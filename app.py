@@ -50,6 +50,14 @@ def _enrich(rows):
     return rows
 
 
+def _enrich_viagogo(rows):
+    for r in rows:
+        avail = r.get("available") or 0
+        fv = r.get("face_value") or 0
+        r["cost"] = round(avail * fv, 2)
+    return rows
+
+
 @app.route("/")
 def dashboard():
     return render_template("dashboard.html")
@@ -71,11 +79,12 @@ def api_inventory():
 
 @app.route("/api/viagogo")
 def api_viagogo():
-    rows = db.all_viagogo()
+    rows = _enrich_viagogo(db.all_viagogo())
     totals = {
         "listings": len(rows),
         "tickets_available": sum(r.get("available") or 0 for r in rows),
         "tickets_sold": sum(r.get("sold") or 0 for r in rows),
+        "total_cost": round(sum(r.get("cost") or 0 for r in rows), 2),
         "total_price": round(sum((r.get("price") or 0) * (r.get("available") or 0) for r in rows), 2),
         "total_proceeds": round(sum((r.get("proceeds") or 0) * (r.get("available") or 0) for r in rows), 2),
     }
@@ -108,15 +117,16 @@ def export_xlsx():
     ws_v = wb.create_sheet("Viagogo")
     ws_v.append([
         "Event", "Date", "Venue", "Section", "Ticket Type",
-        "Visibility", "Face Value", "Price", "Proceeds", "Available", "Sold",
+        "Visibility", "Face Value", "Available", "Cost (Avail x Face)",
+        "Price", "Proceeds", "Sold",
     ])
-    for r in db.all_viagogo():
+    for r in _enrich_viagogo(db.all_viagogo()):
         ws_v.append([
             r.get("event_name"), r.get("event_date"), r.get("venue"),
             r.get("section"), r.get("ticket_type"),
             r.get("visibility"),
-            r.get("face_value"), r.get("price"), r.get("proceeds"),
-            r.get("available"), r.get("sold"),
+            r.get("face_value"), r.get("available"), r.get("cost"),
+            r.get("price"), r.get("proceeds"), r.get("sold"),
         ])
 
     buf = io.BytesIO()

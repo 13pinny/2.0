@@ -35,12 +35,13 @@
 <div id="errbox" style="display:none" class="err"></div>
 
 <div class="stats">
+  <div class="stat"><div class="label">Unsold Cost (All)</div><div class="value" id="s-combined-cost">$0</div></div>
   <div class="stat"><div class="label">Events</div><div class="value" id="s-events">0</div></div>
   <div class="stat"><div class="label">Listings</div><div class="value" id="s-listings">0</div></div>
   <div class="stat"><div class="label">Tickets</div><div class="value" id="s-tickets">0</div></div>
-  <div class="stat"><div class="label">Total Cost</div><div class="value" id="s-cost">$0</div></div>
-  <div class="stat"><div class="label">Total List</div><div class="value" id="s-list">$0</div></div>
-  <div class="stat"><div class="label">P/L</div><div class="value" id="s-pl">$0</div></div>
+  <div class="stat"><div class="label">Lysted Cost</div><div class="value" id="s-cost">$0</div></div>
+  <div class="stat"><div class="label">Lysted List</div><div class="value" id="s-list">$0</div></div>
+  <div class="stat"><div class="label">Lysted P/L</div><div class="value" id="s-pl">$0</div></div>
 </div>
 
 <div class="bar">
@@ -71,6 +72,7 @@
   <div class="stat"><div class="label">Listings</div><div class="value" id="v-listings">0</div></div>
   <div class="stat"><div class="label">Available</div><div class="value" id="v-avail">0</div></div>
   <div class="stat"><div class="label">Sold</div><div class="value" id="v-sold">0</div></div>
+  <div class="stat"><div class="label">Cost (Avail × Face)</div><div class="value" id="v-cost">$0</div></div>
   <div class="stat"><div class="label">Asking</div><div class="value" id="v-price">$0</div></div>
   <div class="stat"><div class="label">Proceeds</div><div class="value" id="v-proceeds">$0</div></div>
 </div>
@@ -83,9 +85,10 @@
       <th>Section</th>
       <th>Type</th>
       <th class="num">Face</th>
+      <th class="num">Avail</th>
+      <th class="num">Cost</th>
       <th class="num">Price</th>
       <th class="num">Proceeds</th>
-      <th class="num">Avail</th>
       <th class="num">Sold</th>
     </tr>
   </thead>
@@ -107,6 +110,7 @@ async function load() {
   document.getElementById("s-tickets").textContent = t.tickets;
   document.getElementById("s-cost").textContent = money(t.total_cost);
   document.getElementById("s-list").textContent = money(t.total_list);
+  _lystedCost = t.total_cost || 0;
   const pl = document.getElementById("s-pl");
   pl.textContent = money(t.total_pl);
   pl.className = "value " + (t.total_pl >= 0 ? "profit-pos" : "profit-neg");
@@ -150,6 +154,8 @@ document.getElementById("refresh").addEventListener("click", async (e) => {
   setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh now"; load(); }, 4000);
 });
 
+let _lystedCost = 0;
+
 async function loadViagogo() {
   const res = await fetch("/api/viagogo");
   const data = await res.json();
@@ -157,8 +163,10 @@ async function loadViagogo() {
   document.getElementById("v-listings").textContent = t.listings;
   document.getElementById("v-avail").textContent = t.tickets_available;
   document.getElementById("v-sold").textContent = t.tickets_sold;
+  document.getElementById("v-cost").textContent = money(t.total_cost);
   document.getElementById("v-price").textContent = money(t.total_price);
   document.getElementById("v-proceeds").textContent = money(t.total_proceeds);
+  document.getElementById("s-combined-cost").textContent = money((_lystedCost || 0) + (t.total_cost || 0));
   const tbody = document.getElementById("vtbody");
   tbody.innerHTML = "";
   for (const r of data.rows) {
@@ -170,9 +178,10 @@ async function loadViagogo() {
       <td>${esc(r.section)}</td>
       <td>${esc(r.ticket_type)}</td>
       <td class="num">${money(r.face_value)}</td>
+      <td class="num">${r.available ?? ""}</td>
+      <td class="num">${money(r.cost)}</td>
       <td class="num">${money(r.price)}</td>
       <td class="num">${money(r.proceeds)}</td>
-      <td class="num">${r.available ?? ""}</td>
       <td class="num">${r.sold ?? ""}</td>
     `;
     tbody.appendChild(tr);
