@@ -1,51 +1,97 @@
 """One-time interactive Lysted login.
 
-Opens a real browser window so you can sign in manually (email, password,
-SMS code if required, Cloudflare challenge if shown). All cookies and
-browser state are persisted under user_data/ so the hourly scraper can
-reuse the same browser profile and keep Cloudflare happy.
+Launches a dedicated Google Chrome window with remote debugging enabled
+and leaves it running. You log in manually in that window — no
+automation is controlling it during login, so Auth0 and Cloudflare don't
+block you. The hourly scraper attaches to that same Chrome via CDP.
 
-Run again if the session ever expires or Cloudflare starts challenging.
+Keep the Chrome window open (minimized is fine). If you close it, run
+this script again before the next scrape.
 """
-import os
+import subprocess
+import sys
+import time
+import urllib.request
 from pathlib import Path
 
-from dotenv import load_dotenv
-from patchright.sync_api import sync_playwright
-
-load_dotenv()
-
 USER_DATA = Path(__file__).parent / "user_data"
+CDP_URL = "http://localhost:9222"
+CHROME_PATHS = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+]
+
+
+def is_chrome_running():
+    try:
+        urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=2)
+        return True
+    except Exception:
+        return False
+
+
+def find_chrome():
+    for path in CHROME_PATHS:
+        if Path(path).exists():
+            return path
+    return None
+
+
+def launch_chrome():
+    chrome = find_chrome()
+    if not chrome:
+        print("ERROR: Google Chrome not found. Install it from https://www.google.com/chrome/")
+        sys.exit(1)
+    USER_DATA.mkdir(exist_ok=True)
+    args = [
+        chrome,
+        "--remote-debugging-port=9222",
+        f"--user-data-dir={USER_DATA.resolve()}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "https://lysted.com/login",
+    ]
+    kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen(args, **kwargs)
+    for _ in range(20):
+        if is_chrome_running():
+            return
+        time.sleep(1)
 
 
 def main():
-    USER_DATA.mkdir(exist_ok=True)
-    login_url = os.environ.get("LYSTED_LOGIN_URL", "https://lysted.com/login")
-    with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(USER_DATA),
-            channel="chrome",
-            headless=False,
-            no_viewport=True,
-        )
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(login_url)
+    if is_chrome_running():
+        print("Chrome is already running with remote debugging — good.")
+    else:
+        print("Launching a dedicated Chrome window...")
+        launch_chrome()
+        if not is_chrome_running():
+            print("ERROR: Chrome did not start in time. Try running this script again.")
+            sys.exit(1)
+        print("Chrome is ready.")
 
-        print()
-        print("=" * 60)
-        print(" A Chrome window opened. In that window:")
-        print("   1. Enter your email and password.")
-        print("   2. Enter the SMS code if prompted.")
-        print("   3. Solve the Cloudflare 'Verify you are human' check")
-        print("      if it appears.")
-        print("   4. Wait until your tickets dashboard is fully loaded.")
-        print(" Then come back to THIS terminal and press Enter.")
-        print("=" * 60)
-        print()
-        input("Press Enter once you're logged in and on the tickets page... ")
-
-        context.close()
-        print(f"Browser profile saved to {USER_DATA.name}/")
+    print()
+    print("=" * 60)
+    print(" In the Chrome window that opened:")
+    print("   1. Log in to Lysted (email, password, SMS code if asked).")
+    print("   2. Solve the Cloudflare 'Verify you are human' check if shown.")
+    print("   3. Wait until you see your tickets dashboard loaded.")
+    print()
+    print(" Then come back here and press Enter.")
+    print()
+    print(" IMPORTANT: keep that Chrome window open. Minimize it — don't")
+    print(" close it. The hourly scraper attaches to it silently.")
+    print("=" * 60)
+    print()
+    input("Press Enter once you're logged in and on the tickets page... ")
+    print("Session ready. Now run: python app.py")
 
 
 if __name__ == "__main__":

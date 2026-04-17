@@ -10,7 +10,7 @@ import db
 load_dotenv()
 
 DEBUG_DIR = Path(__file__).parent / "debug"
-USER_DATA = Path(__file__).parent / "user_data"
+CDP_URL = "http://localhost:9222"
 
 
 def _parse_money(text):
@@ -141,20 +141,17 @@ def _merge(*sources):
 
 
 def scrape_all():
-    if not USER_DATA.exists():
-        raise RuntimeError(
-            "No saved browser profile found. Run `python login.py` once to "
-            "sign in manually (including SMS + Cloudflare if prompted), then retry."
-        )
     rows = []
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(USER_DATA),
-            channel="chrome",
-            headless=False,
-            no_viewport=True,
-        )
-        page = context.pages[0] if context.pages else context.new_page()
+        try:
+            browser = p.chromium.connect_over_cdp(CDP_URL)
+        except Exception as e:
+            raise RuntimeError(
+                f"Can't reach Chrome at {CDP_URL}. Run `python login.py` and "
+                f"keep that Chrome window open. (Underlying: {e})"
+            )
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        page = context.new_page()
         try:
             _ensure_logged_in(page)
             _save_debug(page, "tickets")
@@ -166,7 +163,10 @@ def scrape_all():
             _save_debug(page, "failure")
             raise
         finally:
-            context.close()
+            try:
+                page.close()
+            except Exception:
+                pass
     return rows
 
 
