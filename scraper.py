@@ -10,7 +10,7 @@ import db
 load_dotenv()
 
 DEBUG_DIR = Path(__file__).parent / "debug"
-AUTH_PATH = Path(__file__).parent / "auth.json"
+USER_DATA = Path(__file__).parent / "user_data"
 
 
 def _parse_money(text):
@@ -59,11 +59,18 @@ def _ensure_logged_in(page):
     """Verify the saved session still works by hitting the inventory URL."""
     url = os.environ.get("LYSTED_INVENTORY_URL", "https://app.lysted.com/tickets")
     page.goto(url, wait_until="domcontentloaded")
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(5000)
     if "login" in page.url or "automatiq.com" in page.url:
         raise RuntimeError(
             "Saved Lysted session has expired. Run `python login.py` to "
             "sign in again (email + password + SMS code), then retry."
+        )
+    body_text = (page.inner_text("body") or "").lower()
+    if "performing security verification" in body_text or "verify you are human" in body_text:
+        raise RuntimeError(
+            "Cloudflare is challenging the scraper. Run `python login.py`, "
+            "complete the 'Verify you are human' check, wait for the tickets "
+            "page to load, then press Enter in that terminal and retry."
         )
 
 
@@ -134,16 +141,19 @@ def _merge(*sources):
 
 
 def scrape_all():
-    if not AUTH_PATH.exists():
+    if not USER_DATA.exists():
         raise RuntimeError(
-            "No saved Lysted session found. Run `python login.py` once to "
-            "sign in manually (including SMS code if prompted), then retry."
+            "No saved browser profile found. Run `python login.py` once to "
+            "sign in manually (including SMS + Cloudflare if prompted), then retry."
         )
     rows = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=str(AUTH_PATH))
-        page = context.new_page()
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=str(USER_DATA),
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        page = context.pages[0] if context.pages else context.new_page()
         try:
             _ensure_logged_in(page)
             _save_debug(page, "tickets")
@@ -155,7 +165,7 @@ def scrape_all():
             _save_debug(page, "failure")
             raise
         finally:
-            browser.close()
+            context.close()
     return rows
 
 
