@@ -127,13 +127,41 @@ def _extract_row(r):
     }
 
 
+NEXT_BTN_SELECTORS = (
+    'ul.pagination li:not(.disabled) button[aria-label*="next" i]',
+    'ul.pagination li:not(.disabled) a[aria-label*="next" i]',
+    'button[aria-label="Go to next page"]:not([disabled])',
+    'a[aria-label="Go to next page"]:not([aria-disabled="true"])',
+)
+
+
+def _find_next_button(page):
+    for sel in NEXT_BTN_SELECTORS:
+        btn = page.query_selector(sel)
+        if btn:
+            return btn
+    return None
+
+
 def _scrape_inventory(page):
-    rows = page.query_selector_all("table.b-table tbody tr")
     out = []
-    for r in rows:
-        row = _extract_row(r)
-        if row:
-            out.append(row)
+    seen = set()
+    for _ in range(30):  # safety cap
+        page.wait_for_selector("table.b-table tbody tr", timeout=10000)
+        page.wait_for_timeout(800)
+        for r in page.query_selector_all("table.b-table tbody tr"):
+            row = _extract_row(r)
+            if row and row["id"] not in seen:
+                seen.add(row["id"])
+                out.append(row)
+        next_btn = _find_next_button(page)
+        if not next_btn:
+            break
+        try:
+            next_btn.click()
+        except Exception:
+            break
+        page.wait_for_timeout(1200)
     return out
 
 
