@@ -27,6 +27,10 @@
   .evt-meta { color: #777; font-size: 12px; }
   h2 { font-size: 18px; margin: 32px 0 8px; }
   .status { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #eef; display: inline-block; }
+  tr.group-hdr td { background: #eef4ff; padding: 10px 12px; font-size: 13px; border-top: 1px solid #cdd9ec; }
+  tr.group-hdr .evt-title { font-weight: 700; font-size: 14px; color: #1a1a1a; }
+  tr.group-hdr .evt-meta { color: #555; margin-left: 6px; }
+  tr.group-hdr .evt-stats { float: right; color: #333; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -51,24 +55,6 @@
 </div>
 
 <h2>Lysted</h2>
-<table>
-  <thead>
-    <tr>
-      <th>Event</th>
-      <th>Date</th>
-      <th>Venue</th>
-      <th class="num">Listings</th>
-      <th class="num">Tickets</th>
-      <th class="num">Cost</th>
-      <th class="num">List</th>
-      <th class="num">P/L</th>
-    </tr>
-  </thead>
-  <tbody id="tbody"></tbody>
-</table>
-<div id="empty" class="empty" style="display:none">No Lysted data yet. Click "Refresh now".</div>
-
-<h2>Lysted Tickets</h2>
 <div class="stats">
   <div class="stat"><div class="label">Active Tickets</div><div class="value" id="lp-active">0</div></div>
   <div class="stat"><div class="label">Sold Tickets</div><div class="value" id="lp-sold">0</div></div>
@@ -87,13 +73,11 @@
 <table>
   <thead>
     <tr>
-      <th>Event</th>
-      <th>Date</th>
-      <th>Venue</th>
       <th>Section</th>
       <th>Row</th>
       <th class="num">Qty</th>
       <th>Seats</th>
+      <th>Delivery</th>
       <th class="num">Cost</th>
       <th class="num">Cost/ea</th>
       <th>Status</th>
@@ -161,25 +145,6 @@ async function load() {
   if (lr.error) { err.style.display = "block"; err.textContent = "Last scrape error: " + lr.error; }
   else { err.style.display = "none"; }
 
-  const tbody = document.getElementById("tbody");
-  tbody.innerHTML = "";
-  for (const r of data.rows) {
-    const tr = document.createElement("tr");
-    const plVal = r.profit_loss;
-    const plClass = plVal == null ? "" : (plVal >= 0 ? "profit-pos" : "profit-neg");
-    tr.innerHTML = `
-      <td class="evt">${esc(r.event_name)}</td>
-      <td>${esc(r.event_date)}${r.event_time ? ' <span class="evt-meta">' + esc(r.event_time) + '</span>' : ''}</td>
-      <td>${esc(r.venue)}</td>
-      <td class="num">${r.listings_count ?? ""}</td>
-      <td class="num">${r.tickets_count ?? ""}</td>
-      <td class="num">${money(r.total_cost)}</td>
-      <td class="num">${money(r.total_list)}</td>
-      <td class="num ${plClass}">${money(plVal)}</td>
-    `;
-    tbody.appendChild(tr);
-  }
-  document.getElementById("empty").style.display = data.rows.length ? "none" : "block";
 }
 
 document.getElementById("refresh").addEventListener("click", async (e) => {
@@ -201,27 +166,58 @@ function renderLystedPurchases() {
     if (filter === "sold") return sold;
     return true;
   });
+
+  const groups = new Map();
+  for (const r of rows) {
+    const key = (r.event_name || "") + "|" + (r.event_date_iso || r.event_date || "");
+    if (!groups.has(key)) {
+      groups.set(key, {
+        event_name: r.event_name,
+        event_date: r.event_date,
+        event_date_iso: r.event_date_iso,
+        venue: r.venue,
+        rows: [],
+      });
+    }
+    groups.get(key).rows.push(r);
+  }
+  const sorted = [...groups.values()].sort((a, b) =>
+    (a.event_date_iso || "zzz").localeCompare(b.event_date_iso || "zzz")
+  );
+
   const tbody = document.getElementById("lpbody");
   tbody.innerHTML = "";
-  for (const r of rows) {
-    const tr = document.createElement("tr");
-    const sold = (r.status || "").toLowerCase() === "sold";
-    if (sold) tr.style.color = "#888";
-    tr.innerHTML = `
-      <td class="evt">${esc(r.event_name)}</td>
-      <td>${esc(r.event_date)}</td>
-      <td>${esc(r.venue)}</td>
-      <td>${esc(r.section)}</td>
-      <td>${esc(r.row_label)}</td>
-      <td class="num">${r.qty ?? ""}</td>
-      <td>${esc(r.seats)}</td>
-      <td class="num">${money(r.total_cost)}</td>
-      <td class="num">${money(r.cost_per_unit)}</td>
-      <td><span class="status">${esc(r.status)}</span></td>
+  for (const g of sorted) {
+    const tickets = g.rows.reduce((s, r) => s + (r.qty || 0), 0);
+    const cost = g.rows.reduce((s, r) => s + (r.total_cost || 0), 0);
+    const hdr = document.createElement("tr");
+    hdr.className = "group-hdr";
+    hdr.innerHTML = `
+      <td colspan="8">
+        <span class="evt-title">${esc(g.event_name)}</span>
+        <span class="evt-meta">${esc(g.event_date)} · ${esc(g.venue)}</span>
+        <span class="evt-stats">${tickets} tickets · ${money(cost)}</span>
+      </td>
     `;
-    tbody.appendChild(tr);
+    tbody.appendChild(hdr);
+    for (const r of g.rows) {
+      const tr = document.createElement("tr");
+      const sold = (r.status || "").toLowerCase() === "sold";
+      if (sold) tr.style.color = "#888";
+      tr.innerHTML = `
+        <td>${esc(r.section)}</td>
+        <td>${esc(r.row_label)}</td>
+        <td class="num">${r.qty ?? ""}</td>
+        <td>${esc(r.seats)}</td>
+        <td>${esc(r.delivery_type)}</td>
+        <td class="num">${money(r.total_cost)}</td>
+        <td class="num">${money(r.cost_per_unit)}</td>
+        <td><span class="status">${esc(r.status)}</span></td>
+      `;
+      tbody.appendChild(tr);
+    }
   }
-  document.getElementById("lpempty").style.display = rows.length ? "none" : "block";
+  document.getElementById("lpempty").style.display = sorted.length ? "none" : "block";
 }
 
 async function loadLystedPurchases() {
