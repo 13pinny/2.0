@@ -59,7 +59,7 @@ def _ensure_logged_in(page):
     """Verify the saved session still works by hitting the inventory URL."""
     url = os.environ.get("LYSTED_INVENTORY_URL", "https://app.lysted.com/tickets")
     page.goto(url, wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle")
+    page.wait_for_timeout(3000)
     if "login" in page.url or "automatiq.com" in page.url:
         raise RuntimeError(
             "Saved Lysted session has expired. Run `python login.py` to "
@@ -69,7 +69,7 @@ def _ensure_logged_in(page):
 
 def _scrape_page(page, url):
     page.goto(url, wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle")
+    page.wait_for_timeout(3000)
     return page.query_selector_all(
         '[data-testid="inventory-row"], tr.inventory-row, tr[data-ticket-id]'
     )
