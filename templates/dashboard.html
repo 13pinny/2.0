@@ -25,6 +25,7 @@
   .empty { color: #888; padding: 24px; text-align: center; }
   .evt { font-weight: 600; }
   .evt-meta { color: #777; font-size: 12px; }
+  h2 { font-size: 18px; margin: 32px 0 8px; }
 </style>
 </head>
 <body>
@@ -47,6 +48,7 @@
   <a class="btn" href="/export.xlsx">Export to Excel</a>
 </div>
 
+<h2>Lysted</h2>
 <table>
   <thead>
     <tr>
@@ -62,7 +64,34 @@
   </thead>
   <tbody id="tbody"></tbody>
 </table>
-<div id="empty" class="empty" style="display:none">No data yet. Click "Refresh now" to pull from Lysted.</div>
+<div id="empty" class="empty" style="display:none">No Lysted data yet. Click "Refresh now".</div>
+
+<h2>Viagogo</h2>
+<div class="stats">
+  <div class="stat"><div class="label">Listings</div><div class="value" id="v-listings">0</div></div>
+  <div class="stat"><div class="label">Available</div><div class="value" id="v-avail">0</div></div>
+  <div class="stat"><div class="label">Sold</div><div class="value" id="v-sold">0</div></div>
+  <div class="stat"><div class="label">Asking</div><div class="value" id="v-price">$0</div></div>
+  <div class="stat"><div class="label">Proceeds</div><div class="value" id="v-proceeds">$0</div></div>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Event</th>
+      <th>Date</th>
+      <th>Venue</th>
+      <th>Section</th>
+      <th>Type</th>
+      <th class="num">Face</th>
+      <th class="num">Price</th>
+      <th class="num">Proceeds</th>
+      <th class="num">Avail</th>
+      <th class="num">Sold</th>
+    </tr>
+  </thead>
+  <tbody id="vtbody"></tbody>
+</table>
+<div id="vempty" class="empty" style="display:none">No Viagogo data yet.</div>
 
 <script>
 const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
@@ -121,8 +150,39 @@ document.getElementById("refresh").addEventListener("click", async (e) => {
   setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh now"; load(); }, 4000);
 });
 
-load();
-setInterval(load, 15000);
+async function loadViagogo() {
+  const res = await fetch("/api/viagogo");
+  const data = await res.json();
+  const t = data.totals;
+  document.getElementById("v-listings").textContent = t.listings;
+  document.getElementById("v-avail").textContent = t.tickets_available;
+  document.getElementById("v-sold").textContent = t.tickets_sold;
+  document.getElementById("v-price").textContent = money(t.total_price);
+  document.getElementById("v-proceeds").textContent = money(t.total_proceeds);
+  const tbody = document.getElementById("vtbody");
+  tbody.innerHTML = "";
+  for (const r of data.rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="evt">${esc(r.event_name)}</td>
+      <td>${esc(r.event_date)}</td>
+      <td>${esc(r.venue)}</td>
+      <td>${esc(r.section)}</td>
+      <td>${esc(r.ticket_type)}</td>
+      <td class="num">${money(r.face_value)}</td>
+      <td class="num">${money(r.price)}</td>
+      <td class="num">${money(r.proceeds)}</td>
+      <td class="num">${r.available ?? ""}</td>
+      <td class="num">${r.sold ?? ""}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("vempty").style.display = data.rows.length ? "none" : "block";
+}
+
+function loadAll() { load(); loadViagogo(); }
+loadAll();
+setInterval(loadAll, 15000);
 </script>
 </body>
 </html>

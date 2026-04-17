@@ -25,10 +25,10 @@ def run_scraper():
         return
     _last_run["running"] = True
     try:
-        count = scraper.run_and_save()
+        counts = scraper.run_and_save()
         _last_run.update(
             at=datetime.now(timezone.utc).isoformat(),
-            count=count,
+            count=counts,
             error=None,
         )
     except Exception as e:
@@ -69,6 +69,19 @@ def api_inventory():
     return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
 
 
+@app.route("/api/viagogo")
+def api_viagogo():
+    rows = db.all_viagogo()
+    totals = {
+        "listings": len(rows),
+        "tickets_available": sum(r.get("available") or 0 for r in rows),
+        "tickets_sold": sum(r.get("sold") or 0 for r in rows),
+        "total_price": round(sum((r.get("price") or 0) * (r.get("available") or 0) for r in rows), 2),
+        "total_proceeds": round(sum((r.get("proceeds") or 0) * (r.get("available") or 0) for r in rows), 2),
+    }
+    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
+
+
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
     threading.Thread(target=run_scraper, daemon=True).start()
@@ -77,21 +90,35 @@ def api_refresh():
 
 @app.route("/export.xlsx")
 def export_xlsx():
-    rows = _enrich(db.all_inventory())
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Inventory"
-    ws.append([
+    ws_l = wb.active
+    ws_l.title = "Lysted"
+    ws_l.append([
         "Event", "Date", "Time", "Venue",
         "Listings", "Tickets", "Total Cost", "Total List", "P/L",
     ])
-    for r in rows:
-        ws.append([
+    for r in _enrich(db.all_inventory()):
+        ws_l.append([
             r.get("event_name"), r.get("event_date"), r.get("event_time"),
             r.get("venue"),
             r.get("listings_count"), r.get("tickets_count"),
             r.get("total_cost"), r.get("total_list"), r.get("profit_loss"),
         ])
+
+    ws_v = wb.create_sheet("Viagogo")
+    ws_v.append([
+        "Event", "Date", "Venue", "Section", "Ticket Type",
+        "Visibility", "Face Value", "Price", "Proceeds", "Available", "Sold",
+    ])
+    for r in db.all_viagogo():
+        ws_v.append([
+            r.get("event_name"), r.get("event_date"), r.get("venue"),
+            r.get("section"), r.get("ticket_type"),
+            r.get("visibility"),
+            r.get("face_value"), r.get("price"), r.get("proceeds"),
+            r.get("available"), r.get("sold"),
+        ])
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)

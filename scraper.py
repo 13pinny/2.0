@@ -182,28 +182,131 @@ def _scrape_inventory(page):
     return out
 
 
-def _dump_viagogo(context):
-    """Best-effort debug dump of the Viagogo inventory page.
-
-    Never fails the main Lysted scrape; just captures HTML so we can
-    design real selectors before wiring Viagogo into the dashboard.
-    """
-    vpage = context.new_page()
+def _parse_viagogo_date(date_str):
+    if not date_str:
+        return None
     try:
-        vpage.goto("https://inv.viagogo.com/", wait_until="domcontentloaded")
-        vpage.wait_for_timeout(4000)
-        _save_debug(vpage, "viagogo")
-    except Exception as e:
-        print(f"[kartis] viagogo dump failed: {type(e).__name__}: {e}")
+        return datetime.strptime(date_str.strip(), "%a %d %b %Y %H:%M").isoformat(timespec="minutes")
+    except ValueError:
+        try:
+            return datetime.strptime(date_str.strip(), "%a %d %b %Y").date().isoformat()
+        except ValueError:
+            return None
+
+
+VIAGOGO_EXTRACT_JS = r"""
+(el) => {
+  const q = (sel) => el.querySelector(sel);
+  const t = (sel) => q(sel)?.innerText?.trim() ?? null;
+  const headerH = q('td.w25 div.h');
+  const headerText = headerH?.innerText?.trim() ?? '';
+  const name = headerText.replace(/\[.*?\]/, '').trim();
+  const listings = [];
+  const next = el.nextElementSibling;
+  if (next && next.classList.contains('js-listing-container')) {
+    for (const tr of next.querySelectorAll('tr[data-id]')) {
+      const tds = tr.querySelectorAll('td');
+      const txt = (i) => tds[i]?.innerText?.trim() ?? null;
+      listings.push({
+        listing_id: tr.getAttribute('data-id'),
+        quantity: tr.getAttribute('data-quantity'),
+        section: txt(1),
+        ticket_type: txt(2),
+        visibility: txt(3),
+        face_value: txt(4),
+        price: txt(5),
+        proceeds: txt(6),
+        available: txt(7),
+        sold: txt(8),
+      });
+    }
+  }
+  return {
+    event_id: el.getAttribute('data-eventid'),
+    event_name: name,
+    event_date: t('td.w25 div.t.xs.nowrap'),
+    venue: t('td.w25 div.t.xxs.cGry4'),
+    listings,
+  };
+}
+"""
+
+
+def _scrape_viagogo(context):
+    page = context.new_page()
+    try:
+        page.goto("https://inv.viagogo.com/Listings", wait_until="domcontentloaded")
+        try:
+            page.wait_for_selector("tr.eventRow", timeout=15000)
+        except Exception as e:
+            print(f"[kartis] viagogo inventory never rendered: {e}")
+            _save_debug(page, "viagogo")
+            return []
+        page.wait_for_timeout(1500)
+
+        # Expand every collapsed event so its listings render into the DOM.
+        for _ in range(20):
+            collapsed = page.query_selector_all("tr.eventRow:not(.expanded) td.js-expand")
+            if not collapsed:
+                break
+            for arrow in collapsed:
+                try:
+                    arrow.click()
+                except Exception:
+                    pass
+            page.wait_for_timeout(600)
+
+        _save_debug(page, "viagogo")
+
+        out = []
+        for evt in page.query_selector_all("tr.eventRow"):
+            try:
+                data = evt.evaluate(VIAGOGO_EXTRACT_JS)
+            except Exception as e:
+                print(f"[kartis] viagogo row extract failed: {e}")
+                continue
+            event_name = data.get("event_name")
+            event_date = data.get("event_date")
+            venue = data.get("venue")
+            event_id = data.get("event_id")
+            event_date_iso = _parse_viagogo_date(event_date)
+            for L in data.get("listings") or []:
+                listing_id = L.get("listing_id")
+                if not listing_id:
+                    continue
+                out.append({
+                    "id": listing_id,
+                    "event_id": event_id,
+                    "event_name": event_name,
+                    "event_date": event_date,
+                    "event_date_iso": event_date_iso,
+                    "venue": venue,
+                    "section": L.get("section"),
+                    "ticket_type": L.get("ticket_type"),
+                    "visibility": L.get("visibility"),
+                    "face_value": _parse_money(L.get("face_value")),
+                    "price": _parse_money(L.get("price")),
+                    "proceeds": _parse_money(L.get("proceeds")),
+                    "available": _parse_int(L.get("available")),
+                    "sold": _parse_int(L.get("sold")),
+                })
+        return out
     finally:
         try:
-            vpage.close()
+            page.close()
         except Exception:
             pass
 
 
+def _parse_int(text):
+    if text is None:
+        return None
+    m = re.search(r"-?\d+", text)
+    return int(m.group(0)) if m else None
+
+
 def scrape_all():
-    rows = []
+    result = {"lysted": [], "viagogo": []}
     with sync_playwright() as p:
         try:
             browser = p.chromium.connect_over_cdp(CDP_URL)
@@ -213,11 +316,12 @@ def scrape_all():
                 f"keep that Chrome window open. (Underlying: {e})"
             )
         context = browser.contexts[0] if browser.contexts else browser.new_context()
+
         page = context.new_page()
         try:
             _ensure_logged_in(page)
             _save_debug(page, "tickets")
-            rows = _scrape_inventory(page)
+            result["lysted"] = _scrape_inventory(page)
         except Exception:
             _save_debug(page, "failure")
             raise
@@ -226,18 +330,23 @@ def scrape_all():
                 page.close()
             except Exception:
                 pass
-        _dump_viagogo(context)
-    return rows
+
+        try:
+            result["viagogo"] = _scrape_viagogo(context)
+        except Exception as e:
+            print(f"[kartis] viagogo scrape failed: {type(e).__name__}: {e}")
+    return result
 
 
 def run_and_save():
-    rows = scrape_all()
+    data = scrape_all()
     now_iso = datetime.now(timezone.utc).isoformat()
-    db.upsert_inventory(rows, now_iso)
-    return len(rows)
+    db.upsert_inventory(data["lysted"], now_iso)
+    db.upsert_viagogo(data["viagogo"], now_iso)
+    return {"lysted": len(data["lysted"]), "viagogo": len(data["viagogo"])}
 
 
 if __name__ == "__main__":
     db.init()
-    count = run_and_save()
-    print(f"Saved {count} events.")
+    counts = run_and_save()
+    print(f"Saved {counts['lysted']} Lysted events, {counts['viagogo']} Viagogo listings.")
