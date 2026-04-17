@@ -31,6 +31,22 @@ def _text(el, selector):
     return node.inner_text().strip() if node else None
 
 
+def _parse_event_datetime(date_str, time_str):
+    if not date_str:
+        return None
+    try:
+        d = datetime.strptime(date_str, "%a %b %d, %Y").date()
+    except ValueError:
+        return None
+    if time_str:
+        try:
+            t = datetime.strptime(time_str.strip(), "%I:%M%p").time()
+            return datetime.combine(d, t).isoformat(timespec="minutes")
+        except ValueError:
+            pass
+    return d.isoformat()
+
+
 def _save_debug(page, label):
     DEBUG_DIR.mkdir(exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -119,6 +135,7 @@ def _extract_row(r):
         "event_name": event_name,
         "event_date": event_date,
         "event_time": event_time,
+        "event_date_iso": _parse_event_datetime(event_date, event_time),
         "venue": venue,
         "listings_count": listings_count,
         "tickets_count": tickets_count,

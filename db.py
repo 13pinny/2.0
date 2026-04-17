@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS inventory (
     event_name TEXT,
     event_date TEXT,
     event_time TEXT,
+    event_date_iso TEXT,
     venue TEXT,
     listings_count INTEGER,
     tickets_count INTEGER,
@@ -34,6 +35,9 @@ def connect():
 def init():
     with connect() as conn:
         conn.executescript(SCHEMA)
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(inventory)").fetchall()}
+        if "event_date_iso" not in cols:
+            conn.execute("ALTER TABLE inventory ADD COLUMN event_date_iso TEXT")
 
 
 def upsert_inventory(rows, now_iso):
@@ -41,16 +45,19 @@ def upsert_inventory(rows, now_iso):
         for r in rows:
             conn.execute(
                 """
-                INSERT INTO inventory (id, event_name, event_date, event_time, venue,
+                INSERT INTO inventory (id, event_name, event_date, event_time,
+                                       event_date_iso, venue,
                                        listings_count, tickets_count,
                                        total_cost, total_list, last_seen_at)
-                VALUES (:id, :event_name, :event_date, :event_time, :venue,
+                VALUES (:id, :event_name, :event_date, :event_time,
+                        :event_date_iso, :venue,
                         :listings_count, :tickets_count,
                         :total_cost, :total_list, :last_seen_at)
                 ON CONFLICT(id) DO UPDATE SET
                     event_name=excluded.event_name,
                     event_date=excluded.event_date,
                     event_time=excluded.event_time,
+                    event_date_iso=excluded.event_date_iso,
                     venue=excluded.venue,
                     listings_count=excluded.listings_count,
                     tickets_count=excluded.tickets_count,
@@ -65,6 +72,7 @@ def upsert_inventory(rows, now_iso):
 def all_inventory():
     with connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM inventory ORDER BY event_date, event_name"
+            "SELECT * FROM inventory "
+            "ORDER BY event_date_iso IS NULL, event_date_iso, event_name"
         ).fetchall()
     return [dict(r) for r in rows]
