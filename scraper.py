@@ -10,6 +10,7 @@ import db
 load_dotenv()
 
 DEBUG_DIR = Path(__file__).parent / "debug"
+AUTH_PATH = Path(__file__).parent / "auth.json"
 
 
 def _parse_money(text):
@@ -35,35 +36,6 @@ def _row_id(r):
     )
 
 
-EMAIL_SELECTORS = (
-    'input[type="email"], '
-    'input[name="email"], '
-    'input[autocomplete="email"], '
-    'input[autocomplete="username"], '
-    'input[id*="email" i], '
-    'input[name*="email" i], '
-    'input[placeholder*="email" i]'
-)
-
-PASSWORD_SELECTORS = (
-    'input[type="password"], '
-    'input[name="password"], '
-    'input[autocomplete="current-password"], '
-    'input[id*="password" i], '
-    'input[name*="password" i]'
-)
-
-SUBMIT_SELECTORS = (
-    'button[type="submit"], '
-    'button:has-text("Sign in"), '
-    'button:has-text("Sign In"), '
-    'button:has-text("Log in"), '
-    'button:has-text("Log In"), '
-    'button:has-text("Login"), '
-    'input[type="submit"]'
-)
-
-
 def _save_debug(page, label):
     DEBUG_DIR.mkdir(exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -83,17 +55,16 @@ def _save_debug(page, label):
     print(f"[kartis] saved debug artifacts to {base}.*")
 
 
-def _login(page):
-    email = os.environ["LYSTED_EMAIL"]
-    password = os.environ["LYSTED_PASSWORD"]
-    login_url = os.environ.get("LYSTED_LOGIN_URL", "https://lysted.com/login")
-
-    page.goto(login_url, wait_until="domcontentloaded")
-    page.wait_for_selector(EMAIL_SELECTORS, timeout=20000)
-    page.fill(EMAIL_SELECTORS, email)
-    page.fill(PASSWORD_SELECTORS, password)
-    page.click(SUBMIT_SELECTORS)
+def _ensure_logged_in(page):
+    """Verify the saved session still works by hitting the inventory URL."""
+    url = os.environ.get("LYSTED_INVENTORY_URL", "https://app.lysted.com/tickets")
+    page.goto(url, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle")
+    if "login" in page.url or "automatiq.com" in page.url:
+        raise RuntimeError(
+            "Saved Lysted session has expired. Run `python login.py` to "
+            "sign in again (email + password + SMS code), then retry."
+        )
 
 
 def _scrape_page(page, url):
@@ -163,16 +134,20 @@ def _merge(*sources):
 
 
 def scrape_all():
+    if not AUTH_PATH.exists():
+        raise RuntimeError(
+            "No saved Lysted session found. Run `python login.py` once to "
+            "sign in manually (including SMS code if prompted), then retry."
+        )
     rows = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
+        context = browser.new_context(storage_state=str(AUTH_PATH))
         page = context.new_page()
         try:
-            _login(page)
-            _save_debug(page, "after-login")
-            inv = _scrape_tickets(page)
+            _ensure_logged_in(page)
             _save_debug(page, "tickets")
+            inv = _scrape_tickets(page)
             purchases = _scrape_purchases(page)
             sales = _scrape_sales(page)
             rows = _merge(inv, purchases, sales)

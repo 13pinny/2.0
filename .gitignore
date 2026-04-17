@@ -1,5 +1,6 @@
 # Secrets
 .env
+auth.json
 
 # Python
 __pycache__/
