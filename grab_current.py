@@ -17,23 +17,38 @@ CDP_URL = "http://localhost:9222"
 
 def main():
     needle = (sys.argv[1] if len(sys.argv) > 1 else "viagogo").lower()
+    print(f"[grab] looking for tab matching '{needle}'", flush=True)
     out_dir = Path(__file__).parent / "debug"
     out_dir.mkdir(exist_ok=True)
 
     with sync_playwright() as p:
+        print("[grab] connecting to Chrome CDP on localhost:9222 ...", flush=True)
         browser = p.chromium.connect_over_cdp(CDP_URL)
-        matching = [
-            pg for ctx in browser.contexts for pg in ctx.pages
-            if needle in (pg.url or "").lower()
-        ]
+        print(f"[grab] connected. contexts: {len(browser.contexts)}", flush=True)
+
+        all_pages = [pg for ctx in browser.contexts for pg in ctx.pages]
+        print(f"[grab] {len(all_pages)} open pages:", flush=True)
+        for pg in all_pages:
+            print(f"  - {pg.url}", flush=True)
+
+        matching = [pg for pg in all_pages if needle in (pg.url or "").lower()]
         if not matching:
-            print(f"No tab with '{needle}' in the URL. Is the Chrome window open?")
+            print(f"[grab] no tab with '{needle}' in the URL.", flush=True)
             return
         page = matching[0]
+        print(f"[grab] grabbing HTML from: {page.url}", flush=True)
+
+        try:
+            html = page.content()
+        except Exception as e:
+            print(f"[grab] page.content() failed: {type(e).__name__}: {e}", flush=True)
+            return
+        print(f"[grab] got {len(html)} chars of HTML", flush=True)
+
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         out = out_dir / f"{needle}-manual-{stamp}.html"
-        out.write_text(page.content(), encoding="utf-8")
-        print(f"Saved {out} ({out.stat().st_size} bytes) from {page.url}")
+        out.write_text(html, encoding="utf-8")
+        print(f"[grab] saved {out} ({out.stat().st_size} bytes)", flush=True)
 
 
 if __name__ == "__main__":
