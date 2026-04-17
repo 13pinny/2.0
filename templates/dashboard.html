@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Inventory</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 24px; color: #1a1a1a; }
+  h1 { margin: 0 0 4px; }
+  .sub { color: #666; margin-bottom: 16px; font-size: 13px; }
+  .bar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+  button, a.btn { padding: 8px 14px; border: 1px solid #333; background: #fff; border-radius: 6px; cursor: pointer; text-decoration: none; color: #1a1a1a; font-size: 14px; }
+  button:hover, a.btn:hover { background: #f0f0f0; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .stats { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .stat { background: #f5f5f5; padding: 12px 16px; border-radius: 8px; min-width: 120px; }
+  .stat .label { font-size: 12px; color: #666; }
+  .stat .value { font-size: 20px; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { border-bottom: 1px solid #eee; padding: 8px 10px; text-align: left; }
+  th { background: #fafafa; font-weight: 600; position: sticky; top: 0; }
+  tr.sold td { color: #888; }
+  .profit-pos { color: #0a7f2e; font-weight: 600; }
+  .profit-neg { color: #b00020; font-weight: 600; }
+  .status { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #eef; display: inline-block; }
+  .err { background: #fee; color: #900; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
+  .empty { color: #888; padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<h1>Kartis</h1>
+<div class="sub" id="lastrun">—</div>
+
+<div id="errbox" style="display:none" class="err"></div>
+
+<div class="stats">
+  <div class="stat"><div class="label">Active</div><div class="value" id="s-active">0</div></div>
+  <div class="stat"><div class="label">Sold</div><div class="value" id="s-sold">0</div></div>
+  <div class="stat"><div class="label">Total P/L</div><div class="value" id="s-profit">$0.00</div></div>
+</div>
+
+<div class="bar">
+  <button id="refresh">Refresh now</button>
+  <a class="btn" href="/export.xlsx">Export to Excel</a>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Event</th><th>Date</th><th>Section</th><th>Row</th><th>Seat</th>
+      <th>Purchase</th><th>Sale</th><th>P/L</th><th>Status</th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+<div id="empty" class="empty" style="display:none">No tickets yet. Click "Refresh now" to pull from Lysted.</div>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toFixed(2);
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+async function load() {
+  const res = await fetch("/api/tickets");
+  const data = await res.json();
+
+  document.getElementById("s-active").textContent = data.summary.active_count;
+  document.getElementById("s-sold").textContent = data.summary.sold_count;
+  document.getElementById("s-profit").textContent = money(data.summary.total_profit);
+
+  const lr = data.last_run;
+  const msg = lr.running ? "Scraping now…"
+    : lr.at ? "Last updated: " + new Date(lr.at).toLocaleString()
+    : "No scrape has run yet.";
+  document.getElementById("lastrun").textContent = msg;
+
+  const err = document.getElementById("errbox");
+  if (lr.error) { err.style.display = "block"; err.textContent = "Last scrape error: " + lr.error; }
+  else { err.style.display = "none"; }
+
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  for (const t of data.tickets) {
+    const tr = document.createElement("tr");
+    if (t.sold) tr.classList.add("sold");
+    const pl = t.profit_loss;
+    const plClass = pl == null ? "" : (pl >= 0 ? "profit-pos" : "profit-neg");
+    tr.innerHTML = `
+      <td>${esc(t.event_name)}</td>
+      <td>${esc(t.event_date)}</td>
+      <td>${esc(t.section)}</td>
+      <td>${esc(t.row)}</td>
+      <td>${esc(t.seat)}</td>
+      <td>${money(t.purchase_price)}</td>
+      <td>${money(t.sale_price)}</td>
+      <td class="${plClass}">${money(pl)}</td>
+      <td><span class="status">${esc(t.status)}</span></td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("empty").style.display = data.tickets.length ? "none" : "block";
+}
+
+document.getElementById("refresh").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = "Refreshing…";
+  await fetch("/api/refresh", { method: "POST" });
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh now"; load(); }, 3000);
+});
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>
