@@ -182,6 +182,141 @@ def _scrape_inventory(page):
     return out
 
 
+PURCHASES_EXTRACT_JS = r"""
+() => Array.from(document.querySelectorAll("table.b-table tbody tr[role='row']")).map(tr => ({
+  cells: Array.from(tr.querySelectorAll("td")).map(td => (td.innerText || "").trim())
+}))
+"""
+
+
+def _parse_lysted_event_date(text):
+    """Parse a purchases-page event date like '05/08/26' or 'May 08, 2026'."""
+    if not text:
+        return None
+    text = text.strip()
+    for fmt in ("%m/%d/%y", "%b %d, %Y", "%B %d, %Y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_purchases_row(cells):
+    """Best-effort parse of the Purchases page cells.
+
+    Structure from the screenshot (5 columns):
+      0: Order  — '14386374\n04/16/26'
+      1: Event  — 'Blake Shelton\nThe Colosseum at Caesars Palace · Las Vegas, NV\nMay 08, 2026 · 08:00PM'
+      2: Seating — '202\nRow K · Qty 4\nSeats 213-216'
+      3: Type/Notes — 'Mobile Transfer\n13pinny@gmail.com\n30000710743076238'
+      4: Cost/Unit — '$364.00\n$91.00/ea\nActive'
+    """
+    if len(cells) < 5:
+        return None
+
+    order_lines = [l.strip() for l in cells[0].splitlines() if l.strip()]
+    event_lines = [l.strip() for l in cells[1].splitlines() if l.strip()]
+    seat_lines = [l.strip() for l in cells[2].splitlines() if l.strip()]
+    type_lines = [l.strip() for l in cells[3].splitlines() if l.strip()]
+    cost_lines = [l.strip() for l in cells[4].splitlines() if l.strip()]
+
+    order_id = order_lines[0] if order_lines else None
+    order_date = order_lines[1] if len(order_lines) > 1 else None
+
+    event_name = event_lines[0] if event_lines else None
+    venue = event_lines[1] if len(event_lines) > 1 else None
+    event_datetime = event_lines[2] if len(event_lines) > 2 else None
+    event_date_iso = None
+    if event_datetime:
+        date_part = event_datetime.split("·")[0].strip()
+        event_date_iso = _parse_lysted_event_date(date_part)
+
+    section = seat_lines[0] if seat_lines else None
+    row_label = None
+    qty = None
+    seats = None
+    if len(seat_lines) > 1:
+        m_row = re.search(r"Row\s+(\S+)", seat_lines[1])
+        m_qty = re.search(r"Qty\s+(\d+)", seat_lines[1])
+        row_label = m_row.group(1) if m_row else None
+        qty = int(m_qty.group(1)) if m_qty else None
+    if len(seat_lines) > 2:
+        seats = seat_lines[2].replace("Seats", "").strip()
+
+    delivery_type = type_lines[0] if type_lines else None
+    account_email = type_lines[1] if len(type_lines) > 1 else None
+    transaction_id = type_lines[2] if len(type_lines) > 2 else None
+
+    total_cost = _parse_money(cost_lines[0]) if cost_lines else None
+    cost_per_unit = _parse_money(cost_lines[1]) if len(cost_lines) > 1 else None
+    status = cost_lines[-1] if cost_lines else None
+
+    composite_id = "|".join(filter(None, [order_id, section, row_label, seats or ""]))
+    if not composite_id:
+        return None
+
+    return {
+        "id": composite_id,
+        "order_id": order_id,
+        "order_date": order_date,
+        "event_name": event_name,
+        "event_date": event_datetime,
+        "event_date_iso": event_date_iso,
+        "venue": venue,
+        "section": section,
+        "row_label": row_label,
+        "qty": qty,
+        "seats": seats,
+        "delivery_type": delivery_type,
+        "account_email": account_email,
+        "transaction_id": transaction_id,
+        "total_cost": total_cost,
+        "cost_per_unit": cost_per_unit,
+        "status": status,
+    }
+
+
+def _scrape_lysted_purchases(context):
+    url = os.environ.get("LYSTED_PURCHASES_URL", "https://app.lysted.com/purchases")
+    page = context.new_page()
+    try:
+        page.goto(url, wait_until="domcontentloaded")
+        try:
+            page.wait_for_selector("table.b-table tbody tr", timeout=20000)
+        except Exception as e:
+            print(f"[kartis] purchases table never rendered: {e}")
+            _save_debug(page, "purchases")
+            return []
+        page.wait_for_timeout(1500)
+
+        out = []
+        seen = set()
+        for _ in range(30):
+            rows = page.evaluate(PURCHASES_EXTRACT_JS)
+            for r in rows:
+                parsed = _parse_purchases_row(r.get("cells") or [])
+                if parsed and parsed["id"] not in seen:
+                    seen.add(parsed["id"])
+                    out.append(parsed)
+            next_btn = _find_next_button(page)
+            if not next_btn:
+                break
+            try:
+                next_btn.click()
+            except Exception:
+                break
+            page.wait_for_timeout(1200)
+
+        _save_debug(page, "purchases")
+        return out
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+
 def _parse_viagogo_date(date_str):
     if not date_str:
         return None
@@ -306,7 +441,7 @@ def _parse_int(text):
 
 
 def scrape_all():
-    result = {"lysted": [], "viagogo": []}
+    result = {"lysted": [], "lysted_purchases": [], "viagogo": []}
     with sync_playwright() as p:
         try:
             browser = p.chromium.connect_over_cdp(CDP_URL)
@@ -332,6 +467,11 @@ def scrape_all():
                 pass
 
         try:
+            result["lysted_purchases"] = _scrape_lysted_purchases(context)
+        except Exception as e:
+            print(f"[kartis] lysted purchases scrape failed: {type(e).__name__}: {e}")
+
+        try:
             result["viagogo"] = _scrape_viagogo(context)
         except Exception as e:
             print(f"[kartis] viagogo scrape failed: {type(e).__name__}: {e}")
@@ -342,8 +482,13 @@ def run_and_save():
     data = scrape_all()
     now_iso = datetime.now(timezone.utc).isoformat()
     db.upsert_inventory(data["lysted"], now_iso)
+    db.upsert_lysted_purchases(data["lysted_purchases"], now_iso)
     db.upsert_viagogo(data["viagogo"], now_iso)
-    return {"lysted": len(data["lysted"]), "viagogo": len(data["viagogo"])}
+    return {
+        "lysted": len(data["lysted"]),
+        "lysted_purchases": len(data["lysted_purchases"]),
+        "viagogo": len(data["viagogo"]),
+    }
 
 
 if __name__ == "__main__":

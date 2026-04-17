@@ -18,6 +18,26 @@ CREATE TABLE IF NOT EXISTS inventory (
     total_list REAL,
     last_seen_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS lysted_purchases (
+    id TEXT PRIMARY KEY,
+    order_id TEXT,
+    order_date TEXT,
+    event_name TEXT,
+    event_date TEXT,
+    event_date_iso TEXT,
+    venue TEXT,
+    section TEXT,
+    row_label TEXT,
+    qty INTEGER,
+    seats TEXT,
+    delivery_type TEXT,
+    account_email TEXT,
+    transaction_id TEXT,
+    total_cost REAL,
+    cost_per_unit REAL,
+    status TEXT,
+    last_seen_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS viagogo_listings (
     id TEXT PRIMARY KEY,
     event_id TEXT,
@@ -55,6 +75,55 @@ def init():
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(inventory)").fetchall()}
         if "event_date_iso" not in cols:
             conn.execute("ALTER TABLE inventory ADD COLUMN event_date_iso TEXT")
+
+
+def upsert_lysted_purchases(rows, now_iso):
+    with connect() as conn:
+        for r in rows:
+            conn.execute(
+                """
+                INSERT INTO lysted_purchases (id, order_id, order_date, event_name,
+                                              event_date, event_date_iso, venue,
+                                              section, row_label, qty, seats,
+                                              delivery_type, account_email,
+                                              transaction_id, total_cost,
+                                              cost_per_unit, status, last_seen_at)
+                VALUES (:id, :order_id, :order_date, :event_name,
+                        :event_date, :event_date_iso, :venue,
+                        :section, :row_label, :qty, :seats,
+                        :delivery_type, :account_email,
+                        :transaction_id, :total_cost,
+                        :cost_per_unit, :status, :last_seen_at)
+                ON CONFLICT(id) DO UPDATE SET
+                    order_id=excluded.order_id,
+                    order_date=excluded.order_date,
+                    event_name=excluded.event_name,
+                    event_date=excluded.event_date,
+                    event_date_iso=excluded.event_date_iso,
+                    venue=excluded.venue,
+                    section=excluded.section,
+                    row_label=excluded.row_label,
+                    qty=excluded.qty,
+                    seats=excluded.seats,
+                    delivery_type=excluded.delivery_type,
+                    account_email=excluded.account_email,
+                    transaction_id=excluded.transaction_id,
+                    total_cost=excluded.total_cost,
+                    cost_per_unit=excluded.cost_per_unit,
+                    status=excluded.status,
+                    last_seen_at=excluded.last_seen_at
+                """,
+                {**r, "last_seen_at": now_iso},
+            )
+
+
+def all_lysted_purchases():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM lysted_purchases "
+            "ORDER BY event_date_iso IS NULL, event_date_iso, event_name"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def upsert_viagogo(rows, now_iso):

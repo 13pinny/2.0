@@ -77,6 +77,25 @@ def api_inventory():
     return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
 
 
+@app.route("/api/lysted-purchases")
+def api_lysted_purchases():
+    rows = db.all_lysted_purchases()
+    def _live(r):
+        s = (r.get("status") or "").strip().lower()
+        return s != "sold"
+    active = [r for r in rows if _live(r)]
+    sold = [r for r in rows if not _live(r)]
+    totals = {
+        "tickets": sum(r.get("qty") or 0 for r in rows),
+        "active_tickets": sum(r.get("qty") or 0 for r in active),
+        "sold_tickets": sum(r.get("qty") or 0 for r in sold),
+        "active_cost": round(sum(r.get("total_cost") or 0 for r in active), 2),
+        "sold_cost": round(sum(r.get("total_cost") or 0 for r in sold), 2),
+        "total_cost": round(sum(r.get("total_cost") or 0 for r in rows), 2),
+    }
+    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
+
+
 @app.route("/api/viagogo")
 def api_viagogo():
     rows = _enrich_viagogo(db.all_viagogo())
@@ -112,6 +131,22 @@ def export_xlsx():
             r.get("venue"),
             r.get("listings_count"), r.get("tickets_count"),
             r.get("total_cost"), r.get("total_list"), r.get("profit_loss"),
+        ])
+
+    ws_p = wb.create_sheet("Lysted Tickets")
+    ws_p.append([
+        "Order", "Order Date", "Event", "Event Date", "Venue",
+        "Section", "Row", "Qty", "Seats",
+        "Delivery", "Account", "Transaction ID",
+        "Total Cost", "Cost/Unit", "Status",
+    ])
+    for r in db.all_lysted_purchases():
+        ws_p.append([
+            r.get("order_id"), r.get("order_date"),
+            r.get("event_name"), r.get("event_date"), r.get("venue"),
+            r.get("section"), r.get("row_label"), r.get("qty"), r.get("seats"),
+            r.get("delivery_type"), r.get("account_email"), r.get("transaction_id"),
+            r.get("total_cost"), r.get("cost_per_unit"), r.get("status"),
         ])
 
     ws_v = wb.create_sheet("Viagogo")

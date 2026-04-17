@@ -26,6 +26,7 @@
   .evt { font-weight: 600; }
   .evt-meta { color: #777; font-size: 12px; }
   h2 { font-size: 18px; margin: 32px 0 8px; }
+  .status { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #eef; display: inline-block; }
 </style>
 </head>
 <body>
@@ -66,6 +67,41 @@
   <tbody id="tbody"></tbody>
 </table>
 <div id="empty" class="empty" style="display:none">No Lysted data yet. Click "Refresh now".</div>
+
+<h2>Lysted Tickets</h2>
+<div class="stats">
+  <div class="stat"><div class="label">Active Tickets</div><div class="value" id="lp-active">0</div></div>
+  <div class="stat"><div class="label">Sold Tickets</div><div class="value" id="lp-sold">0</div></div>
+  <div class="stat"><div class="label">Active Cost</div><div class="value" id="lp-acost">$0</div></div>
+  <div class="stat"><div class="label">Sold Cost</div><div class="value" id="lp-scost">$0</div></div>
+</div>
+<div class="bar">
+  <label style="font-size:13px;">Show:
+    <select id="lp-filter">
+      <option value="active">Active only</option>
+      <option value="sold">Sold only</option>
+      <option value="all">All</option>
+    </select>
+  </label>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Event</th>
+      <th>Date</th>
+      <th>Venue</th>
+      <th>Section</th>
+      <th>Row</th>
+      <th class="num">Qty</th>
+      <th>Seats</th>
+      <th class="num">Cost</th>
+      <th class="num">Cost/ea</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody id="lpbody"></tbody>
+</table>
+<div id="lpempty" class="empty" style="display:none">No Lysted purchases yet.</div>
 
 <h2>Viagogo</h2>
 <div class="stats">
@@ -155,6 +191,50 @@ document.getElementById("refresh").addEventListener("click", async (e) => {
 });
 
 let _lystedCost = 0;
+let _lpRows = [];
+
+function renderLystedPurchases() {
+  const filter = document.getElementById("lp-filter").value;
+  const rows = _lpRows.filter(r => {
+    const sold = (r.status || "").toLowerCase() === "sold";
+    if (filter === "active") return !sold;
+    if (filter === "sold") return sold;
+    return true;
+  });
+  const tbody = document.getElementById("lpbody");
+  tbody.innerHTML = "";
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    const sold = (r.status || "").toLowerCase() === "sold";
+    if (sold) tr.style.color = "#888";
+    tr.innerHTML = `
+      <td class="evt">${esc(r.event_name)}</td>
+      <td>${esc(r.event_date)}</td>
+      <td>${esc(r.venue)}</td>
+      <td>${esc(r.section)}</td>
+      <td>${esc(r.row_label)}</td>
+      <td class="num">${r.qty ?? ""}</td>
+      <td>${esc(r.seats)}</td>
+      <td class="num">${money(r.total_cost)}</td>
+      <td class="num">${money(r.cost_per_unit)}</td>
+      <td><span class="status">${esc(r.status)}</span></td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("lpempty").style.display = rows.length ? "none" : "block";
+}
+
+async function loadLystedPurchases() {
+  const res = await fetch("/api/lysted-purchases");
+  const data = await res.json();
+  const t = data.totals;
+  document.getElementById("lp-active").textContent = t.active_tickets;
+  document.getElementById("lp-sold").textContent = t.sold_tickets;
+  document.getElementById("lp-acost").textContent = money(t.active_cost);
+  document.getElementById("lp-scost").textContent = money(t.sold_cost);
+  _lpRows = data.rows;
+  renderLystedPurchases();
+}
 
 async function loadViagogo() {
   const res = await fetch("/api/viagogo");
@@ -189,7 +269,8 @@ async function loadViagogo() {
   document.getElementById("vempty").style.display = data.rows.length ? "none" : "block";
 }
 
-function loadAll() { load(); loadViagogo(); }
+function loadAll() { load(); loadLystedPurchases(); loadViagogo(); }
+document.getElementById("lp-filter").addEventListener("change", renderLystedPurchases);
 loadAll();
 setInterval(loadAll, 15000);
 </script>
