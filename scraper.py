@@ -150,8 +150,9 @@ def scrape_all():
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
             user_data_dir=str(USER_DATA),
+            channel="chrome",
             headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
+            no_viewport=True,
         )
         page = context.pages[0] if context.pages else context.new_page()
         try:
