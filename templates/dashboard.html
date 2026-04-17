@@ -11,19 +11,20 @@
   button, a.btn { padding: 8px 14px; border: 1px solid #333; background: #fff; border-radius: 6px; cursor: pointer; text-decoration: none; color: #1a1a1a; font-size: 14px; }
   button:hover, a.btn:hover { background: #f0f0f0; }
   button:disabled { opacity: 0.5; cursor: wait; }
-  .stats { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-  .stat { background: #f5f5f5; padding: 12px 16px; border-radius: 8px; min-width: 120px; }
-  .stat .label { font-size: 12px; color: #666; }
-  .stat .value { font-size: 20px; font-weight: 600; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .stat { background: #f5f5f5; padding: 10px 14px; border-radius: 8px; }
+  .stat .label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat .value { font-size: 20px; font-weight: 600; margin-top: 2px; }
   table { border-collapse: collapse; width: 100%; font-size: 14px; }
   th, td { border-bottom: 1px solid #eee; padding: 8px 10px; text-align: left; }
   th { background: #fafafa; font-weight: 600; position: sticky; top: 0; }
-  tr.sold td { color: #888; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .profit-pos { color: #0a7f2e; font-weight: 600; }
   .profit-neg { color: #b00020; font-weight: 600; }
-  .status { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #eef; display: inline-block; }
   .err { background: #fee; color: #900; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
   .empty { color: #888; padding: 24px; text-align: center; }
+  .evt { font-weight: 600; }
+  .evt-meta { color: #777; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -33,9 +34,12 @@
 <div id="errbox" style="display:none" class="err"></div>
 
 <div class="stats">
-  <div class="stat"><div class="label">Active</div><div class="value" id="s-active">0</div></div>
-  <div class="stat"><div class="label">Sold</div><div class="value" id="s-sold">0</div></div>
-  <div class="stat"><div class="label">Total P/L</div><div class="value" id="s-profit">$0.00</div></div>
+  <div class="stat"><div class="label">Events</div><div class="value" id="s-events">0</div></div>
+  <div class="stat"><div class="label">Listings</div><div class="value" id="s-listings">0</div></div>
+  <div class="stat"><div class="label">Tickets</div><div class="value" id="s-tickets">0</div></div>
+  <div class="stat"><div class="label">Total Cost</div><div class="value" id="s-cost">$0</div></div>
+  <div class="stat"><div class="label">Total List</div><div class="value" id="s-list">$0</div></div>
+  <div class="stat"><div class="label">P/L</div><div class="value" id="s-pl">$0</div></div>
 </div>
 
 <div class="bar">
@@ -46,25 +50,37 @@
 <table>
   <thead>
     <tr>
-      <th>Event</th><th>Date</th><th>Section</th><th>Row</th><th>Seat</th>
-      <th>Purchase</th><th>Sale</th><th>P/L</th><th>Status</th>
+      <th>Event</th>
+      <th>Date</th>
+      <th>Venue</th>
+      <th class="num">Listings</th>
+      <th class="num">Tickets</th>
+      <th class="num">Cost</th>
+      <th class="num">List</th>
+      <th class="num">P/L</th>
     </tr>
   </thead>
   <tbody id="tbody"></tbody>
 </table>
-<div id="empty" class="empty" style="display:none">No tickets yet. Click "Refresh now" to pull from Lysted.</div>
+<div id="empty" class="empty" style="display:none">No data yet. Click "Refresh now" to pull from Lysted.</div>
 
 <script>
-const money = (n) => n == null ? "—" : "$" + Number(n).toFixed(2);
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
 const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 
 async function load() {
-  const res = await fetch("/api/tickets");
+  const res = await fetch("/api/inventory");
   const data = await res.json();
+  const t = data.totals;
 
-  document.getElementById("s-active").textContent = data.summary.active_count;
-  document.getElementById("s-sold").textContent = data.summary.sold_count;
-  document.getElementById("s-profit").textContent = money(data.summary.total_profit);
+  document.getElementById("s-events").textContent = t.events;
+  document.getElementById("s-listings").textContent = t.listings;
+  document.getElementById("s-tickets").textContent = t.tickets;
+  document.getElementById("s-cost").textContent = money(t.total_cost);
+  document.getElementById("s-list").textContent = money(t.total_list);
+  const pl = document.getElementById("s-pl");
+  pl.textContent = money(t.total_pl);
+  pl.className = "value " + (t.total_pl >= 0 ? "profit-pos" : "profit-neg");
 
   const lr = data.last_run;
   const msg = lr.running ? "Scraping now…"
@@ -78,25 +94,23 @@ async function load() {
 
   const tbody = document.getElementById("tbody");
   tbody.innerHTML = "";
-  for (const t of data.tickets) {
+  for (const r of data.rows) {
     const tr = document.createElement("tr");
-    if (t.sold) tr.classList.add("sold");
-    const pl = t.profit_loss;
-    const plClass = pl == null ? "" : (pl >= 0 ? "profit-pos" : "profit-neg");
+    const plVal = r.profit_loss;
+    const plClass = plVal == null ? "" : (plVal >= 0 ? "profit-pos" : "profit-neg");
     tr.innerHTML = `
-      <td>${esc(t.event_name)}</td>
-      <td>${esc(t.event_date)}</td>
-      <td>${esc(t.section)}</td>
-      <td>${esc(t.row)}</td>
-      <td>${esc(t.seat)}</td>
-      <td>${money(t.purchase_price)}</td>
-      <td>${money(t.sale_price)}</td>
-      <td class="${plClass}">${money(pl)}</td>
-      <td><span class="status">${esc(t.status)}</span></td>
+      <td class="evt">${esc(r.event_name)}</td>
+      <td>${esc(r.event_date)}${r.event_time ? ' <span class="evt-meta">' + esc(r.event_time) + '</span>' : ''}</td>
+      <td>${esc(r.venue)}</td>
+      <td class="num">${r.listings_count ?? ""}</td>
+      <td class="num">${r.tickets_count ?? ""}</td>
+      <td class="num">${money(r.total_cost)}</td>
+      <td class="num">${money(r.total_list)}</td>
+      <td class="num ${plClass}">${money(plVal)}</td>
     `;
     tbody.appendChild(tr);
   }
-  document.getElementById("empty").style.display = data.tickets.length ? "none" : "block";
+  document.getElementById("empty").style.display = data.rows.length ? "none" : "block";
 }
 
 document.getElementById("refresh").addEventListener("click", async (e) => {
@@ -104,7 +118,7 @@ document.getElementById("refresh").addEventListener("click", async (e) => {
   btn.disabled = true;
   btn.textContent = "Refreshing…";
   await fetch("/api/refresh", { method: "POST" });
-  setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh now"; load(); }, 3000);
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh now"; load(); }, 4000);
 });
 
 load();

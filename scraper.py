@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,9 +17,11 @@ CDP_URL = "http://localhost:9222"
 def _parse_money(text):
     if not text:
         return None
-    cleaned = text.replace("$", "").replace(",", "").strip()
+    match = re.search(r"\$?([\d,]+(?:\.\d+)?)", text)
+    if not match:
+        return None
     try:
-        return float(cleaned)
+        return float(match.group(1).replace(",", ""))
     except ValueError:
         return None
 
@@ -26,14 +29,6 @@ def _parse_money(text):
 def _text(el, selector):
     node = el.query_selector(selector)
     return node.inner_text().strip() if node else None
-
-
-def _row_id(r):
-    return (
-        _text(r, '[data-field="id"]')
-        or _text(r, '[data-testid="ticket-id"]')
-        or r.get_attribute("data-ticket-id")
-    )
 
 
 def _save_debug(page, label):
@@ -56,88 +51,90 @@ def _save_debug(page, label):
 
 
 def _ensure_logged_in(page):
-    """Verify the saved session still works by hitting the inventory URL."""
     url = os.environ.get("LYSTED_INVENTORY_URL", "https://app.lysted.com/tickets")
     page.goto(url, wait_until="domcontentloaded")
-    page.wait_for_timeout(5000)
-    if "login" in page.url or "automatiq.com" in page.url:
-        raise RuntimeError(
-            "Saved Lysted session has expired. Run `python login.py` to "
-            "sign in again (email + password + SMS code), then retry."
-        )
-    body_text = (page.inner_text("body") or "").lower()
-    if "performing security verification" in body_text or "verify you are human" in body_text:
-        raise RuntimeError(
-            "Cloudflare is challenging the scraper. Run `python login.py`, "
-            "complete the 'Verify you are human' check, wait for the tickets "
-            "page to load, then press Enter in that terminal and retry."
-        )
+    try:
+        page.wait_for_selector("table.b-table tbody tr", timeout=20000)
+    except Exception:
+        body_text = (page.inner_text("body") or "").lower()
+        if "performing security verification" in body_text or "verify you are human" in body_text:
+            raise RuntimeError(
+                "Cloudflare is challenging the browser. Switch to the Chrome "
+                "window, complete the 'Verify you are human' check, then retry."
+            )
+        if "login" in page.url or "automatiq.com" in page.url:
+            raise RuntimeError(
+                "Chrome session is logged out. Run `python login.py` and sign "
+                "back into Lysted in that window."
+            )
+        raise
+    page.wait_for_timeout(1500)
 
 
-def _scrape_page(page, url):
-    page.goto(url, wait_until="domcontentloaded")
-    page.wait_for_timeout(3000)
-    return page.query_selector_all(
-        '[data-testid="inventory-row"], tr.inventory-row, tr[data-ticket-id]'
-    )
+def _extract_row(r):
+    event_name = _text(r, "span.smart-title")
+    if not event_name:
+        return None
+
+    secondary = r.query_selector("td[aria-colindex='1'] div.secondary")
+    event_date = None
+    event_time = None
+    venue = None
+    if secondary:
+        date_el = secondary.query_selector("b")
+        event_date = date_el.inner_text().strip() if date_el else None
+        full = secondary.inner_text().strip()
+        if event_date:
+            full = full.replace(event_date, "", 1)
+        # full is now "8:00PM, Moody Center ATX" (whitespace/newlines collapse)
+        cleaned = " ".join(full.split())
+        if "," in cleaned:
+            time_part, venue_part = cleaned.split(",", 1)
+            event_time = time_part.strip() or None
+            venue = venue_part.strip() or None
+        else:
+            venue = cleaned or None
+
+    listings_count = None
+    tickets_count = None
+    primary = r.query_selector("td[aria-colindex='2'] div.primary")
+    if primary:
+        numbers = re.findall(r"\d+", primary.inner_text())
+        if len(numbers) >= 2:
+            listings_count = int(numbers[0])
+            tickets_count = int(numbers[1])
+
+    total_cost = None
+    total_list = None
+    price_sec = r.query_selector("td[aria-colindex='2'] div.secondary")
+    if price_sec:
+        amounts = re.findall(r"\$[\d,]+(?:\.\d+)?", price_sec.inner_text())
+        if len(amounts) >= 1:
+            total_cost = _parse_money(amounts[0])
+        if len(amounts) >= 2:
+            total_list = _parse_money(amounts[1])
+
+    return {
+        "id": f"{event_name}|{event_date or ''}|{venue or ''}",
+        "event_name": event_name,
+        "event_date": event_date,
+        "event_time": event_time,
+        "venue": venue,
+        "listings_count": listings_count,
+        "tickets_count": tickets_count,
+        "total_cost": total_cost,
+        "total_list": total_list,
+    }
 
 
-def _scrape_tickets(page):
-    url = os.environ.get("LYSTED_INVENTORY_URL", "https://app.lysted.com/tickets")
-    out = {}
-    for r in _scrape_page(page, url):
-        tid = _row_id(r)
-        if not tid:
-            continue
-        out[tid] = {
-            "id": tid,
-            "event_name": _text(r, '[data-field="event"]'),
-            "event_date": _text(r, '[data-field="date"]'),
-            "section": _text(r, '[data-field="section"]'),
-            "row": _text(r, '[data-field="row"]'),
-            "seat": _text(r, '[data-field="seat"]'),
-            "status": _text(r, '[data-field="status"]'),
-        }
+def _scrape_inventory(page):
+    rows = page.query_selector_all("table.b-table tbody tr")
+    out = []
+    for r in rows:
+        row = _extract_row(r)
+        if row:
+            out.append(row)
     return out
-
-
-def _scrape_purchases(page):
-    url = os.environ.get("LYSTED_PURCHASES_URL", "https://app.lysted.com/purchases")
-    out = {}
-    for r in _scrape_page(page, url):
-        tid = _row_id(r)
-        if not tid:
-            continue
-        out[tid] = {
-            "id": tid,
-            "purchase_price": _parse_money(_text(r, '[data-field="purchase-price"]')),
-        }
-    return out
-
-
-def _scrape_sales(page):
-    url = os.environ.get("LYSTED_SALES_URL", "https://app.lysted.com/sales")
-    out = {}
-    for r in _scrape_page(page, url):
-        tid = _row_id(r)
-        if not tid:
-            continue
-        out[tid] = {
-            "id": tid,
-            "sale_price": _parse_money(_text(r, '[data-field="sale-price"]')),
-        }
-    return out
-
-
-def _merge(*sources):
-    merged = {}
-    for src in sources:
-        for tid, row in src.items():
-            merged.setdefault(tid, {"id": tid})
-            for k, v in row.items():
-                if v is not None:
-                    merged[tid][k] = v
-    return list(merged.values())
 
 
 def scrape_all():
@@ -155,10 +152,7 @@ def scrape_all():
         try:
             _ensure_logged_in(page)
             _save_debug(page, "tickets")
-            inv = _scrape_tickets(page)
-            purchases = _scrape_purchases(page)
-            sales = _scrape_sales(page)
-            rows = _merge(inv, purchases, sales)
+            rows = _scrape_inventory(page)
         except Exception:
             _save_debug(page, "failure")
             raise
@@ -171,18 +165,13 @@ def scrape_all():
 
 
 def run_and_save():
-    rows = [t for t in scrape_all() if t.get("id")]
-    defaults = {
-        "event_name": None, "event_date": None, "section": None, "row": None,
-        "seat": None, "purchase_price": None, "sale_price": None, "status": None,
-    }
-    rows = [{**defaults, **r} for r in rows]
+    rows = scrape_all()
     now_iso = datetime.now(timezone.utc).isoformat()
-    db.upsert_tickets(rows, now_iso)
+    db.upsert_inventory(rows, now_iso)
     return len(rows)
 
 
 if __name__ == "__main__":
     db.init()
     count = run_and_save()
-    print(f"Saved {count} tickets.")
+    print(f"Saved {count} events.")

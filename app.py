@@ -44,11 +44,9 @@ def run_scraper():
 
 def _enrich(rows):
     for r in rows:
-        pp = r.get("purchase_price") or 0
-        sp = r.get("sale_price")
-        sold = sp is not None
-        r["sold"] = sold
-        r["profit_loss"] = round(sp - pp, 2) if sold else None
+        cost = r.get("total_cost")
+        lst = r.get("total_list")
+        r["profit_loss"] = round(lst - cost, 2) if cost is not None and lst is not None else None
     return rows
 
 
@@ -57,21 +55,18 @@ def dashboard():
     return render_template("dashboard.html")
 
 
-@app.route("/api/tickets")
-def api_tickets():
-    rows = _enrich(db.all_tickets())
-    active = [r for r in rows if not r["sold"]]
-    sold = [r for r in rows if r["sold"]]
-    total_profit = sum(r["profit_loss"] for r in sold if r["profit_loss"] is not None)
-    return jsonify({
-        "tickets": rows,
-        "summary": {
-            "active_count": len(active),
-            "sold_count": len(sold),
-            "total_profit": round(total_profit, 2),
-        },
-        "last_run": _last_run,
-    })
+@app.route("/api/inventory")
+def api_inventory():
+    rows = _enrich(db.all_inventory())
+    totals = {
+        "events": len(rows),
+        "listings": sum(r.get("listings_count") or 0 for r in rows),
+        "tickets": sum(r.get("tickets_count") or 0 for r in rows),
+        "total_cost": round(sum(r.get("total_cost") or 0 for r in rows), 2),
+        "total_list": round(sum(r.get("total_list") or 0 for r in rows), 2),
+    }
+    totals["total_pl"] = round(totals["total_list"] - totals["total_cost"], 2)
+    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
 
 
 @app.route("/api/refresh", methods=["POST"])
@@ -82,20 +77,20 @@ def api_refresh():
 
 @app.route("/export.xlsx")
 def export_xlsx():
-    rows = _enrich(db.all_tickets())
+    rows = _enrich(db.all_inventory())
     wb = Workbook()
     ws = wb.active
     ws.title = "Inventory"
     ws.append([
-        "Event", "Date", "Section", "Row", "Seat",
-        "Purchase Price", "Sale Price", "Profit/Loss", "Status",
+        "Event", "Date", "Time", "Venue",
+        "Listings", "Tickets", "Total Cost", "Total List", "P/L",
     ])
     for r in rows:
         ws.append([
-            r.get("event_name"), r.get("event_date"), r.get("section"),
-            r.get("row"), r.get("seat"),
-            r.get("purchase_price"), r.get("sale_price"),
-            r.get("profit_loss"), r.get("status"),
+            r.get("event_name"), r.get("event_date"), r.get("event_time"),
+            r.get("venue"),
+            r.get("listings_count"), r.get("tickets_count"),
+            r.get("total_cost"), r.get("total_list"), r.get("profit_loss"),
         ])
     buf = io.BytesIO()
     wb.save(buf)
