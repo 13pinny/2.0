@@ -62,6 +62,22 @@
   <div class="stat"><div class="label">Sold Cost</div><div class="value" id="lp-scost">$0</div></div>
 </div>
 <div class="bar">
+  <input type="search" id="lp-search" placeholder="Search event / artist" style="padding:7px 10px; border:1px solid #ccc; border-radius:6px; font-size:13px; min-width:200px;">
+  <label style="font-size:13px;">Sort:
+    <select id="lp-sort">
+      <option value="date-asc">Date (soonest first)</option>
+      <option value="date-desc">Date (latest first)</option>
+      <option value="name">Name A–Z</option>
+    </select>
+  </label>
+  <label style="font-size:13px;">Range:
+    <select id="lp-range">
+      <option value="all">All dates</option>
+      <option value="7">Next 7 days</option>
+      <option value="14">Next 14 days</option>
+      <option value="month">This month</option>
+    </select>
+  </label>
   <label style="font-size:13px;">Show:
     <select id="lp-filter">
       <option value="active">Active only</option>
@@ -95,6 +111,24 @@
   <div class="stat"><div class="label">Cost (Avail × Face)</div><div class="value" id="v-cost">$0</div></div>
   <div class="stat"><div class="label">Asking</div><div class="value" id="v-price">$0</div></div>
   <div class="stat"><div class="label">Proceeds</div><div class="value" id="v-proceeds">$0</div></div>
+</div>
+<div class="bar">
+  <input type="search" id="v-search" placeholder="Search event / artist" style="padding:7px 10px; border:1px solid #ccc; border-radius:6px; font-size:13px; min-width:200px;">
+  <label style="font-size:13px;">Sort:
+    <select id="v-sort">
+      <option value="date-asc">Date (soonest first)</option>
+      <option value="date-desc">Date (latest first)</option>
+      <option value="name">Name A–Z</option>
+    </select>
+  </label>
+  <label style="font-size:13px;">Range:
+    <select id="v-range">
+      <option value="all">All dates</option>
+      <option value="7">Next 7 days</option>
+      <option value="14">Next 14 days</option>
+      <option value="month">This month</option>
+    </select>
+  </label>
 </div>
 <table>
   <thead>
@@ -157,13 +191,49 @@ document.getElementById("refresh").addEventListener("click", async (e) => {
 
 let _lystedCost = 0;
 let _lpRows = [];
+let _vRows = [];
+
+function _inRange(iso, range) {
+  if (range === "all") return true;
+  if (!iso) return false;
+  const d = new Date(iso);
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  if (range === "7" || range === "14") {
+    const max = new Date(now);
+    max.setDate(max.getDate() + Number(range));
+    return d >= now && d <= max;
+  }
+  if (range === "month") {
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  }
+  return true;
+}
+
+function _matches(query, ...fields) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return fields.some(f => (f || "").toLowerCase().includes(q));
+}
+
+function _sortCmp(mode) {
+  if (mode === "date-desc") return (a, b) => (b.event_date_iso || "").localeCompare(a.event_date_iso || "");
+  if (mode === "name") return (a, b) => (a.event_name || "").localeCompare(b.event_name || "");
+  return (a, b) => (a.event_date_iso || "zzz").localeCompare(b.event_date_iso || "zzz");
+}
 
 function renderLystedPurchases() {
   const filter = document.getElementById("lp-filter").value;
+  const search = document.getElementById("lp-search").value;
+  const range = document.getElementById("lp-range").value;
+  const sort = document.getElementById("lp-sort").value;
+
   const rows = _lpRows.filter(r => {
     const sold = (r.status || "").toLowerCase() === "sold";
-    if (filter === "active") return !sold;
-    if (filter === "sold") return sold;
+    if (filter === "active" && sold) return false;
+    if (filter === "sold" && !sold) return false;
+    if (!_inRange(r.event_date_iso, range)) return false;
+    if (!_matches(search, r.event_name, r.venue)) return false;
     return true;
   });
 
@@ -181,9 +251,7 @@ function renderLystedPurchases() {
     }
     groups.get(key).rows.push(r);
   }
-  const sorted = [...groups.values()].sort((a, b) =>
-    (a.event_date_iso || "zzz").localeCompare(b.event_date_iso || "zzz")
-  );
+  const sorted = [...groups.values()].sort(_sortCmp(sort));
 
   const tbody = document.getElementById("lpbody");
   tbody.innerHTML = "";
@@ -232,20 +300,20 @@ async function loadLystedPurchases() {
   renderLystedPurchases();
 }
 
-async function loadViagogo() {
-  const res = await fetch("/api/viagogo");
-  const data = await res.json();
-  const t = data.totals;
-  document.getElementById("v-listings").textContent = t.listings;
-  document.getElementById("v-avail").textContent = t.tickets_available;
-  document.getElementById("v-sold").textContent = t.tickets_sold;
-  document.getElementById("v-cost").textContent = money(t.total_cost);
-  document.getElementById("v-price").textContent = money(t.total_price);
-  document.getElementById("v-proceeds").textContent = money(t.total_proceeds);
-  document.getElementById("s-combined-cost").textContent = money((_lystedCost || 0) + (t.total_cost || 0));
+function renderViagogo() {
+  const search = document.getElementById("v-search").value;
+  const range = document.getElementById("v-range").value;
+  const sort = document.getElementById("v-sort").value;
+
+  const rows = _vRows.filter(r => {
+    if (!_inRange(r.event_date_iso, range)) return false;
+    if (!_matches(search, r.event_name, r.venue, r.section)) return false;
+    return true;
+  }).sort(_sortCmp(sort));
+
   const tbody = document.getElementById("vtbody");
   tbody.innerHTML = "";
-  for (const r of data.rows) {
+  for (const r of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td class="evt">${esc(r.event_name)}</td>
@@ -262,11 +330,33 @@ async function loadViagogo() {
     `;
     tbody.appendChild(tr);
   }
-  document.getElementById("vempty").style.display = data.rows.length ? "none" : "block";
+  document.getElementById("vempty").style.display = rows.length ? "none" : "block";
+}
+
+async function loadViagogo() {
+  const res = await fetch("/api/viagogo");
+  const data = await res.json();
+  const t = data.totals;
+  document.getElementById("v-listings").textContent = t.listings;
+  document.getElementById("v-avail").textContent = t.tickets_available;
+  document.getElementById("v-sold").textContent = t.tickets_sold;
+  document.getElementById("v-cost").textContent = money(t.total_cost);
+  document.getElementById("v-price").textContent = money(t.total_price);
+  document.getElementById("v-proceeds").textContent = money(t.total_proceeds);
+  document.getElementById("s-combined-cost").textContent = money((_lystedCost || 0) + (t.total_cost || 0));
+  _vRows = data.rows;
+  renderViagogo();
 }
 
 function loadAll() { load(); loadLystedPurchases(); loadViagogo(); }
-document.getElementById("lp-filter").addEventListener("change", renderLystedPurchases);
+for (const id of ["lp-filter", "lp-search", "lp-sort", "lp-range"]) {
+  document.getElementById(id).addEventListener("input", renderLystedPurchases);
+  document.getElementById(id).addEventListener("change", renderLystedPurchases);
+}
+for (const id of ["v-search", "v-sort", "v-range"]) {
+  document.getElementById(id).addEventListener("input", renderViagogo);
+  document.getElementById(id).addEventListener("change", renderViagogo);
+}
 loadAll();
 setInterval(loadAll, 15000);
 </script>
