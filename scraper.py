@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
@@ -7,6 +8,8 @@ from playwright.sync_api import sync_playwright
 import db
 
 load_dotenv()
+
+DEBUG_DIR = Path(__file__).parent / "debug"
 
 
 def _parse_money(text):
@@ -32,19 +35,69 @@ def _row_id(r):
     )
 
 
+EMAIL_SELECTORS = (
+    'input[type="email"], '
+    'input[name="email"], '
+    'input[autocomplete="email"], '
+    'input[autocomplete="username"], '
+    'input[id*="email" i], '
+    'input[name*="email" i], '
+    'input[placeholder*="email" i]'
+)
+
+PASSWORD_SELECTORS = (
+    'input[type="password"], '
+    'input[name="password"], '
+    'input[autocomplete="current-password"], '
+    'input[id*="password" i], '
+    'input[name*="password" i]'
+)
+
+SUBMIT_SELECTORS = (
+    'button[type="submit"], '
+    'button:has-text("Sign in"), '
+    'button:has-text("Sign In"), '
+    'button:has-text("Log in"), '
+    'button:has-text("Log In"), '
+    'button:has-text("Login"), '
+    'input[type="submit"]'
+)
+
+
+def _save_debug(page, label):
+    DEBUG_DIR.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    base = DEBUG_DIR / f"{label}-{stamp}"
+    try:
+        page.screenshot(path=str(base.with_suffix(".png")), full_page=True)
+    except Exception:
+        pass
+    try:
+        base.with_suffix(".html").write_text(page.content(), encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        base.with_suffix(".url.txt").write_text(page.url, encoding="utf-8")
+    except Exception:
+        pass
+    print(f"[kartis] saved debug artifacts to {base}.*")
+
+
 def _login(page):
     email = os.environ["LYSTED_EMAIL"]
     password = os.environ["LYSTED_PASSWORD"]
     login_url = os.environ.get("LYSTED_LOGIN_URL", "https://lysted.com/login")
-    page.goto(login_url)
-    page.fill('input[type="email"], input[name="email"]', email)
-    page.fill('input[type="password"], input[name="password"]', password)
-    page.click('button[type="submit"]')
+
+    page.goto(login_url, wait_until="domcontentloaded")
+    page.wait_for_selector(EMAIL_SELECTORS, timeout=20000)
+    page.fill(EMAIL_SELECTORS, email)
+    page.fill(PASSWORD_SELECTORS, password)
+    page.click(SUBMIT_SELECTORS)
     page.wait_for_load_state("networkidle")
 
 
 def _scrape_page(page, url):
-    page.goto(url)
+    page.goto(url, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle")
     return page.query_selector_all(
         '[data-testid="inventory-row"], tr.inventory-row, tr[data-ticket-id]'
@@ -110,25 +163,29 @@ def _merge(*sources):
 
 
 def scrape_all():
-    tickets = []
+    rows = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context()
         page = context.new_page()
-
-        _login(page)
-        inv = _scrape_tickets(page)
-        purchases = _scrape_purchases(page)
-        sales = _scrape_sales(page)
-
-        browser.close()
-
-    return _merge(inv, purchases, sales)
+        try:
+            _login(page)
+            _save_debug(page, "after-login")
+            inv = _scrape_tickets(page)
+            _save_debug(page, "tickets")
+            purchases = _scrape_purchases(page)
+            sales = _scrape_sales(page)
+            rows = _merge(inv, purchases, sales)
+        except Exception:
+            _save_debug(page, "failure")
+            raise
+        finally:
+            browser.close()
+    return rows
 
 
 def run_and_save():
     rows = [t for t in scrape_all() if t.get("id")]
-    # Ensure every column exists so DB insert doesn't KeyError.
     defaults = {
         "event_name": None, "event_date": None, "section": None, "row": None,
         "seat": None, "purchase_price": None, "sale_price": None, "status": None,

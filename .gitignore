@@ -16,3 +16,6 @@ kartis.db
 
 # Playwright
 .playwright/
+
+# Scraper debug artifacts (screenshots + HTML dumps)
+debug/
