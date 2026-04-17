@@ -182,6 +182,26 @@ def _scrape_inventory(page):
     return out
 
 
+def _dump_viagogo(context):
+    """Best-effort debug dump of the Viagogo inventory page.
+
+    Never fails the main Lysted scrape; just captures HTML so we can
+    design real selectors before wiring Viagogo into the dashboard.
+    """
+    vpage = context.new_page()
+    try:
+        vpage.goto("https://inv.viagogo.com/", wait_until="domcontentloaded")
+        vpage.wait_for_timeout(4000)
+        _save_debug(vpage, "viagogo")
+    except Exception as e:
+        print(f"[kartis] viagogo dump failed: {type(e).__name__}: {e}")
+    finally:
+        try:
+            vpage.close()
+        except Exception:
+            pass
+
+
 def scrape_all():
     rows = []
     with sync_playwright() as p:
@@ -206,6 +226,7 @@ def scrape_all():
                 page.close()
             except Exception:
                 pass
+        _dump_viagogo(context)
     return rows
 
 
