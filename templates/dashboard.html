@@ -56,9 +56,9 @@
 
 <h2>Lysted</h2>
 <div class="stats">
-  <div class="stat"><div class="label">Active Tickets</div><div class="value" id="lp-active">0</div></div>
+  <div class="stat"><div class="label">Available Tickets</div><div class="value" id="lp-active">0</div></div>
   <div class="stat"><div class="label">Sold Tickets</div><div class="value" id="lp-sold">0</div></div>
-  <div class="stat"><div class="label">Active Cost</div><div class="value" id="lp-acost">$0</div></div>
+  <div class="stat"><div class="label">Available Cost</div><div class="value" id="lp-acost">$0</div></div>
   <div class="stat"><div class="label">Sold Cost</div><div class="value" id="lp-scost">$0</div></div>
 </div>
 <div class="bar">
@@ -105,12 +105,10 @@
 
 <h2>Viagogo</h2>
 <div class="stats">
-  <div class="stat"><div class="label">Listings</div><div class="value" id="v-listings">0</div></div>
-  <div class="stat"><div class="label">Available</div><div class="value" id="v-avail">0</div></div>
-  <div class="stat"><div class="label">Sold</div><div class="value" id="v-sold">0</div></div>
-  <div class="stat"><div class="label">Cost (Avail × Face)</div><div class="value" id="v-cost">$0</div></div>
-  <div class="stat"><div class="label">Asking</div><div class="value" id="v-price">$0</div></div>
-  <div class="stat"><div class="label">Proceeds</div><div class="value" id="v-proceeds">$0</div></div>
+  <div class="stat"><div class="label">Available Tickets</div><div class="value" id="v-avail">0</div></div>
+  <div class="stat"><div class="label">Sold Tickets</div><div class="value" id="v-sold">0</div></div>
+  <div class="stat"><div class="label">Available Cost</div><div class="value" id="v-cost">$0</div></div>
+  <div class="stat"><div class="label">Sold Cost</div><div class="value" id="v-scost">$0</div></div>
 </div>
 <div class="bar">
   <input type="search" id="v-search" placeholder="Search event / artist" style="padding:7px 10px; border:1px solid #ccc; border-radius:6px; font-size:13px; min-width:200px;">
@@ -337,12 +335,10 @@ async function loadViagogo() {
   const res = await fetch("/api/viagogo");
   const data = await res.json();
   const t = data.totals;
-  document.getElementById("v-listings").textContent = t.listings;
   document.getElementById("v-avail").textContent = t.tickets_available;
   document.getElementById("v-sold").textContent = t.tickets_sold;
   document.getElementById("v-cost").textContent = money(t.total_cost);
-  document.getElementById("v-price").textContent = money(t.total_price);
-  document.getElementById("v-proceeds").textContent = money(t.total_proceeds);
+  document.getElementById("v-scost").textContent = money(t.sold_cost);
   document.getElementById("s-combined-cost").textContent = money((_lystedCost || 0) + (t.total_cost || 0));
   _vRows = data.rows;
   renderViagogo();

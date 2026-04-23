@@ -53,8 +53,10 @@ def _enrich(rows):
 def _enrich_viagogo(rows):
     for r in rows:
         avail = r.get("available") or 0
+        sold = r.get("sold") or 0
         fv = r.get("face_value") or 0
         r["cost"] = round(avail * fv, 2)
+        r["sold_cost"] = round(sold * fv, 2)
     return rows
 
 
@@ -104,6 +106,7 @@ def api_viagogo():
         "tickets_available": sum(r.get("available") or 0 for r in rows),
         "tickets_sold": sum(r.get("sold") or 0 for r in rows),
         "total_cost": round(sum(r.get("cost") or 0 for r in rows), 2),
+        "sold_cost": round(sum(r.get("sold_cost") or 0 for r in rows), 2),
         "total_price": round(sum((r.get("price") or 0) * (r.get("available") or 0) for r in rows), 2),
         "total_proceeds": round(sum((r.get("proceeds") or 0) * (r.get("available") or 0) for r in rows), 2),
     }
