@@ -2022,7 +2022,9 @@ def api_watchers_sections():
         {"code": code, "name": info.get("name") or code, "price": info.get("price")}
         for code, info in blocks.items()
     ]
-    rows.sort(key=lambda r: (r["price"] or 0, r["code"]))
+    # Priced sections first (sorted by price ascending), then unpriced ones
+    # alphabetically — keeps the relevant inventory on top for the user.
+    rows.sort(key=lambda r: (r["price"] is None, r["price"] or 0, r["code"]))
     return jsonify({"sections": rows, "filters": json.loads(w.get("filters")) if w.get("filters") else None})
 
 

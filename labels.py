@@ -104,6 +104,44 @@ def _fetch_block_labels(event_code, perf_code, lang):
     return blocks
 
 
+_ISM_HOST = "https://www.ticketmaster.co.il/ismapi/api/v1/seatPlans"
+_INTERNET = "INTERNET"
+
+
+def _discover_extra_blocks(event_code, perf_code):
+    """Return the set of block codes present in the seat-plan APIs but
+    missing from getPriceByProfiles. Two sources:
+
+    * getAllBlockSeats — every seat across every block in the venue,
+      regardless of current state (BOOKED/ISSUED/AVAILABLE). Heaviest
+      payload (~225 KB) but the most complete; cached so this only fires
+      once an hour per watcher.
+    * getAllGaBlock — standing/general-admission blocks (e.g. STN1).
+      Tiny and cheap.
+
+    We don't try to recover names or prices for these blocks — the
+    relevant endpoint just doesn't have them. They show up in the UI as
+    raw codes (e.g. "BLTC") so the user can still tick them in the
+    exclude-sections list.
+    """
+    extras = set()
+    for path in (
+        f"{_ISM_HOST}/getAllBlockSeats/{event_code}/{perf_code}",
+        f"{_ISM_HOST}/getAllGaBlock/{event_code}/{perf_code}",
+    ):
+        try:
+            payload = _http_get_json(path)
+            data = payload.get("data") or []
+            if not isinstance(data, list):
+                continue
+            for s in data:
+                if isinstance(s, dict) and s.get("b"):
+                    extras.add(s["b"])
+        except Exception:
+            continue
+    return extras
+
+
 def fetch_fresh(event_code, perf_code, lang="iw"):
     """Force a refresh — bypasses cache. Used when a notification surfaces an
     unknown block code (rare but possible if a new section opens up)."""
@@ -112,6 +150,19 @@ def fetch_fresh(event_code, perf_code, lang="iw"):
         blocks = _fetch_block_labels(event_code, perf_code, lang)
     except Exception:
         blocks = {}
+    # Backfill block codes that exist in the venue layout but didn't
+    # appear in getPriceByProfiles — typically restricted/accessibility
+    # tiers and standing blocks.
+    try:
+        for code in _discover_extra_blocks(event_code, perf_code):
+            blocks.setdefault(code, {
+                "name": code,           # raw code; user sees what to filter
+                "price": None,
+                "priceLevel": None,
+                "profileId": None,
+            })
+    except Exception:
+        pass
     payload = {
         "_fetched_at": time.time(),
         "event_code": event_code,
