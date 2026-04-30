@@ -24,12 +24,14 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 
 import db
-import labels as tm_labels
+import kupat
 import notify
 import ticketmaster
 
 load_dotenv()
 db.init()
+
+SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat}
 
 import os
 INTERVAL = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
@@ -38,12 +40,24 @@ _lock = threading.Lock()
 _state = {"at": None, "checked": 0, "drops": 0, "errors": 0}
 
 
+def _diff_seats_set(prev_keys, curr_seats, src):
+    prev = set(prev_keys)
+    by_key = {}
+    for s in curr_seats:
+        by_key.setdefault(src.seat_key(s), s)
+    curr = set(by_key)
+    return [by_key[k] for k in curr - prev], list(prev - curr)
+
+
 def check_one(w, now_iso):
     wid = w["id"]
     label = w.get("label") or f"{w['event_code']}/{w['perf_code']}"
-    perf_url = ticketmaster.perf_url(w["event_code"], w["perf_code"])
+    src_name = w.get("source") or "ticketmaster"
+    src = SOURCES.get(src_name, ticketmaster)
+    perf_url = src.perf_url(w["event_code"], w["perf_code"])
+
     try:
-        seats = ticketmaster.fetch_selectable_seats(w["event_code"], w["perf_code"])
+        seats = src.fetch_selectable_seats(w["event_code"], w["perf_code"])
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         db.tm_update_watcher(wid, {"last_check_at": now_iso, "last_check_error": err})
@@ -51,7 +65,7 @@ def check_one(w, now_iso):
 
     prev_keys = db.tm_get_seat_keys(wid)
     is_baseline = not prev_keys and not w.get("last_check_at")
-    added, removed, _ = ticketmaster.diff_seats(prev_keys, seats)
+    added, removed = _diff_seats_set(prev_keys, seats, src)
     db.tm_replace_seat_state(wid, seats)
     db.tm_update_watcher(wid, {
         "last_check_at": now_iso,
@@ -62,13 +76,26 @@ def check_one(w, now_iso):
         return 0, None
 
     if added:
-        probe = next((s.get("b") for s in added if s.get("b")), None)
-        lbls = tm_labels.get_labels(w["event_code"], w["perf_code"], lang="iw", missing_block=probe)
-        result = notify.notify_drop(
-            label=label, perf_url=perf_url,
-            added_seats=added, removed_count=len(removed),
-            total_now=len(seats), labels=lbls,
-        )
+        probe = next((s.get("block") or s.get("b") for s in added if s.get("block") or s.get("b")), None)
+        try:
+            lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw", missing_block=probe)
+        except Exception:
+            lbls = None
+        master_muted = db.setting_get_bool("master_muted", default=False)
+        watcher_muted = bool(w.get("muted"))
+        channels_csv = (w.get("notify_channels") or "discord,email").strip().lower()
+        enabled = {c for c in (s.strip() for s in channels_csv.split(",")) if c}
+        if master_muted or watcher_muted:
+            enabled = set()
+        if enabled:
+            result = notify.notify_drop(
+                label=label, perf_url=perf_url,
+                added_seats=added, removed_count=len(removed),
+                total_now=len(seats), labels=lbls, channels=enabled,
+            )
+        else:
+            reason = "master-muted" if master_muted else ("watcher-muted" if watcher_muted else "channels-empty")
+            result = {"discord": f"skipped ({reason})", "email": f"skipped ({reason})"}
         db.tm_record_drop(
             wid, len(added), len(removed),
             json.dumps(added, ensure_ascii=False)[:8000],
@@ -82,6 +109,11 @@ def tick():
     if not _lock.acquire(blocking=False):
         return
     try:
+        if db.setting_get_bool("master_paused", default=False):
+            now_iso = datetime.now(timezone.utc).isoformat()
+            _state.update(at=now_iso, checked=0, drops=0, errors=0, paused=True)
+            print(f"[{now_iso}] master_paused — skipping tick", flush=True)
+            return
         watchers = db.tm_active_watchers()
         now_iso = datetime.now(timezone.utc).isoformat()
         drops = errors = 0
@@ -95,7 +127,7 @@ def tick():
             except Exception:
                 errors += 1
                 traceback.print_exc()
-        _state.update(at=now_iso, checked=len(watchers), drops=drops, errors=errors)
+        _state.update(at=now_iso, checked=len(watchers), drops=drops, errors=errors, paused=False)
         print(f"[{now_iso}] checked={len(watchers)} drops={drops} errors={errors}", flush=True)
     finally:
         _lock.release()

@@ -120,12 +120,10 @@ def fetch_performance_detail(event_code, perf_code):
 
 
 def fetch_selectable_seats(event_code, perf_code):
-    """Returns the list of seats currently buyable through the INTERNET channel.
+    """Returns the list of seats currently buyable through the INTERNET channel,
+    normalized to the cross-source shape with `block`, `row`, `seat` keys.
 
-    Each seat is a dict with keys b (block/section), r (row label), l (seat
-    number / level — the SPA treats l as the seat label), s (status), id
-    (internal numeric id), f (flag).
-
+    Raw API fields (b, r, l, s, id, f) are kept on the dict for audit.
     Returns [] when the show has no inventory or the endpoint returns null
     `data` (the SPA explicitly maps a null response to "no seats" — see the
     rxjs `catchError(() => of(null))` in the bundle). Hard errors are raised.
@@ -141,20 +139,32 @@ def fetch_selectable_seats(event_code, perf_code):
     data = payload.get("data") or []
     if not isinstance(data, list):
         return []
-    return data
+    out = []
+    for s in data:
+        if not isinstance(s, dict):
+            continue
+        out.append({
+            **s,
+            "block": s.get("b") or "",
+            "row": str(s.get("r") or ""),
+            "seat": str(s.get("l") if s.get("l") is not None else ""),
+        })
+    return out
 
 
 def seat_key(seat):
-    """Stable dedup key for a seat. Uses block + row + seat-number; ignores
-    `id` because the SPA's internal id can differ across calls for the same
-    physical seat (different price profile, etc.)."""
-    return f"{seat.get('b','')}|{seat.get('r','')}|{seat.get('l','')}"
+    """Stable dedup key for a seat across calls. Uses the normalized
+    block/row/seat keys; ignores the source's internal id (which can differ
+    across calls for the same physical seat under different price profiles).
+    """
+    return f"{seat.get('block') or seat.get('b','')}|{seat.get('row') or seat.get('r','')}|{seat.get('seat') or seat.get('l','')}"
 
 
 def format_seat(seat):
-    return (
-        f"{seat.get('b','?')} row {seat.get('r','?')} seat {seat.get('l','?')}"
-    )
+    block = seat.get("block") or seat.get("b") or "?"
+    row = seat.get("row") or seat.get("r") or "?"
+    num = seat.get("seat") or seat.get("l") or "?"
+    return f"{block} row {row} seat {num}"
 
 
 def diff_seats(prev_keys, curr_seats):
@@ -177,6 +187,21 @@ def diff_seats(prev_keys, curr_seats):
     return added, removed, list(curr)
 
 
+# Shims so app.py can call source modules uniformly.
+SOURCE_NAME = "ticketmaster"
+
+
+def get_labels(event_code, perf_code, lang="iw", force=False, missing_block=None):
+    # Lazy import to avoid a circular dep at module load time.
+    import labels as _labels
+    return _labels.get_labels(event_code, perf_code, lang=lang, force=force, missing_block=missing_block)
+
+
+def event_summary(labels):
+    import labels as _labels
+    return _labels.event_summary(labels)
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
@@ -190,7 +215,7 @@ if __name__ == "__main__":
     print(f"{len(seats)} selectable seats")
     by_block = {}
     for s in seats:
-        by_block.setdefault(s.get("b"), 0)
-        by_block[s["b"]] += 1
+        by_block.setdefault(s.get("block"), 0)
+        by_block[s["block"]] += 1
     for b, n in sorted(by_block.items(), key=lambda kv: -kv[1]):
         print(f"  {b}: {n}")

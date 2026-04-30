@@ -18,47 +18,64 @@ import urllib.error
 from email.message import EmailMessage
 
 
+def _seat_block(seat):
+    """Pick the block/section code from a seat dict, accepting both the
+    normalized `block` key (kupat + new ticketmaster) and the raw `b` key
+    (older ticketmaster fixtures). Returns '' if neither is set."""
+    return str(seat.get("block") or seat.get("b") or "")
+
+
+def _seat_row(seat):
+    return str(seat.get("row") or seat.get("r") or "?")
+
+
+def _seat_num(seat):
+    v = seat.get("seat")
+    if v is None:
+        v = seat.get("l")
+    return str(v) if v is not None else "?"
+
+
 def _block_info(labels, code):
     """Return (name_or_code, price_or_none) for a block code, given a labels
-    payload from labels.get_labels(). Falls back to the raw code when the
-    block isn't in the cached map."""
+    payload from a source's get_labels(). Falls back to the raw code when
+    the block isn't in the cached map."""
     blocks = ((labels or {}).get("blocks")) or {}
-    entry = blocks.get(code) or {}
+    entry = blocks.get(code) or blocks.get(str(code)) or {}
     name = entry.get("name") or code
     return name, entry.get("price")
 
 
 def _short(seat, labels=None):
-    code = seat.get("b", "?")
+    code = _seat_block(seat) or "?"
     name, _ = _block_info(labels, code)
-    return f"{name} · row {seat.get('r','?')} · seat {seat.get('l','?')}"
+    return f"{name} · row {_seat_row(seat)} · seat {_seat_num(seat)}"
 
 
 def _format_seat_lines(seats, limit=40, labels=None):
     """Group seats by block (showing block name once, then row/seat pairs).
-    Hebrew block names render right-to-left in Discord/Gmail naturally; we
-    don't try to override the rendering — the Unicode bidi algorithm handles
-    it correctly when the line is mostly Hebrew."""
+    Hebrew block names render right-to-left in Discord/Gmail naturally;
+    Unicode bidi handles it without any explicit marker."""
     by_block = {}
     for s in seats:
-        by_block.setdefault(s.get("b", "?"), []).append(s)
+        by_block.setdefault(_seat_block(s) or "?", []).append(s)
     lines = []
     shown = 0
     for code, group in sorted(by_block.items(), key=lambda kv: (-len(kv[1]), kv[0])):
         name, price = _block_info(labels, code)
-        header_bits = [name]
-        if name != code:
+        header_bits = [str(name)]
+        if str(name) != str(code):
             header_bits.append(f"({code})")
         if price is not None:
             header_bits.append(f"— ₪{price:.0f}")
         if len(group) > 1:
             header_bits.append(f"× {len(group)}")
         lines.append(f"**{' '.join(header_bits)}**")
-        for seat in sorted(group, key=lambda s: (str(s.get("r", "")), str(s.get("l", "")))):
+        for seat in sorted(group, key=lambda s: (_seat_row(s), _seat_num(s))):
             if shown >= limit:
                 lines.append(f"... +{len(seats) - shown} more")
                 return lines
-            lines.append(f"• row {seat.get('r','?')}, seat {seat.get('l','?')}")
+            lines.append(f"• row {_seat_row(seat)}, seat {_seat_num(seat)}")
             shown += 1
     return lines
 
@@ -70,7 +87,7 @@ def _total_price(seats, labels):
         return None
     total = 0.0
     for s in seats:
-        _, price = _block_info(labels, s.get("b"))
+        _, price = _block_info(labels, _seat_block(s))
         if price is None:
             return None
         total += price
@@ -115,19 +132,25 @@ def _send_email(subject, body, gmail_user, gmail_pwd, to_addr):
         return f"{type(e).__name__}: {e}"
 
 
-def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, labels=None):
+def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, labels=None, channels=None):
     """Send a notification for added seats. Returns {'discord': str, 'email': str}.
 
-    `label` is the user-facing watcher name (e.g. "Marina Brikker — Apr 30").
-    `perf_url` is the public Ticketmaster URL.
-    `added_seats` is a list of seat dicts from ticketmaster.fetch_selectable_seats.
-    `labels` is the payload from labels.get_labels(event, perf) — when provided,
-        block codes are translated to Hebrew names and ILS prices are shown.
+    `label` — user-facing watcher name (e.g. "אגם בוחבוט · אמפי קיסריה …").
+    `perf_url` — public URL of the performance.
+    `added_seats` — list of seat dicts (any source's fetch_selectable_seats).
+    `labels` — labels payload from the source's get_labels(); when provided,
+        block codes are translated to human names and prices are shown.
+    `channels` — iterable of {'discord', 'email'}. None = both. Empty = neither
+        (the function still returns a result dict so the caller can record it).
     """
     discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
     to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
+    if channels is None:
+        channels = {"discord", "email"}
+    else:
+        channels = {c.strip().lower() for c in channels}
 
     n_added = len(added_seats)
     seat_lines = _format_seat_lines(added_seats, labels=labels)
@@ -145,8 +168,8 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
             when = ""
     total_price = _total_price(added_seats, labels)
 
-    discord_result = "skipped (no DISCORD_WEBHOOK_URL)"
-    if discord_url:
+    discord_result = "skipped (channel disabled)" if "discord" not in channels else "skipped (no DISCORD_WEBHOOK_URL)"
+    if "discord" in channels and discord_url:
         title_bits = [f"🎟️ {n_added} new seat{'s' if n_added != 1 else ''} dropped"]
         if event_name:
             title_bits.append(f"— {event_name}")
@@ -171,8 +194,8 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
             embed["fields"].append({"name": "Also removed", "value": str(removed_count), "inline": True})
         discord_result = _post_discord(discord_url, {"embeds": [embed]})
 
-    email_result = "skipped (no GMAIL creds)"
-    if gmail_user and gmail_pwd and to_addr:
+    email_result = "skipped (channel disabled)" if "email" not in channels else "skipped (no GMAIL creds)"
+    if "email" in channels and gmail_user and gmail_pwd and to_addr:
         subj_bits = [f"[Kartis] {n_added} new seat{'s' if n_added != 1 else ''}"]
         if event_name:
             subj_bits.append(f"— {event_name}")

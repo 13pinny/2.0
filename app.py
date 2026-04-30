@@ -14,11 +14,37 @@ from openpyxl import Workbook
 
 import db
 import import_jerujam
-import labels as tm_labels
+import kupat
 import matcher
 import notify
 import scraper
 import ticketmaster
+
+# Drop-checker sources keyed by the value stored in tm_watchers.source.
+# Each module exposes parse_url, perf_url, fetch_selectable_seats,
+# seat_key, get_labels, event_summary. Adding a new ticketing site is a
+# matter of writing one module and adding a row here.
+WATCHER_SOURCES = {
+    "ticketmaster": ticketmaster,
+    "kupat": kupat,
+}
+
+
+def _detect_source(url):
+    """Pick the right source module from a URL. Returns (source_name, module).
+
+    Falls back to ticketmaster for shorthand 'ABC123/001' with letters,
+    kupat for shorthand '1358/51596' (digits only — both kupat IDs are
+    numeric), so existing callers keep working.
+    """
+    s = (url or "").strip().lower()
+    if "kupat.co.il" in s:
+        return "kupat", kupat
+    if "ticketmaster.co.il" in s:
+        return "ticketmaster", ticketmaster
+    if re.fullmatch(r"\s*\d+\s*/\s*\d+\s*", s or ""):
+        return "kupat", kupat
+    return "ticketmaster", ticketmaster
 
 load_dotenv()
 
@@ -1682,20 +1708,40 @@ def export_xlsx():
     )
 
 
+def _diff_seats_set(prev_keys, curr_seats, src):
+    """Source-agnostic set diff. Each source provides its own seat_key()."""
+    prev = set(prev_keys)
+    by_key = {}
+    for s in curr_seats:
+        by_key.setdefault(src.seat_key(s), s)
+    curr = set(by_key)
+    added = [by_key[k] for k in curr - prev]
+    removed = list(prev - curr)
+    return added, removed
+
+
 def _check_one_watcher(w, now_iso):
     """One tick for one watcher. Returns (added_count, error_str_or_None).
 
     The very first tick on a fresh watcher (no recorded state and no prior
-    check timestamp) is treated as a baseline: we capture whatever's currently
-    available and DO NOT notify, otherwise the user gets a spam ping for seats
-    that were already there at watch-create time.
+    check timestamp) is treated as a baseline: we capture whatever's
+    currently available and DO NOT notify, otherwise the user gets a
+    spam ping for seats that were already there at watch-create time.
+
+    Notification gating: master_muted (db setting), the watcher's own
+    `muted` flag, and `notify_channels` all apply here. When notifications
+    are suppressed the drop is still recorded in `tm_drops` so the
+    dashboard history shows what was missed.
     """
     import json as _json
     wid = w["id"]
     label = w.get("label") or f"{w['event_code']}/{w['perf_code']}"
-    perf_url = ticketmaster.perf_url(w["event_code"], w["perf_code"])
+    src_name = w.get("source") or "ticketmaster"
+    src = WATCHER_SOURCES.get(src_name, ticketmaster)
+    perf_url = src.perf_url(w["event_code"], w["perf_code"])
+
     try:
-        seats = ticketmaster.fetch_selectable_seats(w["event_code"], w["perf_code"])
+        seats = src.fetch_selectable_seats(w["event_code"], w["perf_code"])
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         db.tm_update_watcher(wid, {
@@ -1705,7 +1751,7 @@ def _check_one_watcher(w, now_iso):
 
     prev_keys = db.tm_get_seat_keys(wid)
     is_baseline = not prev_keys and not w.get("last_check_at")
-    added, removed, _curr = ticketmaster.diff_seats(prev_keys, seats)
+    added, removed = _diff_seats_set(prev_keys, seats, src)
     db.tm_replace_seat_state(wid, seats)
     db.tm_update_watcher(wid, {
         "last_check_at": now_iso,
@@ -1717,20 +1763,30 @@ def _check_one_watcher(w, now_iso):
         return 0, None
 
     if added:
-        # Hebrew labels + ILS prices. Passing any added block code as
-        # `missing_block` triggers a cache refresh only when that code
-        # isn't already known — keeps notifications accurate if a new
-        # section opens up mid-event.
-        probe_block = next((s.get("b") for s in added if s.get("b")), None)
-        labels = tm_labels.get_labels(
-            w["event_code"], w["perf_code"], lang="iw",
-            missing_block=probe_block,
-        )
-        result = notify.notify_drop(
-            label=label, perf_url=perf_url,
-            added_seats=added, removed_count=len(removed),
-            total_now=len(seats), labels=labels,
-        )
+        probe_block = next((s.get("block") or s.get("b") for s in added if s.get("block") or s.get("b")), None)
+        try:
+            labels = src.get_labels(w["event_code"], w["perf_code"], lang="iw", missing_block=probe_block)
+        except Exception:
+            labels = None
+
+        master_muted = db.setting_get_bool("master_muted", default=False)
+        watcher_muted = bool(w.get("muted"))
+        channels_csv = (w.get("notify_channels") or "discord,email").strip().lower()
+        enabled = {c for c in (s.strip() for s in channels_csv.split(",")) if c}
+        if master_muted or watcher_muted:
+            enabled = set()
+
+        if enabled:
+            result = notify.notify_drop(
+                label=label, perf_url=perf_url,
+                added_seats=added, removed_count=len(removed),
+                total_now=len(seats), labels=labels,
+                channels=enabled,
+            )
+        else:
+            reason = "master-muted" if master_muted else ("watcher-muted" if watcher_muted else "channels-empty")
+            result = {"discord": f"skipped ({reason})", "email": f"skipped ({reason})"}
+
         db.tm_record_drop(
             wid, len(added), len(removed),
             _json.dumps(added, ensure_ascii=False)[:8000],
@@ -1742,11 +1798,18 @@ def _check_one_watcher(w, now_iso):
 
 def run_tm_check():
     """Iterate active watchers, run one check each. Lock prevents overlap if
-    a tick exceeds the interval (e.g. a slow API response with many watchers)."""
+    a tick exceeds the interval. Honors the master_paused setting — when
+    set, the tick records the timestamp but skips polling entirely."""
     if not _tm_lock.acquire(blocking=False):
         return
     _last_tm["running"] = True
     try:
+        if db.setting_get_bool("master_paused", default=False):
+            _last_tm.update(
+                at=datetime.now(timezone.utc).isoformat(),
+                checked=0, drops=0, errors=0, paused=True,
+            )
+            return
         watchers = db.tm_active_watchers()
         now_iso = datetime.now(timezone.utc).isoformat()
         drops = 0
@@ -1762,7 +1825,7 @@ def run_tm_check():
                 errors += 1
                 traceback.print_exc()
         _last_tm.update(
-            at=now_iso, checked=len(watchers), drops=drops, errors=errors,
+            at=now_iso, checked=len(watchers), drops=drops, errors=errors, paused=False,
         )
     finally:
         _last_tm["running"] = False
@@ -1778,52 +1841,156 @@ def watchers_page():
 def api_watchers():
     watchers = db.tm_all_watchers()
     drops = db.tm_recent_drops(limit=200)
+    settings = db.all_settings()
     return jsonify({
         "watchers": watchers,
         "drops": drops,
         "last_tm": _last_tm,
         "interval_seconds": TM_CHECK_INTERVAL_SECONDS,
+        "settings": {
+            "master_paused": settings.get("master_paused", "false") in ("1", "true", "True"),
+            "master_muted": settings.get("master_muted", "false") in ("1", "true", "True"),
+        },
+        "sources": list(WATCHER_SOURCES.keys()),
     })
+
+
+def _add_one_watcher(url, label=None):
+    """Shared logic between single-add and bulk-add. Returns (watcher_dict, warning) on success
+    or raises ValueError with a user-readable message on failure."""
+    url = (url or "").strip()
+    src_name, src = _detect_source(url)
+    try:
+        event_code, perf_code = src.parse_url(url)
+    except Exception as e:
+        raise ValueError(f"{src_name}: {e}")
+    for existing in db.tm_all_watchers():
+        if (
+            (existing.get("source") or "ticketmaster") == src_name
+            and existing["event_code"] == event_code
+            and existing["perf_code"] == perf_code
+        ):
+            raise ValueError(f"already watching {src_name} {event_code}/{perf_code}")
+    wid = "tmw-" + uuid.uuid4().hex[:12]
+    final_label = (label or "").strip()
+    if not final_label:
+        try:
+            lbls = src.get_labels(event_code, perf_code, lang="iw")
+            final_label = src.event_summary(lbls) or f"{event_code}/{perf_code}"
+        except Exception:
+            final_label = f"{event_code}/{perf_code}"
+    db.tm_insert_watcher({
+        "id": wid, "label": final_label, "source": src_name,
+        "event_code": event_code, "perf_code": perf_code,
+        "paused": 0, "muted": 0, "notify_channels": "discord,email",
+    }, datetime.now(timezone.utc).isoformat())
+    w = db.tm_get_watcher(wid)
+    warning = None
+    try:
+        _check_one_watcher(w, datetime.now(timezone.utc).isoformat())
+    except Exception as e:
+        traceback.print_exc()
+        warning = str(e)
+    return db.tm_get_watcher(wid), warning
 
 
 @app.route("/api/watchers/add", methods=["POST"])
 def api_watchers_add():
     from flask import request
     body = request.get_json(silent=True) or {}
-    url = (body.get("url") or "").strip()
-    label = (body.get("label") or "").strip()
     try:
-        event_code, perf_code = ticketmaster.parse_url(url)
-    except ticketmaster.TicketmasterError as e:
-        return jsonify({"error": str(e)}), 400
-    # Dedupe — the unique constraint also enforces this, but a friendly error
-    # beats a SQLite IntegrityError for the user.
-    for existing in db.tm_all_watchers():
-        if existing["event_code"] == event_code and existing["perf_code"] == perf_code:
-            return jsonify({"error": f"Already watching {event_code}/{perf_code}", "id": existing["id"]}), 409
-    wid = "tmw-" + uuid.uuid4().hex[:12]
-    if not label:
-        # Default to "<eventName> · <YYYY-MM-DD>" when we can fetch metadata,
-        # so the watchers list reads naturally in Hebrew instead of "MBP19/001".
+        w, warning = _add_one_watcher(body.get("url"), body.get("label"))
+    except ValueError as e:
+        # Use 409 for dedupe, 400 for parse errors — caller distinguishes.
+        msg = str(e)
+        return jsonify({"error": msg}), (409 if "already watching" in msg else 400)
+    return jsonify({"ok": True, "id": w["id"], "warning": warning})
+
+
+@app.route("/api/watchers/bulk-add", methods=["POST"])
+def api_watchers_bulk_add():
+    """Accept a textarea of URLs (one per line) and add each. Returns a
+    per-line outcome so the UI can show what worked + what didn't."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    text = body.get("urls") or ""
+    results = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
         try:
-            lbls = tm_labels.get_labels(event_code, perf_code, lang="iw")
-            summary = tm_labels.event_summary(lbls)
-            label = summary or f"{event_code}/{perf_code}"
-        except Exception:
-            label = f"{event_code}/{perf_code}"
-    db.tm_insert_watcher({
-        "id": wid, "label": label,
-        "event_code": event_code, "perf_code": perf_code, "paused": 0,
-    }, datetime.now(timezone.utc).isoformat())
-    # Run a baseline check synchronously so the user sees "OK, watching N seats"
-    # immediately and is_baseline correctly suppresses the first notification.
-    w = db.tm_get_watcher(wid)
-    try:
-        _check_one_watcher(w, datetime.now(timezone.utc).isoformat())
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"ok": True, "id": wid, "warning": str(e)})
-    return jsonify({"ok": True, "id": wid})
+            w, warning = _add_one_watcher(line)
+            results.append({"url": line, "ok": True, "id": w["id"], "label": w.get("label"), "warning": warning})
+        except ValueError as e:
+            results.append({"url": line, "ok": False, "error": str(e)})
+        except Exception as e:
+            traceback.print_exc()
+            results.append({"url": line, "ok": False, "error": f"{type(e).__name__}: {e}"})
+    added = sum(1 for r in results if r["ok"])
+    return jsonify({"added": added, "results": results})
+
+
+@app.route("/api/watchers/update", methods=["POST"])
+def api_watchers_update():
+    """Change per-watcher settings: muted, notify_channels, label. The UI
+    uses this for the inline mute toggle and channel dropdown."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    wid = (body.get("id") or "").strip()
+    if not wid or not db.tm_get_watcher(wid):
+        return jsonify({"error": "watcher not found"}), 404
+    fields = {}
+    if "muted" in body:
+        fields["muted"] = 1 if body["muted"] else 0
+    if "notify_channels" in body:
+        # Accept either a list (UI sends ['discord','email']) or a CSV string.
+        chans = body["notify_channels"]
+        if isinstance(chans, list):
+            chans = ",".join(c.strip().lower() for c in chans if c)
+        chans = (chans or "").strip().lower()
+        # Normalize: keep only known channels, drop the rest. Empty string = no pings.
+        valid = {c for c in chans.split(",") if c in {"discord", "email"}}
+        fields["notify_channels"] = ",".join(sorted(valid))
+    if "label" in body:
+        new_label = (body["label"] or "").strip()
+        if new_label:
+            fields["label"] = new_label
+    if not fields:
+        return jsonify({"error": "no fields to update"}), 400
+    db.tm_update_watcher(wid, fields)
+    return jsonify({"ok": True, "fields": fields})
+
+
+@app.route("/api/watchers/settings", methods=["POST"])
+def api_watchers_settings():
+    """Master pause / master mute. Body: {key: 'master_paused'|'master_muted', value: bool}."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    key = (body.get("key") or "").strip()
+    if key not in {"master_paused", "master_muted"}:
+        return jsonify({"error": "key must be master_paused or master_muted"}), 400
+    value = "true" if body.get("value") else "false"
+    db.setting_set(key, value, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "key": key, "value": value})
+
+
+@app.route("/api/watchers/stop-everything", methods=["POST"])
+def api_watchers_stop_everything():
+    """One-click flip both master_paused and master_muted to true. Used by
+    the big STOP button on the dashboard."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.setting_set("master_paused", "true", now_iso)
+    db.setting_set("master_muted", "true", now_iso)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/watchers/resume-everything", methods=["POST"])
+def api_watchers_resume_everything():
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.setting_set("master_paused", "false", now_iso)
+    db.setting_set("master_muted", "false", now_iso)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/watchers/toggle", methods=["POST"])

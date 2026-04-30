@@ -318,6 +318,11 @@ CREATE TABLE IF NOT EXISTS tm_drops (
     notify_result TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tm_drops_watcher ON tm_drops(watcher_id, detected_at DESC);
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -344,6 +349,18 @@ def init():
         mi_cols = {row["name"] for row in conn.execute("PRAGMA table_info(manual_inventory)").fetchall()}
         if "email" not in mi_cols:
             conn.execute("ALTER TABLE manual_inventory ADD COLUMN email TEXT")
+        # tm_watchers grew multi-source + per-watcher mute + channel routing.
+        # SQLite can't add NOT NULL with default to existing rows in one shot,
+        # so we add nullable columns and backfill.
+        tw_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tm_watchers)").fetchall()}
+        if "source" not in tw_cols:
+            conn.execute("ALTER TABLE tm_watchers ADD COLUMN source TEXT")
+            conn.execute("UPDATE tm_watchers SET source = 'ticketmaster' WHERE source IS NULL")
+        if "muted" not in tw_cols:
+            conn.execute("ALTER TABLE tm_watchers ADD COLUMN muted INTEGER NOT NULL DEFAULT 0")
+        if "notify_channels" not in tw_cols:
+            conn.execute("ALTER TABLE tm_watchers ADD COLUMN notify_channels TEXT")
+            conn.execute("UPDATE tm_watchers SET notify_channels = 'discord,email' WHERE notify_channels IS NULL")
 
 
 def upsert_lysted_purchases(rows, now_iso):
@@ -1063,10 +1080,18 @@ def tm_insert_watcher(row, now_iso):
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO tm_watchers (id, label, event_code, perf_code, paused, created_at)
-            VALUES (:id, :label, :event_code, :perf_code, :paused, :created_at)
+            INSERT INTO tm_watchers (id, label, source, event_code, perf_code,
+                paused, muted, notify_channels, created_at)
+            VALUES (:id, :label, :source, :event_code, :perf_code,
+                :paused, :muted, :notify_channels, :created_at)
             """,
-            {**row, "created_at": now_iso},
+            {
+                "muted": 0,
+                "notify_channels": "discord,email",
+                "source": "ticketmaster",
+                **row,
+                "created_at": now_iso,
+            },
         )
 
 
@@ -1116,16 +1141,17 @@ def tm_get_seat_keys(watcher_id):
 
 
 def tm_replace_seat_state(watcher_id, seats):
-    """Atomically replace the watcher's known seat set with the given list of
-    seat dicts (b/r/l from the API). Done in a single connection so the wipe
-    and the inserts share a transaction."""
+    """Atomically replace the watcher's known seat set. Seats must be in the
+    normalized shape with `block`, `row`, `seat` keys (each source module
+    produces this shape from its raw API response).
+    """
     with connect() as conn:
         conn.execute("DELETE FROM tm_seat_state WHERE watcher_id = ?", (watcher_id,))
         seen = set()
         for s in seats:
-            block = s.get("b") or ""
-            row = s.get("r") or ""
-            num = str(s.get("l") if s.get("l") is not None else "")
+            block = str(s.get("block") or s.get("b") or "")
+            row = str(s.get("row") or s.get("r") or "")
+            num = str(s.get("seat") if s.get("seat") is not None else (s.get("l") if s.get("l") is not None else ""))
             key = f"{block}|{row}|{num}"
             if key in seen:
                 continue
@@ -1135,6 +1161,35 @@ def tm_replace_seat_state(watcher_id, seats):
                 "VALUES (?, ?, ?, ?, ?)",
                 (watcher_id, key, block, row, num),
             )
+
+
+# --- App-level settings (master pause / mute / future flags) -------------
+
+def setting_get(key, default=None):
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def setting_set(key, value, now_iso):
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, str(value) if value is not None else None, now_iso),
+        )
+
+
+def setting_get_bool(key, default=False):
+    v = setting_get(key)
+    if v is None:
+        return default
+    return v.lower() in ("1", "true", "yes", "on")
+
+
+def all_settings():
+    with connect() as conn:
+        rows = conn.execute("SELECT key, value, updated_at FROM app_settings").fetchall()
+    return {r["key"]: r["value"] for r in rows}
 
 
 def tm_record_drop(watcher_id, added_count, removed_count, seats_json, notify_result, now_iso):
