@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import re
 import threading
@@ -13,6 +14,7 @@ from flask import Flask, jsonify, render_template, send_file
 from openpyxl import Workbook
 
 import db
+import filters as watcher_filters
 import import_jerujam
 import kupat
 import matcher
@@ -1769,6 +1771,11 @@ def _check_one_watcher(w, now_iso):
         except Exception:
             labels = None
 
+        # Apply the watcher's filters (min consecutive seats, exclude sections,
+        # price range). Diff against `seats` (current full availability) so
+        # adjacency reflects the live snapshot, not historical state.
+        matched = watcher_filters.apply(added, seats, w.get("filters"), labels=labels)
+
         master_muted = db.setting_get_bool("master_muted", default=False)
         watcher_muted = bool(w.get("muted"))
         channels_csv = (w.get("notify_channels") or "discord,email").strip().lower()
@@ -1776,13 +1783,17 @@ def _check_one_watcher(w, now_iso):
         if master_muted or watcher_muted:
             enabled = set()
 
-        if enabled:
+        if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,
-                added_seats=added, removed_count=len(removed),
+                added_seats=matched, removed_count=len(removed),
                 total_now=len(seats), labels=labels,
                 channels=enabled,
             )
+        elif not matched and added:
+            # All new seats filtered out — record the drop so the user sees
+            # the filter is working, but skip the notification.
+            result = {"discord": "skipped (filtered)", "email": "skipped (filtered)"}
         else:
             reason = "master-muted" if master_muted else ("watcher-muted" if watcher_muted else "channels-empty")
             result = {"discord": f"skipped ({reason})", "email": f"skipped ({reason})"}
@@ -1792,6 +1803,7 @@ def _check_one_watcher(w, now_iso):
             _json.dumps(added, ensure_ascii=False)[:8000],
             _json.dumps(result)[:1000],
             now_iso,
+            notify_count=len(matched),
         )
     return len(added), None
 
@@ -1883,6 +1895,10 @@ def _add_one_watcher(url, label=None):
         "id": wid, "label": final_label, "source": src_name,
         "event_code": event_code, "perf_code": perf_code,
         "paused": 0, "muted": 0, "notify_channels": "discord,email",
+        # Default new watchers to exclude singles — most users want pairs.
+        # Existing watchers stay unfiltered (filters column is NULL on
+        # legacy rows) until the user opts in.
+        "filters": json.dumps({"min_group_size": 2}),
     }, datetime.now(timezone.utc).isoformat())
     w = db.tm_get_watcher(wid)
     warning = None
@@ -1933,8 +1949,9 @@ def api_watchers_bulk_add():
 
 @app.route("/api/watchers/update", methods=["POST"])
 def api_watchers_update():
-    """Change per-watcher settings: muted, notify_channels, label. The UI
-    uses this for the inline mute toggle and channel dropdown."""
+    """Change per-watcher settings: muted, notify_channels, label, filters.
+    The UI uses this for the inline mute toggle, channel dropdown, and
+    the filters modal save button."""
     from flask import request
     body = request.get_json(silent=True) or {}
     wid = (body.get("id") or "").strip()
@@ -1944,22 +1961,69 @@ def api_watchers_update():
     if "muted" in body:
         fields["muted"] = 1 if body["muted"] else 0
     if "notify_channels" in body:
-        # Accept either a list (UI sends ['discord','email']) or a CSV string.
         chans = body["notify_channels"]
         if isinstance(chans, list):
             chans = ",".join(c.strip().lower() for c in chans if c)
         chans = (chans or "").strip().lower()
-        # Normalize: keep only known channels, drop the rest. Empty string = no pings.
         valid = {c for c in chans.split(",") if c in {"discord", "email"}}
         fields["notify_channels"] = ",".join(sorted(valid))
     if "label" in body:
         new_label = (body["label"] or "").strip()
         if new_label:
             fields["label"] = new_label
+    if "filters" in body:
+        # Validate + normalize the filter object before storing.
+        f = body["filters"] or {}
+        if not isinstance(f, dict):
+            return jsonify({"error": "filters must be an object"}), 400
+        out_f = {}
+        try:
+            mgs = int(f.get("min_group_size") or 1)
+        except (TypeError, ValueError):
+            mgs = 1
+        if mgs > 1:
+            out_f["min_group_size"] = mgs
+        excl = f.get("exclude_sections") or []
+        if isinstance(excl, list) and excl:
+            out_f["exclude_sections"] = [str(x) for x in excl if x]
+        for k in ("min_price", "max_price"):
+            v = f.get(k)
+            if v in (None, ""):
+                continue
+            try:
+                out_f[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+        fields["filters"] = json.dumps(out_f) if out_f else None
     if not fields:
         return jsonify({"error": "no fields to update"}), 400
     db.tm_update_watcher(wid, fields)
     return jsonify({"ok": True, "fields": fields})
+
+
+@app.route("/api/watchers/sections")
+def api_watchers_sections():
+    """Returns the list of {code, name, price} for a watcher's blocks/sections,
+    so the filter modal can populate its multi-select. Pulls from the cached
+    labels — fast, no extra network calls in the common case."""
+    from flask import request
+    wid = (request.args.get("id") or "").strip()
+    w = db.tm_get_watcher(wid) if wid else None
+    if not w:
+        return jsonify({"error": "watcher not found"}), 404
+    src_name = w.get("source") or "ticketmaster"
+    src = WATCHER_SOURCES.get(src_name, ticketmaster)
+    try:
+        labels = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
+    except Exception as e:
+        return jsonify({"error": f"label fetch failed: {e}"}), 500
+    blocks = (labels or {}).get("blocks") or {}
+    rows = [
+        {"code": code, "name": info.get("name") or code, "price": info.get("price")}
+        for code, info in blocks.items()
+    ]
+    rows.sort(key=lambda r: (r["price"] or 0, r["code"]))
+    return jsonify({"sections": rows, "filters": json.loads(w.get("filters")) if w.get("filters") else None})
 
 
 @app.route("/api/watchers/settings", methods=["POST"])

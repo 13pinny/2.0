@@ -361,6 +361,15 @@ def init():
         if "notify_channels" not in tw_cols:
             conn.execute("ALTER TABLE tm_watchers ADD COLUMN notify_channels TEXT")
             conn.execute("UPDATE tm_watchers SET notify_channels = 'discord,email' WHERE notify_channels IS NULL")
+        if "filters" not in tw_cols:
+            # JSON blob: {min_group_size, exclude_sections, min_price, max_price}.
+            # Existing watchers stay unfiltered (NULL) so behavior doesn't
+            # change under them; new watchers get min_group_size=2 from the
+            # insert path's default.
+            conn.execute("ALTER TABLE tm_watchers ADD COLUMN filters TEXT")
+        td_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tm_drops)").fetchall()}
+        if "notify_count" not in td_cols:
+            conn.execute("ALTER TABLE tm_drops ADD COLUMN notify_count INTEGER")
 
 
 def upsert_lysted_purchases(rows, now_iso):
@@ -1192,13 +1201,14 @@ def all_settings():
     return {r["key"]: r["value"] for r in rows}
 
 
-def tm_record_drop(watcher_id, added_count, removed_count, seats_json, notify_result, now_iso):
+def tm_record_drop(watcher_id, added_count, removed_count, seats_json, notify_result, now_iso, notify_count=None):
     with connect() as conn:
         conn.execute(
             """INSERT INTO tm_drops (watcher_id, detected_at, added_count,
-               removed_count, seats_json, notify_result)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (watcher_id, now_iso, added_count, removed_count, seats_json, notify_result),
+               removed_count, seats_json, notify_result, notify_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (watcher_id, now_iso, added_count, removed_count, seats_json, notify_result,
+             notify_count if notify_count is not None else added_count),
         )
 
 

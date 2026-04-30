@@ -24,6 +24,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 
 import db
+import filters as watcher_filters
 import kupat
 import notify
 import ticketmaster
@@ -81,18 +82,21 @@ def check_one(w, now_iso):
             lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw", missing_block=probe)
         except Exception:
             lbls = None
+        matched = watcher_filters.apply(added, seats, w.get("filters"), labels=lbls)
         master_muted = db.setting_get_bool("master_muted", default=False)
         watcher_muted = bool(w.get("muted"))
         channels_csv = (w.get("notify_channels") or "discord,email").strip().lower()
         enabled = {c for c in (s.strip() for s in channels_csv.split(",")) if c}
         if master_muted or watcher_muted:
             enabled = set()
-        if enabled:
+        if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,
-                added_seats=added, removed_count=len(removed),
+                added_seats=matched, removed_count=len(removed),
                 total_now=len(seats), labels=lbls, channels=enabled,
             )
+        elif not matched:
+            result = {"discord": "skipped (filtered)", "email": "skipped (filtered)"}
         else:
             reason = "master-muted" if master_muted else ("watcher-muted" if watcher_muted else "channels-empty")
             result = {"discord": f"skipped ({reason})", "email": f"skipped ({reason})"}
@@ -101,6 +105,7 @@ def check_one(w, now_iso):
             json.dumps(added, ensure_ascii=False)[:8000],
             json.dumps(result)[:1000],
             now_iso,
+            notify_count=len(matched),
         )
     return len(added), None
 
