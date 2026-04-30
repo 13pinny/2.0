@@ -100,6 +100,39 @@ Each tick it prints `checked=N drops=M errors=K`. When the seat set
 changes, it sends a Discord embed + Gmail email with section name
 (Hebrew) and ILS price.
 
+### Auto-update from GitHub (recommended for an always-on box)
+
+Use `start_supervised.bat` instead of `start_watcher.bat`. The supervisor
+runs the watcher AND pulls from GitHub every 5 minutes, restarting the
+watcher only when actual changes arrive. Edit and push from your main PC
+and the home server picks it up.
+
+```cmd
+.venv\Scripts\python -m pip install -r requirements.txt
+git pull                                  # one-time, to cache GitHub creds
+.venv\Scripts\python add_watcher.py "<URL>"
+start_supervised.bat
+```
+
+Tunables (in `.env`):
+
+- `KARTIS_PULL_INTERVAL_SECONDS=300` — how often to `git pull`. 60 is fine.
+- `KARTIS_GIT_BRANCH=main` — pin to a specific branch. Default = whatever
+  branch is checked out.
+
+Behavior:
+- New commits on the watched branch → terminate watcher → `pip install -r
+  requirements.txt` (in case deps changed) → start fresh watcher.
+- Watcher crash → restart with exponential backoff (10s, 20s, 40s… capped
+  at 1h) so a broken commit doesn't burn CPU.
+- Output goes to `supervisor.log` (gitignored).
+
+**Private repo?** Run `git pull` once interactively first; Git Credential
+Manager (bundled with Git for Windows) will prompt you to authenticate
+through GitHub's OAuth flow and cache the token in Windows Credential
+Manager. After that the supervisor's automated pulls just work. For a
+truly unattended setup, prefer a deploy key over a personal token.
+
 ### Auto-start on boot (Windows Task Scheduler)
 
 1. Open **Task Scheduler** → Create Task.
@@ -107,14 +140,18 @@ changes, it sends a Discord embed + Gmail email with section name
    logged on or not", check "Run with highest privileges".
 3. **Triggers**: New → Begin: At system startup.
 4. **Actions**: New → Start a program →
-   - Program: `C:\Users\13pin\kartis\start_watcher.bat`
+   - Program: `C:\Users\13pin\kartis\start_supervised.bat`
    - Start in: `C:\Users\13pin\kartis`
 5. **Settings**: uncheck "Stop if runs longer than..." (it's a daemon).
-6. OK → enter your password.
+   Check "If the task fails, restart every 1 minute" up to 3 attempts so
+   transient failures self-heal.
+6. OK → enter your Windows password (needed for unattended mode).
 
-Reboot to verify it auto-starts. Logs go to a console window if you
-chose "user logged on" mode; for unattended mode, redirect inside the
-.bat: `python watcher_only.py >> watcher.log 2>&1`.
+Reboot to verify. Tail logs with `type supervisor.log` from the install
+directory.
+
+(If you don't want auto-update, swap `start_supervised.bat` for
+`start_watcher.bat` in step 4 — same script flow, just no `git pull`.)
 
 ### Send a test ping
 
@@ -177,6 +214,7 @@ EVENT/PERF` directly to see the raw error.
 |---|---|
 | `app.py` | Flask app — full dashboard. Imports `scraper.py` and needs Chrome. |
 | `watcher_only.py` | Headless drop-checker daemon. No Flask, no Chrome. |
+| `supervisor.py` | Wraps `watcher_only.py` with `git pull` auto-update + crash restart. |
 | `add_watcher.py` | CLI to add/list/remove watchers without the dashboard. |
 | `ticketmaster.py` | Drop-checker API client (parse URL, fetch seats, diff). |
 | `notify.py` | Discord webhook + Gmail SMTP senders. |

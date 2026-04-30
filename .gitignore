@@ -29,3 +29,6 @@ debug/
 # Ticketmaster watcher cache (Hebrew labels + price metadata; refetched as needed)
 tm_cache/
 tm_probe/
+
+# Supervisor log (rolling output from start_supervised.bat)
+supervisor.log
