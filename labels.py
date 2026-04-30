@@ -109,37 +109,38 @@ _INTERNET = "INTERNET"
 
 
 def _discover_extra_blocks(event_code, perf_code):
-    """Return the set of block codes present in the seat-plan APIs but
-    missing from getPriceByProfiles. Two sources:
+    """Discover every block code in the venue, plus the seated capacity.
 
-    * getAllBlockSeats — every seat across every block in the venue,
-      regardless of current state (BOOKED/ISSUED/AVAILABLE). Heaviest
-      payload (~225 KB) but the most complete; cached so this only fires
-      once an hour per watcher.
-    * getAllGaBlock — standing/general-admission blocks (e.g. STN1).
-      Tiny and cheap.
+    Returns (extras, totalSeated). `extras` is the set of block codes seen
+    in getAllBlockSeats / getAllGaBlock. `totalSeated` is the dot-count of
+    the seat plan — every entry in getAllBlockSeats is one physical seat
+    regardless of state, so the length of the array IS the venue's seated
+    capacity for this performance.
 
-    We don't try to recover names or prices for these blocks — the
-    relevant endpoint just doesn't have them. They show up in the UI as
-    raw codes (e.g. "BLTC") so the user can still tick them in the
-    exclude-sections list.
+    Cached for an hour as part of the labels payload.
     """
     extras = set()
-    for path in (
-        f"{_ISM_HOST}/getAllBlockSeats/{event_code}/{perf_code}",
-        f"{_ISM_HOST}/getAllGaBlock/{event_code}/{perf_code}",
-    ):
-        try:
-            payload = _http_get_json(path)
-            data = payload.get("data") or []
-            if not isinstance(data, list):
-                continue
+    total_seated = 0
+    try:
+        payload = _http_get_json(f"{_ISM_HOST}/getAllBlockSeats/{event_code}/{perf_code}")
+        data = payload.get("data") or []
+        if isinstance(data, list):
+            total_seated = len(data)
             for s in data:
                 if isinstance(s, dict) and s.get("b"):
                     extras.add(s["b"])
-        except Exception:
-            continue
-    return extras
+    except Exception:
+        pass
+    try:
+        payload = _http_get_json(f"{_ISM_HOST}/getAllGaBlock/{event_code}/{perf_code}")
+        data = payload.get("data") or []
+        if isinstance(data, list):
+            for s in data:
+                if isinstance(s, dict) and s.get("b"):
+                    extras.add(s["b"])
+    except Exception:
+        pass
+    return extras, total_seated
 
 
 def fetch_fresh(event_code, perf_code, lang="iw"):
@@ -152,17 +153,21 @@ def fetch_fresh(event_code, perf_code, lang="iw"):
         blocks = {}
     # Backfill block codes that exist in the venue layout but didn't
     # appear in getPriceByProfiles — typically restricted/accessibility
-    # tiers and standing blocks.
+    # tiers and standing blocks. Also captures the total seated capacity.
+    total_seated = 0
     try:
-        for code in _discover_extra_blocks(event_code, perf_code):
+        extras, total_seated = _discover_extra_blocks(event_code, perf_code)
+        for code in extras:
             blocks.setdefault(code, {
-                "name": code,           # raw code; user sees what to filter
+                "name": code,
                 "price": None,
                 "priceLevel": None,
                 "profileId": None,
             })
     except Exception:
         pass
+    if total_seated:
+        meta["totalSeats"] = total_seated
     payload = {
         "_fetched_at": time.time(),
         "event_code": event_code,

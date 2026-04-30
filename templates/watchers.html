@@ -197,7 +197,7 @@ https://tickets.kupat.co.il/booking/features/1358?display=list&prsntId=51596
     <th>EVENT/PERF</th>
     <th>STATUS</th>
     <th>LAST CHECK</th>
-    <th class="num">SEATS</th>
+    <th class="num">SEATS / TOTAL</th>
     <th class="col-tight">CHANNELS</th>
     <th class="col-tight">MUTE</th>
     <th class="col-tight">FILTERS</th>
@@ -301,7 +301,7 @@ async function load() {
       <td><a class="tm-link" href="${tmUrl}" target="_blank">${escape(w.event_code)}/${escape(w.perf_code)}</a></td>
       <td><span class="status ${status}" title="${escape(w.last_check_error || '')}">${statusLabel}</span></td>
       <td>${fmtTime(w.last_check_at)}</td>
-      <td class="num">${w.last_seat_count ?? '—'}</td>
+      <td class="num">${seatCell(w)}</td>
       <td class="col-tight"><select class="channels" data-id="${w.id}">${channelSel}</select></td>
       <td class="col-tight">
         <label class="switch" title="mute notifications (keeps polling)"><input type="checkbox" data-id="${w.id}" data-act="mute" ${w.muted ? 'checked' : ''}><span class="slider"></span></label>
@@ -384,6 +384,22 @@ async function onWatcherAction(e) {
     await load();
   } catch (err) { showError(err.message); }
   finally { btn.disabled = false; }
+}
+
+function seatCell(w) {
+  const avail = w.last_seat_count;
+  const total = w.total_seats;
+  if (avail == null) return '—';
+  if (!total) return String(avail);
+  const sold = Math.max(0, total - avail);
+  const pctSold = total > 0 ? (sold / total * 100) : 0;
+  // Color-code: low availability = red (hot), high = green (cold)
+  const availPct = 100 - pctSold;
+  let cls = 'profit-pos';  // green
+  if (availPct < 5) cls = 'profit-neg';
+  else if (availPct < 15) cls = '';
+  return `<div>${avail} / ${total}</div>` +
+         `<div style="font-size:10px;color:var(--muted)">${pctSold.toFixed(1)}% sold</div>`;
 }
 
 function filterSummaryFor(w) {

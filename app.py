@@ -1854,6 +1854,17 @@ def api_watchers():
     watchers = db.tm_all_watchers()
     drops = db.tm_recent_drops(limit=200)
     settings = db.all_settings()
+    # Enrich each watcher with venue capacity from its cached labels — pure
+    # disk read, no network. Lets the UI show "53 / 4125 (98.7% sold)"
+    # without holding a venue total in tm_watchers.
+    for w in watchers:
+        src_name = w.get("source") or "ticketmaster"
+        src = WATCHER_SOURCES.get(src_name, ticketmaster)
+        try:
+            lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
+            w["total_seats"] = ((lbls or {}).get("meta") or {}).get("totalSeats")
+        except Exception:
+            w["total_seats"] = None
     return jsonify({
         "watchers": watchers,
         "drops": drops,

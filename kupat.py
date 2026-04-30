@@ -192,8 +192,10 @@ def _cache_path(feature_id, presentation_id, lang):
 
 
 def _build_block_map(presentation, seatplan):
-    """Returns {block_code: {name, price, priceLevel, ticketGroupId}}."""
-    # priceLevels from the presentation: ticketGroupId → minPrice
+    """Returns ({block_code: {name, price, priceLevel, ticketGroupId}}, totalSeated).
+
+    totalSeated is the sum of every section's Capacity from the seatplan —
+    i.e. the venue's seated dot-count for this layout."""
     price_by_group = {}
     for lvl in presentation.get("priceLevels") or []:
         gid = lvl.get("ticketGroupId")
@@ -202,6 +204,7 @@ def _build_block_map(presentation, seatplan):
         price_by_group[gid] = lvl.get("minPrice") or lvl.get("maxPrice")
     sections = (seatplan or {}).get("sections") or {}
     out = {}
+    total_seated = 0
     for sid, sec in sections.items():
         if not isinstance(sec, dict):
             continue
@@ -212,20 +215,23 @@ def _build_block_map(presentation, seatplan):
             gid_int = int(gid) if gid is not None else None
         except (TypeError, ValueError):
             gid_int = None
+        cap = sec.get("Capacity")
+        if isinstance(cap, (int, float)):
+            total_seated += int(cap)
         out[section_id] = {
             "name": name or section_id,
             "price": price_by_group.get(gid_int),
             "priceLevel": gid_int,
             "ticketGroupId": gid_int,
         }
-    return out
+    return out, total_seated
 
 
 def fetch_fresh(feature_id, presentation_id, lang="iw"):
     captured = _browse_capture(feature_id, presentation_id, want={"presentation", "seatplan"})
     presentation = captured.get("presentation") or {}
     seatplan = captured.get("seatplan") or {}
-    blocks = _build_block_map(presentation, seatplan)
+    blocks, total_seated = _build_block_map(presentation, seatplan)
     # kupat returns dateTime as "YYYY-MM-DD HH:MM:SS" in venue-local time.
     # We keep both the raw string (for accurate display, no TZ conversion)
     # and an ms-since-epoch interpretation (for sorting). The display path
@@ -254,6 +260,7 @@ def fetch_fresh(feature_id, presentation_id, lang="iw"):
             "firstPerfText": perf_text,
             "status": "soldout" if presentation.get("soldout") else "selling",
             "availSeats": presentation.get("availSeats"),
+            "totalSeats": total_seated or None,
         },
         "blocks": blocks,
     }
