@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Watchers</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --bg-3: #11161d;
+    --line: #21262d;
+    --line-2: #2a3038;
+    --text: #c9d1d9;
+    --muted: #6e7681;
+    --accent: #58a6ff;
+    --green: #56d364;
+    --red: #f85149;
+    --amber: #d29922;
+    --orange: #f97316;
+    --purple: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 24px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .ok { background: #102a14; border: 1px solid var(--green); color: var(--green); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, button, a.btn { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button, a.btn { cursor: pointer; text-decoration: none; display: inline-block; }
+  button:hover, a.btn:hover { background: #1f262e; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  button.danger { color: var(--red); border-color: #4a1f1f; }
+  button.danger:hover { background: #2a1414; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line-2); color: var(--muted); border-radius: 1px; letter-spacing: 1px; text-transform: uppercase; }
+  .status.active { color: var(--green); border-color: var(--green); }
+  .status.paused { color: var(--amber); border-color: var(--amber); }
+  .status.error { color: var(--red); border-color: var(--red); }
+  .empty { color: var(--muted); padding: 28px; text-align: center; font-size: 12px; }
+  .seats-detail { font-size: 11px; color: var(--muted); white-space: pre-wrap; max-height: 200px; overflow: auto; padding: 6px 8px; background: var(--bg-3); border: 1px solid var(--line); }
+  details summary { cursor: pointer; color: var(--accent); font-size: 11px; }
+  .add-form { display: grid; grid-template-columns: 2fr 1fr auto; gap: 8px; max-width: 900px; }
+  .add-form input { width: 100%; }
+  a.tm-link { color: var(--accent); text-decoration: none; }
+  a.tm-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>// WATCHERS</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/watchers" class="active">WATCHERS</a>
+  </nav>
+</header>
+<main>
+<div id="errbox" class="err" style="display:none"></div>
+<div id="okbox" class="ok" style="display:none"></div>
+
+<div class="stats">
+  <div class="stat"><div class="label">Watchers</div><div class="value" id="s-total">0</div></div>
+  <div class="stat green"><div class="label">Active</div><div class="value" id="s-active">0</div></div>
+  <div class="stat amber"><div class="label">Paused</div><div class="value" id="s-paused">0</div></div>
+  <div class="stat"><div class="label">Last Tick</div><div class="value" id="s-tick">—</div></div>
+  <div class="stat green"><div class="label">Drops Logged</div><div class="value" id="s-drops">0</div></div>
+  <div class="stat red"><div class="label">Errors</div><div class="value" id="s-errors">0</div></div>
+</div>
+
+<h2>// ADD WATCHER</h2>
+<form class="add-form" id="addForm">
+  <input id="add-url" placeholder="Paste Ticketmaster.co.il /performance/ URL or shorthand 'EVENT/PERF'" required>
+  <input id="add-label" placeholder="label (optional)">
+  <button type="submit" id="add-btn">Add &amp; baseline</button>
+</form>
+<div class="bar" style="margin-top:8px">
+  <button id="test-btn">Send test notification</button>
+  <button id="check-btn">Check all now</button>
+  <span class="meta" id="interval">—</span>
+</div>
+
+<h2>// ACTIVE WATCHERS</h2>
+<table>
+  <thead><tr>
+    <th>LABEL</th><th>EVENT/PERF</th><th>STATUS</th>
+    <th>LAST CHECK</th><th class="num">SEATS</th><th>ERROR</th><th>ACTIONS</th>
+  </tr></thead>
+  <tbody id="watchersBody"></tbody>
+</table>
+<div id="watchersEmpty" class="empty" style="display:none">// no watchers yet — paste a URL above to start</div>
+
+<h2>// DROP HISTORY</h2>
+<table>
+  <thead><tr>
+    <th>WHEN</th><th>WATCHER</th><th class="num">+ADDED</th><th class="num">-REMOVED</th>
+    <th>NOTIFY</th><th>SEATS</th>
+  </tr></thead>
+  <tbody id="dropsBody"></tbody>
+</table>
+<div id="dropsEmpty" class="empty" style="display:none">// no drops detected yet</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString();
+  } catch (_) { return iso; }
+}
+
+function showError(msg) {
+  $('errbox').textContent = msg; $('errbox').style.display = 'block';
+  setTimeout(() => $('errbox').style.display = 'none', 6000);
+}
+function showOk(msg) {
+  $('okbox').textContent = msg; $('okbox').style.display = 'block';
+  setTimeout(() => $('okbox').style.display = 'none', 4000);
+}
+
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  let data; try { data = await r.json(); } catch (_) { data = null; }
+  if (!r.ok) throw new Error((data && data.error) || `HTTP ${r.status}`);
+  return data;
+}
+
+function tmUrl(ev, pf) {
+  return `https://www.ticketmaster.co.il/performance/${ev}/${pf}/ALL/iw`;
+}
+
+async function load() {
+  let data;
+  try { data = await api('/api/watchers'); }
+  catch (e) { showError(e.message); return; }
+  const watchers = data.watchers || [];
+  const drops = data.drops || [];
+  const lastTm = data.last_tm || {};
+
+  $('s-total').textContent = watchers.length;
+  $('s-active').textContent = watchers.filter(w => !w.paused).length;
+  $('s-paused').textContent = watchers.filter(w => w.paused).length;
+  $('s-tick').textContent = lastTm.at ? new Date(lastTm.at).toLocaleTimeString() : '—';
+  $('s-drops').textContent = drops.length;
+  $('s-errors').textContent = lastTm.errors || 0;
+  $('interval').textContent = `tick = every ${data.interval_seconds}s`;
+
+  const wbody = $('watchersBody');
+  wbody.innerHTML = '';
+  $('watchersEmpty').style.display = watchers.length ? 'none' : 'block';
+  for (const w of watchers) {
+    const tr = document.createElement('tr');
+    const status = w.last_check_error ? 'error' : (w.paused ? 'paused' : 'active');
+    const statusLabel = w.last_check_error ? 'ERROR' : (w.paused ? 'PAUSED' : 'ACTIVE');
+    tr.innerHTML = `
+      <td>${escape(w.label || '—')}</td>
+      <td><a class="tm-link" href="${tmUrl(w.event_code, w.perf_code)}" target="_blank">${escape(w.event_code)}/${escape(w.perf_code)}</a></td>
+      <td><span class="status ${status}">${statusLabel}</span></td>
+      <td>${fmtTime(w.last_check_at)}</td>
+      <td class="num">${w.last_seat_count ?? '—'}</td>
+      <td>${escape(w.last_check_error || '')}</td>
+      <td>
+        <button data-act="check" data-id="${w.id}">Check</button>
+        <button data-act="toggle" data-id="${w.id}" data-paused="${w.paused ? 0 : 1}">${w.paused ? 'Resume' : 'Pause'}</button>
+        <button class="danger" data-act="delete" data-id="${w.id}">Delete</button>
+      </td>`;
+    wbody.appendChild(tr);
+  }
+  wbody.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', onWatcherAction);
+  });
+
+  const watcherById = Object.fromEntries(watchers.map(w => [w.id, w]));
+  const dbody = $('dropsBody');
+  dbody.innerHTML = '';
+  $('dropsEmpty').style.display = drops.length ? 'none' : 'block';
+  for (const d of drops) {
+    const w = watcherById[d.watcher_id];
+    const wlabel = w ? `${w.label} (${w.event_code}/${w.perf_code})` : d.watcher_id;
+    let seatsHtml = '';
+    if (d.seats_json) {
+      try {
+        const seats = JSON.parse(d.seats_json);
+        const lines = seats.map(s => `${s.b} R${s.r} S${s.l}`).join('\n');
+        seatsHtml = `<details><summary>${seats.length} seat(s)</summary><div class="seats-detail">${escape(lines)}</div></details>`;
+      } catch (_) {
+        seatsHtml = `<span class="meta">parse error</span>`;
+      }
+    }
+    let notifyResult = '';
+    if (d.notify_result) {
+      try {
+        const nr = JSON.parse(d.notify_result);
+        notifyResult = `discord: ${escape(nr.discord||'?')} · email: ${escape(nr.email||'?')}`;
+      } catch (_) { notifyResult = escape(d.notify_result); }
+    }
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${fmtTime(d.detected_at)}</td>
+      <td>${escape(wlabel)}</td>
+      <td class="num">${d.added_count}</td>
+      <td class="num">${d.removed_count}</td>
+      <td style="font-size:11px">${notifyResult}</td>
+      <td>${seatsHtml}</td>`;
+    dbody.appendChild(tr);
+  }
+}
+
+function escape(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+
+async function onWatcherAction(e) {
+  const btn = e.currentTarget;
+  const act = btn.dataset.act;
+  const id = btn.dataset.id;
+  btn.disabled = true;
+  try {
+    if (act === 'check') {
+      const r = await api('/api/watchers/check-now', 'POST', { id });
+      showOk(`Checked. Added ${r.added}${r.error ? ' / err: ' + r.error : ''}`);
+    } else if (act === 'toggle') {
+      await api('/api/watchers/toggle', 'POST', { id, paused: parseInt(btn.dataset.paused, 10) });
+    } else if (act === 'delete') {
+      if (!confirm('Delete this watcher and its history?')) { btn.disabled = false; return; }
+      await api('/api/watchers/delete', 'POST', { id });
+    }
+    await load();
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$('addForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = $('add-url').value.trim();
+  const label = $('add-label').value.trim();
+  if (!url) return;
+  $('add-btn').disabled = true;
+  try {
+    const r = await api('/api/watchers/add', 'POST', { url, label });
+    $('add-url').value = ''; $('add-label').value = '';
+    showOk(r.warning ? `Added but: ${r.warning}` : 'Added; baseline captured.');
+    await load();
+  } catch (err) { showError(err.message); }
+  finally { $('add-btn').disabled = false; }
+});
+
+$('test-btn').addEventListener('click', async () => {
+  $('test-btn').disabled = true;
+  try {
+    const r = await api('/api/watchers/test-notify', 'POST', {});
+    showOk(`Test sent — discord: ${r.result.discord} · email: ${r.result.email}`);
+  } catch (err) { showError(err.message); }
+  finally { $('test-btn').disabled = false; }
+});
+
+$('check-btn').addEventListener('click', async () => {
+  $('check-btn').disabled = true;
+  try {
+    await api('/api/watchers/check-now', 'POST', {});
+    showOk('Tick triggered. Refreshing in 3s…');
+    setTimeout(load, 3000);
+  } catch (err) { showError(err.message); }
+  finally { $('check-btn').disabled = false; }
+});
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

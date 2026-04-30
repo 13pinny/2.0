@@ -2,151 +2,137 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Kartis — Inventory</title>
+<title>Kartis — Sources</title>
 <style>
-  body { font-family: -apple-system, system-ui, sans-serif; margin: 24px; color: #1a1a1a; }
-  h1 { margin: 0 0 4px; }
-  .sub { color: #666; margin-bottom: 16px; font-size: 13px; }
-  .bar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
-  button, a.btn { padding: 8px 14px; border: 1px solid #333; background: #fff; border-radius: 6px; cursor: pointer; text-decoration: none; color: #1a1a1a; font-size: 14px; }
-  button:hover, a.btn:hover { background: #f0f0f0; }
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --bg-3: #11161d;
+    --line: #21262d;
+    --line-2: #2a3038;
+    --text: #c9d1d9;
+    --muted: #6e7681;
+    --accent: #58a6ff;
+    --green: #56d364;
+    --red: #f85149;
+    --amber: #d29922;
+    --orange: #f97316;
+    --purple: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 24px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, button, a.btn { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button, a.btn { cursor: pointer; text-decoration: none; display: inline-block; }
+  button:hover, a.btn:hover { background: #1f262e; }
   button:disabled { opacity: 0.5; cursor: wait; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; }
-  .stat { background: #f5f5f5; padding: 10px 14px; border-radius: 8px; }
-  .stat .label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
-  .stat .value { font-size: 20px; font-weight: 600; margin-top: 2px; }
-  table { border-collapse: collapse; width: 100%; font-size: 14px; }
-  th, td { border-bottom: 1px solid #eee; padding: 8px 10px; text-align: left; }
-  th { background: #fafafa; font-weight: 600; position: sticky; top: 0; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .profit-pos { color: #0a7f2e; font-weight: 600; }
-  .profit-neg { color: #b00020; font-weight: 600; }
-  .err { background: #fee; color: #900; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
-  .empty { color: #888; padding: 24px; text-align: center; }
-  .evt { font-weight: 600; }
-  .evt-meta { color: #777; font-size: 12px; }
-  h2 { font-size: 18px; margin: 32px 0 8px; }
-  .status { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #eef; display: inline-block; }
-  tr.group-hdr td { background: #eef4ff; padding: 10px 12px; font-size: 13px; border-top: 1px solid #cdd9ec; }
-  tr.group-hdr .evt-title { font-weight: 700; font-size: 14px; color: #1a1a1a; }
-  tr.group-hdr .evt-meta { color: #555; margin-left: 6px; }
-  tr.group-hdr .evt-stats { float: right; color: #333; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.group-hdr td { background: var(--bg-2); padding: 9px 12px; border-top: 1px solid var(--line); }
+  tr.group-hdr .evt-title { color: var(--text); font-weight: 700; letter-spacing: 0.5px; }
+  tr.group-hdr .evt-meta { color: var(--muted); margin-left: 8px; font-size: 11px; }
+  tr.group-hdr .evt-stats { float: right; color: var(--muted); font-size: 11px; }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line-2); color: var(--muted); border-radius: 1px; letter-spacing: 1px; text-transform: uppercase; }
+  .status.active { color: var(--accent); border-color: var(--accent); }
+  .status.sold { color: var(--green); border-color: var(--green); }
+  .profit-pos { color: var(--green); font-weight: 600; }
+  .profit-neg { color: var(--red); font-weight: 600; }
+  .empty { color: var(--muted); padding: 28px; text-align: center; font-size: 12px; }
 </style>
 </head>
 <body>
-<h1>Kartis</h1>
-<div class="sub" id="lastrun">—</div>
-
-<div id="errbox" style="display:none" class="err"></div>
+<header>
+  <div class="left">
+    <h1>// SOURCES</h1>
+    <span class="meta" id="lastrun">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources" class="active">SOURCES</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/watchers">WATCHERS</a>
+  </nav>
+</header>
+<main>
+<div id="errbox" class="err" style="display:none"></div>
 
 <div class="stats">
-  <div class="stat"><div class="label">Unsold Cost (All)</div><div class="value" id="s-combined-cost">$0</div></div>
+  <div class="stat amber"><div class="label">Unsold Cost (All)</div><div class="value" id="s-combined-cost">$0</div></div>
   <div class="stat"><div class="label">Events</div><div class="value" id="s-events">0</div></div>
   <div class="stat"><div class="label">Listings</div><div class="value" id="s-listings">0</div></div>
   <div class="stat"><div class="label">Tickets</div><div class="value" id="s-tickets">0</div></div>
-  <div class="stat"><div class="label">Lysted Cost</div><div class="value" id="s-cost">$0</div></div>
+  <div class="stat amber"><div class="label">Lysted Cost</div><div class="value" id="s-cost">$0</div></div>
   <div class="stat"><div class="label">Lysted List</div><div class="value" id="s-list">$0</div></div>
-  <div class="stat"><div class="label">Lysted P/L</div><div class="value" id="s-pl">$0</div></div>
+  <div class="stat green"><div class="label">Lysted P/L</div><div class="value" id="s-pl">$0</div></div>
 </div>
 
 <div class="bar">
-  <button id="refresh">Refresh now</button>
-  <a class="btn" href="/export.xlsx">Export to Excel</a>
+  <button id="refresh">Refresh</button>
+  <a class="btn" href="/export.xlsx">Export XLSX</a>
 </div>
 
-<h2>Lysted</h2>
+<h2>// LYSTED</h2>
 <div class="stats">
-  <div class="stat"><div class="label">Available Tickets</div><div class="value" id="lp-active">0</div></div>
-  <div class="stat"><div class="label">Sold Tickets</div><div class="value" id="lp-sold">0</div></div>
-  <div class="stat"><div class="label">Available Cost</div><div class="value" id="lp-acost">$0</div></div>
-  <div class="stat"><div class="label">Sold Cost</div><div class="value" id="lp-scost">$0</div></div>
+  <div class="stat"><div class="label">Avail Tickets</div><div class="value" id="lp-active">0</div></div>
+  <div class="stat green"><div class="label">Sold Tickets</div><div class="value" id="lp-sold">0</div></div>
+  <div class="stat amber"><div class="label">Avail Cost</div><div class="value" id="lp-acost">$0</div></div>
+  <div class="stat green"><div class="label">Sold Cost</div><div class="value" id="lp-scost">$0</div></div>
 </div>
 <div class="bar">
-  <input type="search" id="lp-search" placeholder="Search event / artist" style="padding:7px 10px; border:1px solid #ccc; border-radius:6px; font-size:13px; min-width:200px;">
-  <label style="font-size:13px;">Sort:
-    <select id="lp-sort">
-      <option value="date-asc">Date (soonest first)</option>
-      <option value="date-desc">Date (latest first)</option>
-      <option value="name">Name A–Z</option>
-    </select>
-  </label>
-  <label style="font-size:13px;">Range:
-    <select id="lp-range">
-      <option value="all">All dates</option>
-      <option value="7">Next 7 days</option>
-      <option value="14">Next 14 days</option>
-      <option value="month">This month</option>
-    </select>
-  </label>
-  <label style="font-size:13px;">Show:
-    <select id="lp-filter">
-      <option value="active">Active only</option>
-      <option value="sold">Sold only</option>
-      <option value="all">All</option>
-    </select>
-  </label>
+  <input type="search" id="lp-search" placeholder="search // event venue" style="flex:1; min-width:200px;">
+  <select id="lp-sort"><option value="date-asc">DATE ↑</option><option value="date-desc">DATE ↓</option><option value="name">NAME</option></select>
+  <select id="lp-range"><option value="all">ALL DATES</option><option value="7">NEXT 7</option><option value="14">NEXT 14</option><option value="month">THIS MONTH</option></select>
+  <select id="lp-filter"><option value="active">ACTIVE</option><option value="sold">SOLD</option><option value="all">ALL</option></select>
 </div>
 <table>
-  <thead>
-    <tr>
-      <th>Section</th>
-      <th>Row</th>
-      <th class="num">Qty</th>
-      <th>Seats</th>
-      <th>Delivery</th>
-      <th class="num">Cost</th>
-      <th class="num">Cost/ea</th>
-      <th>Status</th>
-    </tr>
-  </thead>
+  <thead><tr><th>SECTION</th><th>ROW</th><th class="num">QTY</th><th>SEATS</th><th>DELIVERY</th><th class="num">COST</th><th class="num">/EA</th><th>STATUS</th></tr></thead>
   <tbody id="lpbody"></tbody>
 </table>
-<div id="lpempty" class="empty" style="display:none">No Lysted purchases yet.</div>
+<div id="lpempty" class="empty" style="display:none">// no Lysted purchases yet</div>
 
-<h2>Viagogo</h2>
+<h2>// VIAGOGO</h2>
 <div class="stats">
-  <div class="stat"><div class="label">Available Tickets</div><div class="value" id="v-avail">0</div></div>
-  <div class="stat"><div class="label">Sold Tickets</div><div class="value" id="v-sold">0</div></div>
-  <div class="stat"><div class="label">Available Cost</div><div class="value" id="v-cost">$0</div></div>
-  <div class="stat"><div class="label">Sold Cost</div><div class="value" id="v-scost">$0</div></div>
+  <div class="stat"><div class="label">Avail Tickets</div><div class="value" id="v-avail">0</div></div>
+  <div class="stat green"><div class="label">Sold Tickets</div><div class="value" id="v-sold">0</div></div>
+  <div class="stat amber"><div class="label">Avail Cost</div><div class="value" id="v-cost">$0</div></div>
+  <div class="stat green"><div class="label">Sold Cost</div><div class="value" id="v-scost">$0</div></div>
 </div>
 <div class="bar">
-  <input type="search" id="v-search" placeholder="Search event / artist" style="padding:7px 10px; border:1px solid #ccc; border-radius:6px; font-size:13px; min-width:200px;">
-  <label style="font-size:13px;">Sort:
-    <select id="v-sort">
-      <option value="date-asc">Date (soonest first)</option>
-      <option value="date-desc">Date (latest first)</option>
-      <option value="name">Name A–Z</option>
-    </select>
-  </label>
-  <label style="font-size:13px;">Range:
-    <select id="v-range">
-      <option value="all">All dates</option>
-      <option value="7">Next 7 days</option>
-      <option value="14">Next 14 days</option>
-      <option value="month">This month</option>
-    </select>
-  </label>
+  <input type="search" id="v-search" placeholder="search // event venue section" style="flex:1; min-width:200px;">
+  <select id="v-sort"><option value="date-asc">DATE ↑</option><option value="date-desc">DATE ↓</option><option value="name">NAME</option></select>
+  <select id="v-range"><option value="all">ALL DATES</option><option value="7">NEXT 7</option><option value="14">NEXT 14</option><option value="month">THIS MONTH</option></select>
 </div>
 <table>
-  <thead>
-    <tr>
-      <th>Event</th>
-      <th>Date</th>
-      <th>Venue</th>
-      <th>Section</th>
-      <th>Type</th>
-      <th class="num">Face</th>
-      <th class="num">Avail</th>
-      <th class="num">Cost</th>
-      <th class="num">Price</th>
-      <th class="num">Proceeds</th>
-      <th class="num">Sold</th>
-    </tr>
-  </thead>
+  <thead><tr><th>EVENT</th><th>DATE</th><th>VENUE</th><th>SECTION</th><th>TYPE</th><th class="num">FACE</th><th class="num">AVAIL</th><th class="num">COST</th><th class="num">PRICE</th><th class="num">PROCEEDS</th><th class="num">SOLD</th></tr></thead>
   <tbody id="vtbody"></tbody>
 </table>
-<div id="vempty" class="empty" style="display:none">No Viagogo data yet.</div>
+<div id="vempty" class="empty" style="display:none">// no Viagogo data yet</div>
+</main>
 
 <script>
 const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
@@ -156,7 +142,6 @@ async function load() {
   const res = await fetch("/api/inventory");
   const data = await res.json();
   const t = data.totals;
-
   document.getElementById("s-events").textContent = t.events;
   document.getElementById("s-listings").textContent = t.listings;
   document.getElementById("s-tickets").textContent = t.tickets;
@@ -165,26 +150,24 @@ async function load() {
   _lystedCost = t.total_cost || 0;
   const pl = document.getElementById("s-pl");
   pl.textContent = money(t.total_pl);
-  pl.className = "value " + (t.total_pl >= 0 ? "profit-pos" : "profit-neg");
+  pl.parentElement.className = "stat " + (t.total_pl >= 0 ? "green" : "red");
 
   const lr = data.last_run;
-  const msg = lr.running ? "Scraping now…"
-    : lr.at ? "Last updated: " + new Date(lr.at).toLocaleString()
-    : "No scrape has run yet.";
-  document.getElementById("lastrun").textContent = msg;
+  const lb = data.last_backup || {};
+  const parts = [];
+  parts.push(lr.running ? "scraping..." : lr.at ? "last_scrape=" + new Date(lr.at).toLocaleString() : "no_scrape_yet");
+  if (lb.at) parts.push("last_backup=" + new Date(lb.at).toLocaleString());
+  document.getElementById("lastrun").textContent = parts.join(" // ");
 
   const err = document.getElementById("errbox");
-  if (lr.error) { err.style.display = "block"; err.textContent = "Last scrape error: " + lr.error; }
-  else { err.style.display = "none"; }
-
+  if (lr.error) { err.style.display = "block"; err.textContent = "// scrape error: " + lr.error; }
+  else err.style.display = "none";
 }
 
 document.getElementById("refresh").addEventListener("click", async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true;
-  btn.textContent = "Refreshing…";
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "refreshing...";
   await fetch("/api/refresh", { method: "POST" });
-  setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh now"; load(); }, 4000);
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh"; load(); }, 4000);
 });
 
 let _lystedCost = 0;
@@ -195,29 +178,23 @@ function _inRange(iso, range) {
   if (range === "all") return true;
   if (!iso) return false;
   const d = new Date(iso);
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
+  const now = new Date(); now.setHours(0,0,0,0);
   if (range === "7" || range === "14") {
-    const max = new Date(now);
-    max.setDate(max.getDate() + Number(range));
+    const max = new Date(now); max.setDate(max.getDate() + Number(range));
     return d >= now && d <= max;
   }
-  if (range === "month") {
-    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-  }
+  if (range === "month") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
   return true;
 }
-
 function _matches(query, ...fields) {
   if (!query) return true;
   const q = query.toLowerCase();
   return fields.some(f => (f || "").toLowerCase().includes(q));
 }
-
 function _sortCmp(mode) {
-  if (mode === "date-desc") return (a, b) => (b.event_date_iso || "").localeCompare(a.event_date_iso || "");
-  if (mode === "name") return (a, b) => (a.event_name || "").localeCompare(b.event_name || "");
-  return (a, b) => (a.event_date_iso || "zzz").localeCompare(b.event_date_iso || "zzz");
+  if (mode === "date-desc") return (a,b) => (b.event_date_iso||"").localeCompare(a.event_date_iso||"");
+  if (mode === "name") return (a,b) => (a.event_name||"").localeCompare(b.event_name||"");
+  return (a,b) => (a.event_date_iso||"zzz").localeCompare(b.event_date_iso||"zzz");
 }
 
 function renderLystedPurchases() {
@@ -225,7 +202,6 @@ function renderLystedPurchases() {
   const search = document.getElementById("lp-search").value;
   const range = document.getElementById("lp-range").value;
   const sort = document.getElementById("lp-sort").value;
-
   const rows = _lpRows.filter(r => {
     const sold = (r.status || "").toLowerCase() === "sold";
     if (filter === "active" && sold) return false;
@@ -234,42 +210,27 @@ function renderLystedPurchases() {
     if (!_matches(search, r.event_name, r.venue)) return false;
     return true;
   });
-
   const groups = new Map();
   for (const r of rows) {
-    const key = (r.event_name || "") + "|" + (r.event_date_iso || r.event_date || "");
-    if (!groups.has(key)) {
-      groups.set(key, {
-        event_name: r.event_name,
-        event_date: r.event_date,
-        event_date_iso: r.event_date_iso,
-        venue: r.venue,
-        rows: [],
-      });
-    }
+    const key = (r.event_name||"") + "|" + (r.event_date_iso||r.event_date||"");
+    if (!groups.has(key)) groups.set(key, {event_name:r.event_name, event_date:r.event_date, event_date_iso:r.event_date_iso, venue:r.venue, rows:[]});
     groups.get(key).rows.push(r);
   }
   const sorted = [...groups.values()].sort(_sortCmp(sort));
-
   const tbody = document.getElementById("lpbody");
   tbody.innerHTML = "";
   for (const g of sorted) {
-    const tickets = g.rows.reduce((s, r) => s + (r.qty || 0), 0);
-    const cost = g.rows.reduce((s, r) => s + (r.total_cost || 0), 0);
+    const tickets = g.rows.reduce((s,r) => s + (r.qty || 0), 0);
+    const cost = g.rows.reduce((s,r) => s + (r.total_cost || 0), 0);
     const hdr = document.createElement("tr");
     hdr.className = "group-hdr";
-    hdr.innerHTML = `
-      <td colspan="8">
-        <span class="evt-title">${esc(g.event_name)}</span>
-        <span class="evt-meta">${esc(g.event_date)} · ${esc(g.venue)}</span>
-        <span class="evt-stats">${tickets} tickets · ${money(cost)}</span>
-      </td>
-    `;
+    hdr.innerHTML = `<td colspan="8"><span class="evt-title">${esc(g.event_name)}</span><span class="evt-meta">// ${esc(g.event_date)} · ${esc(g.venue)}</span><span class="evt-stats">${tickets} tickets · ${money(cost)}</span></td>`;
     tbody.appendChild(hdr);
     for (const r of g.rows) {
       const tr = document.createElement("tr");
-      const sold = (r.status || "").toLowerCase() === "sold";
-      if (sold) tr.style.color = "#888";
+      const sold = (r.status||"").toLowerCase() === "sold";
+      if (sold) tr.style.color = "var(--muted)";
+      const statusKey = sold ? "sold" : "active";
       tr.innerHTML = `
         <td>${esc(r.section)}</td>
         <td>${esc(r.row_label)}</td>
@@ -278,7 +239,7 @@ function renderLystedPurchases() {
         <td>${esc(r.delivery_type)}</td>
         <td class="num">${money(r.total_cost)}</td>
         <td class="num">${money(r.cost_per_unit)}</td>
-        <td><span class="status">${esc(r.status)}</span></td>
+        <td><span class="status ${statusKey}">${esc(r.status)}</span></td>
       `;
       tbody.appendChild(tr);
     }
@@ -302,19 +263,17 @@ function renderViagogo() {
   const search = document.getElementById("v-search").value;
   const range = document.getElementById("v-range").value;
   const sort = document.getElementById("v-sort").value;
-
   const rows = _vRows.filter(r => {
     if (!_inRange(r.event_date_iso, range)) return false;
     if (!_matches(search, r.event_name, r.venue, r.section)) return false;
     return true;
   }).sort(_sortCmp(sort));
-
   const tbody = document.getElementById("vtbody");
   tbody.innerHTML = "";
   for (const r of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td class="evt">${esc(r.event_name)}</td>
+      <td>${esc(r.event_name)}</td>
       <td>${esc(r.event_date)}</td>
       <td>${esc(r.venue)}</td>
       <td>${esc(r.section)}</td>

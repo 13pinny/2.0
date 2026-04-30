@@ -82,7 +82,10 @@ def main():
     print(" In the Chrome window that opened:")
     print("   1. Log in to Lysted (email, password, SMS code if asked).")
     print("   2. Solve the Cloudflare 'Verify you are human' check if shown.")
-    print("   3. Wait until you see your tickets dashboard loaded.")
+    print("   3. Open a 2nd tab → https://inv.viagogo.com/  → sign in.")
+    print("   4. Open a 3rd tab → https://crowdvolt.com/login → sign in")
+    print("      with your phone + SMS OTP. Once you land on the dashboard")
+    print("      the session is cached in user_data/ for the scraper.")
     print()
     print(" Then come back here and press Enter.")
     print()
@@ -90,7 +93,7 @@ def main():
     print(" close it. The hourly scraper attaches to it silently.")
     print("=" * 60)
     print()
-    input("Press Enter once you're logged in and on the tickets page... ")
+    input("Press Enter once you're logged in and on the dashboards... ")
     print("Session ready. Now run: python app.py")
 
 

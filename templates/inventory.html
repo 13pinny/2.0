@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Inventory</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --bg-3: #11161d;
+    --line: #21262d;
+    --line-2: #2a3038;
+    --text: #c9d1d9;
+    --muted: #6e7681;
+    --accent: #58a6ff;
+    --green: #56d364;
+    --red: #f85149;
+    --amber: #d29922;
+    --orange: #f97316;
+    --purple: #a78bfa;
+    --pink: #f06595;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.amber .value { color: var(--amber); }
+  .stat.green .value { color: var(--green); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, button, a.btn { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button, a.btn { cursor: pointer; text-decoration: none; display: inline-block; }
+  button:hover, a.btn:hover { background: #1f262e; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .bar .label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); position: sticky; top: 60px; background: var(--bg); z-index: 1; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.group-hdr td { background: var(--bg-2); padding: 9px 12px; border-top: 1px solid var(--line); cursor: default; user-select: none; }
+  tr.group-hdr.has-sales td { cursor: pointer; }
+  tr.group-hdr.has-sales td:hover { background: #1c232b; }
+  tr.group-hdr .chev { display: inline-block; width: 12px; color: var(--muted); transition: transform 0.15s; }
+  tr.group-hdr.expanded .chev { transform: rotate(90deg); }
+  tr.group-hdr .evt-title { color: var(--text); font-weight: 700; letter-spacing: 0.5px; }
+  tr.group-hdr .evt-meta { color: var(--muted); margin-left: 8px; font-size: 11px; }
+  tr.group-hdr .evt-stats { float: right; color: var(--muted); font-size: 11px; }
+  tr.group-hdr .evt-stats .sold { color: var(--green); margin-left: 8px; }
+  tr.sale-row td { background: #0e1722; color: var(--muted); font-size: 12px; }
+  tr.sale-row .pill { padding: 1px 6px; border: 1px solid var(--green); color: var(--green); border-radius: 2px; font-size: 10px; letter-spacing: 1.5px; margin-left: 4px; }
+  tr.sale-hdr td { background: #0a1018; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 12px; border-top: 1px dashed var(--line); }
+  .src { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
+  .src-lysted { color: var(--accent); border-color: var(--accent); }
+  .src-viagogo { color: var(--orange); border-color: var(--orange); }
+  .src-jerujam { color: var(--purple); border-color: var(--purple); }
+  .src-crowdvolt { color: var(--pink); border-color: var(--pink); }
+  .src-manual { color: var(--amber); border-color: var(--amber); }
+  .status.status-pending { color: var(--amber); border-color: var(--amber); background: rgba(210,153,34,0.06); }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line-2); color: var(--muted); border-radius: 1px; letter-spacing: 1px; text-transform: uppercase; }
+  .status.status-active, .status.status-lysted { color: var(--accent); border-color: var(--accent); }
+  .status.status-public, .status.status-visible { color: var(--green); border-color: var(--green); }
+  .status.status-partial { color: var(--amber); border-color: var(--amber); }
+  .status.status-sold { color: var(--green); border-color: var(--green); }
+  tbody tr:not(.group-hdr):not(.sale-hdr):not(.sale-row) { cursor: pointer; }
+  td.edited { background: rgba(88,166,255,0.06); }
+  td.edited::after { content: " ●"; color: var(--accent); font-size: 8px; vertical-align: super; }
+  /* edit modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 540px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal h3 .close:hover { color: var(--text); }
+  .modal h3 .src-tag { font-size: 10px; padding: 1px 6px; border: 1px solid; border-radius: 1px; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 110px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus, .modal-body select:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #79b8ff; }
+  .modal-foot button:hover { background: #1f262e; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+  .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; }
+  .row-del { color: var(--red); }
+  .row-sell { color: var(--green); }
+  tbody tr:hover .row-action { opacity: 0.7; }
+  tbody tr .row-del:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  tbody tr .row-sell:hover { opacity: 1; background: rgba(86,211,100,0.1); border-color: var(--green); }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); color: var(--text); border: 1px solid var(--line); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; z-index: 1000; letter-spacing: 0.5px; }
+  #toast button { margin-left: 12px; padding: 3px 10px; background: transparent; color: var(--amber); border: 1px solid var(--line-2); cursor: pointer; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
+  #toast button:hover { background: #1f262e; }
+  #toast .kbd { color: var(--muted); margin-left: 8px; font-size: 10px; letter-spacing: 1px; }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>// KARTIS</h1>
+    <span class="meta" id="lastrun">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/" class="active">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/watchers">WATCHERS</a>
+  </nav>
+</header>
+<main>
+  <div id="errbox" class="err" style="display:none"></div>
+
+  <div class="stats">
+    <div class="stat"><div class="label">Unsold</div><div class="value" id="s-tickets">0</div></div>
+    <div class="stat"><div class="label">Listings</div><div class="value" id="s-rows">0</div></div>
+    <div class="stat amber"><div class="label">Cash Tied</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat"><div class="label">Lysted</div><div class="value" id="s-lysted">0</div></div>
+    <div class="stat"><div class="label">Viagogo</div><div class="value" id="s-viagogo">0</div></div>
+    <div class="stat"><div class="label">JeruJam</div><div class="value" id="s-jerujam">0</div></div>
+    <div class="stat"><div class="label">Deduped</div><div class="value" id="s-deduped">0</div></div>
+    <div class="stat green"><div class="label">Auto-Sold</div><div class="value" id="s-matched">0</div></div>
+  </div>
+
+  <div class="bar">
+    <button id="refresh">Refresh</button>
+    <button id="add-pending" title="Add a ticket I have but haven't listed yet">+ Pending</button>
+    <input type="search" id="q-search" placeholder="search // event venue section" style="flex:1; min-width:200px;">
+    <select id="q-source"><option value="all">SRC: ALL</option><option value="lysted">LYSTED</option><option value="viagogo">VIAGOGO</option><option value="jerujam">JERUJAM</option></select>
+    <select id="q-sort">
+      <option value="date-asc">DATE ↑</option>
+      <option value="date-desc">DATE ↓</option>
+      <option value="name">NAME A–Z</option>
+      <option value="cost-desc">COST ↓</option>
+    </select>
+    <select id="q-range">
+      <option value="all">ALL DATES</option>
+      <option value="7">NEXT 7</option>
+      <option value="14">NEXT 14</option>
+      <option value="month">THIS MONTH</option>
+    </select>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>SRC</th><th>SECTION</th><th>ROW</th><th class="num">QTY</th><th>SEATS</th>
+      <th>DELIV</th><th class="num">COST</th><th class="num">/EA</th><th>STATUS</th><th></th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">// no matches</div>
+</main>
+
+<div id="toast"><span id="toast-msg"></span><button id="toast-undo">Undo</button><span class="kbd">Ctrl+Z</span></div>
+
+<div id="pend-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>// ADD PENDING TICKET</span><button class="close" id="pend-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Tickets you have but haven't listed yet — auto-clears once Lysted/Viagogo picks them up.</div>
+      <label>Event Name *</label><input id="pend-event_name" type="text" placeholder="required">
+      <label>Event Date</label><input id="pend-event_date" type="date">
+      <label>Venue</label><input id="pend-venue" type="text">
+      <label>Section</label><input id="pend-section" type="text">
+      <label>Row</label><input id="pend-row" type="text">
+      <label>Qty *</label><input id="pend-qty" type="number" step="1" min="1" value="1">
+      <label>Cost / ticket</label><input id="pend-cost_per_unit" type="number" step="0.01" placeholder="enter either this...">
+      <label>Total cost</label><input id="pend-total_cost" type="number" step="0.01" placeholder="...or this — auto-syncs">
+      <label>Email</label><input id="pend-email" type="text" placeholder="which inbox (for your records)">
+      <label>Note</label><input id="pend-note" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <span class="muted" style="margin-right:auto;align-self:center;font-size:10px;letter-spacing:1px;">ctrl+enter saves</span>
+      <button id="pend-cancel">Cancel</button>
+      <button class="primary" id="pend-save">Add</button>
+    </div>
+  </div>
+</div>
+
+<div id="sell-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>// RECORD SALE <span id="sell-src" class="src-tag"></span></span><button class="close" id="sell-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="sell-meta"></div>
+      <label>Qty</label><input id="sell-qty" type="number" step="1" min="1">
+      <label>Sale Price</label><input id="sell-price" type="number" step="0.01" placeholder="leave blank for $0">
+      <label>Sale Date</label><input id="sell-date" type="date">
+      <label>Platform</label>
+      <select id="sell-platform">
+        <option value="lysted">Lysted</option>
+        <option value="viagogo">Viagogo</option>
+        <option value="crowdvolt">CrowdVolt</option>
+        <option value="other">Other / Manual</option>
+        <option value="loss">Did not sell (loss)</option>
+      </select>
+      <label>Note</label><input id="sell-note" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <button id="sell-loss" style="color:var(--red);border-color:var(--red);" title="Mark as full loss">Mark Loss</button>
+      <span class="muted" style="margin-right:auto;align-self:center;font-size:10px;letter-spacing:1px;">cost auto-applied · ctrl+enter saves</span>
+      <button id="sell-cancel">Cancel</button>
+      <button class="primary" id="sell-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>// EDIT LISTING <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="m-event"></div>
+      <label>Section</label><input id="m-section" type="text">
+      <label>Row</label><input id="m-row" type="text">
+      <label>Qty</label><input id="m-qty_unsold" type="number" step="1">
+      <label>Seats</label><input id="m-seats" type="text">
+      <label>Delivery</label><input id="m-delivery_type" type="text">
+      <label>Cost</label><input id="m-cost" type="number" step="0.01">
+      <label>Cost/ea</label><input id="m-cost_per_unit" type="number" step="0.01">
+      <label>List Price</label><input id="m-list_price" type="number" step="0.01">
+      <label>Status</label><input id="m-status" type="text">
+      <label>Event Name</label><input id="m-event_name" type="text">
+      <label>Venue</label><input id="m-venue" type="text">
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="m-foot-note">Tip: clear a field to revert it to the scraped value</span>
+      <button id="m-cancel">Cancel</button>
+      <button class="primary" id="m-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+let _rows = [];
+let _salesByEvent = new Map();
+let _expanded = new Set();
+
+function _eventKey(row) {
+  // Prefer the backend's fuzzy-grouped key (handles "Wit"/"With" etc.).
+  if (row && row.event_group) return row.event_group;
+  return ((row?.event_name || "") + "|" + (row?.event_date_iso || row?.event_date || "")).toLowerCase();
+}
+
+function _inRange(iso, range) {
+  if (range === "all") return true;
+  if (!iso) return false;
+  const d = new Date(iso);
+  const now = new Date(); now.setHours(0,0,0,0);
+  if (range === "7" || range === "14") {
+    const max = new Date(now); max.setDate(max.getDate() + Number(range));
+    return d >= now && d <= max;
+  }
+  if (range === "month") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  return true;
+}
+
+function _matches(q, ...fields) {
+  if (!q) return true;
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const nq = norm(q);
+  if (!nq) return true;
+  return fields.some(f => norm(f).includes(nq));
+}
+
+function _sortCmp(mode) {
+  const k = (r) => r.event_date_iso || "zzz";
+  if (mode === "date-desc") return (a,b) => k(b).localeCompare(k(a));
+  if (mode === "name") return (a,b) => (a.event_name || "").localeCompare(b.event_name || "");
+  if (mode === "cost-desc") return (a,b) => (b.cost || 0) - (a.cost || 0);
+  return (a,b) => k(a).localeCompare(k(b));
+}
+
+function render() {
+  const q = document.getElementById("q-search").value;
+  const src = document.getElementById("q-source").value;
+  const sort = document.getElementById("q-sort").value;
+  const range = document.getElementById("q-range").value;
+
+  const rows = _rows.filter(r => {
+    if (src !== "all" && r.source !== src) return false;
+    if (!_inRange(r.event_date_iso, range)) return false;
+    if (!_matches(q, r.event_name, r.venue, r.section)) return false;
+    return true;
+  });
+
+  const groups = new Map();
+  for (const r of rows) {
+    const key = _eventKey(r);
+    if (!groups.has(key)) {
+      groups.set(key, { key: key, event_name: r.event_name, event_date: r.event_date, event_date_iso: r.event_date_iso, venue: r.venue, rows: [] });
+    }
+    groups.get(key).rows.push(r);
+  }
+  const sorted = [...groups.values()].sort(_sortCmp(sort));
+
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  for (const g of sorted) {
+    const qty = g.rows.reduce((s,r) => s + (r.qty_unsold || 0), 0);
+    const cost = g.rows.reduce((s,r) => s + (r.cost || 0), 0);
+    const sales = _salesByEvent.get(g.key) || [];
+    const soldQty = sales.reduce((s,x) => s + (x.qty || 0), 0);
+    const soldRev = sales.reduce((s,x) => s + (x.sale_price || 0), 0);
+    const hasSales = sales.length > 0;
+    const expanded = _expanded.has(g.key);
+
+    const hdr = document.createElement("tr");
+    hdr.className = "group-hdr " + (hasSales ? "has-sales" : "no-sales") + (expanded ? " expanded" : "");
+    hdr.dataset.key = g.key;
+    hdr.innerHTML = `
+      <td colspan="10">
+        <span class="chev">${hasSales ? "▸" : ""}</span>
+        <span class="evt-title">${esc(g.event_name)}</span>
+        <span class="evt-meta">// ${esc(g.event_date)} · ${esc(g.venue)}</span>
+        <span class="evt-stats">${qty} unsold · ${money(cost)}${hasSales ? `<span class="sold">${soldQty} SOLD · ${money(soldRev)}</span>` : ""}</span>
+      </td>
+    `;
+    if (hasSales) {
+      hdr.addEventListener("click", () => {
+        if (_expanded.has(g.key)) _expanded.delete(g.key); else _expanded.add(g.key);
+        render();
+      });
+    }
+    tbody.appendChild(hdr);
+
+    for (const r of g.rows) {
+      const tr = document.createElement("tr");
+      const costPer = r.cost_per_unit != null ? r.cost_per_unit : (r.qty_unsold ? (r.cost || 0) / r.qty_unsold : null);
+      const statusClass = "status status-" + (r.status || "").toLowerCase().replace(/[^a-z0-9_]/g, "_");
+      const ed = (f) => (r._edited || []).includes(f) ? "edited" : "";
+      tr.title = "Double-click to edit";
+      tr.innerHTML = `
+        <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span></td>
+        <td class="${ed('section')}">${esc(r.section)}</td>
+        <td class="${ed('row')}">${esc(r.row)}</td>
+        <td class="num ${ed('qty_unsold')}">${r.qty_unsold ?? ""}</td>
+        <td class="${ed('seats')}">${esc(r.seats)}</td>
+        <td class="${ed('delivery_type')}">${esc(r.delivery_type)}</td>
+        <td class="num ${ed('cost')}">${money(r.cost)}</td>
+        <td class="num ${ed('cost_per_unit')}">${money(costPer)}</td>
+        <td class="${ed('status')}"><span class="${statusClass}">${esc(r.status)}</span></td>
+        <td style="white-space:nowrap;">
+          <button class="row-action row-sell" title="Record manual sale">$</button>
+          <button class="row-action row-del" title="Hide this listing" data-source="${esc(r.source)}" data-id="${esc(r.source_id)}">×</button>
+        </td>
+      `;
+      tr._row = r;
+      tbody.appendChild(tr);
+    }
+
+    if (expanded && hasSales) {
+      const subhdr = document.createElement("tr");
+      subhdr.className = "sale-hdr";
+      subhdr.innerHTML = `<td colspan="10">// SOLD · ${sales.length} ${sales.length === 1 ? "sale" : "sales"}</td>`;
+      tbody.appendChild(subhdr);
+      const sortedSales = sales.slice().sort((a,b) => (b.sale_date || "").localeCompare(a.sale_date || ""));
+      for (const s of sortedSales) {
+        const sr = document.createElement("tr");
+        sr.className = "sale-row";
+        const net = s.sale_price == null ? null : (s.sale_price - (s.cost || 0));
+        const netColor = net == null ? "var(--muted)" : net >= 0 ? "var(--green)" : "var(--red)";
+        const costPer = s.qty ? (s.cost || 0) / s.qty : null;
+        sr.innerHTML = `
+          <td><span class="src src-${esc(s.source)}">${esc((s.source||"").toUpperCase())}</span><span class="pill">SOLD</span></td>
+          <td>${esc(s.section)}</td>
+          <td>${esc(s.row)}</td>
+          <td class="num">${s.qty ?? ""}</td>
+          <td>${esc(s.platform)}</td>
+          <td>${s.sale_date ? esc(s.sale_date) : ""}</td>
+          <td class="num">${money(s.cost)}</td>
+          <td class="num">${money(costPer)}</td>
+          <td class="num" style="color:${netColor};">${s.sale_price == null ? "—" : money(s.sale_price)}${net != null ? `<div style="font-size:10px;color:${netColor};letter-spacing:1px;">NET ${money(net)}</div>` : ""}</td>
+          <td></td>
+        `;
+        tbody.appendChild(sr);
+      }
+    }
+  }
+  document.getElementById("empty").style.display = sorted.length ? "none" : "block";
+}
+
+async function load() {
+  const [invR, salR] = await Promise.all([fetch("/api/inventory-all"), fetch("/api/sales-all")]);
+  const d = await invR.json();
+  const sd = await salR.json();
+  _rows = d.rows || [];
+  _salesByEvent = new Map();
+  for (const s of (sd.rows || [])) {
+    const key = _eventKey(s);
+    if (!_salesByEvent.has(key)) _salesByEvent.set(key, []);
+    _salesByEvent.get(key).push(s);
+  }
+  const t = d.totals || {};
+  document.getElementById("s-tickets").textContent = t.tickets ?? 0;
+  document.getElementById("s-rows").textContent = t.rows ?? 0;
+  document.getElementById("s-cost").textContent = money(t.total_cost);
+  const bs = t.by_source || {};
+  document.getElementById("s-lysted").textContent = bs.lysted || 0;
+  document.getElementById("s-viagogo").textContent = bs.viagogo || 0;
+  document.getElementById("s-jerujam").textContent = bs.jerujam || 0;
+  document.getElementById("s-deduped").textContent = t.jerujam_skipped_dedupe || 0;
+  document.getElementById("s-matched").textContent = t.auto_matched || 0;
+
+  const lr = d.last_run || {};
+  const lb = d.last_backup || {};
+  const parts = [];
+  parts.push(lr.running ? "scraping..." : lr.at ? "last_scrape=" + new Date(lr.at).toLocaleString() : "no_scrape_yet");
+  if (lb.at) parts.push("last_backup=" + new Date(lb.at).toLocaleString());
+  document.getElementById("lastrun").textContent = parts.join(" // ");
+
+  const err = document.getElementById("errbox");
+  if (lr.error) { err.style.display = "block"; err.textContent = "// scrape error: " + lr.error; }
+  else err.style.display = "none";
+
+  render();
+}
+
+document.getElementById("refresh").addEventListener("click", async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "refreshing...";
+  await fetch("/api/refresh", { method: "POST" });
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh"; load(); }, 4000);
+});
+for (const id of ["q-search", "q-source", "q-sort", "q-range"]) {
+  document.getElementById(id).addEventListener("input", render);
+  document.getElementById(id).addEventListener("change", render);
+}
+
+// --- delete + undo ---
+const _undoStack = [];
+let _toastTimer = null;
+function showToast(msg) {
+  const toast = document.getElementById("toast");
+  document.getElementById("toast-msg").textContent = msg;
+  toast.style.display = "block";
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toast.style.display = "none"; }, 6000);
+}
+
+async function hideRow(row) {
+  const label = `${row.event_name || "?"} · ${row.section || ""}${row.row ? "/" + row.row : ""}${row.seats ? " · " + row.seats : ""}`;
+  if (!confirm(`Hide this listing?\n\n${label}\n\nQty ${row.qty_unsold} · ${row.cost ? "$" + Number(row.cost).toLocaleString() : ""}`)) return;
+  const res = await fetch("/api/inventory/hide", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source: row.source, source_id: row.source_id}),
+  });
+  if (!res.ok) { alert("Failed to hide"); return; }
+  const idx = _rows.findIndex(r => r.source === row.source && String(r.source_id) === String(row.source_id));
+  if (idx !== -1) _rows.splice(idx, 1);
+  _undoStack.push({source: row.source, source_id: row.source_id, label});
+  showToast(`hidden // ${label}`);
+  render();
+}
+
+async function undoLast() {
+  const last = _undoStack.pop();
+  if (!last) { showToast("// nothing to undo"); return; }
+  const res = await fetch("/api/inventory/unhide", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source: last.source, source_id: last.source_id}),
+  });
+  if (!res.ok) { alert("Failed to restore"); return; }
+  showToast(`restored // ${last.label}`);
+  await load();
+}
+
+document.getElementById("toast-undo").addEventListener("click", undoLast);
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".row-del");
+  if (!btn) return;
+  e.stopPropagation();
+  const tr = btn.closest("tr");
+  const row = tr && tr._row;
+  if (row) hideRow(row);
+});
+
+document.addEventListener("keydown", (e) => {
+  const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z";
+  if (!isUndo) return;
+  const tag = (document.activeElement?.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+  if (document.activeElement?.isContentEditable) return;
+  e.preventDefault();
+  undoLast();
+});
+
+// --- row-level edit modal ---
+const INV_FIELDS = ["section","row","qty_unsold","seats","delivery_type","cost","cost_per_unit","list_price","status","event_name","venue"];
+const INV_NUMERIC = new Set(["qty_unsold","cost","cost_per_unit","list_price"]);
+let _modalRow = null;
+let _modalInitial = {};
+
+function openEditModal(row) {
+  _modalRow = row;
+  _modalInitial = {};
+  const sec = row.cost_per_unit != null
+    ? row.cost_per_unit
+    : (row.qty_unsold ? (row.cost || 0) / row.qty_unsold : null);
+  const computed = { ...row, cost_per_unit: sec };
+  for (const f of INV_FIELDS) {
+    const v = computed[f] ?? "";
+    document.getElementById("m-" + f).value = v;
+    _modalInitial[f] = String(v);
+  }
+  document.getElementById("m-event").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.venue || ""}`;
+  document.getElementById("m-src").textContent = (row.source || "").toUpperCase();
+  document.getElementById("m-src").className = "src-tag src src-" + row.source;
+  document.getElementById("modal-bg").classList.add("open");
+  setTimeout(() => document.getElementById("m-section").focus(), 30);
+}
+function closeEditModal() {
+  document.getElementById("modal-bg").classList.remove("open");
+  _modalRow = null;
+}
+
+async function saveEditModal() {
+  if (!_modalRow) return;
+  const changes = [];
+  for (const f of INV_FIELDS) {
+    const newVal = document.getElementById("m-" + f).value.trim();
+    if (newVal !== _modalInitial[f]) {
+      let parsed = newVal;
+      if (INV_NUMERIC.has(f)) {
+        if (newVal === "") parsed = "";
+        else {
+          const n = parseFloat(newVal.replace(/[$,]/g, ""));
+          parsed = isNaN(n) ? "" : n;
+        }
+      }
+      changes.push({field: f, value: parsed});
+    }
+  }
+  if (changes.length === 0) { closeEditModal(); return; }
+  for (const c of changes) {
+    await fetch("/api/inventory/edit", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({source: _modalRow.source, source_id: String(_modalRow.source_id), ...c}),
+    });
+  }
+  closeEditModal();
+  await load();
+}
+
+document.addEventListener("dblclick", (e) => {
+  if (e.target.closest(".modal-bg")) return;
+  if (e.target.closest("button")) return;
+  const tr = e.target.closest("tr");
+  if (!tr || !tr._row) return;
+  e.preventDefault();
+  openEditModal(tr._row);
+});
+
+// --- record sale ---
+let _sellRow = null;
+function openSellModal(row) {
+  _sellRow = row;
+  document.getElementById("sell-qty").value = row.qty_unsold || 1;
+  document.getElementById("sell-qty").max = row.qty_unsold || 1;
+  document.getElementById("sell-price").value = "";
+  document.getElementById("sell-date").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("sell-platform").value = "viagogo";
+  document.getElementById("sell-note").value = "";
+  document.getElementById("sell-meta").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.section || ""}${row.row ? "/" + row.row : ""} · cost/ea ${row.cost_per_unit != null ? "$" + row.cost_per_unit.toFixed(2) : "?"}`;
+  document.getElementById("sell-src").textContent = (row.source || "").toUpperCase();
+  document.getElementById("sell-src").className = "src-tag src src-" + row.source;
+  document.getElementById("sell-bg").classList.add("open");
+  setTimeout(() => document.getElementById("sell-qty").focus(), 30);
+}
+function closeSellModal() {
+  document.getElementById("sell-bg").classList.remove("open");
+  _sellRow = null;
+}
+async function saveSellModal(asLoss) {
+  if (!_sellRow) return;
+  const qty = parseInt(document.getElementById("sell-qty").value, 10);
+  const platformSel = document.getElementById("sell-platform").value;
+  const isLoss = asLoss || platformSel === "loss";
+  const priceRaw = document.getElementById("sell-price").value.trim();
+  const sale_price = isLoss ? 0 : (priceRaw === "" ? 0 : parseFloat(priceRaw.replace(/[$,]/g, "")));
+  const sale_date = document.getElementById("sell-date").value || new Date().toISOString().slice(0, 10);
+  const platform = isLoss ? "loss" : platformSel;
+  const note = document.getElementById("sell-note").value.trim();
+  if (!qty || qty < 1 || qty > (_sellRow.qty_unsold || 0)) {
+    alert(`Qty must be between 1 and ${_sellRow.qty_unsold}`);
+    return;
+  }
+  const res = await fetch("/api/sales/manual-record", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      inv_source: _sellRow.source,
+      inv_source_id: String(_sellRow.source_id),
+      qty, sale_price, sale_date, platform, note,
+      is_loss: isLoss,
+    }),
+  });
+  if (!res.ok) { alert("Failed to record sale"); return; }
+  closeSellModal();
+  await load();
+}
+
+// --- add pending ---
+function openPendingModal() {
+  for (const id of ["event_name","event_date","venue","section","row","cost_per_unit","total_cost","email","note"]) {
+    document.getElementById("pend-" + id).value = "";
+  }
+  document.getElementById("pend-qty").value = 1;
+  document.getElementById("pend-bg").classList.add("open");
+  setTimeout(() => document.getElementById("pend-event_name").focus(), 30);
+}
+function closePendingModal() {
+  document.getElementById("pend-bg").classList.remove("open");
+}
+// Two-way link: cost/ticket × qty = total cost. Whichever the user typed last wins;
+// we update the *other* field. Skip if qty is unset/invalid.
+let _pendCostSrc = null; // "per" | "total" | null — which field the user touched last
+function _pendQty() {
+  const q = parseInt(document.getElementById("pend-qty").value, 10);
+  return q > 0 ? q : 0;
+}
+function _pendSyncFromPer() {
+  _pendCostSrc = "per";
+  const q = _pendQty();
+  const per = parseFloat(document.getElementById("pend-cost_per_unit").value);
+  const tot = document.getElementById("pend-total_cost");
+  if (q && !isNaN(per)) tot.value = (per * q).toFixed(2);
+  else if (!document.getElementById("pend-cost_per_unit").value) tot.value = "";
+}
+function _pendSyncFromTotal() {
+  _pendCostSrc = "total";
+  const q = _pendQty();
+  const tot = parseFloat(document.getElementById("pend-total_cost").value);
+  const per = document.getElementById("pend-cost_per_unit");
+  if (q && !isNaN(tot)) per.value = (tot / q).toFixed(2);
+  else if (!document.getElementById("pend-total_cost").value) per.value = "";
+}
+function _pendSyncFromQty() {
+  // Recompute the field the user *didn't* most-recently type, based on the other.
+  const q = _pendQty();
+  const perEl = document.getElementById("pend-cost_per_unit");
+  const totEl = document.getElementById("pend-total_cost");
+  if (!q) return;
+  if (_pendCostSrc === "total") {
+    const tot = parseFloat(totEl.value);
+    if (!isNaN(tot)) perEl.value = (tot / q).toFixed(2);
+  } else {
+    const per = parseFloat(perEl.value);
+    if (!isNaN(per)) totEl.value = (per * q).toFixed(2);
+  }
+}
+async function savePendingModal() {
+  const event_name = document.getElementById("pend-event_name").value.trim();
+  const qty = parseInt(document.getElementById("pend-qty").value, 10);
+  if (!event_name) { alert("Event name is required"); return; }
+  if (!qty || qty < 1) { alert("Qty must be ≥ 1"); return; }
+  // Cost/ticket is the source of truth in DB. If only Total was entered, derive it.
+  let costPer = document.getElementById("pend-cost_per_unit").value;
+  const totVal = document.getElementById("pend-total_cost").value;
+  if (!costPer && totVal) {
+    const t = parseFloat(totVal);
+    if (!isNaN(t)) costPer = (t / qty).toFixed(4);
+  }
+  const body = {
+    event_name,
+    event_date: document.getElementById("pend-event_date").value,
+    venue: document.getElementById("pend-venue").value.trim(),
+    section: document.getElementById("pend-section").value.trim(),
+    row: document.getElementById("pend-row").value.trim(),
+    qty,
+    cost_per_unit: costPer || null,
+    email: document.getElementById("pend-email").value.trim(),
+    note: document.getElementById("pend-note").value.trim(),
+  };
+  const res = await fetch("/api/inventory/manual-add", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) { alert("Failed to add"); return; }
+  closePendingModal();
+  await load();
+}
+document.getElementById("add-pending").addEventListener("click", openPendingModal);
+document.getElementById("pend-close").addEventListener("click", closePendingModal);
+document.getElementById("pend-cancel").addEventListener("click", closePendingModal);
+document.getElementById("pend-save").addEventListener("click", savePendingModal);
+document.getElementById("pend-cost_per_unit").addEventListener("input", _pendSyncFromPer);
+document.getElementById("pend-total_cost").addEventListener("input", _pendSyncFromTotal);
+document.getElementById("pend-qty").addEventListener("input", _pendSyncFromQty);
+document.getElementById("pend-bg").addEventListener("click", (e) => {
+  if (e.target.id === "pend-bg") closePendingModal();
+});
+
+document.getElementById("sell-close").addEventListener("click", closeSellModal);
+document.getElementById("sell-cancel").addEventListener("click", closeSellModal);
+document.getElementById("sell-save").addEventListener("click", () => saveSellModal(false));
+document.getElementById("sell-loss").addEventListener("click", () => {
+  if (!confirm("Mark this batch as unsold (full cost loss)?")) return;
+  saveSellModal(true);
+});
+document.getElementById("sell-bg").addEventListener("click", (e) => {
+  if (e.target.id === "sell-bg") closeSellModal();
+});
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".row-sell");
+  if (!btn) return;
+  e.stopPropagation();
+  const tr = btn.closest("tr");
+  const row = tr && tr._row;
+  if (row) openSellModal(row);
+});
+
+document.getElementById("m-close").addEventListener("click", closeEditModal);
+document.getElementById("m-cancel").addEventListener("click", closeEditModal);
+document.getElementById("m-save").addEventListener("click", saveEditModal);
+document.getElementById("modal-bg").addEventListener("click", (e) => {
+  if (e.target.id === "modal-bg") closeEditModal();
+});
+document.addEventListener("keydown", (e) => {
+  const editOpen = document.getElementById("modal-bg").classList.contains("open");
+  const sellOpen = document.getElementById("sell-bg").classList.contains("open");
+  const pendOpen = document.getElementById("pend-bg").classList.contains("open");
+  if (!editOpen && !sellOpen && !pendOpen) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    if (editOpen) closeEditModal();
+    if (sellOpen) closeSellModal();
+    if (pendOpen) closePendingModal();
+  }
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    if (editOpen) saveEditModal();
+    if (sellOpen) saveSellModal(false);
+    if (pendOpen) savePendingModal();
+  }
+});
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Sales</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --bg-3: #11161d;
+    --line: #21262d;
+    --line-2: #2a3038;
+    --text: #c9d1d9;
+    --muted: #6e7681;
+    --accent: #58a6ff;
+    --green: #56d364;
+    --red: #f85149;
+    --amber: #d29922;
+    --orange: #f97316;
+    --purple: #a78bfa;
+    --pink: #f06595;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; position: sticky; top: 56px; z-index: 4; background: var(--bg); padding: 10px 0; margin: 0 0 14px; border-bottom: 1px solid var(--line); }
+  input, select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); position: sticky; top: 110px; background: var(--bg); }
+  th.col-check, td.col-check { width: 28px; padding: 6px 4px 6px 10px; }
+  input.row-check { width: 14px; height: 14px; cursor: pointer; padding: 0; margin: 0; vertical-align: middle; accent-color: var(--accent); }
+  tr.row-selected td { background: rgba(88,166,255,0.08) !important; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.is-new td { background: #0e1d12; }
+  .src { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
+  .src-lysted { color: var(--accent); border-color: var(--accent); }
+  .src-viagogo { color: var(--orange); border-color: var(--orange); }
+  .src-jerujam { color: var(--purple); border-color: var(--purple); }
+  .src-crowdvolt { color: var(--pink); border-color: var(--pink); }
+  .new-badge { padding: 1px 5px; font-size: 9px; background: rgba(86,211,100,0.12); color: var(--green); border: 1px solid var(--green); border-radius: 1px; letter-spacing: 1.5px; margin-left: 4px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 28px 0 10px; color: var(--text); display: flex; align-items: baseline; gap: 12px; }
+  h2:first-of-type { margin-top: 0; }
+  h2 .count { color: var(--muted); font-weight: 400; font-size: 11px; }
+  .pill-bar { display: flex; gap: 4px; margin-bottom: 12px; }
+  .pill-bar .pill { font-family: inherit; font-size: 10px; letter-spacing: 1.5px; padding: 5px 12px; border: 1px solid var(--line); background: var(--bg-2); color: var(--muted); cursor: pointer; text-transform: uppercase; }
+  .pill-bar .pill:hover { background: #1f262e; color: var(--text); }
+  .pill-bar .pill.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.06); }
+  tbody tr { cursor: pointer; }
+  td.edited { background: rgba(88,166,255,0.06); }
+  td.edited::after { content: " ●"; color: var(--accent); font-size: 8px; vertical-align: super; }
+  /* edit modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 540px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal h3 .close:hover { color: var(--text); }
+  .modal h3 .src-tag { font-size: 10px; padding: 1px 6px; border: 1px solid; border-radius: 1px; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 110px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus, .modal-body select:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #79b8ff; }
+  .modal-foot button:hover { background: #1f262e; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+  .muted { color: var(--muted); }
+  .row-del { width: 22px; height: 22px; border-radius: 0; background: transparent; color: var(--red); border: 1px solid transparent; cursor: pointer; font-size: 13px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; }
+  tbody tr:hover .row-del { opacity: 0.7; }
+  tbody tr .row-del:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  #bulk-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--accent); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; z-index: 999; letter-spacing: 0.5px; gap: 12px; align-items: center; }
+  #bulk-bar.open { display: flex; }
+  #bulk-bar .bulk-count { color: var(--accent); font-weight: 600; }
+  #bulk-bar button { font-family: inherit; font-size: 11px; padding: 6px 12px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; }
+  #bulk-bar button:hover { background: #1f262e; }
+  #bulk-bar button.danger { color: var(--red); border-color: var(--red); }
+  #bulk-bar button.danger:hover { background: rgba(248,81,73,0.1); }
+  #bulk-bar button.primary { color: var(--accent); border-color: var(--accent); }
+  #bulk-bar button.primary:hover { background: rgba(88,166,255,0.1); }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); color: var(--text); border: 1px solid var(--line); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; z-index: 1000; letter-spacing: 0.5px; }
+  #toast button { margin-left: 12px; padding: 3px 10px; background: transparent; color: var(--amber); border: 1px solid var(--line-2); cursor: pointer; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
+  #toast button:hover { background: #1f262e; }
+  #toast .kbd { color: var(--muted); margin-left: 8px; font-size: 10px; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>// SALES</h1>
+    <span class="meta" id="sub">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales" class="active">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/watchers">WATCHERS</a>
+  </nav>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Sales</div><div class="value" id="s-rows">0</div></div>
+    <div class="stat"><div class="label">Tickets Sold</div><div class="value" id="s-qty">0</div></div>
+    <div class="stat green"><div class="label">Revenue</div><div class="value" id="s-rev">$0</div></div>
+    <div class="stat amber"><div class="label">Cost</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat green"><div class="label">Net</div><div class="value" id="s-net">$0</div></div>
+    <div class="stat green"><div class="label">New v JJ</div><div class="value" id="s-new">0</div></div>
+    <div class="stat"><div class="label">JeruJam</div><div class="value" id="s-jerujam">0</div></div>
+    <div class="stat"><div class="label">Lysted</div><div class="value" id="s-lysted">0</div></div>
+    <div class="stat"><div class="label">Viagogo</div><div class="value" id="s-viagogo">0</div></div>
+    <div class="stat"><div class="label">CrowdVolt</div><div class="value" id="s-crowdvolt">0</div></div>
+  </div>
+
+  <div class="bar">
+    <input type="search" id="q-search" placeholder="search // event venue platform" style="flex:1; min-width:200px;">
+    <select id="q-source">
+      <option value="all">SRC: ALL</option>
+      <option value="jerujam">JERUJAM</option>
+      <option value="lysted">LYSTED</option>
+      <option value="viagogo">VIAGOGO</option>
+      <option value="crowdvolt">CROWDVOLT</option>
+    </select>
+    <select id="q-new">
+      <option value="all">SHOW: ALL</option>
+      <option value="new">ONLY NEW v JJ</option>
+    </select>
+    <select id="q-sort">
+      <option value="sale-desc">SOLD ↓ (NEW)</option>
+      <option value="sale-asc">SOLD ↑ (OLD)</option>
+      <option value="event-asc">EVENT DATE ↑</option>
+      <option value="event-desc">EVENT DATE ↓</option>
+      <option value="rev-desc">REV ↓</option>
+    </select>
+  </div>
+
+  <h2>// RECENT <span class="count" id="recent-count"></span><span class="count" id="recent-rev"></span></h2>
+  <div class="pill-bar" id="recent-pills">
+    <button class="pill" data-days="1">Today</button>
+    <button class="pill" data-days="3">3 days</button>
+    <button class="pill active" data-days="7">7 days</button>
+    <button class="pill" data-days="14">14 days</button>
+    <button class="pill" data-days="month">This month</button>
+  </div>
+  <table>
+    <thead><tr>
+      <th class="col-check"><input type="checkbox" class="row-check" id="check-all-recent" title="Select all visible"></th>
+      <th>SOLD</th><th>EVENT</th><th>VENUE</th><th>SEC/ROW</th>
+      <th>SRC</th><th>PLATFORM</th><th>ORDER#</th><th class="num">QTY</th>
+      <th class="num">REV</th><th class="num">COST</th><th class="num">NET</th><th class="num">ROI</th><th></th>
+    </tr></thead>
+    <tbody id="recentbody"></tbody>
+  </table>
+  <div id="recentempty" class="empty" style="display:none">// no sales in this window</div>
+
+  <h2>// ALL SALES <span class="count" id="all-count"></span></h2>
+  <table>
+    <thead><tr>
+      <th class="col-check"><input type="checkbox" class="row-check" id="check-all" title="Select all visible"></th>
+      <th>SOLD</th><th>EVENT</th><th>VENUE</th><th>SEC/ROW</th>
+      <th>SRC</th><th>PLATFORM</th><th>ORDER#</th><th class="num">QTY</th>
+      <th class="num">REV</th><th class="num">COST</th><th class="num">NET</th><th class="num">ROI</th><th></th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">// no sales match</div>
+</main>
+
+<div id="bulk-bar">
+  <span class="bulk-count" id="bulk-count">0 selected</span>
+  <button class="primary" id="bulk-edit">Edit</button>
+  <button class="danger" id="bulk-delete">Delete</button>
+  <button id="bulk-clear">Clear</button>
+</div>
+
+<div id="bulk-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>// BULK EDIT <span class="src-tag" id="bulk-src" style="color:var(--accent);border-color:var(--accent);">0 SALES</span></span><button class="close" id="bulk-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Only filled-in fields are applied. Leave blank to keep each row's existing value.</div>
+      <label>Sale Date</label><input id="bulk-sale_date" type="text" placeholder="(unchanged)">
+      <label>Event Name</label><input id="bulk-event_name" type="text" placeholder="(unchanged)">
+      <label>Venue</label><input id="bulk-venue" type="text" placeholder="(unchanged)">
+      <label>Section</label><input id="bulk-section" type="text" placeholder="(unchanged)">
+      <label>Row</label><input id="bulk-row" type="text" placeholder="(unchanged)">
+      <label>Platform</label><input id="bulk-platform" type="text" placeholder="(unchanged)">
+      <label>Qty</label><input id="bulk-qty" type="number" step="1" placeholder="(unchanged)">
+      <label>Sale Price</label><input id="bulk-sale_price" type="number" step="0.01" placeholder="(unchanged)">
+      <label>Cost</label><input id="bulk-cost" type="number" step="0.01" placeholder="(unchanged)">
+    </div>
+    <div class="modal-foot">
+      <span class="muted">applies only to filled fields</span>
+      <button id="bulk-edit-cancel">Cancel</button>
+      <button class="primary" id="bulk-edit-save">Apply to <span id="bulk-edit-count">0</span></button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"><span id="toast-msg"></span><button id="toast-undo">Undo</button><span class="kbd">Ctrl+Z</span></div>
+
+<div id="modal-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>// EDIT SALE <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="m-meta"></div>
+      <label>Sale Date</label><input id="m-sale_date" type="text">
+      <label>Event Name</label><input id="m-event_name" type="text">
+      <label>Venue</label><input id="m-venue" type="text">
+      <label>Section</label><input id="m-section" type="text">
+      <label>Row</label><input id="m-row" type="text">
+      <label>Platform</label><input id="m-platform" type="text">
+      <label>Qty</label><input id="m-qty" type="number" step="1">
+      <label>Sale Price</label><input id="m-sale_price" type="number" step="0.01">
+      <label>Cost</label><input id="m-cost" type="number" step="0.01">
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="m-foot-note">Tip: clear a field to revert it to the scraped value</span>
+      <button id="m-cancel">Cancel</button>
+      <button class="primary" id="m-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+let _rows = [];
+
+function _sortCmp(mode, searching) {
+  if (searching) {
+    // When the user has a search active, cluster matches by event so two
+    // BLOND'ISH rows sit next to each other, then by event date asc, then
+    // newest sales first.
+    return (a,b) => {
+      const an = (a.event_name || "").toLowerCase();
+      const bn = (b.event_name || "").toLowerCase();
+      if (an !== bn) return an < bn ? -1 : 1;
+      const ad = a.event_date_iso || "zzz";
+      const bd = b.event_date_iso || "zzz";
+      if (ad !== bd) return ad < bd ? -1 : 1;
+      return (b.sale_date_iso || "").localeCompare(a.sale_date_iso || "");
+    };
+  }
+  if (mode === "sale-asc") return (a,b) => (a.sale_date || "").localeCompare(b.sale_date || "");
+  if (mode === "event-asc") return (a,b) => (a.event_date_iso || "zzz").localeCompare(b.event_date_iso || "zzz");
+  if (mode === "event-desc") return (a,b) => (b.event_date_iso || "").localeCompare(a.event_date_iso || "");
+  if (mode === "rev-desc") return (a,b) => (b.sale_price || 0) - (a.sale_price || 0);
+  return (a,b) => (b.sale_date || "").localeCompare(a.sale_date || "");
+}
+
+function _payout(r) {
+  return (r.payout != null) ? r.payout : r.sale_price;
+}
+function _net(r) {
+  const p = _payout(r);
+  return p == null ? null : (p - (r.cost || 0));
+}
+function _roi(r) {
+  const n = _net(r);
+  return (n == null || !r.cost) ? null : (n / r.cost) * 100;
+}
+
+function _renderRow(r) {
+  const payout = _payout(r);
+  const net = _net(r);
+  const netColor = net == null ? "var(--muted)" : net >= 0 ? "var(--green)" : "var(--red)";
+  const roi = _roi(r);
+  const roiColor = roi == null ? "var(--muted)" : roi >= 0 ? "var(--green)" : "var(--red)";
+  const roiText = roi == null ? "—" : (roi >= 0 ? "+" : "") + roi.toFixed(1) + "%";
+  const tr = document.createElement("tr");
+  if (r.is_new) tr.className = "is-new";
+  const newBadge = r.is_new ? '<span class="new-badge">NEW</span>' : '';
+  const ed = (f) => (r._edited || []).includes(f) ? "edited" : "";
+  tr.title = "Double-click to edit";
+  // Lysted sales: only the payout matters (sale_price is the gross before Lysted's fee).
+  // Other sources: show sale_price, with payout as a subline when it differs.
+  let revCell;
+  if (r.source === "lysted") {
+    revCell = payout == null
+      ? '<span class="muted">unknown</span>'
+      : money(payout);
+  } else {
+    const showPayout = r.sale_price != null && payout != null && Math.abs(payout - r.sale_price) > 0.01;
+    revCell = r.sale_price == null
+      ? '<span class="muted">unknown</span>'
+      : money(r.sale_price) + (showPayout ? `<div class="muted" style="font-size:10px;">payout ${money(payout)}</div>` : '');
+  }
+  const selKey = `${r.source}:::${r.sale_id}`;
+  const isSelected = _selected.has(selKey);
+  if (isSelected) tr.classList.add("row-selected");
+  tr.innerHTML = `
+    <td class="col-check"><input type="checkbox" class="row-check" data-sel="${esc(selKey)}"${isSelected ? " checked" : ""}></td>
+    <td class="${ed('sale_date')}">${r.sale_date ? esc(r.sale_date) : '<span class="muted">—</span>'}</td>
+    <td class="${ed('event_name')}">${esc(r.event_name)}<div class="muted" style="font-size:11px;">${esc(r.event_date)}</div></td>
+    <td class="${ed('venue')}">${esc(r.venue)}</td>
+    <td class="${ed('section')}">${esc(r.section)}${r.row ? " / " + esc(r.row) : ""}</td>
+    <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span>${newBadge}</td>
+    <td class="${ed('platform')}">${esc(r.platform)}</td>
+    <td class="muted" style="font-size:11px;">${esc(r.order_id || "")}</td>
+    <td class="num ${ed('qty')}">${r.qty ?? ""}</td>
+    <td class="num ${ed('sale_price')}">${revCell}</td>
+    <td class="num ${ed('cost')}">${money(r.cost)}</td>
+    <td class="num" style="color:${netColor};">${net == null ? '—' : money(net)}</td>
+    <td class="num" style="color:${roiColor};">${roiText}</td>
+    <td><button class="row-del" title="Delete this sale" data-source="${esc(r.source)}" data-id="${esc(r.sale_id)}">×</button></td>
+  `;
+  tr._row = r;
+  return tr;
+}
+
+let _recentDays = "7";
+
+function _withinRecent(iso, days) {
+  if (!iso) return false;
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return false;
+  const now = new Date(); now.setHours(0,0,0,0);
+  if (days === "month") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  const min = new Date(now); min.setDate(min.getDate() - (Number(days) - 1));
+  return d >= min && d <= now;
+}
+
+function renderRecent() {
+  const q = _searchNorm(document.getElementById("q-search").value);
+  const src = document.getElementById("q-source").value;
+  const onlyNew = document.getElementById("q-new").value === "new";
+  const recent = _rows
+    .filter(r => _withinRecent(r.sale_date_iso, _recentDays))
+    .filter(r => {
+      if (src !== "all" && r.source !== src) return false;
+      if (onlyNew && !r.is_new) return false;
+      if (q && !(_searchNorm(r.event_name).includes(q) || _searchNorm(r.venue).includes(q) || _searchNorm(r.platform).includes(q))) return false;
+      return true;
+    })
+    .sort((a,b) => (b.sale_date_iso || "").localeCompare(a.sale_date_iso || ""));
+  const tbody = document.getElementById("recentbody");
+  tbody.innerHTML = "";
+  for (const r of recent) tbody.appendChild(_renderRow(r));
+  document.getElementById("recentempty").style.display = recent.length ? "none" : "block";
+  document.getElementById("recent-count").textContent = `(${recent.length} ${recent.length === 1 ? "sale" : "sales"})`;
+  const rev = recent.reduce((a, r) => a + (r.sale_price || 0), 0);
+  const cost = recent.reduce((a, r) => a + (r.cost || 0), 0);
+  const payouts = recent.reduce((a, r) => a + (_payout(r) || 0), 0);
+  const profit = payouts - cost;
+  const roi = cost ? (profit / cost) * 100 : null;
+  const profitColor = profit >= 0 ? "var(--green)" : "var(--red)";
+  const profitSign = profit >= 0 ? "+" : "";
+  const roiText = roi == null ? "—" : (roi >= 0 ? "+" : "") + roi.toFixed(1) + "% ROI";
+  document.getElementById("recent-rev").innerHTML = `· ${money(rev)} rev · <span style="color:${profitColor};">${profitSign}${money(profit)} profit · ${roiText}</span>`;
+}
+
+const _searchNorm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+function render() {
+  const q = _searchNorm(document.getElementById("q-search").value);
+  const src = document.getElementById("q-source").value;
+  const sort = document.getElementById("q-sort").value;
+  const onlyNew = document.getElementById("q-new").value === "new";
+  const rows = _rows.filter(r => {
+    if (src !== "all" && r.source !== src) return false;
+    if (onlyNew && !r.is_new) return false;
+    if (q && !(_searchNorm(r.event_name).includes(q) || _searchNorm(r.venue).includes(q) || _searchNorm(r.platform).includes(q))) return false;
+    return true;
+  }).sort(_sortCmp(sort, !!q));
+
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  for (const r of rows) tbody.appendChild(_renderRow(r));
+  document.getElementById("empty").style.display = rows.length ? "none" : "block";
+  document.getElementById("sub").textContent = `${rows.length} of ${_rows.length} shown`;
+  document.getElementById("all-count").textContent = `(${rows.length})`;
+  renderRecent();
+}
+
+document.getElementById("recent-pills").addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (!b) return;
+  document.querySelectorAll("#recent-pills .pill").forEach(p => p.classList.toggle("active", p === b));
+  _recentDays = b.dataset.days;
+  renderRecent();
+});
+
+async function load() {
+  const r = await fetch("/api/sales-all");
+  const d = await r.json();
+  _rows = d.rows || [];
+  const t = d.totals || {};
+  document.getElementById("s-rows").textContent = t.rows ?? 0;
+  document.getElementById("s-qty").textContent = t.qty ?? 0;
+  document.getElementById("s-rev").textContent = money(t.revenue);
+  document.getElementById("s-cost").textContent = money(t.cost);
+  const sumPayout = (_rows || []).reduce((a, r) => a + (_payout(r) || 0), 0);
+  const net = sumPayout - (t.cost || 0);
+  const ne = document.getElementById("s-net");
+  ne.textContent = money(net);
+  ne.parentElement.className = "stat " + (net >= 0 ? "green" : "red");
+  const bs = t.by_source || {};
+  document.getElementById("s-jerujam").textContent = bs.jerujam || 0;
+  document.getElementById("s-lysted").textContent = bs.lysted || 0;
+  document.getElementById("s-viagogo").textContent = bs.viagogo || 0;
+  document.getElementById("s-crowdvolt").textContent = bs.crowdvolt || 0;
+  document.getElementById("s-new").textContent = t.new_since_jerujam || 0;
+  render();
+}
+
+for (const id of ["q-search", "q-source", "q-sort", "q-new"]) {
+  document.getElementById(id).addEventListener("input", render);
+  document.getElementById(id).addEventListener("change", render);
+}
+
+// --- multi-select ---
+// Selection lives in a Set keyed by `source:::sale_id` so the same row checked in
+// both Recent and All Sales tables stays consistent. Shift-click does range
+// selection within whichever tbody you're clicking in.
+const _selected = new Set();
+let _lastClickedKey = null;
+let _lastClickedTbody = null;
+
+function _selKey(r) { return `${r.source}:::${r.sale_id}`; }
+
+function _renderBulkBar() {
+  const bar = document.getElementById("bulk-bar");
+  const count = _selected.size;
+  if (count === 0) { bar.classList.remove("open"); return; }
+  bar.classList.add("open");
+  document.getElementById("bulk-count").textContent = `${count} selected`;
+  document.getElementById("bulk-edit-count").textContent = count;
+  document.getElementById("bulk-src").textContent = `${count} ${count === 1 ? "SALE" : "SALES"}`;
+}
+
+function _selectedRows() {
+  // Resolve keys back to row objects from _rows. Manual sales have unique sale_ids.
+  const out = [];
+  for (const k of _selected) {
+    const [source, sale_id] = k.split(":::");
+    const row = _rows.find(r => r.source === source && String(r.sale_id) === sale_id);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+function _toggleSelKey(key, on) {
+  if (on) _selected.add(key); else _selected.delete(key);
+  // Mirror across both tables — both rows with the same data-sel key
+  document.querySelectorAll(`input.row-check[data-sel="${CSS.escape(key)}"]`).forEach(cb => { cb.checked = on; });
+  document.querySelectorAll(`input.row-check[data-sel="${CSS.escape(key)}"]`).forEach(cb => {
+    const tr = cb.closest("tr");
+    if (tr) tr.classList.toggle("row-selected", on);
+  });
+}
+
+function _selectRange(tbody, fromKey, toKey, on) {
+  const checks = Array.from(tbody.querySelectorAll("input.row-check"));
+  const fromIdx = checks.findIndex(c => c.dataset.sel === fromKey);
+  const toIdx = checks.findIndex(c => c.dataset.sel === toKey);
+  if (fromIdx === -1 || toIdx === -1) return;
+  const [a, b] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+  for (let i = a; i <= b; i++) {
+    const k = checks[i].dataset.sel;
+    if (k) _toggleSelKey(k, on);
+  }
+}
+
+document.addEventListener("click", (e) => {
+  // Per-row checkbox
+  const cb = e.target.closest("input.row-check");
+  if (!cb) return;
+  // Header "select all" checkboxes
+  if (cb.id === "check-all" || cb.id === "check-all-recent") {
+    const tbody = document.getElementById(cb.id === "check-all" ? "tbody" : "recentbody");
+    const visible = Array.from(tbody.querySelectorAll("input.row-check"));
+    for (const v of visible) _toggleSelKey(v.dataset.sel, cb.checked);
+    _renderBulkBar();
+    return;
+  }
+  e.stopPropagation();
+  const key = cb.dataset.sel;
+  if (!key) return;
+  const tbody = cb.closest("tbody");
+  if (e.shiftKey && _lastClickedKey && _lastClickedTbody === tbody) {
+    _selectRange(tbody, _lastClickedKey, key, cb.checked);
+  } else {
+    _toggleSelKey(key, cb.checked);
+  }
+  _lastClickedKey = key;
+  _lastClickedTbody = tbody;
+  _renderBulkBar();
+});
+
+document.getElementById("bulk-clear").addEventListener("click", () => {
+  for (const k of Array.from(_selected)) _toggleSelKey(k, false);
+  _renderBulkBar();
+});
+
+document.getElementById("bulk-delete").addEventListener("click", async () => {
+  const rows = _selectedRows();
+  if (!rows.length) return;
+  const manual = rows.filter(r => r.source === "manual").length;
+  const scraped = rows.length - manual;
+  let prompt = `Delete ${rows.length} sale${rows.length === 1 ? "" : "s"}?`;
+  if (manual && scraped) prompt += `\n\n${scraped} scraped (Ctrl+Z undoes), ${manual} manual (permanent, restores inventory).`;
+  else if (manual) prompt += `\n\n${manual} manual sale${manual === 1 ? "" : "s"} — permanent, will restore qty to inventory.`;
+  else prompt += `\n\nCtrl+Z undoes if needed.`;
+  if (!confirm(prompt)) return;
+  for (const r of rows) {
+    const isManual = r.source === "manual";
+    const url = isManual ? "/api/sales/manual-delete" : "/api/sales/hide";
+    const body = isManual ? {sale_id: String(r.sale_id)} : {source: r.source, sale_id: String(r.sale_id)};
+    await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    if (!isManual) {
+      const label = `${r.event_name || "?"} · qty ${r.qty}`;
+      _undoStack.push({source: r.source, sale_id: r.sale_id, label});
+    }
+  }
+  showToast(`deleted ${rows.length} sale${rows.length === 1 ? "" : "s"}`);
+  _selected.clear();
+  _renderBulkBar();
+  await load();
+});
+
+const BULK_FIELDS = ["sale_date","event_name","venue","section","row","platform","qty","sale_price","cost"];
+const BULK_NUMERIC = new Set(["qty","sale_price","cost"]);
+
+document.getElementById("bulk-edit").addEventListener("click", () => {
+  if (_selected.size === 0) return;
+  for (const f of BULK_FIELDS) document.getElementById("bulk-" + f).value = "";
+  document.getElementById("bulk-bg").classList.add("open");
+  setTimeout(() => document.getElementById("bulk-sale_date").focus(), 30);
+});
+
+function closeBulkModal() { document.getElementById("bulk-bg").classList.remove("open"); }
+
+async function saveBulkModal() {
+  const rows = _selectedRows();
+  if (!rows.length) { closeBulkModal(); return; }
+  const changes = [];
+  for (const f of BULK_FIELDS) {
+    const v = document.getElementById("bulk-" + f).value.trim();
+    if (v === "") continue;
+    let parsed = v;
+    if (BULK_NUMERIC.has(f)) {
+      const n = parseFloat(v.replace(/[$,]/g, ""));
+      if (isNaN(n)) continue;
+      parsed = n;
+    }
+    changes.push({field: f, value: parsed});
+  }
+  if (changes.length === 0) { closeBulkModal(); return; }
+  for (const r of rows) {
+    for (const c of changes) {
+      await fetch("/api/sales/edit", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({source: r.source, sale_id: String(r.sale_id), ...c}),
+      });
+    }
+  }
+  closeBulkModal();
+  showToast(`updated ${rows.length} sale${rows.length === 1 ? "" : "s"} · ${changes.length} field${changes.length === 1 ? "" : "s"}`);
+  await load();
+}
+
+document.getElementById("bulk-close").addEventListener("click", closeBulkModal);
+document.getElementById("bulk-edit-cancel").addEventListener("click", closeBulkModal);
+document.getElementById("bulk-edit-save").addEventListener("click", saveBulkModal);
+document.getElementById("bulk-bg").addEventListener("click", (e) => {
+  if (e.target.id === "bulk-bg") closeBulkModal();
+});
+
+// --- delete + undo ---
+const _undoStack = [];
+let _toastTimer = null;
+function showToast(msg) {
+  const toast = document.getElementById("toast");
+  document.getElementById("toast-msg").textContent = msg;
+  toast.style.display = "block";
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toast.style.display = "none"; }, 6000);
+}
+
+async function hideSale(row) {
+  const label = `${row.event_name || "?"} · ${row.section || ""}${row.row ? "/" + row.row : ""} · qty ${row.qty} · ${row.sale_price != null ? "$" + Number(row.sale_price).toLocaleString() : "—"}`;
+  const isManual = row.source === "manual";
+  const prompt = isManual
+    ? `Delete this manual sale?\n\n${label}\n\n(${row.qty} ticket${row.qty === 1 ? "" : "s"} will be restored to inventory)`
+    : `Delete this sale?\n\n${label}\n\nSource: ${row.source}\n(Ctrl+Z undoes if needed.)`;
+  if (!confirm(prompt)) return;
+  const url = isManual ? "/api/sales/manual-delete" : "/api/sales/hide";
+  const body = isManual
+    ? {sale_id: String(row.sale_id)}
+    : {source: row.source, sale_id: String(row.sale_id)};
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) { alert("Failed to delete"); return; }
+  const idx = _rows.findIndex(r => r.source === row.source && String(r.sale_id) === String(row.sale_id));
+  if (idx !== -1) _rows.splice(idx, 1);
+  if (!isManual) _undoStack.push({source: row.source, sale_id: row.sale_id, label});
+  showToast(`deleted // ${label}`);
+  render();
+}
+
+async function undoLast() {
+  const last = _undoStack.pop();
+  if (!last) { showToast("// nothing to undo"); return; }
+  const res = await fetch("/api/sales/unhide", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source: last.source, sale_id: String(last.sale_id)}),
+  });
+  if (!res.ok) { alert("Failed to restore"); return; }
+  showToast(`restored // ${last.label}`);
+  await load();
+}
+
+document.getElementById("toast-undo").addEventListener("click", undoLast);
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".row-del");
+  if (!btn) return;
+  e.stopPropagation();
+  const tr = btn.closest("tr");
+  const row = tr && tr._row;
+  if (row) hideSale(row);
+});
+
+document.addEventListener("keydown", (e) => {
+  const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z";
+  if (!isUndo) return;
+  const tag = (document.activeElement?.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+  if (document.activeElement?.isContentEditable) return;
+  e.preventDefault();
+  undoLast();
+});
+
+// --- row-level edit modal ---
+const SALE_FIELDS = ["sale_date","event_name","venue","section","row","platform","qty","sale_price","cost"];
+const SALE_NUMERIC = new Set(["qty","sale_price","cost"]);
+let _modalRow = null;
+let _modalInitial = {};
+
+function openEditModal(row) {
+  _modalRow = row;
+  _modalInitial = {};
+  for (const f of SALE_FIELDS) {
+    const v = row[f] ?? "";
+    document.getElementById("m-" + f).value = v;
+    _modalInitial[f] = String(v);
+  }
+  document.getElementById("m-meta").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.venue || ""}`;
+  document.getElementById("m-src").textContent = (row.source || "").toUpperCase();
+  document.getElementById("m-src").className = "src-tag src src-" + row.source;
+  document.getElementById("modal-bg").classList.add("open");
+  setTimeout(() => document.getElementById("m-sale_date").focus(), 30);
+}
+function closeEditModal() {
+  document.getElementById("modal-bg").classList.remove("open");
+  _modalRow = null;
+}
+async function saveEditModal() {
+  if (!_modalRow) return;
+  const changes = [];
+  for (const f of SALE_FIELDS) {
+    const newVal = document.getElementById("m-" + f).value.trim();
+    if (newVal !== _modalInitial[f]) {
+      let parsed = newVal;
+      if (SALE_NUMERIC.has(f)) {
+        if (newVal === "") parsed = "";
+        else {
+          const n = parseFloat(newVal.replace(/[$,]/g, ""));
+          parsed = isNaN(n) ? "" : n;
+        }
+      }
+      changes.push({field: f, value: parsed});
+    }
+  }
+  if (changes.length === 0) { closeEditModal(); return; }
+  for (const c of changes) {
+    await fetch("/api/sales/edit", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({source: _modalRow.source, sale_id: String(_modalRow.sale_id), ...c}),
+    });
+  }
+  closeEditModal();
+  await load();
+}
+
+document.addEventListener("dblclick", (e) => {
+  if (e.target.closest(".modal-bg")) return;
+  if (e.target.closest("button")) return;
+  const tr = e.target.closest("tr");
+  if (!tr || !tr._row) return;
+  e.preventDefault();
+  openEditModal(tr._row);
+});
+
+document.getElementById("m-close").addEventListener("click", closeEditModal);
+document.getElementById("m-cancel").addEventListener("click", closeEditModal);
+document.getElementById("m-save").addEventListener("click", saveEditModal);
+document.getElementById("modal-bg").addEventListener("click", (e) => {
+  if (e.target.id === "modal-bg") closeEditModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (!document.getElementById("modal-bg").classList.contains("open")) return;
+  if (e.key === "Escape") { e.preventDefault(); closeEditModal(); }
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEditModal(); }
+});
+
+load();
+</script>
+</body>
+</html>

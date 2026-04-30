@@ -12,6 +12,10 @@ venv/
 # Local database
 kartis.db
 *.db-journal
+backups/
+
+# Claude Code local-only settings (project launch config is tracked, this is per-machine)
+.claude/settings.local.json
 
 # Exports
 *.xlsx
@@ -21,3 +25,7 @@ kartis.db
 
 # Scraper debug artifacts (screenshots + HTML dumps)
 debug/
+
+# Ticketmaster watcher cache (Hebrew labels + price metadata; refetched as needed)
+tm_cache/
+tm_probe/

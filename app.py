@@ -1,7 +1,11 @@
 import io
+import os
+import re
 import threading
 import traceback
-from datetime import datetime, timezone
+import uuid
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
@@ -9,7 +13,12 @@ from flask import Flask, jsonify, render_template, send_file
 from openpyxl import Workbook
 
 import db
+import import_jerujam
+import labels as tm_labels
+import matcher
+import notify
 import scraper
+import ticketmaster
 
 load_dotenv()
 
@@ -18,6 +27,77 @@ db.init()
 
 _last_run = {"at": None, "count": 0, "error": None, "running": False}
 _run_lock = threading.Lock()
+
+BACKUP_DIR = Path(os.getenv("KARTIS_BACKUP_DIR") or (Path(__file__).parent / "backups"))
+BACKUP_KEEP_DAYS = int(os.getenv("KARTIS_BACKUP_KEEP_DAYS") or 30)
+_last_backup = {"at": None, "path": None, "error": None, "running": False}
+_backup_lock = threading.Lock()
+
+_last_jerujam = {"at": None, "count": None, "error": None, "running": False}
+_jerujam_lock = threading.Lock()
+
+_last_tm = {"at": None, "checked": 0, "drops": 0, "errors": 0, "running": False}
+_tm_lock = threading.Lock()
+TM_CHECK_INTERVAL_SECONDS = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
+
+
+def run_jerujam_import():
+    if not _jerujam_lock.acquire(blocking=False):
+        return
+    _last_jerujam["running"] = True
+    try:
+        counts = import_jerujam.run()
+        _last_jerujam.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            count=counts,
+            error=None,
+        )
+    except Exception as e:
+        _last_jerujam.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_jerujam["running"] = False
+        _jerujam_lock.release()
+
+
+def run_backup():
+    if not _backup_lock.acquire(blocking=False):
+        return
+    _last_backup["running"] = True
+    try:
+        stamp = datetime.now().strftime("%Y-%m-%d")
+        dest = BACKUP_DIR / f"kartis-{stamp}.db"
+        db.backup(dest)
+        _prune_old_backups()
+        _last_backup.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            path=str(dest),
+            error=None,
+        )
+    except Exception as e:
+        _last_backup.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_backup["running"] = False
+        _backup_lock.release()
+
+
+def _prune_old_backups():
+    if not BACKUP_DIR.exists():
+        return
+    cutoff = datetime.now().timestamp() - BACKUP_KEEP_DAYS * 86400
+    for f in BACKUP_DIR.glob("kartis-*.db"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+        except OSError:
+            pass
 
 
 def run_scraper():
@@ -60,9 +140,755 @@ def _enrich_viagogo(rows):
     return rows
 
 
+def _norm(s):
+    return (s or "").strip().lower()
+
+
+_DATE_FORMATS = (
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%m/%d/%Y",
+    "%Y-%m-%d",
+    "%d %b %Y",
+    "%d %B %Y",
+)
+
+
+def _parse_event_date(text):
+    if not text:
+        return None
+    head = (text or "").split("•")[0].split("@")[0].strip().rstrip(",").strip()
+    head = head.split(" ")
+    # Strip trailing time tokens like "08:00PM" if they slipped in
+    while head and any(c.isdigit() for c in head[-1]) and (":" in head[-1] or head[-1].lower().endswith(("am", "pm"))):
+        head.pop()
+    candidate = " ".join(head).strip(", ")
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(candidate, fmt).date().isoformat()
+        except ValueError:
+            continue
+    import re
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", text)
+    if m:
+        return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    return None
+
+
+def _date_only(iso):
+    if not iso:
+        return iso
+    return iso.split("T", 1)[0]
+
+
+def _resolve_iso(row):
+    return _date_only(row.get("event_date_iso") or _parse_event_date(row.get("event_date")))
+
+
+def _event_key(event_name, iso):
+    return (_norm(event_name), iso or "")
+
+
+_INV_NUMERIC = {"qty_unsold", "cost", "cost_per_unit", "list_price"}
+_SALE_NUMERIC = {"qty", "sale_price", "cost"}
+
+
+def _norm_event_name(s):
+    s = (s or "").lower()
+    s = re.sub(r"[^a-z0-9 ]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _event_groups():
+    """Build a canonical map for (event_name, iso) → group key.
+
+    Cluster fuzzy duplicates ("A Boogie Wit Da Hoodie" vs "A Boogie With Da
+    Hoodie") so inventory rows and sales rows share the same group key. The
+    UI uses this for its event-grouped click-to-expand behaviour.
+    """
+    from difflib import SequenceMatcher
+    pairs = set()
+    for r in db.all_lysted_purchases():
+        pairs.add((r.get("event_name") or "", _date_only(_resolve_iso(r) or "")))
+    for r in db.all_lysted_sales():
+        pairs.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or "")))
+    for r in db.all_viagogo():
+        pairs.add((r.get("event_name") or "", _date_only(_resolve_iso(r) or "")))
+    for r in db.all_viagogo_sales():
+        pairs.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or "")))
+    for r in db.all_jerujam_tickets():
+        pairs.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or "")))
+    j_tix = {t["id"]: t for t in db.all_jerujam_tickets()}
+    for s in db.all_jerujam_sales():
+        t = j_tix.get(s.get("ticket_id"), {})
+        pairs.add((t.get("event_name") or "", _date_only(t.get("event_date_iso") or "")))
+    for r in db.all_crowdvolt_sales():
+        pairs.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or "")))
+
+    canonicals = []  # list[(norm_name, iso)]
+    mapping = {}
+    for name, iso in sorted(pairs):
+        norm = _norm_event_name(name)
+        found = None
+        for cn, ciso in canonicals:
+            if ciso != iso:
+                continue
+            if cn == norm or SequenceMatcher(None, cn, norm).ratio() >= 0.85:
+                found = (cn, ciso)
+                break
+        if found:
+            mapping[(name, iso)] = f"{found[0]}|{found[1]}"
+        else:
+            canonicals.append((norm, iso))
+            mapping[(name, iso)] = f"{norm}|{iso}"
+    return mapping
+
+
+def _row_group(mapping, name, iso):
+    return mapping.get((name or "", _date_only(iso or "")), f"{_norm_event_name(name)}|{_date_only(iso or '')}")
+
+
+def _apply_overrides(row, overrides_for_row, numeric_fields):
+    if not overrides_for_row:
+        return
+    edited = []
+    for field, value in overrides_for_row.items():
+        if field in numeric_fields:
+            try:
+                row[field] = float(value) if value not in (None, "") else None
+            except (ValueError, TypeError):
+                row[field] = value
+        else:
+            row[field] = value
+        edited.append(field)
+    row["_edited"] = edited
+
+
+def _ga_like(text):
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if "general admission" in t:
+        return True
+    tokens = t.replace("/", " ").split()
+    return "ga" in tokens or "pit" in tokens
+
+
+def _build_unified_inventory():
+    """Combine unsold tickets from Lysted + Viagogo + JeruJam.
+
+    JeruJam tickets are deduped against Lysted by (event, section, row) and
+    against Viagogo by (event, section). The Viagogo dedupe is intentionally
+    coarser since Viagogo listings don't expose row-level data.
+
+    Rows whose (source, source_id) is in inventory_hidden are excluded — that's
+    the soft-delete the dashboard uses.
+    """
+    hidden = db.all_hidden_keys()
+    lysted = db.all_lysted_purchases()
+    viagogo = _enrich_viagogo(db.all_viagogo())
+    jerujam = db.all_jerujam_tickets()
+    j_sales = db.all_jerujam_sales()
+    groups = _event_groups()
+
+    sold_per_ticket = {}
+    for s in j_sales:
+        sold_per_ticket[s["ticket_id"]] = sold_per_ticket.get(s["ticket_id"], 0) + (s.get("quantity") or 0)
+    # Cross-source matches (Lysted/Viagogo/CrowdVolt sales paired to JeruJam tickets)
+    ext_matched_per_ticket = {}
+    for m in db.all_matches():
+        if m.get("inv_source") == "jerujam":
+            tid = m["inv_source_id"]
+            ext_matched_per_ticket[tid] = ext_matched_per_ticket.get(tid, 0) + (m.get("qty_matched") or 0)
+
+    rows = []
+
+    lysted_keys = set()
+    lysted_ga_event_rows = set()  # (event_key, row) for any GA-style Lysted listing
+    for r in lysted:
+        if (r.get("status") or "").strip().lower() == "sold":
+            continue
+        iso = _resolve_iso(r)
+        ek = _event_key(r.get("event_name"), iso)
+        sec_n = _norm(r.get("section"))
+        row_n = _norm(r.get("row_label"))
+        lysted_keys.add((ek, sec_n, row_n))
+        if _ga_like(sec_n):
+            lysted_ga_event_rows.add((ek, row_n))
+            lysted_ga_event_rows.add((ek, ""))
+        if ("lysted", str(r.get("id"))) in hidden:
+            continue
+        rows.append({
+            "source": "lysted",
+            "source_id": r.get("id"),
+            "event_name": r.get("event_name"),
+            "event_date": r.get("event_date"),
+            "event_date_iso": iso,
+            "venue": r.get("venue"),
+            "section": r.get("section"),
+            "row": r.get("row_label"),
+            "seats": r.get("seats"),
+            "qty_unsold": r.get("qty") or 0,
+            "cost": r.get("total_cost") or 0,
+            "cost_per_unit": r.get("cost_per_unit"),
+            "delivery_type": r.get("delivery_type"),
+            "list_price": None,
+            "status": r.get("status") or "active",
+        })
+
+    viagogo_keys = set()
+    viagogo_ga_events = set()  # event_keys for any GA-style Viagogo listing
+    for r in viagogo:
+        avail = r.get("available") or 0
+        if avail <= 0:
+            continue
+        iso = _resolve_iso(r)
+        ek = _event_key(r.get("event_name"), iso)
+        sec_n = _norm(r.get("section"))
+        viagogo_keys.add((ek, sec_n))
+        if _ga_like(sec_n):
+            viagogo_ga_events.add(ek)
+        if ("viagogo", str(r.get("id"))) in hidden:
+            continue
+        rows.append({
+            "source": "viagogo",
+            "source_id": r.get("id"),
+            "event_name": r.get("event_name"),
+            "event_date": r.get("event_date"),
+            "event_date_iso": iso,
+            "venue": r.get("venue"),
+            "section": r.get("section"),
+            "row": "",
+            "seats": r.get("ticket_type"),
+            "qty_unsold": avail,
+            "cost": r.get("cost") or 0,
+            "cost_per_unit": r.get("face_value"),
+            "delivery_type": r.get("ticket_type"),
+            "list_price": (r.get("price") or 0) * avail,
+            "status": r.get("visibility") or "active",
+        })
+
+    skipped_jerujam = 0
+    for t in jerujam:
+        if (t.get("status") or "").strip().lower() == "sold":
+            continue
+        qty = t.get("quantity") or 0
+        sold = sold_per_ticket.get(t.get("id"), 0)
+        ext_sold = ext_matched_per_ticket.get(t.get("id"), 0)
+        remaining = max(0, qty - sold - ext_sold)
+        if remaining <= 0:
+            continue
+        iso_j = _resolve_iso(t)
+        ek = _event_key(t.get("event_name"), iso_j)
+        sec = _norm(t.get("section"))
+        row = _norm(t.get("row_label"))
+        if (ek, sec, row) in lysted_keys:
+            skipped_jerujam += 1
+            continue
+        # GA/PIT label variants — Lysted is authoritative when both sides are
+        # any flavor of GA. JeruJam GA PIT (row blank) collapses into Lysted PIT G5.
+        if _ga_like(sec) and ((ek, row) in lysted_ga_event_rows or (ek, "") in lysted_ga_event_rows):
+            skipped_jerujam += 1
+            continue
+        if (ek, sec) in viagogo_keys:
+            skipped_jerujam += 1
+            continue
+        if _ga_like(sec) and ek in viagogo_ga_events:
+            skipped_jerujam += 1
+            continue
+        if ("jerujam", str(t.get("id"))) in hidden:
+            continue
+        cost_per = t.get("cost_per_ticket") or 0
+        rows.append({
+            "source": "jerujam",
+            "source_id": t.get("id"),
+            "event_name": t.get("event_name"),
+            "event_date": t.get("event_date"),
+            "event_date_iso": iso_j,
+            "venue": t.get("venue"),
+            "section": t.get("section"),
+            "row": t.get("row_label"),
+            "seats": t.get("seat_numbers"),
+            "qty_unsold": remaining,
+            "cost": round(cost_per * remaining, 2),
+            "cost_per_unit": cost_per or None,
+            "delivery_type": t.get("listing_platform") or "",
+            "list_price": (t.get("listing_price") or None) and round((t.get("listing_price") or 0) * remaining, 2),
+            "status": t.get("status") or "(none)",
+        })
+
+    # Pending (manually-added) tickets the user has but hasn't listed yet
+    for m in db.all_manual_inventory():
+        if m.get("matched_source"):
+            continue  # already showed up on Lysted/Viagogo
+        if ("manual", str(m.get("id"))) in hidden:
+            continue
+        qty = m.get("qty") or 0
+        if qty <= 0:
+            continue
+        cost_per = m.get("cost_per_unit")
+        rows.append({
+            "source": "manual",
+            "source_id": str(m.get("id")),
+            "event_name": m.get("event_name"),
+            "event_date": m.get("event_date"),
+            "event_date_iso": m.get("event_date_iso"),
+            "venue": m.get("venue"),
+            "section": m.get("section"),
+            "row": m.get("row_label"),
+            "seats": m.get("seats"),
+            "qty_unsold": qty,
+            "cost": round((cost_per or 0) * qty, 2) if cost_per else 0,
+            "cost_per_unit": cost_per,
+            "delivery_type": m.get("note") or "",
+            "list_price": None,
+            "status": "pending",
+        })
+
+    inv_overrides = db.all_inv_overrides()
+    for r in rows:
+        ov = inv_overrides.get((r.get("source"), str(r.get("source_id"))))
+        if ov:
+            _apply_overrides(r, ov, _INV_NUMERIC)
+        r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"))
+    return rows, skipped_jerujam
+
+
+def _matched_cost(matches_idx, jerujam_idx, sale_source, sale_id, qty):
+    """If a sale is paired to a JeruJam inventory row, use that ticket's
+    cost_per_ticket × qty as the sale's cost."""
+    m = matches_idx.get((sale_source, str(sale_id)))
+    if not m or m["inv_source"] != "jerujam":
+        return None
+    j = jerujam_idx.get(m["inv_source_id"])
+    if not j:
+        return None
+    cpt = j.get("cost_per_ticket")
+    if cpt is None:
+        return None
+    return round(cpt * (qty or 0), 2)
+
+
+def _build_combined_sales():
+    """Combine sale events across sources. Sources differ in fidelity:
+    JeruJam has per-sale rows; Lysted/Viagogo only expose aggregates so
+    each sold-row contributes a single coarse entry.
+    """
+    out = []
+    hidden_sales = db.all_hidden_sale_keys()
+
+    j_tickets = {t["id"]: t for t in db.all_jerujam_tickets()}
+    matches_idx = {(m["sale_source"], m["sale_id"]): m for m in db.all_matches()}
+    jerujam_keys = set()
+    for s in db.all_jerujam_sales():
+        t = j_tickets.get(s.get("ticket_id"), {})
+        jerujam_keys.add((
+            _norm(t.get("event_name")),
+            (s.get("sale_date") or "")[:10],
+            s.get("quantity") or 0,
+            round(s.get("sale_price") or 0, 0),
+        ))
+        if ("jerujam", str(s.get("id"))) in hidden_sales:
+            continue
+        sale_price = s.get("sale_price") or 0
+        out.append({
+            "source": "jerujam",
+            "sale_id": str(s.get("id")),
+            "order_id": "",
+            "payout": sale_price,
+            "sale_date": s.get("sale_date") or "",
+            "sale_date_iso": (s.get("sale_date") or "")[:10],
+            "event_name": t.get("event_name") or "",
+            "event_date": t.get("event_date") or "",
+            "event_date_iso": _date_only(t.get("event_date_iso") or _parse_event_date(t.get("event_date"))) or "",
+            "venue": t.get("venue") or "",
+            "section": t.get("section") or "",
+            "row": t.get("row_label") or "",
+            "platform": s.get("platform") or "",
+            "qty": s.get("quantity") or 0,
+            "sale_price": s.get("sale_price") or 0,
+            "cost": round((t.get("cost_per_ticket") or 0) * (s.get("quantity") or 0), 2),
+            "is_new": False,
+        })
+
+    purchases_by_id = {r.get("id"): r for r in db.all_lysted_purchases()}
+    purchases_cost_by_event = {}
+    for r in db.all_lysted_purchases():
+        key = (r.get("event_name") or "", r.get("section") or "", r.get("row_label") or "")
+        purchases_cost_by_event[key] = r.get("cost_per_unit")
+    for r in db.all_lysted_sales():
+        qty = r.get("qty") or 0
+        # Lysted's API returns cost directly — that's the source of truth.
+        cost = r.get("cost")
+        if cost is None:
+            # Fallback chain for older rows that haven't been re-scraped yet.
+            cost_per = None
+            match = purchases_by_id.get(r.get("id"))
+            if match:
+                cost_per = match.get("cost_per_unit")
+            if cost_per is None:
+                cost_per = purchases_cost_by_event.get(
+                    (r.get("event_name") or "", r.get("section") or "", r.get("row_label") or "")
+                )
+            cost = round((cost_per or 0) * qty, 2) if cost_per is not None else 0
+            if cost == 0:
+                mc = _matched_cost(matches_idx, j_tickets, "lysted", r.get("id"), qty)
+                if mc is not None:
+                    cost = mc
+        sale_iso_short = (r.get("sale_date_iso") or "")[:10]
+        key = (_norm(r.get("event_name")), sale_iso_short, qty, round(r.get("sale_price") or 0, 0))
+        if ("lysted", str(r.get("id"))) in hidden_sales:
+            continue
+        payout = r.get("payout") if r.get("payout") is not None else r.get("sale_price")
+        out.append({
+            "source": "lysted",
+            "sale_id": str(r.get("id")),
+            "order_id": str(r.get("order_id") or "").strip(),
+            "payout": payout,
+            "sale_date": r.get("sale_date") or "",
+            "sale_date_iso": (r.get("sale_date_iso") or "")[:10],
+            "event_name": r.get("event_name") or "",
+            "event_date": r.get("event_date") or "",
+            "event_date_iso": _date_only(r.get("event_date_iso") or _parse_event_date(r.get("event_date"))) or "",
+            "venue": r.get("venue") or "",
+            "section": r.get("section") or "",
+            "row": r.get("row_label") or "",
+            "platform": "lysted",
+            "qty": qty,
+            "sale_price": r.get("sale_price"),
+            "cost": cost,
+            "is_new": key not in jerujam_keys,
+        })
+
+    viagogo_listings = _enrich_viagogo(db.all_viagogo())
+    listing_lookup = {}
+
+    def _split_listing_section(text):
+        """Viagogo listings cram "Section\\nRow X , Seat Y" into one cell.
+        Pull out the section name and row number separately."""
+        if not text:
+            return ("", "")
+        first_line = text.splitlines()[0].strip() if "\n" in text else text.strip()
+        m = re.search(r"Row\s+(\S+)", text or "")
+        row = m.group(1) if m else ""
+        return (first_line, row)
+
+    def _clean_row(text):
+        if not text:
+            return ""
+        m = re.match(r"\s*(\S+)", text)
+        return (m.group(1) if m else "").strip()
+
+    for r in viagogo_listings:
+        sec, row = _split_listing_section(r.get("section") or "")
+        ev_n = _norm(r.get("event_name"))
+        # Index by (event, section, row) — most specific
+        listing_lookup.setdefault((ev_n, _norm(sec), _norm(row)), r)
+        # Also keep an event+section fallback for sales that don't have a row
+        listing_lookup.setdefault((ev_n, _norm(sec), ""), r)
+
+    for r in db.all_viagogo_sales():
+        ev_n = _norm(r.get("event_name"))
+        sec_n = _norm(r.get("section"))
+        row_n = _norm(_clean_row(r.get("row_label") or ""))
+        listing = (listing_lookup.get((ev_n, sec_n, row_n))
+                   or listing_lookup.get((ev_n, sec_n, "")))
+        cost_per = listing.get("face_value") if listing else None
+        qty = r.get("qty") or 0
+        cost = round((cost_per or 0) * qty, 2) if cost_per is not None else 0
+        if cost == 0:
+            mc = _matched_cost(matches_idx, j_tickets, "viagogo", r.get("id"), qty)
+            if mc is not None:
+                cost = mc
+        key = (_norm(r.get("event_name")), (r.get("sale_date_iso") or "")[:10], qty, round(r.get("sale_price") or 0, 0))
+        if ("viagogo", str(r.get("id"))) in hidden_sales:
+            continue
+        out.append({
+            "source": "viagogo",
+            "sale_id": str(r.get("id")),
+            "order_id": str(r.get("order_id") or "").strip(),
+            "payout": r.get("sale_price"),
+            "sale_date": r.get("sale_date") or "",
+            "sale_date_iso": (r.get("sale_date_iso") or "")[:10],
+            "event_name": r.get("event_name") or "",
+            "event_date": r.get("event_date") or "",
+            "event_date_iso": _date_only(r.get("event_date_iso") or _parse_event_date(r.get("event_date"))) or "",
+            "venue": r.get("venue") or "",
+            "section": r.get("section") or "",
+            "row": r.get("row_label") or "",
+            "platform": "viagogo",
+            "qty": qty,
+            "sale_price": r.get("sale_price"),
+            "cost": cost,
+            "is_new": key not in jerujam_keys,
+        })
+
+    for r in db.all_crowdvolt_sales():
+        qty = r.get("qty") or 0
+        sale_price = r.get("sale_price") or 0
+        key = (_norm(r.get("event_name")), (r.get("sale_date_iso") or "")[:10], qty, round(sale_price, 0))
+        cost = 0
+        # CrowdVolt is a last-minute dump for tickets bought via Lysted or
+        # Viagogo. Pull cost from a matching purchase/listing in those tables.
+        cv_event = r.get("event_name") or ""
+        cv_section = r.get("ticket_type") or ""
+        cv_qty = qty
+        for lp in db.all_lysted_purchases():
+            if not matcher._events_match(lp.get("event_name"), cv_event):
+                continue
+            if (lp.get("qty") or 0) != cv_qty:
+                continue
+            cost = lp.get("total_cost") or ((lp.get("cost_per_unit") or 0) * cv_qty)
+            if cost:
+                break
+        if not cost:
+            for vl in viagogo_listings:
+                if not matcher._events_match(vl.get("event_name"), cv_event):
+                    continue
+                v_sec = (vl.get("section") or "").splitlines()[0] if vl.get("section") else ""
+                if cv_section and v_sec and not (
+                    _norm(cv_section) == _norm(v_sec)
+                    or (_ga_like(cv_section) and _ga_like(v_sec))
+                ):
+                    continue
+                face = vl.get("face_value") or 0
+                if face > 0:
+                    cost = round(face * cv_qty, 2)
+                    break
+        if not cost:
+            mc = _matched_cost(matches_idx, j_tickets, "crowdvolt", r.get("id"), qty)
+            if mc is not None:
+                cost = mc
+        if ("crowdvolt", str(r.get("id"))) in hidden_sales:
+            continue
+        out.append({
+            "source": "crowdvolt",
+            "sale_id": str(r.get("id")),
+            "order_id": str(r.get("order_id") or "").strip(),
+            "payout": sale_price,
+            "sale_date": r.get("sale_date") or "",
+            "sale_date_iso": (r.get("sale_date_iso") or "")[:10],
+            "event_name": r.get("event_name") or "",
+            "event_date": r.get("event_date") or "",
+            "event_date_iso": _date_only(r.get("event_date_iso")) or "",
+            "venue": r.get("venue") or "",
+            "section": r.get("ticket_type") or "",
+            "row": "",
+            "platform": "crowdvolt",
+            "qty": qty,
+            "sale_price": sale_price,
+            "cost": cost,
+            "is_new": key not in jerujam_keys,
+        })
+
+    for m in db.all_manual_sales():
+        if ("manual", str(m.get("id"))) in hidden_sales:
+            continue
+        qty = m.get("qty") or 0
+        sale_price = m.get("sale_price") or 0
+        out.append({
+            "source": "manual",
+            "sale_id": str(m.get("id")),
+            "order_id": "",
+            "payout": sale_price,
+            "sale_date": m.get("sale_date") or "",
+            "sale_date_iso": (m.get("sale_date_iso") or "")[:10],
+            "event_name": m.get("event_name") or "",
+            "event_date": m.get("event_date") or "",
+            "event_date_iso": _date_only(m.get("event_date_iso") or _parse_event_date(m.get("event_date"))) or "",
+            "venue": m.get("venue") or "",
+            "section": m.get("section") or "",
+            "row": m.get("row_label") or "",
+            "platform": m.get("platform") or "manual",
+            "qty": qty,
+            "sale_price": sale_price,
+            "cost": m.get("cost") or 0,
+            "is_loss": bool(m.get("is_loss")),
+            "is_new": False,
+        })
+
+    sale_overrides = db.all_sale_overrides()
+    groups = _event_groups()
+    for r in out:
+        ov = sale_overrides.get((r.get("source"), str(r.get("sale_id"))))
+        if ov:
+            _apply_overrides(r, ov, _SALE_NUMERIC)
+        r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"))
+    return out
+
+
 @app.route("/")
+def home():
+    return render_template("inventory.html")
+
+
+@app.route("/sources")
 def dashboard():
     return render_template("dashboard.html")
+
+
+@app.route("/sales")
+def sales_page():
+    return render_template("sales.html")
+
+
+@app.route("/mockups")
+def mockups_index():
+    return render_template("mockups/index.html")
+
+
+@app.route("/mockups/<name>")
+def mockup(name):
+    if name not in {"slate", "cocoa", "studio"}:
+        return "Unknown mockup", 404
+    return render_template(f"mockups/{name}.html")
+
+
+@app.route("/api/inventory-all")
+def api_inventory_all():
+    rows, skipped = _build_unified_inventory()
+    by_source = {"lysted": 0, "viagogo": 0, "jerujam": 0}
+    for r in rows:
+        by_source[r["source"]] = by_source.get(r["source"], 0) + 1
+    totals = {
+        "rows": len(rows),
+        "tickets": sum(r["qty_unsold"] for r in rows),
+        "total_cost": round(sum(r["cost"] or 0 for r in rows), 2),
+        "by_source": by_source,
+        "jerujam_skipped_dedupe": skipped,
+        "auto_matched": len(db.all_matches()),
+    }
+    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run, "last_backup": _last_backup})
+
+
+@app.route("/profit")
+def profit_page():
+    return render_template("profit.html")
+
+
+def _profit_response():
+    """Build the same payload returned by /api/profit/daily. Reused by the
+    Maaser summary so both pages agree on what 'profit' means.
+    Adds month["expenses"] / month["net_profit"] derived from the expenses
+    table (operating costs reduce the Maaser base per the user's policy)."""
+    sales = _build_combined_sales()
+    # Lysted payout per sale (we have it on lysted_sales rows directly)
+    lysted_payouts_by_id = {str(r.get("id")): (r.get("payout") or 0) for r in db.all_lysted_sales()}
+    by_day = {}
+    by_month = {}
+    by_source = {"lysted": {"count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0},
+                 "viagogo": {"count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0},
+                 "jerujam": {"count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0},
+                 "crowdvolt":{"count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0}}
+    for s in sales:
+        date = (s.get("sale_date_iso") or "")[:10]
+        if not date or not date.startswith("20"):
+            continue
+        rev = s.get("sale_price") or 0
+        cost = s.get("cost") or 0
+        qty = s.get("qty") or 0
+        bucket = by_day.setdefault(date, {"date": date, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0,
+                                           "by_source": {"lysted":0,"viagogo":0,"jerujam":0,"crowdvolt":0}})
+        bucket["count"] += 1
+        bucket["qty"] += qty
+        bucket["revenue"] += rev
+        bucket["cost"] += cost
+        bucket["profit"] += (rev - cost)
+        bucket["by_source"][s.get("source", "?")] = bucket["by_source"].get(s.get("source", "?"), 0) + 1
+        # Per-source totals
+        src = s.get("source") or "?"
+        if src in by_source:
+            by_source[src]["count"] += 1
+            by_source[src]["qty"] += qty
+            by_source[src]["revenue"] += rev
+            by_source[src]["cost"] += cost
+            by_source[src]["profit"] += (rev - cost)
+
+    # Pull Lysted payouts by day directly from lysted_sales (for accurate per-day payout totals)
+    for r in db.all_lysted_sales():
+        d = (r.get("sale_date_iso") or "")[:10]
+        if not d:
+            continue
+        bucket = by_day.setdefault(d, {"date": d, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0,
+                                       "by_source": {"lysted":0,"viagogo":0,"jerujam":0,"crowdvolt":0}})
+        bucket["payout"] += (r.get("payout") or 0)
+        by_source["lysted"]["payout"] += (r.get("payout") or 0)
+
+    # Build month rollup from days
+    for d, row in by_day.items():
+        m = d[:7]  # YYYY-MM
+        mb = by_month.setdefault(m, {"month": m, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0})
+        mb["count"] += row["count"]; mb["qty"] += row["qty"]
+        mb["revenue"] += row["revenue"]; mb["cost"] += row["cost"]
+        mb["profit"] += row["profit"]; mb["payout"] += row["payout"]
+
+    days = sorted(by_day.values(), key=lambda r: r["date"], reverse=True)
+    months = sorted(by_month.values(), key=lambda r: r["month"], reverse=True)
+
+    # Round and add profit_pct
+    def _finish(row):
+        for k in ("revenue","cost","profit","payout"):
+            row[k] = round(row[k] or 0, 2)
+        rev = row["revenue"] or 0
+        row["profit_pct"] = round((row["profit"] / rev) * 100, 1) if rev else None
+        return row
+    days = [_finish(r) for r in days]
+    months = [_finish(r) for r in months]
+    for k, v in by_source.items():
+        _finish(v)
+
+    totals = _finish({
+        "count": sum(r["count"] for r in days),
+        "qty": sum(r["qty"] for r in days),
+        "revenue": sum(r["revenue"] for r in days),
+        "cost": sum(r["cost"] for r in days),
+        "profit": sum(r["profit"] for r in days),
+        "payout": sum(r["payout"] for r in days),
+    })
+
+    # Layer in operating expenses at month-level (subscriptions + one-offs)
+    expenses_by_month = {}
+    for e in db.all_expenses():
+        mk = (e.get("date_iso") or "")[:7]
+        if not mk:
+            continue
+        expenses_by_month[mk] = expenses_by_month.get(mk, 0) + (e.get("amount") or 0)
+    for m in months:
+        m["expenses"] = round(expenses_by_month.get(m["month"], 0), 2)
+        m["net_profit"] = round((m.get("profit") or 0) - m["expenses"], 2)
+    totals_expenses = round(sum(expenses_by_month.values()), 2)
+    totals["expenses"] = totals_expenses
+    totals["net_profit"] = round((totals.get("profit") or 0) - totals_expenses, 2)
+
+    return {"days": days, "months": months, "totals": totals, "by_source": by_source}
+
+
+@app.route("/api/profit/daily")
+def api_profit_daily():
+    return jsonify(_profit_response())
+
+
+@app.route("/api/sales-all")
+def api_sales_all():
+    rows = _build_combined_sales()
+    by_source = {"lysted": 0, "viagogo": 0, "jerujam": 0, "crowdvolt": 0}
+    new_count = 0
+    for r in rows:
+        by_source[r["source"]] = by_source.get(r["source"], 0) + 1
+        if r.get("is_new"):
+            new_count += 1
+    totals = {
+        "rows": len(rows),
+        "qty": sum(r["qty"] or 0 for r in rows),
+        "revenue": round(sum((r["sale_price"] or 0) for r in rows), 2),
+        "cost": round(sum((r["cost"] or 0) for r in rows), 2),
+        "by_source": by_source,
+        "new_since_jerujam": new_count,
+    }
+    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
 
 
 @app.route("/api/inventory")
@@ -76,7 +902,7 @@ def api_inventory():
         "total_list": round(sum(r.get("total_list") or 0 for r in rows), 2),
     }
     totals["total_pl"] = round(totals["total_list"] - totals["total_cost"], 2)
-    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
+    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run, "last_backup": _last_backup})
 
 
 @app.route("/api/lysted-purchases")
@@ -95,7 +921,7 @@ def api_lysted_purchases():
         "sold_cost": round(sum(r.get("total_cost") or 0 for r in sold), 2),
         "total_cost": round(sum(r.get("total_cost") or 0 for r in rows), 2),
     }
-    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
+    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run, "last_backup": _last_backup})
 
 
 @app.route("/api/viagogo")
@@ -110,12 +936,689 @@ def api_viagogo():
         "total_price": round(sum((r.get("price") or 0) * (r.get("available") or 0) for r in rows), 2),
         "total_proceeds": round(sum((r.get("proceeds") or 0) * (r.get("available") or 0) for r in rows), 2),
     }
-    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
+    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run, "last_backup": _last_backup})
+
+
+@app.route("/api/sales/hide", methods=["POST"])
+def api_sales_hide():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    sale_id = (body.get("sale_id") or "").strip()
+    if not source or not sale_id:
+        return jsonify({"error": "source and sale_id required"}), 400
+    db.hide_sale(source, sale_id, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sales/unhide", methods=["POST"])
+def api_sales_unhide():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    sale_id = (body.get("sale_id") or "").strip()
+    if not source or not sale_id:
+        return jsonify({"error": "source and sale_id required"}), 400
+    db.unhide_sale(source, sale_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/inventory/manual-add", methods=["POST"])
+def api_inventory_manual_add():
+    from flask import request
+    import uuid
+    body = request.get_json(silent=True) or {}
+    event_name = (body.get("event_name") or "").strip()
+    if not event_name:
+        return jsonify({"error": "event_name required"}), 400
+    try:
+        qty = int(body.get("qty") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    if qty <= 0:
+        return jsonify({"error": "qty must be > 0"}), 400
+    cost_per = body.get("cost_per_unit")
+    try:
+        cost_per = float(cost_per) if cost_per not in (None, "") else None
+    except (TypeError, ValueError):
+        cost_per = None
+    event_date = (body.get("event_date") or "").strip()
+    iso = (body.get("event_date_iso") or "").strip()
+    if not iso and event_date:
+        iso = _date_only(_parse_event_date(event_date)) or ""
+    row = {
+        "id": "pending-" + uuid.uuid4().hex[:12],
+        "event_name": event_name,
+        "event_date": event_date,
+        "event_date_iso": iso,
+        "venue": (body.get("venue") or "").strip(),
+        "section": (body.get("section") or "").strip(),
+        "row_label": (body.get("row") or "").strip(),
+        "seats": (body.get("seats") or "").strip(),
+        "qty": qty,
+        "cost_per_unit": cost_per,
+        "note": (body.get("note") or "").strip(),
+        "email": (body.get("email") or "").strip(),
+    }
+    db.insert_manual_inventory(row, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "id": row["id"]})
+
+
+@app.route("/api/inventory/manual-delete", methods=["POST"])
+def api_inventory_manual_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.delete_manual_inventory(id_)
+    return jsonify({"ok": True})
+
+
+# --- Expenses + Maaser ---------------------------------------------------
+
+def _parse_iso(s):
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _ensure_subscription_instances():
+    """For each active expense subscription, ensure an `expenses` row exists for
+    every month from started_at_iso through min(today, ended_at_iso). Idempotent
+    via UNIQUE(subscription_id, month_key) — running this on every page load is
+    cheap and keeps history accurate even if Kartis was off on the 1st."""
+    today = date.today()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for sub in db.all_expense_subscriptions():
+        start = _parse_iso(sub.get("started_at_iso"))
+        if not start:
+            continue
+        end = _parse_iso(sub.get("ended_at_iso")) or today
+        end = min(end, today)
+        cursor = date(start.year, start.month, 1)
+        last = date(end.year, end.month, 1)
+        while cursor <= last:
+            month_key = cursor.strftime("%Y-%m")
+            row = {
+                "id": f"sub-{sub['id']}-{month_key}",
+                "date": cursor.strftime("%Y-%m-%d"),
+                "date_iso": cursor.strftime("%Y-%m-%d"),
+                "vendor": sub.get("name"),
+                "category": sub.get("category"),
+                "amount": sub.get("amount"),
+                "notes": "auto from subscription",
+            }
+            db.upsert_subscription_instance(sub["id"], month_key, row, now_iso)
+            # Advance to first of next month
+            nxt = cursor.replace(day=28) + timedelta(days=4)
+            cursor = nxt.replace(day=1)
+
+
+def _maaser_summary():
+    """Owed = sum over months of max(0, profit − expenses) × 0.10.
+    Given = sum of maaser_payments. Outstanding = owed − given."""
+    profit_resp = _profit_response()
+    owed_by_month = {}
+    net_by_month = {}
+    for m in profit_resp["months"]:
+        net = (m.get("profit") or 0) - (m.get("expenses") or 0)
+        net_by_month[m["month"]] = round(net, 2)
+        owed_by_month[m["month"]] = round(max(0, net) * 0.10, 2)
+    payments = db.all_maaser()
+    given_by_month = {}
+    for p in payments:
+        key = (p.get("date_iso") or "")[:7]
+        if not key:
+            continue
+        given_by_month[key] = given_by_month.get(key, 0) + (p.get("amount") or 0)
+    given_by_month = {k: round(v, 2) for k, v in given_by_month.items()}
+    owed_lifetime = round(sum(owed_by_month.values()), 2)
+    given_lifetime = round(sum((p.get("amount") or 0) for p in payments), 2)
+    this_month_key = date.today().strftime("%Y-%m")
+    return {
+        "owed_by_month": owed_by_month,
+        "given_by_month": given_by_month,
+        "net_by_month": net_by_month,
+        "summary": {
+            "owed_lifetime": owed_lifetime,
+            "given_lifetime": given_lifetime,
+            "outstanding": round(owed_lifetime - given_lifetime, 2),
+            "owed_this_month": owed_by_month.get(this_month_key, 0),
+        },
+    }
+
+
+@app.route("/expenses")
+def expenses_page():
+    return render_template("expenses.html")
+
+
+@app.route("/maaser")
+def maaser_page():
+    return render_template("maaser.html")
+
+
+@app.route("/api/expenses")
+def api_expenses():
+    _ensure_subscription_instances()
+    subs = db.all_expense_subscriptions()
+    expenses = db.all_expenses()
+    totals_by_month = {}
+    for e in expenses:
+        mk = (e.get("date_iso") or "")[:7]
+        if not mk:
+            continue
+        totals_by_month[mk] = round(totals_by_month.get(mk, 0) + (e.get("amount") or 0), 2)
+    today = date.today()
+    this_month = today.strftime("%Y-%m")
+    this_year = today.strftime("%Y")
+    recurring_monthly = sum((s.get("amount") or 0) for s in subs if not s.get("ended_at_iso"))
+    this_month_total = totals_by_month.get(this_month, 0)
+    this_year_total = round(sum(v for k, v in totals_by_month.items() if k.startswith(this_year)), 2)
+    all_time_total = round(sum(totals_by_month.values()), 2)
+    return jsonify({
+        "subscriptions": subs,
+        "expenses": expenses,
+        "totals_by_month": totals_by_month,
+        "summary": {
+            "recurring_monthly": round(recurring_monthly, 2),
+            "this_month": round(this_month_total, 2),
+            "this_year": this_year_total,
+            "all_time": all_time_total,
+        },
+        "last_run": _last_run, "last_backup": _last_backup,
+    })
+
+
+@app.route("/api/expenses/sub-add", methods=["POST"])
+def api_expenses_sub_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    try:
+        amount = float(body.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0:
+        return jsonify({"error": "amount must be > 0"}), 400
+    started = (body.get("started_at_iso") or "").strip()
+    if not _parse_iso(started):
+        return jsonify({"error": "started_at_iso required (YYYY-MM-DD)"}), 400
+    row = {
+        "id": "sub-" + uuid.uuid4().hex[:12],
+        "name": name,
+        "category": (body.get("category") or "").strip(),
+        "amount": amount,
+        "started_at_iso": started,
+        "ended_at_iso": (body.get("ended_at_iso") or "").strip() or None,
+        "notes": (body.get("notes") or "").strip(),
+    }
+    db.insert_expense_subscription(row, datetime.now(timezone.utc).isoformat())
+    _ensure_subscription_instances()
+    return jsonify({"ok": True, "id": row["id"]})
+
+
+@app.route("/api/expenses/sub-edit", methods=["POST"])
+def api_expenses_sub_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    fields = {}
+    for k in ("name", "category", "amount", "started_at_iso", "ended_at_iso", "notes"):
+        if k in body:
+            v = body[k]
+            if k == "amount":
+                try:
+                    v = float(v) if v not in (None, "") else None
+                except (TypeError, ValueError):
+                    continue
+            elif isinstance(v, str):
+                v = v.strip() or None
+            fields[k] = v
+    db.update_expense_subscription(id_, fields)
+    _ensure_subscription_instances()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/expenses/sub-delete", methods=["POST"])
+def api_expenses_sub_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    # Past auto-generated rows are intentionally left in `expenses` as historical
+    # record; only the subscription template is removed.
+    db.delete_expense_subscription(id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/expenses/add", methods=["POST"])
+def api_expenses_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    date_iso = (body.get("date_iso") or "").strip()
+    if not _parse_iso(date_iso):
+        return jsonify({"error": "date_iso required (YYYY-MM-DD)"}), 400
+    try:
+        amount = float(body.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0:
+        return jsonify({"error": "amount must be > 0"}), 400
+    row = {
+        "id": "exp-" + uuid.uuid4().hex[:12],
+        "date": date_iso,
+        "date_iso": date_iso,
+        "vendor": (body.get("vendor") or "").strip(),
+        "category": (body.get("category") or "").strip(),
+        "amount": amount,
+        "subscription_id": None,
+        "month_key": None,
+        "notes": (body.get("notes") or "").strip(),
+    }
+    db.insert_expense(row, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "id": row["id"]})
+
+
+@app.route("/api/expenses/edit", methods=["POST"])
+def api_expenses_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    fields = {}
+    for k in ("date_iso", "vendor", "category", "amount", "notes"):
+        if k in body:
+            v = body[k]
+            if k == "amount":
+                try:
+                    v = float(v) if v not in (None, "") else None
+                except (TypeError, ValueError):
+                    continue
+            elif isinstance(v, str):
+                v = v.strip()
+            fields[k] = v
+    if "date_iso" in fields and fields["date_iso"]:
+        fields["date"] = fields["date_iso"]
+    db.update_expense(id_, fields)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/expenses/delete", methods=["POST"])
+def api_expenses_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.delete_expense(id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/owed")
+def owed_page():
+    return render_template("owed.html")
+
+
+@app.route("/api/owed")
+def api_owed():
+    return jsonify({
+        "items": db.all_owed_items(),
+        "last_run": _last_run, "last_backup": _last_backup,
+    })
+
+
+@app.route("/api/owed/add", methods=["POST"])
+def api_owed_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    date_iso = (body.get("date_iso") or "").strip()
+    if not _parse_iso(date_iso):
+        return jsonify({"error": "date_iso required (YYYY-MM-DD)"}), 400
+    try:
+        amount = float(body.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0:
+        return jsonify({"error": "amount must be > 0"}), 400
+    direction = (body.get("direction") or "").strip()
+    if direction not in ("charge", "withdrawal"):
+        return jsonify({"error": "direction must be 'charge' or 'withdrawal'"}), 400
+    row = {
+        "id": "owe-" + uuid.uuid4().hex[:12],
+        "date_iso": date_iso,
+        "amount": amount,
+        "description": (body.get("description") or "").strip(),
+        "card_account": (body.get("card_account") or "").strip(),
+        "direction": direction,
+    }
+    db.insert_owed_item(row, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "id": row["id"]})
+
+
+@app.route("/api/owed/edit", methods=["POST"])
+def api_owed_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    fields = {}
+    for k in ("date_iso", "amount", "description", "card_account", "direction"):
+        if k in body:
+            v = body[k]
+            if k == "amount":
+                try:
+                    v = float(v) if v not in (None, "") else None
+                except (TypeError, ValueError):
+                    continue
+            elif k == "direction":
+                v = (v or "").strip()
+                if v not in ("charge", "withdrawal"):
+                    continue
+            elif isinstance(v, str):
+                v = v.strip()
+            fields[k] = v
+    db.update_owed_item(id_, fields)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/owed/delete", methods=["POST"])
+def api_owed_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.delete_owed_item(id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/maaser")
+def api_maaser():
+    summary = _maaser_summary()
+    return jsonify({
+        "payments": db.all_maaser(),
+        **summary,
+        "last_run": _last_run, "last_backup": _last_backup,
+    })
+
+
+@app.route("/api/maaser/add", methods=["POST"])
+def api_maaser_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    date_iso = (body.get("date_iso") or "").strip()
+    if not _parse_iso(date_iso):
+        return jsonify({"error": "date_iso required (YYYY-MM-DD)"}), 400
+    try:
+        amount = float(body.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0:
+        return jsonify({"error": "amount must be > 0"}), 400
+    row = {
+        "id": "maaser-" + uuid.uuid4().hex[:12],
+        "date": date_iso,
+        "date_iso": date_iso,
+        "recipient": (body.get("recipient") or "").strip(),
+        "amount": amount,
+        "notes": (body.get("notes") or "").strip(),
+    }
+    db.insert_maaser(row, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "id": row["id"]})
+
+
+@app.route("/api/maaser/edit", methods=["POST"])
+def api_maaser_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    fields = {}
+    for k in ("date_iso", "recipient", "amount", "notes"):
+        if k in body:
+            v = body[k]
+            if k == "amount":
+                try:
+                    v = float(v) if v not in (None, "") else None
+                except (TypeError, ValueError):
+                    continue
+            elif isinstance(v, str):
+                v = v.strip()
+            fields[k] = v
+    if "date_iso" in fields and fields["date_iso"]:
+        fields["date"] = fields["date_iso"]
+    db.update_maaser(id_, fields)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/maaser/delete", methods=["POST"])
+def api_maaser_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.delete_maaser(id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sales/manual-record", methods=["POST"])
+def api_sales_manual_record():
+    from flask import request
+    import uuid
+    body = request.get_json(silent=True) or {}
+    inv_source = (body.get("inv_source") or "").strip()
+    inv_source_id = (body.get("inv_source_id") or "").strip()
+    if not inv_source or not inv_source_id:
+        return jsonify({"error": "inv_source and inv_source_id required"}), 400
+    rows, _ = _build_unified_inventory()
+    inv = next((r for r in rows if r.get("source") == inv_source and str(r.get("source_id")) == inv_source_id), None)
+    if not inv:
+        return jsonify({"error": "inventory row not found (may already be sold or hidden)"}), 404
+    try:
+        qty = int(body.get("qty") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    if qty <= 0 or qty > (inv.get("qty_unsold") or 0):
+        return jsonify({"error": "qty must be 1..remaining"}), 400
+    is_loss = bool(body.get("is_loss"))
+    sale_price = 0.0 if is_loss else float(body.get("sale_price") or 0)
+    sale_date = (body.get("sale_date") or "").strip() or datetime.now().strftime("%Y-%m-%d")
+    sale_iso = sale_date[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", sale_date) else sale_date
+    platform = (body.get("platform") or ("loss" if is_loss else "manual")).strip()
+    note = (body.get("note") or "").strip()
+    cost_per = inv.get("cost_per_unit")
+    if cost_per is None and (inv.get("qty_unsold") or 0) > 0:
+        cost_per = (inv.get("cost") or 0) / (inv.get("qty_unsold") or 1)
+    cost = round((cost_per or 0) * qty, 2)
+    sale_id = "manual-" + uuid.uuid4().hex[:12]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.insert_manual_sale({
+        "id": sale_id,
+        "inv_source": inv_source,
+        "inv_source_id": inv_source_id,
+        "event_name": inv.get("event_name") or "",
+        "event_date": inv.get("event_date") or "",
+        "event_date_iso": inv.get("event_date_iso") or "",
+        "venue": inv.get("venue") or "",
+        "section": inv.get("section") or "",
+        "row_label": inv.get("row") or "",
+        "seats": inv.get("seats") or "",
+        "qty": qty,
+        "sale_price": sale_price,
+        "cost": cost,
+        "sale_date": sale_date,
+        "sale_date_iso": sale_iso,
+        "platform": platform,
+        "is_loss": 1 if is_loss else 0,
+        "note": note,
+    }, now_iso)
+    db.record_match(
+        sale_source="manual", sale_id=sale_id,
+        inv_source=inv_source, inv_source_id=inv_source_id,
+        qty=qty, reason="manual" + ("/loss" if is_loss else ""), now_iso=now_iso,
+    )
+    return jsonify({"ok": True, "sale_id": sale_id})
+
+
+@app.route("/api/sales/manual-delete", methods=["POST"])
+def api_sales_manual_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    sale_id = (body.get("sale_id") or "").strip()
+    if not sale_id:
+        return jsonify({"error": "sale_id required"}), 400
+    db.delete_manual_sale(sale_id)
+    db.delete_match("manual", sale_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/match-now", methods=["POST"])
+def api_match_now():
+    matched, skipped = matcher.run_match_pass()
+    return jsonify({"matched": matched, "unmatched": skipped})
+
+
+_INV_EDITABLE = {"section", "row", "seats", "qty_unsold", "cost", "cost_per_unit", "list_price", "delivery_type", "status", "event_name", "venue"}
+_SALE_EDITABLE = {"event_name", "venue", "section", "row", "qty", "sale_price", "cost", "platform", "sale_date"}
+
+
+@app.route("/api/inventory/edit", methods=["POST"])
+def api_inventory_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    source_id = (body.get("source_id") or "").strip()
+    field = (body.get("field") or "").strip()
+    value = body.get("value")
+    if not source or not source_id or field not in _INV_EDITABLE:
+        return jsonify({"error": "invalid source/source_id/field"}), 400
+    db.set_inv_override(source, source_id, field, value, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sales/edit", methods=["POST"])
+def api_sales_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    sale_id = (body.get("sale_id") or "").strip()
+    field = (body.get("field") or "").strip()
+    value = body.get("value")
+    if not source or not sale_id or field not in _SALE_EDITABLE:
+        return jsonify({"error": "invalid source/sale_id/field"}), 400
+    db.set_sale_override(source, sale_id, field, value, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True})
+
+
+@app.route("/api/inventory/hide", methods=["POST"])
+def api_inventory_hide():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    source_id = (body.get("source_id") or "").strip()
+    if not source or not source_id:
+        return jsonify({"error": "source and source_id required"}), 400
+    db.hide_inventory(source, source_id, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "source": source, "source_id": source_id})
+
+
+@app.route("/api/inventory/unhide", methods=["POST"])
+def api_inventory_unhide():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    source_id = (body.get("source_id") or "").strip()
+    if not source or not source_id:
+        return jsonify({"error": "source and source_id required"}), 400
+    # If an auto-match caused this hide, also blocklist the sale so the
+    # next matcher pass doesn't immediately re-pair them.
+    match = db.find_match_for_inv(source, source_id)
+    if match:
+        db.add_blocklist(match["sale_source"], match["sale_id"], datetime.now(timezone.utc).isoformat())
+        db.delete_match(match["sale_source"], match["sale_id"])
+    db.unhide_inventory(source, source_id)
+    return jsonify({"ok": True, "source": source, "source_id": source_id, "from_match": bool(match)})
 
 
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
     threading.Thread(target=run_scraper, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/backup", methods=["POST"])
+def api_backup():
+    threading.Thread(target=run_backup, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/jerujam")
+def jerujam():
+    return render_template("jerujam.html")
+
+
+@app.route("/api/jerujam")
+def api_jerujam():
+    tickets = db.all_jerujam_tickets()
+    sales = db.all_jerujam_sales()
+    expenses = db.all_jerujam_expenses()
+
+    def is_sold(t):
+        return (t.get("status") or "").strip().lower() == "sold"
+
+    sold = [t for t in tickets if is_sold(t)]
+    held = [t for t in tickets if not is_sold(t)]
+    total_purchase_cost = sum((t.get("total_purchase_cost") or 0) for t in tickets)
+    total_sales = sum((s.get("sale_price") or 0) for s in sales)
+    total_seller_fees = sum((t.get("seller_fees") or 0) for t in tickets)
+    sold_purchase_cost = sum((t.get("total_purchase_cost") or 0) for t in sold)
+    held_purchase_cost = sum((t.get("total_purchase_cost") or 0) for t in held)
+
+    by_status = {}
+    for t in tickets:
+        s = (t.get("status") or "(none)").strip() or "(none)"
+        by_status[s] = by_status.get(s, 0) + 1
+
+    totals = {
+        "tickets": len(tickets),
+        "sales": len(sales),
+        "expenses": len(expenses),
+        "qty_total": sum((t.get("quantity") or 0) for t in tickets),
+        "qty_sold": sum((s.get("quantity") or 0) for s in sales),
+        "total_purchase_cost": round(total_purchase_cost, 2),
+        "sold_purchase_cost": round(sold_purchase_cost, 2),
+        "held_purchase_cost": round(held_purchase_cost, 2),
+        "total_sales": round(total_sales, 2),
+        "total_seller_fees": round(total_seller_fees, 2),
+        "net_profit": round(total_sales - sold_purchase_cost - total_seller_fees, 2),
+        "by_status": by_status,
+    }
+    return jsonify({
+        "tickets": tickets,
+        "sales": sales,
+        "expenses": expenses,
+        "totals": totals,
+        "last_import": _last_jerujam,
+    })
+
+
+@app.route("/api/jerujam/import", methods=["POST"])
+def api_jerujam_import():
+    threading.Thread(target=run_jerujam_import, daemon=True).start()
     return jsonify({"started": True})
 
 
@@ -179,9 +1682,208 @@ def export_xlsx():
     )
 
 
+def _check_one_watcher(w, now_iso):
+    """One tick for one watcher. Returns (added_count, error_str_or_None).
+
+    The very first tick on a fresh watcher (no recorded state and no prior
+    check timestamp) is treated as a baseline: we capture whatever's currently
+    available and DO NOT notify, otherwise the user gets a spam ping for seats
+    that were already there at watch-create time.
+    """
+    import json as _json
+    wid = w["id"]
+    label = w.get("label") or f"{w['event_code']}/{w['perf_code']}"
+    perf_url = ticketmaster.perf_url(w["event_code"], w["perf_code"])
+    try:
+        seats = ticketmaster.fetch_selectable_seats(w["event_code"], w["perf_code"])
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+        db.tm_update_watcher(wid, {
+            "last_check_at": now_iso, "last_check_error": err,
+        })
+        return 0, err
+
+    prev_keys = db.tm_get_seat_keys(wid)
+    is_baseline = not prev_keys and not w.get("last_check_at")
+    added, removed, _curr = ticketmaster.diff_seats(prev_keys, seats)
+    db.tm_replace_seat_state(wid, seats)
+    db.tm_update_watcher(wid, {
+        "last_check_at": now_iso,
+        "last_check_error": None,
+        "last_seat_count": len(seats),
+    })
+
+    if is_baseline:
+        return 0, None
+
+    if added:
+        # Hebrew labels + ILS prices. Passing any added block code as
+        # `missing_block` triggers a cache refresh only when that code
+        # isn't already known — keeps notifications accurate if a new
+        # section opens up mid-event.
+        probe_block = next((s.get("b") for s in added if s.get("b")), None)
+        labels = tm_labels.get_labels(
+            w["event_code"], w["perf_code"], lang="iw",
+            missing_block=probe_block,
+        )
+        result = notify.notify_drop(
+            label=label, perf_url=perf_url,
+            added_seats=added, removed_count=len(removed),
+            total_now=len(seats), labels=labels,
+        )
+        db.tm_record_drop(
+            wid, len(added), len(removed),
+            _json.dumps(added, ensure_ascii=False)[:8000],
+            _json.dumps(result)[:1000],
+            now_iso,
+        )
+    return len(added), None
+
+
+def run_tm_check():
+    """Iterate active watchers, run one check each. Lock prevents overlap if
+    a tick exceeds the interval (e.g. a slow API response with many watchers)."""
+    if not _tm_lock.acquire(blocking=False):
+        return
+    _last_tm["running"] = True
+    try:
+        watchers = db.tm_active_watchers()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        drops = 0
+        errors = 0
+        for w in watchers:
+            try:
+                added, err = _check_one_watcher(w, now_iso)
+                if err:
+                    errors += 1
+                if added:
+                    drops += 1
+            except Exception:
+                errors += 1
+                traceback.print_exc()
+        _last_tm.update(
+            at=now_iso, checked=len(watchers), drops=drops, errors=errors,
+        )
+    finally:
+        _last_tm["running"] = False
+        _tm_lock.release()
+
+
+@app.route("/watchers")
+def watchers_page():
+    return render_template("watchers.html")
+
+
+@app.route("/api/watchers")
+def api_watchers():
+    watchers = db.tm_all_watchers()
+    drops = db.tm_recent_drops(limit=200)
+    return jsonify({
+        "watchers": watchers,
+        "drops": drops,
+        "last_tm": _last_tm,
+        "interval_seconds": TM_CHECK_INTERVAL_SECONDS,
+    })
+
+
+@app.route("/api/watchers/add", methods=["POST"])
+def api_watchers_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
+    label = (body.get("label") or "").strip()
+    try:
+        event_code, perf_code = ticketmaster.parse_url(url)
+    except ticketmaster.TicketmasterError as e:
+        return jsonify({"error": str(e)}), 400
+    # Dedupe — the unique constraint also enforces this, but a friendly error
+    # beats a SQLite IntegrityError for the user.
+    for existing in db.tm_all_watchers():
+        if existing["event_code"] == event_code and existing["perf_code"] == perf_code:
+            return jsonify({"error": f"Already watching {event_code}/{perf_code}", "id": existing["id"]}), 409
+    wid = "tmw-" + uuid.uuid4().hex[:12]
+    if not label:
+        # Default to "<eventName> · <YYYY-MM-DD>" when we can fetch metadata,
+        # so the watchers list reads naturally in Hebrew instead of "MBP19/001".
+        try:
+            lbls = tm_labels.get_labels(event_code, perf_code, lang="iw")
+            summary = tm_labels.event_summary(lbls)
+            label = summary or f"{event_code}/{perf_code}"
+        except Exception:
+            label = f"{event_code}/{perf_code}"
+    db.tm_insert_watcher({
+        "id": wid, "label": label,
+        "event_code": event_code, "perf_code": perf_code, "paused": 0,
+    }, datetime.now(timezone.utc).isoformat())
+    # Run a baseline check synchronously so the user sees "OK, watching N seats"
+    # immediately and is_baseline correctly suppresses the first notification.
+    w = db.tm_get_watcher(wid)
+    try:
+        _check_one_watcher(w, datetime.now(timezone.utc).isoformat())
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"ok": True, "id": wid, "warning": str(e)})
+    return jsonify({"ok": True, "id": wid})
+
+
+@app.route("/api/watchers/toggle", methods=["POST"])
+def api_watchers_toggle():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    wid = (body.get("id") or "").strip()
+    paused = 1 if body.get("paused") else 0
+    if not wid:
+        return jsonify({"error": "id required"}), 400
+    db.tm_update_watcher(wid, {"paused": paused})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/watchers/delete", methods=["POST"])
+def api_watchers_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    wid = (body.get("id") or "").strip()
+    if not wid:
+        return jsonify({"error": "id required"}), 400
+    db.tm_delete_watcher(wid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/watchers/test-notify", methods=["POST"])
+def api_watchers_test_notify():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    label = (body.get("label") or "Kartis test").strip()
+    result = notify.send_test(label=label)
+    return jsonify({"ok": True, "result": result})
+
+
+@app.route("/api/watchers/check-now", methods=["POST"])
+def api_watchers_check_now():
+    """Force a single tick for one watcher (or all if no id given). Useful
+    when the user wants to verify a watcher right after adding it without
+    waiting for the next scheduled tick."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    wid = (body.get("id") or "").strip()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if wid:
+        w = db.tm_get_watcher(wid)
+        if not w:
+            return jsonify({"error": "watcher not found"}), 404
+        added, err = _check_one_watcher(w, now_iso)
+        return jsonify({"ok": True, "added": added, "error": err})
+    threading.Thread(target=run_tm_check, daemon=True).start()
+    return jsonify({"started": True})
+
+
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
+scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
+scheduler.add_job(run_tm_check, "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
 scheduler.start()
+
+threading.Thread(target=run_backup, daemon=True).start()
 
 
 if __name__ == "__main__":

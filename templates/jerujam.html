@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — JeruJam</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --bg-3: #11161d;
+    --line: #21262d;
+    --line-2: #2a3038;
+    --text: #c9d1d9;
+    --muted: #6e7681;
+    --accent: #58a6ff;
+    --green: #56d364;
+    --red: #f85149;
+    --amber: #d29922;
+    --orange: #f97316;
+    --purple: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 24px 0 10px; color: var(--text); }
+  h2 .count { color: var(--muted); font-weight: 400; margin-left: 6px; font-size: 11px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #1f262e; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; background: var(--bg); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  .src { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
+  .src-jerujam { color: var(--purple); border-color: var(--purple); }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line-2); color: var(--muted); border-radius: 1px; letter-spacing: 1px; text-transform: uppercase; }
+  .status-sold { color: var(--green); border-color: var(--green); }
+  .status-lysted { color: var(--accent); border-color: var(--accent); }
+  .status-viagogo { color: var(--orange); border-color: var(--orange); }
+  .status-dt, .status-held, .status-not_listed, .status-unsold, .status-none { color: var(--muted); border-color: var(--line-2); }
+  .status-partial { color: var(--amber); border-color: var(--amber); }
+  .pill-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .pill-bar .status { font-size: 11px; padding: 3px 9px; cursor: pointer; }
+  .pill-bar .status.selected { background: rgba(88,166,255,0.1); }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>// JERUJAM</h1>
+    <span class="meta" id="lastimport">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/jerujam" class="active">JERUJAM</a>
+    <a href="/watchers">WATCHERS</a>
+  </nav>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Tickets</div><div class="value" id="s-tickets">0</div></div>
+    <div class="stat"><div class="label">Qty Total</div><div class="value" id="s-qty">0</div></div>
+    <div class="stat green"><div class="label">Qty Sold</div><div class="value" id="s-qty-sold">0</div></div>
+    <div class="stat amber"><div class="label">Cash Invested</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat green"><div class="label">Total Sales</div><div class="value" id="s-sales">$0</div></div>
+    <div class="stat amber"><div class="label">Sold Cost</div><div class="value" id="s-soldcost">$0</div></div>
+    <div class="stat amber"><div class="label">Held Cost</div><div class="value" id="s-heldcost">$0</div></div>
+    <div class="stat green"><div class="label">Net Profit</div><div class="value" id="s-pl">$0</div></div>
+  </div>
+
+  <div class="bar">
+    <button id="reimport">Re-import from JeruJam</button>
+    <input type="search" id="t-search" placeholder="search // event venue city" style="flex:1; min-width:200px;">
+    <select id="t-status"><option value="all">STATUS: ALL</option></select>
+    <select id="t-sort">
+      <option value="date-asc">DATE ↑</option>
+      <option value="date-desc">DATE ↓</option>
+      <option value="name">NAME A–Z</option>
+      <option value="cost-desc">COST ↓</option>
+      <option value="profit-desc">PROFIT ↓</option>
+    </select>
+  </div>
+  <div class="pill-bar" id="status-pills"></div>
+
+  <h2>// TICKETS <span class="count" id="t-count"></span></h2>
+  <table>
+    <thead><tr>
+      <th>EVENT</th><th>DATE</th><th>VENUE</th><th>SEC/ROW</th>
+      <th class="num">QTY</th><th class="num">COST</th><th class="num">SOLD</th>
+      <th class="num">PROFIT</th><th>STATUS</th><th>PLATFORMS</th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="tempty" class="empty" style="display:none">// no tickets match</div>
+
+  <h2>// SALES <span class="count" id="s-count"></span></h2>
+  <table>
+    <thead><tr>
+      <th>SALE DATE</th><th>EVENT</th><th>PLATFORM</th>
+      <th class="num">QTY</th><th class="num">SALE PRICE</th>
+    </tr></thead>
+    <tbody id="sbody"></tbody>
+  </table>
+  <div id="sempty" class="empty" style="display:none">// no sales yet</div>
+</main>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+let _tickets = [], _sales = [], _ticketsById = {};
+
+function ticketProfit(t) {
+  const ticketSales = _sales.filter(s => s.ticket_id === t.id);
+  if (!ticketSales.length) return null;
+  const revenue = ticketSales.reduce((a,s) => a + (s.sale_price || 0), 0);
+  const sold = ticketSales.reduce((a,s) => a + (s.quantity || 0), 0);
+  const costOfSold = (t.cost_per_ticket || 0) * sold;
+  return revenue - costOfSold - (t.seller_fees || 0);
+}
+
+function statusClass(s) {
+  const k = (s || "").toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  return `status status-${k || "none"}`;
+}
+
+function renderStatusPills(byStatus, current) {
+  const pills = document.getElementById("status-pills");
+  pills.innerHTML = "";
+  const all = document.createElement("span");
+  all.className = "status" + (current === "all" ? " selected" : "");
+  all.textContent = `ALL (${Object.values(byStatus).reduce((a,b)=>a+b,0)})`;
+  all.addEventListener("click", () => { document.getElementById("t-status").value = "all"; render(); });
+  pills.appendChild(all);
+  const entries = Object.entries(byStatus).sort((a,b) => b[1] - a[1]);
+  for (const [k, n] of entries) {
+    const el = document.createElement("span");
+    el.className = statusClass(k) + (current === k ? " selected" : "");
+    el.textContent = `${k} (${n})`;
+    el.addEventListener("click", () => { document.getElementById("t-status").value = k; render(); });
+    pills.appendChild(el);
+  }
+}
+
+function _sortCmp(mode) {
+  const dateKey = (r) => r.event_date_iso || "zzz";
+  if (mode === "date-desc") return (a,b) => dateKey(b).localeCompare(dateKey(a));
+  if (mode === "name") return (a,b) => (a.event_name||"").localeCompare(b.event_name||"");
+  if (mode === "cost-desc") return (a,b) => (b.total_purchase_cost||0) - (a.total_purchase_cost||0);
+  if (mode === "profit-desc") return (a,b) => (ticketProfit(b) ?? -1e9) - (ticketProfit(a) ?? -1e9);
+  return (a,b) => dateKey(a).localeCompare(dateKey(b));
+}
+
+function render() {
+  const status = document.getElementById("t-status").value;
+  const search = document.getElementById("t-search").value.toLowerCase();
+  const sort = document.getElementById("t-sort").value;
+  let rows = _tickets.slice();
+  if (status !== "all") rows = rows.filter(t => (t.status||"(none)") === status);
+  if (search) rows = rows.filter(t =>
+    (t.event_name||"").toLowerCase().includes(search) ||
+    (t.venue||"").toLowerCase().includes(search) ||
+    (t.city||"").toLowerCase().includes(search));
+  rows.sort(_sortCmp(sort));
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  for (const t of rows) {
+    const profit = ticketProfit(t);
+    const platforms = [t.purchase_platform, t.listing_platform].filter(Boolean).join(" → ");
+    const tr = document.createElement("tr");
+    const profitColor = profit == null ? "var(--muted)" : profit >= 0 ? "var(--green)" : "var(--red)";
+    tr.innerHTML = `
+      <td>${esc(t.event_name)}</td>
+      <td>${esc(t.event_date)}<div class="muted" style="font-size:11px;">${esc(t.city)}</div></td>
+      <td>${esc(t.venue)}</td>
+      <td>${esc(t.section)}${t.row_label ? " / " + esc(t.row_label) : ""}</td>
+      <td class="num">${t.quantity ?? ""}</td>
+      <td class="num">${money(t.total_purchase_cost)}</td>
+      <td class="num">${t.sold_count ? t.sold_count : ""}</td>
+      <td class="num" style="color:${profitColor}">${profit == null ? "—" : money(profit)}</td>
+      <td><span class="${statusClass(t.status)}">${esc(t.status || "—")}</span></td>
+      <td class="muted" style="font-size:11px;">${esc(platforms)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("tempty").style.display = rows.length ? "none" : "block";
+  document.getElementById("t-count").textContent = `(${rows.length} of ${_tickets.length})`;
+}
+
+function renderSales() {
+  const tbody = document.getElementById("sbody");
+  tbody.innerHTML = "";
+  for (const s of _sales) {
+    const t = _ticketsById[s.ticket_id] || {};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(s.sale_date)}</td>
+      <td>${esc(t.event_name||"—")}<div class="muted" style="font-size:11px;">${esc(t.venue||"")}</div></td>
+      <td><span class="${statusClass(s.platform)}">${esc(s.platform)}</span></td>
+      <td class="num">${s.quantity ?? ""}</td>
+      <td class="num">${money(s.sale_price)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("sempty").style.display = _sales.length ? "none" : "block";
+  document.getElementById("s-count").textContent = `(${_sales.length})`;
+}
+
+async function load() {
+  const r = await fetch("/api/jerujam");
+  const d = await r.json();
+  _tickets = d.tickets || [];
+  _sales = d.sales || [];
+  _ticketsById = Object.fromEntries(_tickets.map(t => [t.id, t]));
+  const t = d.totals || {};
+  document.getElementById("s-tickets").textContent = t.tickets ?? 0;
+  document.getElementById("s-qty").textContent = t.qty_total ?? 0;
+  document.getElementById("s-qty-sold").textContent = t.qty_sold ?? 0;
+  document.getElementById("s-cost").textContent = money(t.total_purchase_cost);
+  document.getElementById("s-sales").textContent = money(t.total_sales);
+  document.getElementById("s-soldcost").textContent = money(t.sold_purchase_cost);
+  document.getElementById("s-heldcost").textContent = money(t.held_purchase_cost);
+  const pl = document.getElementById("s-pl");
+  pl.textContent = money(t.net_profit);
+  pl.parentElement.className = "stat " + ((t.net_profit||0) >= 0 ? "green" : "red");
+
+  const sel = document.getElementById("t-status");
+  const cur = sel.value;
+  sel.innerHTML = '<option value="all">STATUS: ALL</option>';
+  for (const [k,n] of Object.entries(t.by_status || {}).sort((a,b) => b[1] - a[1])) {
+    const opt = document.createElement("option");
+    opt.value = k; opt.textContent = `${k} (${n})`;
+    sel.appendChild(opt);
+  }
+  sel.value = cur || "all";
+  renderStatusPills(t.by_status || {}, sel.value);
+
+  const li = d.last_import || {};
+  document.getElementById("lastimport").textContent = li.running ? "importing..."
+    : li.at ? `last_import=${new Date(li.at).toLocaleString()}${li.error ? " // ERR " + li.error : ""}`
+    : "no_import_yet // CLI-loaded";
+
+  render();
+  renderSales();
+}
+
+document.getElementById("reimport").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true; btn.textContent = "importing...";
+  await fetch("/api/jerujam/import", { method: "POST" });
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Re-import from JeruJam"; load(); }, 4000);
+});
+
+for (const id of ["t-search","t-status","t-sort"]) {
+  document.getElementById(id).addEventListener("input", render);
+  document.getElementById(id).addEventListener("change", render);
+}
+load();
+</script>
+</body>
+</html>

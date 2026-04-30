@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Choose a design</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 32px; color: #1a1a1a; max-width: 1100px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  p { color: #666; margin: 0 0 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+  .card { border: 1px solid #ddd; border-radius: 12px; overflow: hidden; cursor: pointer; transition: all 0.15s; text-decoration: none; color: inherit; display: block; }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(0,0,0,0.10); border-color: #888; }
+  .preview { height: 220px; padding: 18px; position: relative; overflow: hidden; }
+  .meta { padding: 14px 16px; border-top: 1px solid #eee; }
+  .meta h2 { font-size: 17px; margin: 0 0 4px; font-weight: 700; }
+  .meta p { font-size: 13px; color: #666; margin: 0; }
+
+  /* Slate preview (dark) */
+  .p-slate { background: #0d1117; color: #c9d1d9; font-family: ui-monospace, "JetBrains Mono", monospace; }
+  .p-slate .h { font-size: 11px; color: #6e7681; letter-spacing: 1.5px; text-transform: uppercase; }
+  .p-slate .v { font-size: 22px; color: #58a6ff; font-weight: 600; }
+  .p-slate .row { display: flex; gap: 18px; margin: 10px 0 14px; }
+  .p-slate .pill { padding: 1px 6px; font-size: 10px; border: 1px solid #58a6ff; color: #58a6ff; border-radius: 2px; }
+  .p-slate .line { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #21262d; font-size: 12px; }
+
+  /* Cocoa preview (warm, soft) */
+  .p-cocoa { background: #faf6f1; color: #2d2419; font-family: "Iowan Old Style", Georgia, serif; }
+  .p-cocoa .h { font-family: -apple-system, system-ui, sans-serif; font-size: 11px; color: #8b7355; letter-spacing: 1px; text-transform: uppercase; }
+  .p-cocoa .v { font-size: 22px; color: #6b3e00; font-weight: 600; }
+  .p-cocoa .row { display: flex; gap: 18px; margin: 10px 0 14px; }
+  .p-cocoa .pill { padding: 2px 8px; font-size: 10px; background: #efe2cc; color: #6b3e00; border-radius: 999px; font-family: -apple-system, system-ui, sans-serif; }
+  .p-cocoa .line { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed #d6c5a8; font-size: 13px; }
+
+  /* Studio preview (clean white SaaS) */
+  .p-studio { background: #fff; color: #111; font-family: "Inter", -apple-system, system-ui, sans-serif; }
+  .p-studio .h { font-size: 10px; color: #6b7280; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; }
+  .p-studio .v { font-size: 22px; color: #111; font-weight: 700; }
+  .p-studio .row { display: flex; gap: 18px; margin: 10px 0 14px; }
+  .p-studio .pill { padding: 2px 8px; font-size: 10px; background: #eef2ff; color: #4338ca; border-radius: 4px; font-weight: 600; }
+  .p-studio .line { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid #f1f1f0; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Pick a design direction</h1>
+<p>Click into each to see the full inventory dashboard rendered in that style. Real data, just different paint.</p>
+
+<div class="grid">
+  <a href="/mockups/slate" class="card">
+    <div class="preview p-slate">
+      <div class="row">
+        <div><div class="h">UNSOLD</div><div class="v">615</div></div>
+        <div><div class="h">CASH TIED UP</div><div class="v" style="color:#58a6ff;">$110K</div></div>
+      </div>
+      <div class="line"><span><span class="pill">LYSTED</span> 105 / B · 6-7</span><span style="color:#58a6ff;">$386.06</span></div>
+      <div class="line"><span><span class="pill" style="border-color:#f97316;color:#f97316;">VIAGOGO</span> VIP D / 5</span><span style="color:#58a6ff;">$345.60</span></div>
+      <div class="line"><span><span class="pill" style="border-color:#a78bfa;color:#a78bfa;">JERUJAM</span> 221 / 11</span><span style="color:#58a6ff;">$376.00</span></div>
+    </div>
+    <div class="meta">
+      <h2>Slate <span style="color:#888;font-weight:400;">— dark, dense, monospaced</span></h2>
+      <p>Trading-terminal vibe. High-contrast numbers, tight rows, screams "data". Best on a big monitor.</p>
+    </div>
+  </a>
+
+  <a href="/mockups/cocoa" class="card">
+    <div class="preview p-cocoa">
+      <div class="row">
+        <div><div class="h">UNSOLD</div><div class="v">615</div></div>
+        <div><div class="h">CASH TIED UP</div><div class="v">$110K</div></div>
+      </div>
+      <div class="line"><span><span class="pill">Lysted</span> 105 / B · 6-7</span><span>$386.06</span></div>
+      <div class="line"><span><span class="pill" style="background:#f5e2c8;color:#8a4400;">Viagogo</span> VIP D / 5</span><span>$345.60</span></div>
+      <div class="line"><span><span class="pill" style="background:#e8dcef;color:#5a1f8a;">JeruJam</span> 221 / 11</span><span>$376.00</span></div>
+    </div>
+    <div class="meta">
+      <h2>Cocoa <span style="color:#888;font-weight:400;">— warm, paper-like, calm</span></h2>
+      <p>Cream paper palette, serif headings. Reads like a personal ledger. Easy on the eyes for long sessions.</p>
+    </div>
+  </a>
+
+  <a href="/mockups/studio" class="card">
+    <div class="preview p-studio">
+      <div class="row">
+        <div><div class="h">UNSOLD</div><div class="v">615</div></div>
+        <div><div class="h">CASH TIED UP</div><div class="v">$110K</div></div>
+      </div>
+      <div class="line"><span><span class="pill">LYSTED</span> 105 / B · 6-7</span><span>$386.06</span></div>
+      <div class="line"><span><span class="pill" style="background:#fff1e6;color:#8a4400;">VIAGOGO</span> VIP D / 5</span><span>$345.60</span></div>
+      <div class="line"><span><span class="pill" style="background:#f3e8ff;color:#5a1f8a;">JERUJAM</span> 221 / 11</span><span>$376.00</span></div>
+    </div>
+    <div class="meta">
+      <h2>Studio <span style="color:#888;font-weight:400;">— clean white, modern SaaS</span></h2>
+      <p>Light, airy, lots of whitespace. Linear / Stripe energy. Looks crisp on a phone too.</p>
+    </div>
+  </a>
+</div>
+
+<p style="margin-top: 24px; font-size: 13px;"><a href="/" style="color:#1a4ea3;">← Back to current dashboard</a></p>
+</body>
+</html>

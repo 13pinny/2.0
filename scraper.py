@@ -194,7 +194,7 @@ def _parse_lysted_event_date(text):
     if not text:
         return None
     text = text.strip()
-    for fmt in ("%m/%d/%y", "%b %d, %Y", "%B %d, %Y"):
+    for fmt in ("%m/%d/%y", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y"):
         try:
             return datetime.strptime(text, fmt).date().isoformat()
         except ValueError:
@@ -277,6 +277,156 @@ def _parse_purchases_row(cells):
     }
 
 
+def _lysted_sale_from_api(rec):
+    """Convert one record from api.lysted.com/api/sales to our DB shape."""
+    invoice_id = rec.get("invoiceId")
+    if invoice_id is None:
+        return None
+    invoice_date = rec.get("invoiceDate") or ""
+    event_date = rec.get("eventDate") or ""
+    low = rec.get("lowSeat")
+    high = rec.get("highSeat")
+    seats = None
+    if low is not None and high is not None:
+        seats = f"{low}-{high}" if str(low) != str(high) else str(low)
+    venue_parts = [rec.get("venueName"), rec.get("venueCity")]
+    venue = ", ".join(p for p in venue_parts if p) or None
+    sale_price = None
+    payout = None
+    cost = None
+    try:
+        sale_price = float(rec["total"]) if rec.get("total") not in (None, "") else None
+    except (TypeError, ValueError):
+        pass
+    try:
+        payout = float(rec["payout"]) if rec.get("payout") not in (None, "") else None
+    except (TypeError, ValueError):
+        pass
+    try:
+        cost = float(rec["cost"]) if rec.get("cost") not in (None, "") else None
+    except (TypeError, ValueError):
+        pass
+    fees = round(sale_price - payout, 2) if sale_price is not None and payout is not None else None
+    import json as _json
+    return {
+        "id": f"lysted-{invoice_id}",
+        "order_id": str(invoice_id),
+        "sale_date": invoice_date,
+        "sale_date_iso": invoice_date[:10] if invoice_date else None,
+        "event_name": rec.get("eventName"),
+        "event_date": event_date,
+        "event_date_iso": event_date[:10] if event_date else None,
+        "venue": venue,
+        "section": rec.get("section"),
+        "row_label": rec.get("row"),
+        "qty": rec.get("quantity"),
+        "seats": seats,
+        "delivery_type": rec.get("stockType"),
+        "sale_price": sale_price,
+        "payout": payout,
+        "fees": fees,
+        "cost": cost,
+        "status": rec.get("status") or rec.get("fulfillmentStatus"),
+        "raw_cells": _json.dumps(rec, default=str)[:8000],
+    }
+
+
+LYSTED_SALES_LOOKBACK_DAYS = int(os.environ.get("LYSTED_SALES_LOOKBACK_DAYS", "7"))
+
+
+def _scrape_lysted_sales(context):
+    """Pull Lysted sales via api.lysted.com directly (much cleaner than HTML scrape).
+
+    The /sales UI calls /api/sales with a JWT pulled from localStorage. We hit
+    that same API with a `saledate.min:YYYY-MM-DD` filter to grab a sliding
+    lookback window (default 7 days), so a missed hourly tick doesn't lose data.
+    """
+    import json as _json
+    from datetime import timedelta
+    # Find an already-logged-in app.lysted.com tab that *currently* has the
+    # JWT in localStorage (otherwise we'd grab a tab that already redirected
+    # to the marketing site and lose the auth).
+    existing = None
+    for pg in context.pages:
+        try:
+            if "app.lysted.com" not in (pg.url or ""):
+                continue
+            keys = pg.evaluate("Object.keys(localStorage)")
+            if "ninja-auth" in keys:
+                existing = pg
+                break
+        except Exception:
+            continue
+    page = existing or context.new_page()
+    created_page = existing is None
+    try:
+        if created_page:
+            page.goto("https://app.lysted.com/sales", wait_until="domcontentloaded", timeout=15000)
+            try:
+                page.wait_for_function(
+                    'window.localStorage && window.localStorage.getItem("ninja-auth") != null',
+                    timeout=15000,
+                )
+            except Exception:
+                print("[kartis] timed out waiting for ninja-auth in localStorage; Lysted session may be expired.")
+                _save_debug(page, "sales")
+                page.close()
+                return []
+        raw_auth = page.evaluate('localStorage.getItem("ninja-auth")')
+        # Only proceed if the cached JWT hasn't expired. Reloading the tab to
+        # force a refresh tends to redirect to the marketing site if cookies
+        # are also expired, which logs the user out — so we'd rather report
+        # cleanly than wreck the session.
+        try:
+            auth_check = _json.loads(raw_auth or "{}")
+            exp_ms = (auth_check.get("expiresAt") or 0) * 1000
+            now_ms = int(datetime.now().timestamp() * 1000)
+            if exp_ms and exp_ms < now_ms:
+                print("[kartis] Lysted JWT in localStorage is expired. "
+                      "Open the Lysted tab in Chrome and click around (or re-log in) to refresh it.")
+                if created_page:
+                    page.close()
+                return []
+        except Exception:
+            pass
+        if not raw_auth:
+            print("[kartis] no ninja-auth in localStorage — Lysted login may be expired.")
+            _save_debug(page, "sales")
+            return []
+        auth = _json.loads(raw_auth)
+        token = auth.get("token")
+        api_base = auth.get("api") or "https://api.lysted.com"
+        if not token:
+            print("[kartis] ninja-auth has no token — login expired.")
+            _save_debug(page, "sales")
+            return []
+        since = (datetime.now() - timedelta(days=LYSTED_SALES_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        url = f"{api_base}/api/sales?search=saledate.min:{since}&dateOffset=240&perPage=500&force=true"
+        resp = page.request.get(url, headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json, text/plain, */*",
+        })
+        if resp.status != 200:
+            print(f"[kartis] lysted sales API returned {resp.status}: {resp.text()[:200]}")
+            return []
+        data = _json.loads(resp.text())
+        records = data.get("rows") or data.get("data") or []
+        out = []
+        seen = set()
+        for rec in records:
+            parsed = _lysted_sale_from_api(rec)
+            if parsed and parsed["id"] not in seen:
+                seen.add(parsed["id"])
+                out.append(parsed)
+        return out
+    finally:
+        if created_page:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+
 def _scrape_lysted_purchases(context):
     url = os.environ.get("LYSTED_PURCHASES_URL", "https://app.lysted.com/purchases")
     page = context.new_page()
@@ -309,6 +459,184 @@ def _scrape_lysted_purchases(context):
             page.wait_for_timeout(1200)
 
         _save_debug(page, "purchases")
+        return out
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+
+VIAGOGO_SALES_TABS = ("Upload E-Tickets", "Upload Transfer Receipts", "Get Paid")
+
+
+def _viagogo_select_tab(page, label):
+    return page.evaluate(
+        """(want) => {
+          for (const li of document.querySelectorAll('li.state')) {
+            const lbl = li.querySelector('.label');
+            if (lbl && lbl.innerText.trim().toLowerCase() === want.toLowerCase()) {
+              if (!li.classList.contains('sel')) li.click();
+              return true;
+            }
+          }
+          return false;
+        }""",
+        label,
+    )
+
+
+def _parse_viagogo_sale_row(cells, tab):
+    """Parse one /Transactions row. Column count varies per tab — find fields by pattern.
+
+    Looking for: a money cell ($X\\nUSD), an order cell starting with '#',
+    a seating cell containing '× <qty>', an event cell with a Mon DD MMM YYYY
+    date, an optional 'UPLOAD BY LATEST' deadline cell, and a row-status badge
+    like 'Upload' or 'Postponed' (only present on the upload tabs).
+    """
+    if not cells:
+        return None
+    raw = "\t".join(cells)
+
+    def _lines(s):
+        return [l.strip() for l in (s or "").splitlines() if l.strip()]
+
+    # Identify cells by content.
+    sale_price = None
+    sale_price_text = None
+    order_cell = None
+    seating_cell = None
+    event_cell = None
+    type_cell = None
+    deadline_cell = None
+    row_status = None
+    for c in cells:
+        text = (c or "").strip()
+        if not text:
+            continue
+        lines = _lines(text)
+        if "$" in text and "USD" in text and sale_price is None:
+            m = re.search(r"\$([\d,]+(?:\.\d+)?)", text)
+            sale_price = _parse_money(m.group(1)) if m else None
+            sale_price_text = text
+            continue
+        if text.startswith("#") and order_cell is None:
+            order_cell = lines
+            continue
+        if "×" in text and seating_cell is None:
+            seating_cell = lines
+            continue
+        if "UPLOAD BY LATEST" in text.upper() and deadline_cell is None:
+            deadline_cell = lines
+            continue
+        if text in ("E-Tickets", "Paper", "Mobile Transfer", "Transfer", "Hard Tickets") and type_cell is None:
+            type_cell = text
+            continue
+        if event_cell is None and len(lines) >= 2 and re.search(r"\d{4}", text):
+            event_cell = lines
+            continue
+        if row_status is None and len(text) <= 24 and not any(ch.isdigit() for ch in text):
+            row_status = text
+
+    if not order_cell or not event_cell:
+        return None
+
+    order_id = order_cell[0].lstrip("#").strip() if order_cell else None
+    sale_date = order_cell[1] if len(order_cell) > 1 else None
+    sale_date_iso = _parse_viagogo_date(sale_date)
+    if sale_date_iso and "T" in sale_date_iso:
+        sale_date_iso = sale_date_iso.split("T", 1)[0]
+
+    event_name = event_cell[0]
+    event_date = event_cell[1] if len(event_cell) > 1 else None
+    venue = event_cell[2] if len(event_cell) > 2 else None
+    event_date_iso = _parse_viagogo_date(event_date)
+    if event_date_iso and "T" in event_date_iso:
+        event_date_iso = event_date_iso.split("T", 1)[0]
+
+    section = None
+    row_label = None
+    seats = None
+    qty = None
+    if seating_cell:
+        section = seating_cell[0] if seating_cell else None
+        if len(seating_cell) > 1:
+            mid = seating_cell[1]
+            mr = re.search(r"Row\s+([^,]+)", mid)
+            ms = re.search(r"Seat\s+([\d\-\s]+)", mid)
+            row_label = mr.group(1).strip() if mr else None
+            seats = ms.group(1).strip() if ms else None
+        for ln in seating_cell:
+            mq = re.search(r"×\s*(\d+)", ln)
+            if mq:
+                qty = int(mq.group(1))
+                break
+
+    upload_deadline = None
+    if deadline_cell and len(deadline_cell) > 1:
+        upload_deadline = deadline_cell[1]
+
+    if not order_id:
+        return None
+    return {
+        "id": order_id,
+        "order_id": order_id,
+        "sale_date": sale_date,
+        "sale_date_iso": sale_date_iso,
+        "event_name": event_name,
+        "event_date": event_date,
+        "event_date_iso": event_date_iso,
+        "venue": venue,
+        "section": section,
+        "row_label": row_label,
+        "seats": seats,
+        "qty": qty,
+        "ticket_type": type_cell,
+        "sale_price": sale_price,
+        "upload_deadline": upload_deadline,
+        "tab": tab,
+        "status": row_status or tab,
+        "raw_cells": raw,
+    }
+
+
+def _scrape_viagogo_sales(context):
+    page = context.new_page()
+    try:
+        page.goto("https://inv.viagogo.com/Transactions", wait_until="domcontentloaded", timeout=15000)
+        try:
+            page.wait_for_selector("li.state", timeout=15000)
+        except Exception as e:
+            print(f"[kartis] viagogo sales tabs never rendered: {e}")
+            _save_debug(page, "viagogo-sales")
+            return []
+        page.wait_for_timeout(1500)
+
+        seen = set()
+        out = []
+        for tab in VIAGOGO_SALES_TABS:
+            ok = _viagogo_select_tab(page, tab)
+            if not ok:
+                continue
+            page.wait_for_timeout(2000)
+            try:
+                page.wait_for_function(
+                    "() => document.querySelector('table tbody tr') != null",
+                    timeout=8000,
+                )
+            except Exception:
+                pass
+            rows_data = page.evaluate(
+                """() => Array.from(document.querySelectorAll('table tbody tr')).map(tr => ({
+                  cells: Array.from(tr.querySelectorAll('td')).map(td => (td.innerText || '').trim())
+                }))"""
+            )
+            for r in rows_data:
+                parsed = _parse_viagogo_sale_row(r.get("cells") or [], tab)
+                if parsed and parsed["id"] not in seen:
+                    seen.add(parsed["id"])
+                    out.append(parsed)
+        _save_debug(page, "viagogo-sales")
         return out
     finally:
         try:
@@ -433,6 +761,146 @@ def _scrape_viagogo(context):
             pass
 
 
+def _parse_crowdvolt_sale_date(text):
+    """Parse e.g. '04/25/26 • 2PM' or '04/25/26'."""
+    if not text:
+        return None
+    head = text.split("•")[0].strip()
+    for fmt in ("%m/%d/%y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(head, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_crowdvolt_event_date(text, sale_iso=None):
+    """Parse 'Sat, April 25 • 9PM'. Year is missing — anchor it to sale year
+    (sales happen before the event), then bump +1 year if the parsed event
+    falls before the sale.
+    """
+    if not text:
+        return None
+    head = text.split("•")[0].strip()
+    head = re.sub(r"^[A-Za-z]{3,9},\s*", "", head)
+    anchor_year = datetime.now().year
+    sale_d = None
+    if sale_iso:
+        try:
+            sale_d = datetime.strptime(sale_iso, "%Y-%m-%d").date()
+            anchor_year = sale_d.year
+        except ValueError:
+            pass
+    for fmt in ("%B %d %Y", "%B %d", "%b %d %Y", "%b %d"):
+        try:
+            d = datetime.strptime(head, fmt).date()
+            if "%Y" not in fmt:
+                d = d.replace(year=anchor_year)
+                if sale_d and d < sale_d:
+                    d = d.replace(year=anchor_year + 1)
+            return d.isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_crowdvolt_row(cells):
+    if len(cells) < 6:
+        return None
+    raw = "\t".join(cells)
+    def _lines(s):
+        return [l.strip() for l in (s or "").splitlines() if l.strip()]
+
+    ev = _lines(cells[0])
+    event_name = ev[0] if ev else None
+
+    # CrowdVolt has rearranged the line order at least once. Old: event,
+    # date, venue, qty/type. New: event, qty/type, date, venue. Recognise
+    # each line by content rather than position.
+    qty = None
+    ticket_type = None
+    event_date = None
+    venue = None
+    qty_pat = re.compile(r"^\s*(\d+)\s*(?:x|Tickets?\s*•?)\s*(.*)$", re.IGNORECASE)
+    for line in ev[1:]:
+        m = qty_pat.match(line)
+        if m and qty is None:
+            qty = int(m.group(1))
+            ticket_type = (m.group(2) or "").strip() or None
+            continue
+        if event_date is None and ("•" in line or re.search(r"\b(?:AM|PM|am|pm)\b", line)):
+            event_date = line
+            continue
+        if venue is None:
+            venue = line
+            continue
+    if not ticket_type and venue and event_date is None:
+        # Fallback for malformed rows
+        ticket_type = venue
+        venue = None
+
+    order_id = (cells[1] or "").strip() or None
+    sale_date = (cells[2] or "").strip() or None
+    sale_date_iso = _parse_crowdvolt_sale_date(sale_date)
+    event_date_iso = _parse_crowdvolt_event_date(event_date, sale_date_iso)
+
+    price_per_ticket = _parse_money((cells[3] or "").strip())
+    sale_price = _parse_money((cells[4] or "").strip())
+    status = (cells[5] or "").strip() or None
+
+    if not order_id:
+        return None
+    return {
+        "id": order_id,
+        "order_id": order_id,
+        "sale_date": sale_date,
+        "sale_date_iso": sale_date_iso,
+        "event_name": event_name,
+        "event_date": event_date,
+        "event_date_iso": event_date_iso,
+        "venue": venue,
+        "qty": qty,
+        "ticket_type": ticket_type,
+        "price_per_ticket": price_per_ticket,
+        "sale_price": sale_price,
+        "status": status,
+        "raw_cells": raw,
+    }
+
+
+def _scrape_crowdvolt_sales(context):
+    url = os.environ.get("CROWDVOLT_SALES_URL", "https://www.crowdvolt.com/dashboard/sales?orderType=completed")
+    page = context.new_page()
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        try:
+            page.wait_for_selector("table tbody tr", timeout=15000)
+        except Exception as e:
+            print(f"[kartis] crowdvolt sales table never rendered: {e}")
+            _save_debug(page, "crowdvolt-sales")
+            return []
+        page.wait_for_timeout(2000)
+        rows_data = page.evaluate(
+            """() => Array.from(document.querySelectorAll('table tbody tr')).map(tr => ({
+              cells: Array.from(tr.querySelectorAll('td')).map(td => (td.innerText || '').trim())
+            }))"""
+        )
+        out = []
+        seen = set()
+        for r in rows_data:
+            parsed = _parse_crowdvolt_row(r.get("cells") or [])
+            if parsed and parsed["id"] not in seen:
+                seen.add(parsed["id"])
+                out.append(parsed)
+        _save_debug(page, "crowdvolt-sales")
+        return out
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+
 def _parse_int(text):
     if text is None:
         return None
@@ -441,7 +909,14 @@ def _parse_int(text):
 
 
 def scrape_all():
-    result = {"lysted": [], "lysted_purchases": [], "viagogo": []}
+    result = {
+        "lysted": [],
+        "lysted_purchases": [],
+        "lysted_sales": [],
+        "viagogo": [],
+        "viagogo_sales": [],
+        "crowdvolt_sales": [],
+    }
     with sync_playwright() as p:
         try:
             browser = p.chromium.connect_over_cdp(CDP_URL)
@@ -472,9 +947,24 @@ def scrape_all():
             print(f"[kartis] lysted purchases scrape failed: {type(e).__name__}: {e}")
 
         try:
+            result["lysted_sales"] = _scrape_lysted_sales(context)
+        except Exception as e:
+            print(f"[kartis] lysted sales scrape failed: {type(e).__name__}: {e}")
+
+        try:
             result["viagogo"] = _scrape_viagogo(context)
         except Exception as e:
             print(f"[kartis] viagogo scrape failed: {type(e).__name__}: {e}")
+
+        try:
+            result["viagogo_sales"] = _scrape_viagogo_sales(context)
+        except Exception as e:
+            print(f"[kartis] viagogo sales scrape failed: {type(e).__name__}: {e}")
+
+        try:
+            result["crowdvolt_sales"] = _scrape_crowdvolt_sales(context)
+        except Exception as e:
+            print(f"[kartis] crowdvolt sales scrape failed: {type(e).__name__}: {e}")
     return result
 
 
@@ -483,11 +973,27 @@ def run_and_save():
     now_iso = datetime.now(timezone.utc).isoformat()
     db.upsert_inventory(data["lysted"], now_iso)
     db.upsert_lysted_purchases(data["lysted_purchases"], now_iso)
+    db.upsert_lysted_sales(data["lysted_sales"], now_iso)
     db.upsert_viagogo(data["viagogo"], now_iso)
+    db.upsert_viagogo_sales(data["viagogo_sales"], now_iso)
+    db.upsert_crowdvolt_sales(data["crowdvolt_sales"], now_iso)
+    matched = 0
+    pending_listed = 0
+    try:
+        import matcher
+        matched, _ = matcher.run_match_pass()
+        pending_listed = matcher.run_pending_match()
+    except Exception as e:
+        print(f"[kartis] matcher pass failed: {type(e).__name__}: {e}")
     return {
         "lysted": len(data["lysted"]),
         "lysted_purchases": len(data["lysted_purchases"]),
+        "lysted_sales": len(data["lysted_sales"]),
         "viagogo": len(data["viagogo"]),
+        "viagogo_sales": len(data["viagogo_sales"]),
+        "crowdvolt_sales": len(data["crowdvolt_sales"]),
+        "auto_matched": matched,
+        "pending_listed": pending_listed,
     }
 
 

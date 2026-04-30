@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Profit</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --bg-3: #11161d;
+    --line: #21262d;
+    --line-2: #2a3038;
+    --text: #c9d1d9;
+    --muted: #6e7681;
+    --accent: #58a6ff;
+    --green: #56d364;
+    --red: #f85149;
+    --amber: #d29922;
+    --orange: #f97316;
+    --purple: #a78bfa;
+    --pink: #f06595;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 28px 0 10px; color: var(--text); }
+  h2:first-of-type { margin-top: 0; }
+  h2 .count { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 11px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 2px; letter-spacing: 0.5px; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  select:focus { outline: none; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 18px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  tbody tr:hover td { background: var(--bg-3); }
+  .bar-cell { display: inline-block; min-width: 60px; height: 4px; background: var(--line); position: relative; vertical-align: middle; margin-right: 6px; }
+  .bar-cell .fill { position: absolute; top: 0; left: 0; bottom: 0; }
+  .bar-cell .fill.lysted { background: var(--accent); }
+  .bar-cell .fill.viagogo { background: var(--orange); }
+  .bar-cell .fill.jerujam { background: var(--purple); }
+  .bar-cell .fill.crowdvolt { background: var(--pink); }
+  .src-mix { display: inline-flex; height: 4px; background: var(--line); width: 100px; vertical-align: middle; }
+  .src-mix span { display: inline-block; height: 100%; }
+  .src-mix .lysted { background: var(--accent); }
+  .src-mix .viagogo { background: var(--orange); }
+  .src-mix .jerujam { background: var(--purple); }
+  .src-mix .crowdvolt { background: var(--pink); }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .muted { color: var(--muted); }
+  .pct { font-size: 10px; letter-spacing: 0.5px; opacity: 0.75; }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>// PROFIT</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit" class="active">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/watchers">WATCHERS</a>
+  </nav>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Sales</div><div class="value" id="t-count">0</div></div>
+    <div class="stat"><div class="label">Tickets Sold</div><div class="value" id="t-qty">0</div></div>
+    <div class="stat green"><div class="label">Total Sales</div><div class="value" id="t-rev">$0</div></div>
+    <div class="stat amber"><div class="label">Cost</div><div class="value" id="t-cost">$0</div></div>
+    <div class="stat green"><div class="label">Profit</div><div class="value" id="t-profit">$0</div><div class="sub" id="t-pct">—</div></div>
+    <div class="stat"><div class="label">Lysted Payout</div><div class="value" id="t-payout">$0</div></div>
+  </div>
+
+  <div class="bar">
+    <select id="q-range">
+      <option value="all">RANGE: ALL TIME</option>
+      <option value="ytd">YTD</option>
+      <option value="mtd">MTD</option>
+      <option value="30">LAST 30D</option>
+      <option value="7">LAST 7D</option>
+    </select>
+    <select id="q-source">
+      <option value="all">SRC: ALL</option>
+      <option value="lysted">LYSTED</option>
+      <option value="viagogo">VIAGOGO</option>
+      <option value="jerujam">JERUJAM</option>
+      <option value="crowdvolt">CROWDVOLT</option>
+    </select>
+  </div>
+
+  <h2>// BY SOURCE</h2>
+  <table>
+    <thead><tr><th>SOURCE</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num">PROFIT</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
+    <tbody id="srcbody"></tbody>
+  </table>
+
+  <h2>// DAILY <span class="count" id="d-count"></span></h2>
+  <table>
+    <thead><tr>
+      <th>DATE</th><th>MIX</th><th class="num">SALES</th><th class="num">TICKETS</th>
+      <th class="num">REVENUE</th><th class="num">COST</th>
+      <th class="num">PROFIT</th><th class="num">MARGIN</th><th class="num">PAYOUT</th>
+    </tr></thead>
+    <tbody id="dbody"></tbody>
+  </table>
+  <div id="dempty" class="empty" style="display:none">// no daily data</div>
+
+  <h2>// MONTHLY</h2>
+  <table>
+    <thead><tr><th>MONTH</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num">PROFIT</th><th class="num">EXPENSES</th><th class="num">NET</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
+    <tbody id="mbody"></tbody>
+  </table>
+</main>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const moneyShort = (n) => {
+  if (n == null) return "—";
+  const a = Math.abs(n);
+  if (a >= 1e6) return "$" + (n/1e6).toFixed(1) + "M";
+  if (a >= 1e3) return "$" + (n/1e3).toFixed(1) + "K";
+  return money(n);
+};
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+let _data = null;
+
+function _inRange(date, range) {
+  if (range === "all") return true;
+  if (!date) return false;
+  const d = new Date(date + "T00:00:00");
+  const now = new Date(); now.setHours(0,0,0,0);
+  if (range === "7" || range === "30") {
+    const min = new Date(now); min.setDate(min.getDate() - Number(range));
+    return d >= min && d <= now;
+  }
+  if (range === "ytd") return d.getFullYear() === now.getFullYear();
+  if (range === "mtd") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  return true;
+}
+
+function profitClass(n) { return n == null ? "muted" : (n >= 0 ? "pos" : "neg"); }
+
+function render() {
+  if (!_data) return;
+  const range = document.getElementById("q-range").value;
+  const src = document.getElementById("q-source").value;
+
+  // Filter daily rows by date range. Source filter is informational on the daily/monthly views — we still show totals from the unfiltered by_source table for accuracy.
+  const days = _data.days.filter(r => _inRange(r.date, range)).filter(r => {
+    if (src === "all") return true;
+    return (r.by_source[src] || 0) > 0;
+  });
+
+  // Recompute totals from filtered days
+  const totals = days.reduce((a, r) => {
+    a.count += r.count; a.qty += r.qty; a.revenue += r.revenue;
+    a.cost += r.cost; a.profit += r.profit; a.payout += r.payout;
+    return a;
+  }, {count:0,qty:0,revenue:0,cost:0,profit:0,payout:0});
+  const tpct = totals.revenue ? (totals.profit / totals.revenue * 100) : null;
+
+  document.getElementById("t-count").textContent = totals.count;
+  document.getElementById("t-qty").textContent = totals.qty;
+  document.getElementById("t-rev").textContent = money(totals.revenue);
+  document.getElementById("t-cost").textContent = money(totals.cost);
+  const tp = document.getElementById("t-profit");
+  tp.textContent = money(totals.profit);
+  tp.parentElement.className = "stat " + (totals.profit >= 0 ? "green" : "red");
+  document.getElementById("t-pct").textContent = tpct == null ? "—" : (tpct >= 0 ? "+" : "") + tpct.toFixed(1) + "% margin";
+  document.getElementById("t-payout").textContent = money(totals.payout);
+
+  // By source table
+  const sb = document.getElementById("srcbody");
+  sb.innerHTML = "";
+  for (const [name, v] of Object.entries(_data.by_source)) {
+    const margin = v.revenue ? (v.profit / v.revenue * 100) : null;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><span class="muted" style="display:inline-block;width:8px;height:8px;background:var(--${name === 'lysted' ? 'accent' : name === 'viagogo' ? 'orange' : name === 'jerujam' ? 'purple' : 'pink'});margin-right:8px;"></span>${name.toUpperCase()}</td>
+      <td class="num">${v.count}</td>
+      <td class="num">${v.qty}</td>
+      <td class="num">${money(v.revenue)}</td>
+      <td class="num">${money(v.cost)}</td>
+      <td class="num ${profitClass(v.profit)}">${money(v.profit)}</td>
+      <td class="num pct ${profitClass(v.profit)}">${margin == null ? "—" : margin.toFixed(1) + "%"}</td>
+      <td class="num">${money(v.payout)}</td>
+    `;
+    sb.appendChild(tr);
+  }
+
+  // Daily
+  const db = document.getElementById("dbody");
+  db.innerHTML = "";
+  for (const r of days) {
+    const margin = r.revenue ? (r.profit / r.revenue * 100) : null;
+    const total = (r.by_source.lysted||0) + (r.by_source.viagogo||0) + (r.by_source.jerujam||0) + (r.by_source.crowdvolt||0);
+    const pct = (n) => total ? (n / total * 100) + "%" : "0%";
+    const mix = `<span class="src-mix">
+      <span class="lysted" style="width:${pct(r.by_source.lysted||0)};"></span>
+      <span class="viagogo" style="width:${pct(r.by_source.viagogo||0)};"></span>
+      <span class="jerujam" style="width:${pct(r.by_source.jerujam||0)};"></span>
+      <span class="crowdvolt" style="width:${pct(r.by_source.crowdvolt||0)};"></span>
+    </span>`;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(r.date)}</td>
+      <td>${mix}</td>
+      <td class="num">${r.count}</td>
+      <td class="num">${r.qty}</td>
+      <td class="num">${money(r.revenue)}</td>
+      <td class="num">${money(r.cost)}</td>
+      <td class="num ${profitClass(r.profit)}">${money(r.profit)}</td>
+      <td class="num pct ${profitClass(r.profit)}">${margin == null ? "—" : margin.toFixed(1) + "%"}</td>
+      <td class="num">${money(r.payout)}</td>
+    `;
+    db.appendChild(tr);
+  }
+  document.getElementById("dempty").style.display = days.length ? "none" : "block";
+  document.getElementById("d-count").textContent = `(${days.length} ${days.length === 1 ? "day" : "days"})`;
+
+  // Monthly
+  const mb = document.getElementById("mbody");
+  mb.innerHTML = "";
+  for (const r of _data.months) {
+    const margin = r.revenue ? (r.profit / r.revenue * 100) : null;
+    const net = r.net_profit != null ? r.net_profit : ((r.profit || 0) - (r.expenses || 0));
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(r.month)}</td>
+      <td class="num">${r.count}</td>
+      <td class="num">${r.qty}</td>
+      <td class="num">${money(r.revenue)}</td>
+      <td class="num">${money(r.cost)}</td>
+      <td class="num ${profitClass(r.profit)}">${money(r.profit)}</td>
+      <td class="num">${money(r.expenses || 0)}</td>
+      <td class="num ${profitClass(net)}">${money(net)}</td>
+      <td class="num pct ${profitClass(r.profit)}">${margin == null ? "—" : margin.toFixed(1) + "%"}</td>
+      <td class="num">${money(r.payout)}</td>
+    `;
+    mb.appendChild(tr);
+  }
+}
+
+async function load() {
+  const r = await fetch("/api/profit/daily");
+  _data = await r.json();
+  document.getElementById("meta").textContent = `${_data.days.length} days // ${_data.months.length} months`;
+  render();
+}
+
+for (const id of ["q-range", "q-source"]) {
+  document.getElementById(id).addEventListener("change", render);
+}
+load();
+</script>
+</body>
+</html>
