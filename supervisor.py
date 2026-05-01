@@ -29,7 +29,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 REPO_DIR = Path(__file__).parent
-PYTHON = REPO_DIR / ".venv" / "Scripts" / "python.exe"
+# venv layout differs across platforms: Scripts/python.exe on Windows, bin/python on POSIX
+PYTHON = REPO_DIR / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 WATCHER = REPO_DIR / "watcher_only.py"
 load_dotenv(REPO_DIR / ".env")
 
