@@ -27,12 +27,13 @@ import db
 import filters as watcher_filters
 import kupat
 import notify
+import tickchak
 import ticketmaster
 
 load_dotenv()
 db.init()
 
-SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat}
+SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak}
 
 import os
 INTERVAL = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)

@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, send_file
 from openpyxl import Workbook
 
+import attachments as attachments_mod
 import db
 import filters as watcher_filters
 import import_jerujam
@@ -20,6 +21,7 @@ import kupat
 import matcher
 import notify
 import scraper
+import tickchak
 import ticketmaster
 
 # Drop-checker sources keyed by the value stored in tm_watchers.source.
@@ -29,6 +31,7 @@ import ticketmaster
 WATCHER_SOURCES = {
     "ticketmaster": ticketmaster,
     "kupat": kupat,
+    "tickchak": tickchak,
 }
 
 
@@ -40,6 +43,8 @@ def _detect_source(url):
     numeric), so existing callers keep working.
     """
     s = (url or "").strip().lower()
+    if "tickchak.co.il" in s:
+        return "tickchak", tickchak
     if "kupat.co.il" in s:
         return "kupat", kupat
     if "ticketmaster.co.il" in s:
@@ -51,6 +56,10 @@ def _detect_source(url):
 load_dotenv()
 
 app = Flask(__name__)
+# Cap multipart uploads (file + form overhead) — slightly above the per-file
+# MAX_BYTES in attachments.py so legitimate uploads aren't rejected by Flask
+# before our route handler can return a friendly error.
+app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024
 db.init()
 
 _last_run = {"at": None, "count": 0, "error": None, "running": False}
@@ -779,7 +788,11 @@ def mockup(name):
 def api_inventory_all():
     rows, skipped = _build_unified_inventory()
     by_source = {"lysted": 0, "viagogo": 0, "jerujam": 0}
+    manual_ids = [str(r.get("source_id")) for r in rows if r.get("source") == "manual"]
+    atts_by_owner = db.list_attachments_for_owners("manual_inventory", manual_ids)
     for r in rows:
+        if r.get("source") == "manual":
+            r["attachments"] = atts_by_owner.get(str(r.get("source_id")), [])
         by_source[r["source"]] = by_source.get(r["source"], 0) + 1
     totals = {
         "rows": len(rows),
@@ -991,6 +1004,11 @@ def api_sales_unhide():
     return jsonify({"ok": True})
 
 
+@app.route("/pending")
+def pending_page():
+    return render_template("pending.html")
+
+
 @app.route("/api/inventory/manual-add", methods=["POST"])
 def api_inventory_manual_add():
     from flask import request
@@ -1040,6 +1058,64 @@ def api_inventory_manual_delete():
     if not id_:
         return jsonify({"error": "id required"}), 400
     db.delete_manual_inventory(id_)
+    # Drop the DB attachment rows but leave the files on disk so they
+    # survive in OneDrive sync (per user preference).
+    db.delete_attachments_for_owner("manual_inventory", id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/inventory/manual-attach", methods=["POST"])
+def api_inventory_manual_attach():
+    from flask import request
+    ticket_id = (request.form.get("ticket_id") or "").strip()
+    if not ticket_id:
+        return jsonify({"error": "ticket_id required"}), 400
+    # Confirm the pending row actually exists so we don't accept uploads for
+    # arbitrary owner_ids.
+    existing = {m["id"] for m in db.all_manual_inventory()}
+    if ticket_id not in existing:
+        return jsonify({"error": "unknown ticket_id"}), 404
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "file required"}), 400
+    # Probe size cheaply via stream seek; werkzeug's FileStorage wraps a
+    # SpooledTemporaryFile so this is fine even for the 25 MB ceiling.
+    f.stream.seek(0, 2)
+    size = f.stream.tell()
+    f.stream.seek(0)
+    if size > attachments_mod.MAX_BYTES:
+        return jsonify({"error": f"file too large (>{attachments_mod.MAX_BYTES} bytes)"}), 413
+    row = attachments_mod.save_upload("manual_inventory", ticket_id, f)
+    return jsonify({"ok": True, "attachment": row})
+
+
+@app.route("/api/attachments/<att_id>/download")
+def api_attachment_download(att_id):
+    row = db.get_attachment(att_id)
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    try:
+        path = attachments_mod.disk_path(row)
+    except ValueError:
+        return jsonify({"error": "invalid path"}), 400
+    if not path.exists():
+        return jsonify({"error": "file missing"}), 404
+    return send_file(
+        str(path),
+        as_attachment=True,
+        download_name=row.get("filename") or "file",
+        mimetype=row.get("content_type") or None,
+    )
+
+
+@app.route("/api/attachments/delete", methods=["POST"])
+def api_attachment_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    attachments_mod.delete(id_)
     return jsonify({"ok": True})
 
 
@@ -1906,10 +1982,11 @@ def _add_one_watcher(url, label=None):
         "id": wid, "label": final_label, "source": src_name,
         "event_code": event_code, "perf_code": perf_code,
         "paused": 0, "muted": 0, "notify_channels": "discord,email",
-        # Default new watchers to exclude singles — most users want pairs.
-        # Existing watchers stay unfiltered (filters column is NULL on
-        # legacy rows) until the user opts in.
-        "filters": json.dumps({"min_group_size": 2}),
+        # Each source picks its own default filter. Seated sources
+        # (ticketmaster, kupat) default to {min_group_size: 2} (exclude
+        # singles); GA sources (tickchak) override to {min_group_size: 1}
+        # since adjacency doesn't apply to ticket-type buckets.
+        "filters": json.dumps(getattr(src, "DEFAULT_FILTERS", {"min_group_size": 2})),
     }, datetime.now(timezone.utc).isoformat())
     w = db.tm_get_watcher(wid)
     warning = None

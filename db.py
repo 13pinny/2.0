@@ -288,6 +288,17 @@ CREATE TABLE IF NOT EXISTS jerujam_expenses (
     created_at TEXT,
     last_seen_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY,
+    owner_type TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    stored_path TEXT NOT NULL,
+    size_bytes INTEGER,
+    content_type TEXT,
+    uploaded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_owner ON attachments(owner_type, owner_id);
 CREATE TABLE IF NOT EXISTS tm_watchers (
     id TEXT PRIMARY KEY,
     label TEXT,
@@ -1051,6 +1062,67 @@ def delete_owed_item(id_):
         conn.execute("DELETE FROM owed_items WHERE id = ?", (id_,))
 
 
+def insert_attachment(row):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO attachments (id, owner_type, owner_id, filename,
+                stored_path, size_bytes, content_type, uploaded_at)
+            VALUES (:id, :owner_type, :owner_id, :filename,
+                :stored_path, :size_bytes, :content_type, :uploaded_at)
+            """,
+            row,
+        )
+
+
+def get_attachment(id_):
+    with connect() as conn:
+        r = conn.execute("SELECT * FROM attachments WHERE id = ?", (id_,)).fetchone()
+    return dict(r) if r else None
+
+
+def list_attachments(owner_type, owner_id):
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM attachments WHERE owner_type = ? AND owner_id = ? "
+            "ORDER BY uploaded_at",
+            (owner_type, owner_id),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_attachments_for_owners(owner_type, owner_ids):
+    """Batched version of list_attachments — used by /api/inventory-all to
+    avoid an N+1 query when enriching every pending row."""
+    ids = list({str(x) for x in owner_ids if x is not None})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM attachments WHERE owner_type = ? "
+            f"AND owner_id IN ({placeholders}) ORDER BY uploaded_at",
+            (owner_type, *ids),
+        ).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["owner_id"], []).append(dict(r))
+    return out
+
+
+def delete_attachment(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM attachments WHERE id = ?", (id_,))
+
+
+def delete_attachments_for_owner(owner_type, owner_id):
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM attachments WHERE owner_type = ? AND owner_id = ?",
+            (owner_type, owner_id),
+        )
+
+
 def insert_maaser(row, now_iso):
     with connect() as conn:
         conn.execute(
@@ -1090,14 +1162,15 @@ def tm_insert_watcher(row, now_iso):
         conn.execute(
             """
             INSERT INTO tm_watchers (id, label, source, event_code, perf_code,
-                paused, muted, notify_channels, created_at)
+                paused, muted, notify_channels, filters, created_at)
             VALUES (:id, :label, :source, :event_code, :perf_code,
-                :paused, :muted, :notify_channels, :created_at)
+                :paused, :muted, :notify_channels, :filters, :created_at)
             """,
             {
                 "muted": 0,
                 "notify_channels": "discord,email",
                 "source": "ticketmaster",
+                "filters": None,
                 **row,
                 "created_at": now_iso,
             },
