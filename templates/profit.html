@@ -128,7 +128,19 @@
   </table>
   <div id="dempty" class="empty" style="display:none">// no daily data</div>
 
-  <h2>// MONTHLY</h2>
+  <h2 style="display:flex; align-items:baseline; gap:14px;">
+    // MONTHLY
+    <span class="pill-bar" style="display:inline-flex; gap:4px; margin:0;">
+      <button type="button" class="pill" id="mview-event">By event date</button>
+      <button type="button" class="pill" id="mview-sale">By sale date</button>
+    </span>
+    <span class="muted" id="mview-hint" style="font-size:11px;"></span>
+  </h2>
+  <style>
+    .pill-bar .pill { font-family: inherit; font-size: 10px; letter-spacing: 1.5px; padding: 5px 12px; border: 1px solid var(--line); background: var(--bg-2); color: var(--muted); cursor: pointer; text-transform: uppercase; }
+    .pill-bar .pill:hover { background: #1f262e; color: var(--text); }
+    .pill-bar .pill.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.06); }
+  </style>
   <table>
     <thead><tr><th>MONTH</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num">PROFIT</th><th class="num">EXPENSES</th><th class="num">NET</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
     <tbody id="mbody"></tbody>
@@ -146,6 +158,10 @@ const moneyShort = (n) => {
 };
 const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 let _data = null;
+// Default to event-date buckets — that's the canonical "May profit"
+// the user wants and what the Maaser obligation reads from. The toggle
+// flips it for cash-flow inspection.
+let _monthView = (typeof localStorage !== "undefined" && localStorage.getItem("profit.monthView")) || "event";
 
 function _inRange(date, range) {
   if (range === "all") return true;
@@ -241,10 +257,17 @@ function render() {
   document.getElementById("dempty").style.display = days.length ? "none" : "block";
   document.getElementById("d-count").textContent = `(${days.length} ${days.length === 1 ? "day" : "days"})`;
 
-  // Monthly
+  // Monthly — toggle between sale-date and event-date bucketing.
   const mb = document.getElementById("mbody");
   mb.innerHTML = "";
-  for (const r of _data.months) {
+  const monthRows = (_monthView === "sale" ? _data.months : (_data.months_by_event || _data.months)) || [];
+  document.getElementById("mview-event").classList.toggle("active", _monthView === "event");
+  document.getElementById("mview-sale").classList.toggle("active", _monthView === "sale");
+  document.getElementById("mview-hint").textContent =
+    _monthView === "event"
+      ? "= profit attributed to the month each event takes place in"
+      : "= profit by the month each ticket was sold (cash-flow style)";
+  for (const r of monthRows) {
     const margin = r.revenue ? (r.profit / r.revenue * 100) : null;
     const net = r.net_profit != null ? r.net_profit : ((r.profit || 0) - (r.expenses || 0));
     const tr = document.createElement("tr");
@@ -270,6 +293,16 @@ async function load() {
   document.getElementById("meta").textContent = `${_data.days.length} days // ${_data.months.length} months`;
   render();
 }
+
+function _setMonthView(v) {
+  _monthView = v;
+  try { localStorage.setItem("profit.monthView", v); } catch (_) {}
+  if (_data) render();
+}
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("mview-event").addEventListener("click", () => _setMonthView("event"));
+  document.getElementById("mview-sale").addEventListener("click", () => _setMonthView("sale"));
+});
 
 for (const id of ["q-range", "q-source"]) {
   document.getElementById(id).addEventListener("change", render);

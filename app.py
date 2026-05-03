@@ -18,6 +18,7 @@ import db
 import filters as watcher_filters
 import import_jerujam
 import kupat
+import mail_intake
 import matcher
 import notify
 import scraper
@@ -76,6 +77,32 @@ _jerujam_lock = threading.Lock()
 _last_tm = {"at": None, "checked": 0, "drops": 0, "errors": 0, "running": False}
 _tm_lock = threading.Lock()
 TM_CHECK_INTERVAL_SECONDS = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
+
+_last_intake = {"at": None, "fetched": 0, "saved": 0, "skipped_dupe": 0, "errors": 0, "error": None, "running": False}
+_intake_lock = threading.Lock()
+INTAKE_INTERVAL_MINUTES = int(os.getenv("KARTIS_INTAKE_INTERVAL_MINUTES") or 10)
+
+
+def run_mail_intake():
+    if not _intake_lock.acquire(blocking=False):
+        return
+    _last_intake["running"] = True
+    try:
+        summary = mail_intake.run_intake()
+        _last_intake.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=None,
+            **summary,
+        )
+    except Exception as e:
+        _last_intake.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_intake["running"] = False
+        _intake_lock.release()
 
 
 def run_jerujam_import():
@@ -858,7 +885,8 @@ def _profit_response():
         bucket["payout"] += (r.get("payout") or 0)
         by_source["lysted"]["payout"] += (r.get("payout") or 0)
 
-    # Build month rollup from days
+    # Build month rollup from days (sale-month: bucketed by when the
+    # ticket was sold). This is the cash-flow-style view.
     for d, row in by_day.items():
         m = d[:7]  # YYYY-MM
         mb = by_month.setdefault(m, {"month": m, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0})
@@ -866,8 +894,43 @@ def _profit_response():
         mb["revenue"] += row["revenue"]; mb["cost"] += row["cost"]
         mb["profit"] += row["profit"]; mb["payout"] += row["payout"]
 
+    # Build a parallel month rollup keyed by EVENT date — "May events"
+    # means sales for shows that take place in May, regardless of when
+    # the sale itself happened. This is the view the dashboard treats as
+    # canonical for monthly profit (and what the Maaser obligation reads
+    # from). Sales whose event_date is unknown fall back to sale_date so
+    # totals still tie out across both views.
+    by_month_event = {}
+    for s in sales:
+        ev_date = (s.get("event_date_iso") or "")[:10]
+        if not ev_date or not ev_date.startswith("20"):
+            ev_date = (s.get("sale_date_iso") or "")[:10]
+        if not ev_date or not ev_date.startswith("20"):
+            continue
+        m_key = ev_date[:7]
+        rev = s.get("sale_price") or 0
+        cost = s.get("cost") or 0
+        qty = s.get("qty") or 0
+        mb = by_month_event.setdefault(m_key, {"month": m_key, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0})
+        mb["count"] += 1; mb["qty"] += qty
+        mb["revenue"] += rev; mb["cost"] += cost
+        mb["profit"] += (rev - cost)
+    # Lysted payout still tracked per sale-month; carry the per-sale
+    # payout into the event-month bucket as well so it stays comparable.
+    sales_by_id = {(s.get("source"), s.get("sale_id")): s for s in sales}
+    for r in db.all_lysted_sales():
+        s_match = sales_by_id.get(("lysted", str(r.get("id"))))
+        ev_date_iso = (s_match or {}).get("event_date_iso") or (r.get("sale_date_iso") or "")
+        ev_date = (ev_date_iso or "")[:10]
+        if not ev_date or not ev_date.startswith("20"):
+            continue
+        m_key = ev_date[:7]
+        mb = by_month_event.setdefault(m_key, {"month": m_key, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0})
+        mb["payout"] += (r.get("payout") or 0)
+
     days = sorted(by_day.values(), key=lambda r: r["date"], reverse=True)
     months = sorted(by_month.values(), key=lambda r: r["month"], reverse=True)
+    months_by_event = sorted(by_month_event.values(), key=lambda r: r["month"], reverse=True)
 
     # Round and add profit_pct
     def _finish(row):
@@ -878,6 +941,7 @@ def _profit_response():
         return row
     days = [_finish(r) for r in days]
     months = [_finish(r) for r in months]
+    months_by_event = [_finish(r) for r in months_by_event]
     for k, v in by_source.items():
         _finish(v)
 
@@ -890,7 +954,9 @@ def _profit_response():
         "payout": sum(r["payout"] for r in days),
     })
 
-    # Layer in operating expenses at month-level (subscriptions + one-offs)
+    # Layer in operating expenses at month-level (subscriptions + one-offs).
+    # Expenses are tied to when they were paid (calendar month), not to any
+    # particular event — so the same expense number applies to BOTH views.
     expenses_by_month = {}
     for e in db.all_expenses():
         mk = (e.get("date_iso") or "")[:7]
@@ -900,11 +966,20 @@ def _profit_response():
     for m in months:
         m["expenses"] = round(expenses_by_month.get(m["month"], 0), 2)
         m["net_profit"] = round((m.get("profit") or 0) - m["expenses"], 2)
+    for m in months_by_event:
+        m["expenses"] = round(expenses_by_month.get(m["month"], 0), 2)
+        m["net_profit"] = round((m.get("profit") or 0) - m["expenses"], 2)
     totals_expenses = round(sum(expenses_by_month.values()), 2)
     totals["expenses"] = totals_expenses
     totals["net_profit"] = round((totals.get("profit") or 0) - totals_expenses, 2)
 
-    return {"days": days, "months": months, "totals": totals, "by_source": by_source}
+    return {
+        "days": days,
+        "months": months,                     # by sale date
+        "months_by_event": months_by_event,   # by event date — canonical view
+        "totals": totals,
+        "by_source": by_source,
+    }
 
 
 @app.route("/api/profit/daily")
@@ -1007,6 +1082,116 @@ def api_sales_unhide():
 @app.route("/pending")
 def pending_page():
     return render_template("pending.html")
+
+
+@app.route("/api/pending-intake")
+def api_pending_intake():
+    rows = db.all_pending_intake(status="new")
+    ids = [r["id"] for r in rows]
+    atts = db.list_attachments_for_owners("manual_intake", ids)
+    for r in rows:
+        r["attachments"] = atts.get(r["id"], [])
+    return jsonify({
+        "rows": rows,
+        "last_intake": _last_intake,
+    })
+
+
+@app.route("/api/pending-intake/poll", methods=["POST"])
+def api_pending_intake_poll():
+    if _intake_lock.locked():
+        return jsonify({"ok": False, "error": "already running"}), 429
+    threading.Thread(target=run_mail_intake, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/pending-intake/confirm", methods=["POST"])
+def api_pending_intake_confirm():
+    """Promote a pending_intake row + its attachments to a manual_inventory
+    row. The user can override any of the parsed fields in the request body
+    (the UI sends the edited values straight from the modal). Files stay on
+    disk where they were saved during intake — we just rename the on-disk
+    folder and re-point the DB attachment rows at the new owner_id."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    intake_id = (body.get("id") or "").strip()
+    if not intake_id:
+        return jsonify({"error": "id required"}), 400
+    intake = db.get_pending_intake(intake_id)
+    if not intake:
+        return jsonify({"error": "not found"}), 404
+    event_name = (body.get("event_name") or intake.get("event_name") or "").strip()
+    if not event_name:
+        return jsonify({"error": "event_name required"}), 400
+    try:
+        qty = int(body.get("qty") or intake.get("qty") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    if qty <= 0:
+        return jsonify({"error": "qty must be > 0"}), 400
+    cost_per = body.get("cost_per_unit") if "cost_per_unit" in body else intake.get("cost_per_unit")
+    try:
+        cost_per = float(cost_per) if cost_per not in (None, "") else None
+    except (TypeError, ValueError):
+        cost_per = None
+    iso = (body.get("event_date_iso") or intake.get("event_date_iso") or "").strip()
+    new_id = "pending-" + uuid.uuid4().hex[:12]
+    row = {
+        "id": new_id,
+        "event_name": event_name,
+        "event_date": iso,
+        "event_date_iso": iso,
+        "venue": (body.get("venue") or intake.get("venue") or "").strip(),
+        "section": (body.get("section") or intake.get("section") or "").strip(),
+        "row_label": (body.get("row") or body.get("row_label") or intake.get("row_label") or "").strip(),
+        "seats": (body.get("seats") or intake.get("seats") or "").strip(),
+        "qty": qty,
+        "cost_per_unit": cost_per,
+        "note": (body.get("note") or "").strip(),
+        "email": (body.get("email") or intake.get("email_from") or "").strip(),
+    }
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.insert_manual_inventory(row, now_iso)
+    # Move the on-disk folder so the new owner_id matches the file path.
+    old_dir = attachments_mod.ATTACH_DIR / intake_id
+    new_dir = attachments_mod.ATTACH_DIR / new_id
+    if old_dir.exists():
+        try:
+            old_dir.rename(new_dir)
+        except OSError:
+            pass
+    # Update each attachment row: change owner_type/owner_id + stored_path prefix.
+    for a in db.list_attachments("manual_intake", intake_id):
+        new_stored = a["stored_path"].replace(intake_id, new_id, 1)
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE attachments SET owner_type=?, owner_id=?, stored_path=? WHERE id=?",
+                ("manual_inventory", new_id, new_stored, a["id"]),
+            )
+    db.update_pending_intake(intake_id, {"status": "confirmed"})
+    return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/pending-intake/reject", methods=["POST"])
+def api_pending_intake_reject():
+    """Drop the intake row + its attachments. Disk files are deleted too —
+    rejection means we don't want them; if the user changes their mind they
+    can re-forward the email."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    intake_id = (body.get("id") or "").strip()
+    if not intake_id:
+        return jsonify({"error": "id required"}), 400
+    for a in db.list_attachments("manual_intake", intake_id):
+        attachments_mod.delete(a["id"])
+    db.delete_pending_intake(intake_id)
+    intake_dir = attachments_mod.ATTACH_DIR / intake_id
+    if intake_dir.exists():
+        try:
+            intake_dir.rmdir()
+        except OSError:
+            pass
+    return jsonify({"ok": True})
 
 
 @app.route("/api/inventory/manual-add", methods=["POST"])
@@ -1163,12 +1348,14 @@ def _ensure_subscription_instances():
 
 
 def _maaser_summary():
-    """Owed = sum over months of max(0, profit − expenses) × 0.10.
-    Given = sum of maaser_payments. Outstanding = owed − given."""
+    """Owed = sum over EVENT-months of max(0, profit − expenses) × 0.10.
+    Maaser is calculated against the month each event takes place in,
+    not the month its tickets were sold. Given = sum of maaser_payments.
+    Outstanding = owed − given."""
     profit_resp = _profit_response()
     owed_by_month = {}
     net_by_month = {}
-    for m in profit_resp["months"]:
+    for m in profit_resp["months_by_event"]:
         net = (m.get("profit") or 0) - (m.get("expenses") or 0)
         net_by_month[m["month"]] = round(net, 2)
         owed_by_month[m["month"]] = round(max(0, net) * 0.10, 2)
@@ -2202,6 +2389,7 @@ scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
 scheduler.add_job(run_tm_check, "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
+scheduler.add_job(run_mail_intake, "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
 scheduler.start()
 
 threading.Thread(target=run_backup, daemon=True).start()
