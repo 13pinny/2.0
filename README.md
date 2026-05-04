@@ -233,6 +233,19 @@ on a single machine they're interchangeable.
 Keep the Chrome window open (minimized is fine). The hourly scraper
 attaches to it silently. If you close it, re-run `start.bat`.
 
+### Browser-only launcher (no Flask)
+
+If you only want the logged-in Chrome up — without the dashboard —
+double-click **`start_chrome.bat`**. It opens Chrome with all three
+sites as tabs (Lysted, Viagogo, CrowdVolt) using the same `user_data/`
+profile so your sessions persist. The scraper still attaches to it on
+port 9222 the next time you run `app.py`.
+
+To make Chrome auto-launch on every Windows login (so the dashboard
+just works whenever you fire it up), run **`install_autostart.bat`**
+once. It creates a "Kartis Chrome Login" shortcut in your Windows
+Startup folder. Delete it from `shell:startup` to undo.
+
 ---
 
 ## Troubleshooting
@@ -280,6 +293,8 @@ edits or the auth cache expired. SSH/RDP into the home server, run
 | `matcher.py` | Pairs JeruJam tickets to Lysted/Viagogo sales. |
 | `db.py` | SQLite schema + helpers. |
 | `start.bat` | One-click main-PC launcher (login + Flask). |
+| `start_chrome.bat` | Silent Chrome-only launcher; opens Lysted/Viagogo/CrowdVolt as tabs. |
+| `install_autostart.bat` | One-time setup — drops `start_chrome.bat` into Windows Startup. |
 | `start_watcher.bat` | One-click watcher launcher. |
 | `start_supervised.bat` | One-click watcher + auto-update launcher. |
 | `kartis.db` | Local DB. **Not committed to git** — each install gets its own. |
