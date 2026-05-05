@@ -148,7 +148,10 @@ def _http_get_html(url, referer=None):
 
 
 _EV_JS_RE = re.compile(
-    r'src=["\'](https://static\.tickchak\.co\.il/js/ev_[A-Za-z0-9_\-]+\.js)["\']',
+    # The static URL includes dots in the middle ("…_he.js_<uuid>.js"),
+    # so the character class must include `.` — without it the regex
+    # stops at the first `.js` infix and we never find the script tag.
+    r'src=["\'](https://static\.tickchak\.co\.il/js/ev_[A-Za-z0-9_.\-]+\.js)["\']',
     re.IGNORECASE,
 )
 _FORM_BUTTON_RE = re.compile(r"tickchak_form_button\s*=\s*(\{[^}]*\})")
@@ -387,7 +390,12 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
             "venueCity": venue_city,
             "firstPerfMs": perf_ms,
             "firstPerfText": perf_text,
-            "totalSeats": None,        # tickchak doesn't expose a count
+            # Tickchak doesn't expose a venue dot-count, so we report the
+            # number of distinct ticket types instead. The dashboard's
+            # "X / Y" cell then reads "26 / 28" — i.e. 26 of 28 ticket
+            # types are currently buyable. Approximate but consistent
+            # with how the seat-plan sources show capacity utilization.
+            "totalSeats": (len(blocks) or None),
             "status": ("selling" if any_in_stock else ("soldout" if blocks else "unknown")),
         },
         "blocks": blocks,
