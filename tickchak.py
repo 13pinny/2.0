@@ -1,15 +1,30 @@
-"""tickchak.co.il drop checker — server-rendered HTML + JSON-LD.
+"""tickchak.co.il drop checker — page HTML + cached event JS.
 
-Tickchak is the simplest source so far: every event page already embeds a
-schema.org Event with an `offers` array as inline `<script
-type="application/ld+json">`. Each Offer is a *ticket TYPE* (e.g. "Men's
-Ticket", "Accessible Seat", "Donation tier") with `availability` set to
-either "in_stock" or "out_of_stock". No XHR, no captcha, no API key — just
-fetch the page and parse the JSON.
+Tickchak's public event page exposes two complementary sources we
+combine for accurate state:
 
-Granularity gotcha: tickchak does NOT expose seat numbers. A "drop" here
-means a ticket type flipping back to in_stock. Notifications read like
-"Type X (₪Y) is now available!" rather than "Section 3 row B seat 12."
+  1. Schema.org JSON-LD inside the page HTML (`<script
+     type="application/ld+json">`). Always reachable, includes the
+     event title, venue, start time, and an `offers` array — one Offer
+     per ticket TYPE (Adult, Concession, Accessible…) with `price` +
+     `availability` string. **But the availability flag here is STALE
+     SEO markup** — it says `in_stock` even for fully sold-out events.
+     We use it for names + prices only.
+
+  2. The cached static event JS (`static.tickchak.co.il/js/ev_<hash>_t…`)
+     — referenced by the page HTML. Inside there's a JS literal
+     `tickchak_form_button={"enabled":"0|1","title":"SOLD OUT|…"}`
+     which IS the live signal: enabled=1 means the buy button is
+     live and at least one ticket type is purchasable. The endpoint
+     requires a `Referer: tickchak.co.il/<event>` header but otherwise
+     works over plain urllib — no browser needed.
+
+We poll both per tick. If `enabled="1"`, every JSON-LD Offer flagged
+in_stock is reported as a virtual seat (one per ticket TYPE — tickchak
+doesn't expose per-seat granularity, just per-type buckets). If
+`enabled="0"`, we return [] regardless of what JSON-LD claims, which
+suppresses the false-positive "drop" the SEO markup would otherwise
+trigger on every sold-out event.
 
 URL forms accepted:
   https://tickchak.co.il/mada26          — slug
@@ -17,9 +32,9 @@ URL forms accepted:
   https://tickchak.co.il/103350          — numeric event id
   mada26                                  — bare slug shorthand
 
-Note on slug vs numeric: both forms work and reach the same event, but we
-DON'T auto-dedupe — a watcher added as "mada26" and one added as "103350"
-will both poll. Document this explicitly so the user picks one form.
+Note on slug vs numeric: both reach the same event, but we DON'T
+auto-dedupe — a watcher added as "mada26" and one added as "103350"
+will both poll. Pick one form per event.
 """
 import gzip
 import json
@@ -113,8 +128,13 @@ def perf_url(event_code, perf_code="0"):
 
 # --- HTTP + JSON-LD parsing ----------------------------------------------
 
-def _http_get_html(url):
-    req = urllib.request.Request(url, headers=REQUEST_HEADERS)
+def _http_get_html(url, referer=None):
+    """Plain GET → decoded text. The static.tickchak.co.il endpoint 403s
+    without a tickchak.co.il Referer; pass it through here."""
+    headers = dict(REQUEST_HEADERS)
+    if referer:
+        headers["Referer"] = referer
+    req = urllib.request.Request(url, headers=headers)
     try:
         resp = urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
     except urllib.error.HTTPError as e:
@@ -125,6 +145,35 @@ def _http_get_html(url):
     if resp.headers.get("Content-Encoding") == "gzip":
         raw = gzip.decompress(raw)
     return raw.decode("utf-8", errors="replace")
+
+
+_EV_JS_RE = re.compile(
+    r'src=["\'](https://static\.tickchak\.co\.il/js/ev_[A-Za-z0-9_\-]+\.js)["\']',
+    re.IGNORECASE,
+)
+_FORM_BUTTON_RE = re.compile(r"tickchak_form_button\s*=\s*(\{[^}]*\})")
+
+
+def _fetch_form_button_state(event_code, page_html):
+    """Returns ``{"enabled": "0"|"1", "title": str}`` from the live cached
+    event JS, or None if it can't be located. The JS URL is dynamic
+    (cache-busted with a UUID per response) so we extract it from the page
+    HTML each time, then GET it with the right Referer header."""
+    m = _EV_JS_RE.search(page_html)
+    if not m:
+        return None
+    js_url = m.group(1)
+    try:
+        js = _http_get_html(js_url, referer=f"{SITE_BASE}/{event_code}")
+    except TickchakError:
+        return None
+    fb = _FORM_BUTTON_RE.search(js)
+    if not fb:
+        return None
+    try:
+        return json.loads(fb.group(1))
+    except json.JSONDecodeError:
+        return None
 
 
 _LD_RE = re.compile(
@@ -219,15 +268,27 @@ def _block_label(name, price):
 
 
 def fetch_selectable_seats(event_code, perf_code="0"):
-    """Return one normalized "seat" dict per in-stock Offer. Each entry is
-    a single ticket-type bucket (no per-seat granularity) but the schema
-    matches the other sources: block / row / seat keys."""
+    """Return one normalized "seat" dict per in-stock Offer.
+
+    Two-source check: page HTML + the live event JS's `form_button`.
+    JSON-LD's `availability` is stale on tickchak (server-rendered SEO
+    markup says in_stock even for sold-out events), so we gate every
+    Offer on the live form_button.enabled flag. If the buy button is
+    disabled site-wide, we return []. If it's enabled, every JSON-LD
+    Offer becomes a virtual seat — that's the only granularity tickchak
+    exposes for an "is this event buyable" check."""
     html = _http_get_html(perf_url(event_code))
+    fb = _fetch_form_button_state(event_code, html) or {}
+    if str(fb.get("enabled", "")).strip() != "1":
+        return []
     ld = _extract_jsonld_event(html) or {}
     offers = _normalize_offers(ld.get("offers"))
     out = []
     for o in offers:
-        if not _availability_in_stock(o.get("availability")):
+        # JSON-LD availability is stale; we already know the event is
+        # selling, so default any unmarked Offer to in_stock too.
+        avail = o.get("availability")
+        if avail and not _availability_in_stock(avail):
             continue
         name = (o.get("name") or "").strip() or "כרטיס"
         price = _parse_price(o.get("price"))
@@ -237,6 +298,16 @@ def fetch_selectable_seats(event_code, perf_code="0"):
             "seat": "1",
             "price": price,
             "raw": o,
+        })
+    # No JSON-LD Offers at all but the button is live? Emit a single
+    # opaque "tickets are buyable" placeholder so the user still gets a ping.
+    if not out:
+        out.append({
+            "block": (fb.get("original_title") or "כרטיסים").strip() or "tickets",
+            "row": "GA",
+            "seat": "1",
+            "price": None,
+            "raw": fb,
         })
     return out
 
@@ -263,18 +334,24 @@ def _cache_path(event_code, lang):
 def fetch_fresh(event_code, perf_code="0", lang="iw"):
     """Single page fetch → labels payload. Same shape as
     `kupat.fetch_fresh` and `labels.fetch_fresh` so app.py / notify.py /
-    filter modal don't need per-source branching."""
+    filter modal don't need per-source branching.
+
+    Status is derived from the live form_button rather than the JSON-LD
+    availability fields (which are stale SEO markup on tickchak)."""
     html = _http_get_html(perf_url(event_code))
     ld = _extract_jsonld_event(html) or {}
+    fb = _fetch_form_button_state(event_code, html) or {}
+    button_enabled = str(fb.get("enabled", "")).strip() == "1"
 
     offers = _normalize_offers(ld.get("offers"))
     blocks = {}
-    any_in_stock = False
     for o in offers:
         name = (o.get("name") or "").strip() or "כרטיס"
-        in_stock = _availability_in_stock(o.get("availability"))
-        if in_stock:
-            any_in_stock = True
+        # Treat each Offer as in_stock iff the global button is live AND
+        # the JSON-LD doesn't explicitly mark it out_of_stock.
+        avail_raw = o.get("availability")
+        ld_in_stock = _availability_in_stock(avail_raw) if avail_raw else True
+        in_stock = button_enabled and ld_in_stock
         price = _parse_price(o.get("price"))
         # Composite key keeps (name, price) Offers distinct so the filter
         # modal can exclude a specific price-point, not the whole name.
@@ -290,6 +367,7 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
             "currency": o.get("priceCurrency") or "ILS",
             "availability": "in_stock" if in_stock else "out_of_stock",
         }
+    any_in_stock = button_enabled
 
     location = ld.get("location") if isinstance(ld.get("location"), dict) else {}
     address = location.get("address") if isinstance(location.get("address"), dict) else {}

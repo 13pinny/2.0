@@ -52,6 +52,10 @@ def _detect_source(url):
         return "ticketmaster", ticketmaster
     if re.fullmatch(r"\s*\d+\s*/\s*\d+\s*", s or ""):
         return "kupat", kupat
+    # Bare slug shorthand with no slash, scheme, or query string — most
+    # likely a tickchak event slug (e.g. "mada26", "103350").
+    if re.fullmatch(r"\s*[a-z0-9_\-]{2,}\s*", s or "") and "/" not in s and "?" not in s:
+        return "tickchak", tickchak
     return "ticketmaster", ticketmaster
 
 load_dotenv()
@@ -252,8 +256,24 @@ def _resolve_iso(row):
     return _date_only(row.get("event_date_iso") or _parse_event_date(row.get("event_date")))
 
 
-def _event_key(event_name, iso):
-    return (_norm(event_name), iso or "")
+def _norm_venue(s):
+    """Normalize a venue string for cluster/dedupe matching.
+    Drops the trailing ", City" / ", City, State" suffix that some sources
+    (Lysted in particular) tack on, strips a leading "The ", and lowercases.
+    Lets us treat "The Eastern" / "The Eastern, Atlanta" as the same room
+    while keeping "The Eastern" and "District Atlanta" — same artist, same
+    night, two distinct venues — apart.
+    """
+    s = (s or "").lower()
+    # Drop city/state suffix after the first comma.
+    s = s.split(",", 1)[0]
+    s = re.sub(r"^the\s+", "", s)
+    s = re.sub(r"[^a-z0-9 ]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _event_key(event_name, iso, venue=None):
+    return (_norm(event_name), iso or "", _norm_venue(venue))
 
 
 _INV_NUMERIC = {"qty_unsold", "cost", "cost_per_unit", "list_price"}
@@ -267,52 +287,169 @@ def _norm_event_name(s):
 
 
 def _event_groups():
-    """Build a canonical map for (event_name, iso) → group key.
+    """Build a canonical map for (event_name, iso, venue) → group key.
 
     Cluster fuzzy duplicates ("A Boogie Wit Da Hoodie" vs "A Boogie With Da
     Hoodie") so inventory rows and sales rows share the same group key. The
     UI uses this for its event-grouped click-to-expand behaviour.
+
+    Venue is part of the cluster identity so an artist playing two distinct
+    rooms on the same night (e.g. Disclosure at The Eastern AND District
+    Atlanta on 2026-05-01) gets two separate groups instead of one merged
+    bucket. Venue is normalized via _norm_venue so trailing ", City" and
+    leading "The " variations don't fragment the cluster.
     """
     from difflib import SequenceMatcher
-    pairs = set()
+    triples = set()
     for r in db.all_lysted_purchases():
-        pairs.add((r.get("event_name") or "", _date_only(_resolve_iso(r) or "")))
+        triples.add((r.get("event_name") or "", _date_only(_resolve_iso(r) or ""), _norm_venue(r.get("venue"))))
     for r in db.all_lysted_sales():
-        pairs.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or "")))
+        triples.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or ""), _norm_venue(r.get("venue"))))
     for r in db.all_viagogo():
-        pairs.add((r.get("event_name") or "", _date_only(_resolve_iso(r) or "")))
+        triples.add((r.get("event_name") or "", _date_only(_resolve_iso(r) or ""), _norm_venue(r.get("venue"))))
     for r in db.all_viagogo_sales():
-        pairs.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or "")))
+        triples.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or ""), _norm_venue(r.get("venue"))))
     for r in db.all_jerujam_tickets():
-        pairs.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or "")))
+        triples.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or ""), _norm_venue(r.get("venue"))))
     j_tix = {t["id"]: t for t in db.all_jerujam_tickets()}
     for s in db.all_jerujam_sales():
         t = j_tix.get(s.get("ticket_id"), {})
-        pairs.add((t.get("event_name") or "", _date_only(t.get("event_date_iso") or "")))
+        triples.add((t.get("event_name") or "", _date_only(t.get("event_date_iso") or ""), _norm_venue(t.get("venue"))))
     for r in db.all_crowdvolt_sales():
-        pairs.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or "")))
+        triples.add((r.get("event_name") or "", _date_only(r.get("event_date_iso") or ""), _norm_venue(r.get("venue"))))
+    # Inventory aggregate is a fallback source for the listing-rows path —
+    # include its venues here too so the group key for an aggregate row
+    # matches the corresponding sales rows.
+    for r in db.all_inventory():
+        triples.add((r.get("event_name") or "", _date_only(_resolve_iso(r) or ""), _norm_venue(r.get("venue"))))
 
-    canonicals = []  # list[(norm_name, iso)]
+    def _substr_match(short, long):
+        # Whitespace-bounded substring match. Used for both event names and
+        # venues so "Masonic Temple" and "Masonic Temple - Temple Theatre"
+        # cluster together while "the eastern" and "district atlanta" stay
+        # apart.
+        if not short or not long:
+            return False
+        if short == long:
+            return True
+        if len(short) < 3:
+            return False
+        return (
+            f" {short} " in f" {long} "
+            or long.startswith(short + " ")
+            or long.endswith(" " + short)
+        )
+
+    def _venues_match(a, b):
+        if a == b:
+            return True
+        if not a or not b:
+            # Treat blank venue as a wildcard so a sales row missing venue
+            # doesn't fragment off into its own cluster.
+            return True
+        short, long = (a, b) if len(a) <= len(b) else (b, a)
+        return _substr_match(short, long)
+
+    canonicals = []  # list[(norm_name, iso, norm_venue)]
     mapping = {}
-    for name, iso in sorted(pairs):
+    # Sort shorter names first so the canonical for a cluster is the
+    # cleanest representation ("jigitz" anchors the cluster, then
+    # "jigitz rescheduled from 3 7 26" attaches to it via substring match).
+    for name, iso, venue in sorted(triples, key=lambda p: (len(_norm_event_name(p[0])), p[0])):
         norm = _norm_event_name(name)
+        if not norm:
+            mapping[(name, iso, venue)] = f"|{iso}|{venue}"
+            continue
         found = None
-        for cn, ciso in canonicals:
+        for cn, ciso, cvenue in canonicals:
             if ciso != iso:
                 continue
-            if cn == norm or SequenceMatcher(None, cn, norm).ratio() >= 0.85:
-                found = (cn, ciso)
+            if not _venues_match(cvenue, venue):
+                continue
+            # Substring match (with whitespace boundary) catches
+            # "jigitz" vs "jigitz rescheduled from 3 7 26" which the
+            # SequenceMatcher ratio would otherwise miss because the
+            # extra suffix tanks the similarity score.
+            short, long = (cn, norm) if len(cn) <= len(norm) else (norm, cn)
+            if (
+                cn == norm
+                or _substr_match(short, long)
+                or SequenceMatcher(None, cn, norm).ratio() >= 0.85
+            ):
+                found = (cn, ciso, cvenue)
                 break
         if found:
-            mapping[(name, iso)] = f"{found[0]}|{found[1]}"
+            mapping[(name, iso, venue)] = f"{found[0]}|{found[1]}|{found[2]}"
         else:
-            canonicals.append((norm, iso))
-            mapping[(name, iso)] = f"{norm}|{iso}"
+            canonicals.append((norm, iso, venue))
+            mapping[(name, iso, venue)] = f"{norm}|{iso}|{venue}"
     return mapping
 
 
-def _row_group(mapping, name, iso):
-    return mapping.get((name or "", _date_only(iso or "")), f"{_norm_event_name(name)}|{_date_only(iso or '')}")
+def _bought_by_event(groups_map):
+    """Total tickets purchased per event_group. Each source gives an
+    independent "they bought at least N" signal; we take the max so
+    JeruJam-tracked inventory that's *also* listed/sold via Lysted doesn't
+    double-count.
+
+    Sources:
+      - lysted_purchases.qty (when the order is still on the purchases page)
+      - lysted_active = inventory.tickets_count + lysted_sales.qty  (covers
+        events where the purchase record is missing — common after a few
+        weeks once Lysted clears stale orders — but the tickets are clearly
+        still live or were sold)
+      - jerujam_tickets.quantity
+      - manual_inventory.qty (unmatched)
+      - viagogo: available + sold
+    """
+    per_source = {}  # {group_key: {source: total_qty_bought}}
+    # Honor inventory_hidden here too — otherwise a user hiding a listing
+    # via × would still see the bought-count include it, leaving the sales
+    # page to render a phantom "(no detail)" row that's itself undeletable.
+    hidden = db.all_hidden_keys()
+
+    def _add(src, name, iso, venue, qty):
+        key = _row_group(groups_map, name, _date_only(iso or ""), venue)
+        per_source.setdefault(key, {})
+        per_source[key][src] = per_source[key].get(src, 0) + int(qty or 0)
+
+    for r in db.all_lysted_purchases():
+        if ("lysted", str(r.get("id"))) in hidden:
+            continue
+        _add("lysted_purchases", r.get("event_name"), _resolve_iso(r), r.get("venue"), r.get("qty"))
+    # Lysted's currently-active scraped inventory + recent sales tells us
+    # the same event existed even if the purchases page rolled it off.
+    for r in db.all_inventory():
+        if ("lysted", str(r.get("id"))) in hidden:
+            continue
+        _add("lysted_active", r.get("event_name"), _resolve_iso(r), r.get("venue"), r.get("tickets_count"))
+    for r in db.all_lysted_sales():
+        _add("lysted_active", r.get("event_name"), r.get("event_date_iso"), r.get("venue"), r.get("qty"))
+    for r in db.all_jerujam_tickets():
+        if ("jerujam", str(r.get("id"))) in hidden:
+            continue
+        _add("jerujam", r.get("event_name"), r.get("event_date_iso"), r.get("venue"), r.get("quantity"))
+    for r in db.all_manual_inventory():
+        if r.get("matched_source"):
+            continue  # already represented by the matched lysted/viagogo row
+        if ("manual", str(r.get("id"))) in hidden:
+            continue
+        _add("manual", r.get("event_name"), r.get("event_date_iso"), r.get("venue"), r.get("qty"))
+    for r in db.all_viagogo():
+        if ("viagogo", str(r.get("id"))) in hidden:
+            continue
+        _add("viagogo", r.get("event_name"), _resolve_iso(r), r.get("venue"), (r.get("available") or 0) + (r.get("sold") or 0))
+
+    out = {}
+    for k, sources in per_source.items():
+        out[k] = max(sources.values()) if sources else 0
+    return out
+
+
+def _row_group(mapping, name, iso, venue=None):
+    nv = _norm_venue(venue)
+    iso_d = _date_only(iso or "")
+    return mapping.get((name or "", iso_d, nv), f"{_norm_event_name(name)}|{iso_d}|{nv}")
 
 
 def _apply_overrides(row, overrides_for_row, numeric_fields):
@@ -371,15 +508,17 @@ def _build_unified_inventory():
     rows = []
 
     lysted_keys = set()
+    lysted_event_keys = set()  # event-level dedup for inventory-aggregate fallback below
     lysted_ga_event_rows = set()  # (event_key, row) for any GA-style Lysted listing
     for r in lysted:
         if (r.get("status") or "").strip().lower() == "sold":
             continue
         iso = _resolve_iso(r)
-        ek = _event_key(r.get("event_name"), iso)
+        ek = _event_key(r.get("event_name"), iso, r.get("venue"))
         sec_n = _norm(r.get("section"))
         row_n = _norm(r.get("row_label"))
         lysted_keys.add((ek, sec_n, row_n))
+        lysted_event_keys.add(ek)
         if _ga_like(sec_n):
             lysted_ga_event_rows.add((ek, row_n))
             lysted_ga_event_rows.add((ek, ""))
@@ -403,6 +542,44 @@ def _build_unified_inventory():
             "status": r.get("status") or "active",
         })
 
+    # Fallback: include the inventory-table aggregate for events not covered
+    # by lysted_purchases above. Tickets you've listed on Lysted that don't
+    # have a matching purchase order (e.g. purchased outside Lysted, or the
+    # purchase row rolled off) only show up here. Without this fallback,
+    # those listings are invisible on the sales page and undeletable via × —
+    # the renderer falls through to a synthesized phantom row with no
+    # source_id. The composite inventory.id is used as source_id so
+    # inventory_hidden works the same way.
+    for inv in db.all_inventory():
+        iso_i = _resolve_iso(inv)
+        ek = _event_key(inv.get("event_name"), iso_i, inv.get("venue"))
+        if ek in lysted_event_keys:
+            continue
+        qty = inv.get("tickets_count") or 0
+        if qty <= 0:
+            continue
+        if ("lysted", str(inv.get("id"))) in hidden:
+            continue
+        total_cost = inv.get("total_cost") or 0
+        cost_per = round(total_cost / qty, 2) if qty else None
+        rows.append({
+            "source": "lysted",
+            "source_id": inv.get("id"),
+            "event_name": inv.get("event_name"),
+            "event_date": inv.get("event_date"),
+            "event_date_iso": iso_i,
+            "venue": inv.get("venue"),
+            "section": "",
+            "row": "",
+            "seats": "",
+            "qty_unsold": qty,
+            "cost": total_cost,
+            "cost_per_unit": cost_per,
+            "delivery_type": "",
+            "list_price": inv.get("total_list"),
+            "status": "active",
+        })
+
     viagogo_keys = set()
     viagogo_ga_events = set()  # event_keys for any GA-style Viagogo listing
     for r in viagogo:
@@ -410,7 +587,7 @@ def _build_unified_inventory():
         if avail <= 0:
             continue
         iso = _resolve_iso(r)
-        ek = _event_key(r.get("event_name"), iso)
+        ek = _event_key(r.get("event_name"), iso, r.get("venue"))
         sec_n = _norm(r.get("section"))
         viagogo_keys.add((ek, sec_n))
         if _ga_like(sec_n):
@@ -446,7 +623,7 @@ def _build_unified_inventory():
         if remaining <= 0:
             continue
         iso_j = _resolve_iso(t)
-        ek = _event_key(t.get("event_name"), iso_j)
+        ek = _event_key(t.get("event_name"), iso_j, t.get("venue"))
         sec = _norm(t.get("section"))
         row = _norm(t.get("row_label"))
         if (ek, sec, row) in lysted_keys:
@@ -517,7 +694,7 @@ def _build_unified_inventory():
         ov = inv_overrides.get((r.get("source"), str(r.get("source_id"))))
         if ov:
             _apply_overrides(r, ov, _INV_NUMERIC)
-        r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"))
+        r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"), r.get("venue"))
     return rows, skipped_jerujam
 
 
@@ -780,7 +957,7 @@ def _build_combined_sales():
         ov = sale_overrides.get((r.get("source"), str(r.get("sale_id"))))
         if ov:
             _apply_overrides(r, ov, _SALE_NUMERIC)
-        r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"))
+        r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"), r.get("venue"))
     return out
 
 
@@ -1004,7 +1181,12 @@ def api_sales_all():
         "by_source": by_source,
         "new_since_jerujam": new_count,
     }
-    return jsonify({"rows": rows, "totals": totals, "last_run": _last_run})
+    return jsonify({
+        "rows": rows,
+        "totals": totals,
+        "bought_by_event": _bought_by_event(_event_groups()),
+        "last_run": _last_run,
+    })
 
 
 @app.route("/api/inventory")
@@ -1783,8 +1965,8 @@ def api_match_now():
     return jsonify({"matched": matched, "unmatched": skipped})
 
 
-_INV_EDITABLE = {"section", "row", "seats", "qty_unsold", "cost", "cost_per_unit", "list_price", "delivery_type", "status", "event_name", "venue"}
-_SALE_EDITABLE = {"event_name", "venue", "section", "row", "qty", "sale_price", "cost", "platform", "sale_date"}
+_INV_EDITABLE = {"section", "row", "seats", "qty_unsold", "cost", "cost_per_unit", "list_price", "delivery_type", "status", "event_name", "venue", "event_date", "event_date_iso"}
+_SALE_EDITABLE = {"event_name", "venue", "section", "row", "qty", "sale_price", "cost", "platform", "sale_date", "sale_date_iso", "event_date", "event_date_iso"}
 
 
 @app.route("/api/inventory/edit", methods=["POST"])
