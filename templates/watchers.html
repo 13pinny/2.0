@@ -417,17 +417,16 @@ async function onWatcherAction(e) {
 }
 
 function seatCell(w) {
-  const avail = w.last_seat_count;
+  // Prefer the source's own per-tick "available quantity" when it
+  // exposes one (tickchak). Otherwise fall back to the watcher's
+  // last_seat_count, which is what ticketmaster + kupat already
+  // report at seat granularity.
+  const avail = (w.available_seats != null) ? w.available_seats : w.last_seat_count;
   const total = w.total_seats;
   if (avail == null) return '—';
   if (!total) return String(avail);
   const sold = Math.max(0, total - avail);
   const pctSold = total > 0 ? (sold / total * 100) : 0;
-  // Color-code: low availability = red (hot), high = green (cold)
-  const availPct = 100 - pctSold;
-  let cls = 'profit-pos';  // green
-  if (availPct < 5) cls = 'profit-neg';
-  else if (availPct < 15) cls = '';
   return `<div>${avail} / ${total}</div>` +
          `<div style="font-size:10px;color:var(--muted)">${pctSold.toFixed(1)}% sold</div>`;
 }

@@ -42,6 +42,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -157,26 +158,146 @@ _EV_JS_RE = re.compile(
 _FORM_BUTTON_RE = re.compile(r"tickchak_form_button\s*=\s*(\{[^}]*\})")
 
 
-def _fetch_form_button_state(event_code, page_html):
-    """Returns ``{"enabled": "0"|"1", "title": str}`` from the live cached
-    event JS, or None if it can't be located. The JS URL is dynamic
-    (cache-busted with a UUID per response) so we extract it from the page
-    HTML each time, then GET it with the right Referer header."""
+def _fetch_event_meta_from_static_js(event_code, page_html):
+    """Returns ``(form_button_dict, event_hash)`` from the live cached
+    event JS. Both pieces live in the same file so we fetch it once.
+
+    The JS URL is dynamic (cache-busted with a UUID per response) so we
+    extract it from the page HTML each time, then GET with the right
+    Referer header."""
     m = _EV_JS_RE.search(page_html)
     if not m:
-        return None
-    js_url = m.group(1)
+        return None, None
     try:
-        js = _http_get_html(js_url, referer=f"{SITE_BASE}/{event_code}")
+        js = _http_get_html(m.group(1), referer=f"{SITE_BASE}/{event_code}")
     except TickchakError:
+        return None, None
+    fb_match = _FORM_BUTTON_RE.search(js)
+    fb = None
+    if fb_match:
+        try:
+            fb = json.loads(fb_match.group(1))
+        except json.JSONDecodeError:
+            fb = None
+    eh_match = re.search(r'tickchak_event_hash\s*=\s*["\']([^"\']+)', js)
+    return fb, (eh_match.group(1) if eh_match else None)
+
+
+def _fetch_form_button_state(event_code, page_html):
+    """Back-compat wrapper — only the form_button half. Used by callers
+    that don't need the event_hash."""
+    fb, _ = _fetch_event_meta_from_static_js(event_code, page_html)
+    return fb
+
+
+def _fetch_form_init(event_code, event_hash):
+    """Call ``POST /ajax/form/init`` (the same endpoint the iframe form
+    uses to populate ticket pickers). Returns the parsed JSON or None.
+
+    The response includes a ``tickets`` list with per-type counts:
+      ``amount`` — capacity for that type at this venue
+      ``sold`` — how many have been bought
+      ``amount_avaliable`` — current count (sometimes inflated for
+          unlimited donation tiers; cap at amount when summing)
+      ``active`` — "0" means the type is paused/hidden; skip these
+      ``title``, ``price``, ``tid`` — display + identity fields
+    """
+    if not event_hash:
         return None
-    fb = _FORM_BUTTON_RE.search(js)
-    if not fb:
-        return None
+    body = urllib.parse.urlencode({
+        "event": event_hash,
+        "lang": "he",
+        "source": "landing",
+    }).encode()
+    req = urllib.request.Request(
+        f"{SITE_BASE}/ajax/form/init",
+        data=body,
+        method="POST",
+        headers={
+            "User-Agent": REQUEST_HEADERS["User-Agent"],
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Encoding": "gzip, deflate",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Referer": f"{SITE_BASE}/{event_code}",
+            "X-Requested-With": "XMLHttpRequest",
+        },
+    )
     try:
-        return json.loads(fb.group(1))
+        resp = urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
+    except (urllib.error.HTTPError, urllib.error.URLError):
+        return None
+    raw = resp.read()
+    if resp.headers.get("Content-Encoding") == "gzip":
+        raw = gzip.decompress(raw)
+    try:
+        return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+
+def _normalize_form_init_tickets(init):
+    """Flatten /ajax/form/init's tickets list into a {block_label: dict}
+    map with normalized fields.
+
+    Two kinds of types come back from tickchak:
+      * Capped types (``amount > 0``) — real seats. Count toward
+        ``total_capacity`` and ``total_available``.
+      * Uncapped types (``amount == 0``, e.g. donation tiers, "guest
+        of friend" entries) — no inventory limit. tickchak reports
+        ``amount_avaliable`` as a sentinel (typically 500_000) for
+        these. We keep them in the blocks map (so the filter modal
+        can list them) but don't include them in the seat totals — a
+        donation isn't a seat.
+
+    Returns ``(blocks_map, total_capacity, total_available)``."""
+    out = {}
+    cap = 0
+    avail = 0
+    for t in (init.get("tickets") if isinstance(init, dict) else []) or []:
+        if not isinstance(t, dict):
+            continue
+        if str(t.get("active") or "1") != "1":
+            continue
+        try:
+            amount = int(t.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0
+        try:
+            raw_avail = int(t.get("amount_avaliable") or 0)
+        except (TypeError, ValueError):
+            raw_avail = 0
+        try:
+            sold = int(t.get("sold") or 0)
+        except (TypeError, ValueError):
+            sold = 0
+
+        if amount > 0:
+            # Real seats — cap availability at the type's capacity (some
+            # rows over-report when the venue moves seats around).
+            avail_capped = max(0, min(raw_avail, amount))
+            cap += amount
+            avail += avail_capped
+            unlimited = False
+        else:
+            # Donation / unlimited entry — present but not a seat.
+            avail_capped = 1 if raw_avail > 0 else 0
+            unlimited = True
+
+        title = (t.get("title") or "").strip() or "כרטיס"
+        price = _parse_price(t.get("price"))
+        key = _block_label(title, price)
+        out[key] = {
+            "name": title,
+            "price": price,
+            "currency": "ILS",
+            "amount": amount,
+            "sold": sold,
+            "available": avail_capped,
+            "active": True,
+            "unlimited": unlimited,
+            "tid": t.get("tid"),
+        }
+    return out, cap, avail
 
 
 _LD_RE = re.compile(
@@ -271,25 +392,57 @@ def _block_label(name, price):
 
 
 def fetch_selectable_seats(event_code, perf_code="0"):
-    """Return one normalized "seat" dict per in-stock Offer.
+    """Return one normalized "seat" dict per active in-stock ticket type.
 
-    Two-source check: page HTML + the live event JS's `form_button`.
-    JSON-LD's `availability` is stale on tickchak (server-rendered SEO
-    markup says in_stock even for sold-out events), so we gate every
-    Offer on the live form_button.enabled flag. If the buy button is
-    disabled site-wide, we return []. If it's enabled, every JSON-LD
-    Offer becomes a virtual seat — that's the only granularity tickchak
-    exposes for an "is this event buyable" check."""
+    Three signals stacked:
+
+      1. ``form_button.enabled`` (from the live cached event JS) — when
+         "0", the buy button is disabled site-wide; return []
+         regardless of what the per-type API claims, because users can't
+         actually buy through the public flow.
+      2. ``/ajax/form/init`` per-type quantities — the same endpoint the
+         iframe form uses to populate the ticket picker. Has real
+         ``amount_avaliable``, ``amount``, ``sold`` per type.
+      3. JSON-LD as fallback when form/init is unreachable.
+
+    We emit ONE virtual seat per active type with available > 0. The
+    diff is therefore type-level, not unit-level — going from 43 → 50
+    units of the same type doesn't trigger a notification, only a type
+    flipping from 0 → >0 does. That suits tickchak's GA-style sale model
+    (no per-seat selection in the booking flow) and keeps notification
+    spam tolerable.
+    """
     html = _http_get_html(perf_url(event_code))
-    fb = _fetch_form_button_state(event_code, html) or {}
+    fb, event_hash = _fetch_event_meta_from_static_js(event_code, html)
+    fb = fb or {}
     if str(fb.get("enabled", "")).strip() != "1":
         return []
+
+    init = _fetch_form_init(event_code, event_hash)
+    if init and isinstance(init.get("tickets"), list):
+        types, _cap, _avail = _normalize_form_init_tickets(init)
+        out = []
+        for key, info in types.items():
+            if (info.get("available") or 0) <= 0:
+                continue
+            out.append({
+                "block": key,
+                "row": "GA",
+                "seat": "1",
+                "price": info.get("price"),
+                "qty_available": info.get("available"),
+                "raw": {"tid": info.get("tid"), "title": info.get("name")},
+            })
+        if out:
+            return out
+        # Fall through to JSON-LD if form/init reported zero but the
+        # button is live — better to ping than miss a drop.
+
+    # Fallback: JSON-LD Offers (used to be the primary, kept as backup
+    # for when form/init returns nothing parseable).
     ld = _extract_jsonld_event(html) or {}
-    offers = _normalize_offers(ld.get("offers"))
     out = []
-    for o in offers:
-        # JSON-LD availability is stale; we already know the event is
-        # selling, so default any unmarked Offer to in_stock too.
+    for o in _normalize_offers(ld.get("offers")):
         avail = o.get("availability")
         if avail and not _availability_in_stock(avail):
             continue
@@ -302,9 +455,9 @@ def fetch_selectable_seats(event_code, perf_code="0"):
             "price": price,
             "raw": o,
         })
-    # No JSON-LD Offers at all but the button is live? Emit a single
-    # opaque "tickets are buyable" placeholder so the user still gets a ping.
     if not out:
+        # Button is live but we have no per-type data at all — emit a
+        # single opaque entry so the watcher still pings on the flip.
         out.append({
             "block": (fb.get("original_title") or "כרטיסים").strip() or "tickets",
             "row": "GA",
@@ -339,38 +492,65 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
     `kupat.fetch_fresh` and `labels.fetch_fresh` so app.py / notify.py /
     filter modal don't need per-source branching.
 
-    Status is derived from the live form_button rather than the JSON-LD
-    availability fields (which are stale SEO markup on tickchak)."""
+    Prefer /ajax/form/init for accurate per-type capacity + availability
+    counts. Falls back to JSON-LD Offers if form/init is unreachable.
+    The dashboard reads ``meta.totalSeats`` (capacity) and
+    ``meta.availSeats`` (capped current quantity) from this payload to
+    show real "X / Y" ratios in the watchers table.
+    """
     html = _http_get_html(perf_url(event_code))
     ld = _extract_jsonld_event(html) or {}
-    fb = _fetch_form_button_state(event_code, html) or {}
+    fb, event_hash = _fetch_event_meta_from_static_js(event_code, html)
+    fb = fb or {}
     button_enabled = str(fb.get("enabled", "")).strip() == "1"
 
-    offers = _normalize_offers(ld.get("offers"))
     blocks = {}
-    for o in offers:
-        name = (o.get("name") or "").strip() or "כרטיס"
-        # Treat each Offer as in_stock iff the global button is live AND
-        # the JSON-LD doesn't explicitly mark it out_of_stock.
-        avail_raw = o.get("availability")
-        ld_in_stock = _availability_in_stock(avail_raw) if avail_raw else True
-        in_stock = button_enabled and ld_in_stock
-        price = _parse_price(o.get("price"))
-        # Composite key keeps (name, price) Offers distinct so the filter
-        # modal can exclude a specific price-point, not the whole name.
-        key = _block_label(name, price)
-        existing = blocks.get(key)
-        # Same composite key → dedupe; prefer in_stock so an availability
-        # change in either direction doesn't get hidden by encounter order.
-        if existing and existing.get("availability") == "in_stock" and not in_stock:
-            continue
-        blocks[key] = {
-            "name": name,         # display name (Hebrew, no price suffix)
-            "price": price,
-            "currency": o.get("priceCurrency") or "ILS",
-            "availability": "in_stock" if in_stock else "out_of_stock",
-        }
-    any_in_stock = button_enabled
+    total_capacity = 0
+    total_available = 0
+    init = _fetch_form_init(event_code, event_hash)
+    if init and isinstance(init.get("tickets"), list):
+        types, total_capacity, raw_avail = _normalize_form_init_tickets(init)
+        # Even when the per-type API reports availability, the global
+        # form_button is the authoritative public-buyability gate. Sold-out
+        # events sometimes still expose `amount_avaliable > 0` for held
+        # seats that aren't actually for sale.
+        total_available = raw_avail if button_enabled else 0
+        for key, info in types.items():
+            available = info["available"] if button_enabled else 0
+            blocks[key] = {
+                "name": info["name"],
+                "price": info["price"],
+                "currency": info.get("currency") or "ILS",
+                "amount": info["amount"],
+                "sold": info["sold"],
+                "available": available,
+                "availability": "in_stock" if available > 0 else "out_of_stock",
+            }
+    else:
+        # Legacy path: JSON-LD only. No real seat counts; report ticket-type
+        # totals as before (one virtual seat per type) so the UI still has
+        # something useful to display.
+        for o in _normalize_offers(ld.get("offers")):
+            name = (o.get("name") or "").strip() or "כרטיס"
+            avail_raw = o.get("availability")
+            ld_in_stock = _availability_in_stock(avail_raw) if avail_raw else True
+            in_stock = button_enabled and ld_in_stock
+            price = _parse_price(o.get("price"))
+            key = _block_label(name, price)
+            existing = blocks.get(key)
+            if existing and existing.get("availability") == "in_stock" and not in_stock:
+                continue
+            blocks[key] = {
+                "name": name,
+                "price": price,
+                "currency": o.get("priceCurrency") or "ILS",
+                "availability": "in_stock" if in_stock else "out_of_stock",
+            }
+        # Approximate totals when form/init unavailable.
+        total_capacity = len(blocks)
+        total_available = sum(1 for b in blocks.values() if b.get("availability") == "in_stock")
+
+    any_in_stock = total_available > 0
 
     location = ld.get("location") if isinstance(ld.get("location"), dict) else {}
     address = location.get("address") if isinstance(location.get("address"), dict) else {}
@@ -390,12 +570,14 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
             "venueCity": venue_city,
             "firstPerfMs": perf_ms,
             "firstPerfText": perf_text,
-            # Tickchak doesn't expose a venue dot-count, so we report the
-            # number of distinct ticket types instead. The dashboard's
-            # "X / Y" cell then reads "26 / 28" — i.e. 26 of 28 ticket
-            # types are currently buyable. Approximate but consistent
-            # with how the seat-plan sources show capacity utilization.
-            "totalSeats": (len(blocks) or None),
+            # Real seat counts when /ajax/form/init is reachable
+            # (sum of per-type ``amount`` for capacity, capped sum of
+            # ``amount_avaliable`` for current). The watchers table
+            # reads availSeats / totalSeats to render "5000 / 6495".
+            # When form/init isn't available we fall back to
+            # ticket-type counts (e.g. "26 / 28").
+            "totalSeats": (total_capacity or None),
+            "availSeats": total_available,
             "status": ("selling" if any_in_stock else ("soldout" if blocks else "unknown")),
         },
         "blocks": blocks,

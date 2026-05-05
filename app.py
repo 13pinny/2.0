@@ -2307,9 +2307,17 @@ def api_watchers():
         src = WATCHER_SOURCES.get(src_name, ticketmaster)
         try:
             lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
-            w["total_seats"] = ((lbls or {}).get("meta") or {}).get("totalSeats")
+            meta = (lbls or {}).get("meta") or {}
+            w["total_seats"] = meta.get("totalSeats")
+            # Sources that expose a per-tick available QUANTITY (rather
+            # than just a per-type list count) — currently tickchak —
+            # surface it here so the dashboard can show real "X / Y"
+            # ratios. None for sources where last_seat_count is already
+            # the right number.
+            w["available_seats"] = meta.get("availSeats")
         except Exception:
             w["total_seats"] = None
+            w["available_seats"] = None
     return jsonify({
         "watchers": watchers,
         "drops": drops,
