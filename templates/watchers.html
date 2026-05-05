@@ -78,6 +78,13 @@
   .bulk-results .err-line { color: var(--red); }
   a.tm-link { color: var(--accent); text-decoration: none; }
   a.tm-link:hover { text-decoration: underline; }
+  /* Inline rename button — small, blends with row, becomes prominent on hover. */
+  button.btn-icon { padding: 1px 6px; font-size: 12px; line-height: 1; background: transparent; color: var(--muted); border: 1px solid transparent; border-radius: 0; cursor: pointer; opacity: 0.4; }
+  tbody tr:hover button.btn-icon { opacity: 1; }
+  button.btn-icon:hover { color: var(--accent); border-color: var(--line); background: var(--bg-3); }
+  /* Label cell: link + pencil sit on one line; the link wraps long Hebrew titles. */
+  td.label-cell { display: flex; align-items: baseline; gap: 6px; }
+  td.label-cell a.tm-link { flex: 1; min-width: 0; word-break: break-word; }
   .master-controls { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; padding: 12px 14px; background: var(--bg-2); border: 1px solid var(--line); margin-bottom: 14px; }
   .toggle-group { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
   .toggle-group .label { font-weight: 600; }
@@ -298,9 +305,12 @@ async function load() {
     const tmUrl = (SRC_URLS[src] || SRC_URLS.ticketmaster)(w.event_code, w.perf_code);
     const filterSummary = filterSummaryFor(w);
     tr.innerHTML = `
-      <td>${escape(w.label || '—')}</td>
+      <td class="label-cell">
+        <a class="tm-link" href="${tmUrl}" target="_blank" rel="noopener" title="open on ${escape(src)}.co.il">${escape(w.label || '—')}</a>
+        <button class="btn-icon" data-act="rename" data-id="${w.id}" title="rename event">&#9998;</button>
+      </td>
       <td><span class="src src-${src}">${escape(src)}</span></td>
-      <td><a class="tm-link" href="${tmUrl}" target="_blank">${escape(w.event_code)}/${escape(w.perf_code)}</a></td>
+      <td><a class="tm-link" href="${tmUrl}" target="_blank" rel="noopener">${escape(w.event_code)}/${escape(w.perf_code)}</a></td>
       <td><span class="status ${status}" title="${escape(w.last_check_error || '')}">${statusLabel}</span></td>
       <td>${fmtTime(w.last_check_at)}</td>
       <td class="num">${seatCell(w)}</td>
@@ -382,6 +392,22 @@ async function onWatcherAction(e) {
       await openFiltersModal(id);
       btn.disabled = false;
       return;  // load() called from modal save
+    } else if (act === 'rename') {
+      // Pull the current label from the row's link text — that's already
+      // escaped HTML so we read .textContent for the original string.
+      const linkEl = btn.parentElement.querySelector('a.tm-link');
+      const current = linkEl ? linkEl.textContent : '';
+      const next = prompt('Rename event:', current);
+      if (next == null) { btn.disabled = false; return; }  // cancelled
+      const trimmed = next.trim();
+      if (!trimmed || trimmed === current) { btn.disabled = false; return; }
+      try {
+        await api('/api/watchers/update', 'POST', { id, label: trimmed });
+        showOk('Renamed.');
+        await load();
+      } catch (err) { showError(err.message); }
+      finally { btn.disabled = false; }
+      return;
     }
     await load();
   } catch (err) { showError(err.message); }
