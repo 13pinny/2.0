@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Tools</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --bg-3: #11161d;
+    --line: #21262d;
+    --line-2: #2a3038;
+    --text: #c9d1d9;
+    --muted: #6e7681;
+    --accent: #58a6ff;
+    --green: #56d364;
+    --red: #f85149;
+    --amber: #d29922;
+    --orange: #f97316;
+    --purple: #a78bfa;
+    --pink: #f06595;
+    --cyan: #14b8a6;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 24px; max-width: 920px; margin: 0 auto; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 28px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .tool-card { border: 1px solid var(--line); padding: 18px 20px; margin-bottom: 18px; background: var(--bg-2); }
+  .tool-card .desc { color: var(--muted); font-size: 11px; margin-bottom: 14px; line-height: 1.6; }
+  label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; display: block; margin-bottom: 6px; }
+  input[type="text"], input[type="url"] { width: 100%; font-family: inherit; font-size: 12px; padding: 9px 12px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input[type="text"]:focus, input[type="url"]:focus { outline: none; border-color: var(--accent); }
+  button { font-family: inherit; font-size: 11px; padding: 9px 16px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--accent); color: var(--bg); border: 1px solid var(--accent); margin-top: 12px; }
+  button:hover { background: #79b8ff; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .status { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line); background: var(--bg-3); font-size: 12px; line-height: 1.6; min-height: 14px; }
+  .status.error { border-color: var(--red); color: var(--red); }
+  .status.success { border-color: var(--green); }
+  .status .row { padding: 2px 0; }
+  .status .folder { color: var(--accent); word-break: break-all; }
+  .status .file-list { margin-top: 8px; padding-left: 16px; color: var(--muted); font-size: 11px; }
+  .status .file-list li { padding: 1px 0; word-break: break-all; }
+  .status .seat { color: var(--green); }
+  .spinner { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>// TOOLS</h1>
+    <span class="meta" id="sub">utilities</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/tools" class="active">TOOLS</a>
+  </nav>
+</header>
+<main>
+  <h2>// KUPAT · PRINT TICKETS TO PDF</h2>
+  <div class="tool-card">
+    <div class="desc">
+      Paste a Kupat e-document URL (the link from your purchase email of the form
+      <code style="color:var(--cyan);">tickets.kupat.co.il/edocument/&lt;uuid&gt;/?id=&lt;number&gt;</code>) and we&rsquo;ll
+      drive a headless browser to render each ticket in the order as its own PDF, named
+      <code style="color:var(--cyan);">&lt;EventName&gt;_&lt;Date&gt;_&lt;Section&gt;_Row&lt;N&gt;_Seat&lt;N&gt;.pdf</code>,
+      saved into a per-event folder under
+      <code style="color:var(--cyan);">$KARTIS_TICKETS_DIR</code>
+      (defaults to <code>~/OneDrive/KartisTickets/</code>). Takes ~5s per ticket.
+    </div>
+    <form id="kupat-form" onsubmit="return false;">
+      <label for="kupat-url">Kupat e-document URL</label>
+      <input id="kupat-url" type="url"
+             placeholder="https://tickets.kupat.co.il/edocument/...?id=...">
+      <button id="kupat-go">Print PDFs</button>
+    </form>
+    <div id="kupat-status" class="status" style="display:none"></div>
+  </div>
+</main>
+<script>
+const esc = s => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+const $ = id => document.getElementById(id);
+
+$("kupat-go").addEventListener("click", async () => {
+  const url = $("kupat-url").value.trim();
+  if (!url) { alert("Paste a Kupat URL first"); return; }
+  const btn = $("kupat-go");
+  const statusEl = $("kupat-status");
+  btn.disabled = true;
+  btn.textContent = "Working...";
+  statusEl.className = "status";
+  statusEl.style.display = "block";
+  statusEl.innerHTML = `<div class="row"><span class="spinner"></span> Launching browser — this takes ~5–7 seconds per ticket.</div>`;
+  try {
+    const res = await fetch("/api/kupat-pdf", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({url}),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      statusEl.className = "status error";
+      statusEl.innerHTML = `<div class="row">⚠ ${esc(data.error || "Unknown error")}</div>`;
+      return;
+    }
+    statusEl.className = "status success";
+    const fileList = (data.tickets || []).map(t =>
+      `<li>${esc(t.filename)} <span class="seat">(seat ${esc(t.seat)})</span></li>`
+    ).join("");
+    statusEl.innerHTML = `
+      <div class="row">✓ Saved <strong>${data.tickets.length}</strong> tickets for
+        <strong>${esc(data.event_name || "")}</strong> at <strong>${esc(data.venue || "")}</strong>
+        · ${esc((data.event_date || "").slice(0, 16))}</div>
+      <div class="row">Folder: <span class="folder">${esc(data.folder)}</span></div>
+      <ul class="file-list">${fileList}</ul>
+    `;
+  } catch (e) {
+    statusEl.className = "status error";
+    statusEl.innerHTML = `<div class="row">⚠ ${esc(e.message || e)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Print PDFs";
+  }
+});
+</script>
+</body>
+</html>

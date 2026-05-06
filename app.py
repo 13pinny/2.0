@@ -18,6 +18,7 @@ import db
 import filters as watcher_filters
 import import_jerujam
 import kupat
+import kupat_pdf
 import mail_intake
 import matcher
 import notify
@@ -2662,6 +2663,33 @@ def run_tm_check():
 @app.route("/watchers")
 def watchers_page():
     return render_template("watchers.html")
+
+
+@app.route("/tools")
+def tools_page():
+    return render_template("tools.html")
+
+
+@app.route("/api/kupat-pdf", methods=["POST"])
+def api_kupat_pdf():
+    """Drive kupat_pdf.render_pdfs from the dashboard form. Synchronous —
+    the request body is the URL, the response is the manifest (or error).
+    A future iteration could background this via a job queue if 30-second
+    requests start being a problem, but for one-off ticket prints the
+    synchronous flow keeps the UI dead simple."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "URL required"}), 400
+    try:
+        manifest = kupat_pdf.render_pdfs(url)
+    except kupat_pdf.KupatPdfError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Unexpected: {e}"}), 500
+    return jsonify(manifest)
 
 
 @app.route("/api/watchers")
