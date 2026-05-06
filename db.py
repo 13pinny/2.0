@@ -61,6 +61,25 @@ CREATE TABLE IF NOT EXISTS inventory_hidden (
     hidden_at TEXT NOT NULL,
     PRIMARY KEY (source, source_id)
 );
+CREATE TABLE IF NOT EXISTS inventory_unsold (
+    fingerprint TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    source_id TEXT,
+    event_name TEXT,
+    event_date TEXT,
+    event_date_iso TEXT,
+    venue TEXT,
+    section TEXT,
+    row_label TEXT,
+    seats TEXT,
+    qty INTEGER,
+    cost REAL,
+    cost_per_unit REAL,
+    list_price REAL,
+    delivery_type TEXT,
+    marked_at TEXT NOT NULL,
+    note TEXT
+);
 CREATE TABLE IF NOT EXISTS sales_hidden (
     source TEXT NOT NULL,
     sale_id TEXT NOT NULL,
@@ -288,6 +307,28 @@ CREATE TABLE IF NOT EXISTS jerujam_expenses (
     created_at TEXT,
     last_seen_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pending_intake (
+    id TEXT PRIMARY KEY,
+    message_id TEXT UNIQUE,
+    provider TEXT,
+    email_from TEXT,
+    email_subject TEXT,
+    email_received_at TEXT,
+    event_name TEXT,
+    event_date_iso TEXT,
+    venue TEXT,
+    section TEXT,
+    row_label TEXT,
+    seats TEXT,
+    qty INTEGER,
+    cost REAL,
+    cost_per_unit REAL,
+    raw_text TEXT,
+    parse_warnings TEXT,
+    status TEXT NOT NULL DEFAULT 'new',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pending_intake_status ON pending_intake(status, created_at);
 CREATE TABLE IF NOT EXISTS attachments (
     id TEXT PRIMARY KEY,
     owner_type TEXT NOT NULL,
@@ -534,6 +575,72 @@ def all_hidden_keys():
     with connect() as conn:
         rows = conn.execute("SELECT source, source_id FROM inventory_hidden").fetchall()
     return {(r["source"], r["source_id"]) for r in rows}
+
+
+# --- "Didn't Sell" archive ---
+# Inventory rows whose status is set to "not sold" (or a variant) get
+# archived into inventory_unsold and filtered out of the active inventory
+# view. Keyed by a content fingerprint (event + section + row + seats + qty)
+# rather than (source, source_id) so the tombstone survives Lysted text
+# drift and Viagogo listing-id rotation across resyncs.
+import re as _re
+
+_WS_RE = _re.compile(r"\s+")
+
+
+def _unsold_norm(s):
+    return _WS_RE.sub(" ", str(s or "").strip().lower())
+
+
+def unsold_fingerprint(source, event_name, event_date_iso, section, row_label, seats, qty):
+    """Stable across resyncs — no source_id, just content."""
+    parts = [
+        _unsold_norm(source),
+        _unsold_norm(event_name),
+        (event_date_iso or "").strip()[:10],
+        _unsold_norm(section),
+        _unsold_norm(row_label),
+        _unsold_norm(seats),
+        str(int(qty or 0)),
+    ]
+    return "|".join(parts)
+
+
+def mark_inventory_unsold(snap, now_iso):
+    """snap should already include 'fingerprint'."""
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO inventory_unsold
+                (fingerprint, source, source_id, event_name, event_date,
+                 event_date_iso, venue, section, row_label, seats, qty,
+                 cost, cost_per_unit, list_price, delivery_type, marked_at, note)
+            VALUES (:fingerprint, :source, :source_id, :event_name, :event_date,
+                    :event_date_iso, :venue, :section, :row_label, :seats, :qty,
+                    :cost, :cost_per_unit, :list_price, :delivery_type, :marked_at, :note)
+            """,
+            {**snap, "marked_at": now_iso},
+        )
+
+
+def unmark_inventory_unsold(fingerprint):
+    with connect() as conn:
+        conn.execute("DELETE FROM inventory_unsold WHERE fingerprint = ?", (fingerprint,))
+
+
+def all_unsold():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM inventory_unsold "
+            "ORDER BY event_date_iso IS NULL, event_date_iso, event_name"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def all_unsold_fingerprints():
+    with connect() as conn:
+        rows = conn.execute("SELECT fingerprint FROM inventory_unsold").fetchall()
+    return {r["fingerprint"] for r in rows}
 
 
 def hide_sale(source, sale_id, now_iso):
@@ -1121,6 +1228,79 @@ def delete_attachments_for_owner(owner_type, owner_id):
             "DELETE FROM attachments WHERE owner_type = ? AND owner_id = ?",
             (owner_type, owner_id),
         )
+
+
+def reassign_attachments_owner(owner_type, old_id, new_id):
+    """Move attachment DB rows from one owner_id to another. Used when a
+    pending_intake row is confirmed and promoted to a manual_inventory row —
+    the files on disk stay where they are; we just update the owner pointer
+    and (caller is responsible for) optionally moving the disk dir too."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE attachments SET owner_id = ? WHERE owner_type = ? AND owner_id = ?",
+            (new_id, owner_type, old_id),
+        )
+
+
+def insert_pending_intake(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO pending_intake (id, message_id, provider, email_from,
+                email_subject, email_received_at, event_name, event_date_iso,
+                venue, section, row_label, seats, qty, cost, cost_per_unit,
+                raw_text, parse_warnings, status, created_at)
+            VALUES (:id, :message_id, :provider, :email_from,
+                :email_subject, :email_received_at, :event_name, :event_date_iso,
+                :venue, :section, :row_label, :seats, :qty, :cost, :cost_per_unit,
+                :raw_text, :parse_warnings, :status, :created_at)
+            ON CONFLICT(message_id) DO NOTHING
+            """,
+            {**row, "created_at": now_iso},
+        )
+
+
+def get_pending_intake(id_):
+    with connect() as conn:
+        r = conn.execute("SELECT * FROM pending_intake WHERE id = ?", (id_,)).fetchone()
+    return dict(r) if r else None
+
+
+def all_pending_intake(status="new"):
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM pending_intake WHERE status = ? "
+            "ORDER BY email_received_at DESC, created_at DESC",
+            (status,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def has_intake_message(message_id):
+    if not message_id:
+        return False
+    with connect() as conn:
+        r = conn.execute(
+            "SELECT 1 FROM pending_intake WHERE message_id = ? LIMIT 1",
+            (message_id,),
+        ).fetchone()
+    return r is not None
+
+
+def update_pending_intake(id_, fields):
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=:{k}" for k in fields)
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE pending_intake SET {sets} WHERE id=:_id",
+            {**fields, "_id": id_},
+        )
+
+
+def delete_pending_intake(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM pending_intake WHERE id = ?", (id_,))
 
 
 def insert_maaser(row, now_iso):

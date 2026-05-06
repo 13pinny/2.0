@@ -62,8 +62,40 @@
   .pill-bar .pill:hover { background: #1f262e; color: var(--text); }
   .pill-bar .pill.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.06); }
   tbody tr { cursor: pointer; }
+  tr.group-hdr { scroll-margin-top: 130px; }
+  tr.group-hdr td { background: var(--bg-2); padding: 12px 14px; border-top: 1px solid var(--line); cursor: pointer; user-select: none; }
+  tr.group-hdr td:hover { background: #1c232b; }
+  tr.group-hdr .chev { display: inline-block; width: 14px; color: var(--muted); transition: transform 0.15s; font-size: 14px; vertical-align: middle; }
+  tr.group-hdr.expanded .chev { transform: rotate(90deg); }
+  tr.group-hdr .evt-title { color: var(--text); font-weight: 700; letter-spacing: 0.3px; font-size: 15px; vertical-align: middle; }
+  tr.group-hdr .evt-meta { color: var(--muted); margin-left: 10px; font-size: 11px; vertical-align: middle; }
+  tr.group-hdr .evt-stats { float: right; color: var(--muted); font-size: 11px; padding-top: 3px; }
+  tr.group-hdr .evt-stats .ratio { color: var(--text); margin-right: 12px; }
+  tr.group-hdr .evt-stats .pos { color: var(--green); }
+  tr.group-hdr .evt-stats .neg { color: var(--red); }
+  tr.listing-hdr td { background: #0a1018; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 12px; border-top: 1px dashed var(--line); cursor: default; }
+  tr.listing-row { cursor: pointer; }
+  tr.listing-row[data-clickable="false"] { cursor: default; }
+  tr.listing-row td { background: #0e1722; color: var(--muted); font-size: 12px; }
+  tr.listing-row:hover td { background: #142035; }
+  tr.listing-row .src { opacity: 0.85; }
+  tr.listing-row .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid var(--line); cursor: pointer; font-size: 14px; line-height: 18px; padding: 0; opacity: 0.85; transition: opacity 0.1s, background 0.1s, border-color 0.1s; margin-right: 2px; }
+  tr.listing-row:hover .row-action { opacity: 1; }
+  tr.listing-row .row-sell-list { color: var(--green); }
+  tr.listing-row .row-sell-list:hover { background: rgba(86,211,100,0.15); border-color: var(--green); }
+  tr.listing-row .row-hide-list { color: var(--red); }
+  tr.listing-row .row-hide-list:hover { background: rgba(248,81,73,0.15); border-color: var(--red); }
   td.edited { background: rgba(88,166,255,0.06); }
   td.edited::after { content: " ●"; color: var(--accent); font-size: 8px; vertical-align: super; }
+  /* Single-click-to-edit cells (currently: platform). The dblclick-row-to-edit
+     pattern is preserved for everything else; platform gets a faster path
+     since it changes more often. */
+  td.cell-edit { cursor: pointer; position: relative; }
+  td.cell-edit:hover { background: rgba(88,166,255,0.08); }
+  td.cell-edit:hover::before {
+    content: "✎"; position: absolute; right: 4px; top: 50%;
+    transform: translateY(-50%); color: var(--accent); font-size: 10px; opacity: 0.7;
+  }
   /* edit modal */
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
   .modal-bg.open { display: flex; }
@@ -85,9 +117,9 @@
   .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
   .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
   .muted { color: var(--muted); }
-  .row-del { width: 22px; height: 22px; border-radius: 0; background: transparent; color: var(--red); border: 1px solid transparent; cursor: pointer; font-size: 13px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; }
-  tbody tr:hover .row-del { opacity: 0.7; }
-  tbody tr .row-del:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .row-del { width: 22px; height: 22px; border-radius: 0; background: transparent; color: var(--red); border: 1px solid var(--line); cursor: pointer; font-size: 14px; line-height: 18px; padding: 0; opacity: 0.85; transition: opacity 0.1s, background 0.1s, border-color 0.1s; }
+  tbody tr:hover .row-del { opacity: 1; }
+  tbody tr .row-del:hover { background: rgba(248,81,73,0.15); border-color: var(--red); }
   #bulk-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--accent); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; z-index: 999; letter-spacing: 0.5px; gap: 12px; align-items: center; }
   #bulk-bar.open { display: flex; }
   #bulk-bar .bulk-count { color: var(--accent); font-weight: 600; }
@@ -148,10 +180,10 @@
       <option value="new">ONLY NEW v JJ</option>
     </select>
     <select id="q-sort">
+      <option value="event-asc" selected>EVENT DATE ↑ (TODAY-FIRST)</option>
+      <option value="event-desc">EVENT DATE ↓</option>
       <option value="sale-desc">SOLD ↓ (NEW)</option>
       <option value="sale-asc">SOLD ↑ (OLD)</option>
-      <option value="event-asc">EVENT DATE ↑</option>
-      <option value="event-desc">EVENT DATE ↓</option>
       <option value="rev-desc">REV ↓</option>
     </select>
   </div>
@@ -186,6 +218,16 @@
     <tbody id="tbody"></tbody>
   </table>
   <div id="empty" class="empty" style="display:none">// no sales match</div>
+
+  <h2 id="unsold-header" style="display:none; color:var(--red);">// DIDN'T SELL <span class="count" id="unsold-count"></span><span class="count" id="unsold-loss"></span></h2>
+  <table id="unsold-table" style="display:none">
+    <thead><tr>
+      <th>EVENT</th><th>VENUE</th><th>SEC/ROW</th><th>SEATS</th>
+      <th>SRC</th><th class="num">QTY</th><th class="num">COST</th>
+      <th>MARKED</th><th></th>
+    </tr></thead>
+    <tbody id="unsoldbody"></tbody>
+  </table>
 </main>
 
 <div id="bulk-bar">
@@ -205,7 +247,7 @@
       <label>Venue</label><input id="bulk-venue" type="text" placeholder="(unchanged)">
       <label>Section</label><input id="bulk-section" type="text" placeholder="(unchanged)">
       <label>Row</label><input id="bulk-row" type="text" placeholder="(unchanged)">
-      <label>Platform</label><input id="bulk-platform" type="text" placeholder="(unchanged)">
+      <label>Platform</label><input id="bulk-platform" type="text" list="platform-options" placeholder="(unchanged)">
       <label>Qty</label><input id="bulk-qty" type="number" step="1" placeholder="(unchanged)">
       <label>Sale Price</label><input id="bulk-sale_price" type="number" step="0.01" placeholder="(unchanged)">
       <label>Cost</label><input id="bulk-cost" type="number" step="0.01" placeholder="(unchanged)">
@@ -218,6 +260,15 @@
   </div>
 </div>
 
+<!-- Suggestions for Platform inputs (edit modal + bulk-edit). Free-text still works;
+     this just auto-completes the common values. New platforms can be added here. -->
+<datalist id="platform-options">
+  <option value="JJT">
+  <option value="Lysted">
+  <option value="Viagogo">
+  <option value="CrowdVolt">
+</datalist>
+
 <div id="toast"><span id="toast-msg"></span><button id="toast-undo">Undo</button><span class="kbd">Ctrl+Z</span></div>
 
 <div id="modal-bg" class="modal-bg">
@@ -225,12 +276,13 @@
     <h3><span>// EDIT SALE <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line" id="m-meta"></div>
-      <label>Sale Date</label><input id="m-sale_date" type="text">
+      <label>Sale Date</label><input id="m-sale_date" type="date">
       <label>Event Name</label><input id="m-event_name" type="text">
+      <label>Event Date</label><input id="m-event_date" type="date">
       <label>Venue</label><input id="m-venue" type="text">
       <label>Section</label><input id="m-section" type="text">
       <label>Row</label><input id="m-row" type="text">
-      <label>Platform</label><input id="m-platform" type="text">
+      <label>Platform</label><input id="m-platform" type="text" list="platform-options">
       <label>Qty</label><input id="m-qty" type="number" step="1">
       <label>Sale Price</label><input id="m-sale_price" type="number" step="0.01">
       <label>Cost</label><input id="m-cost" type="number" step="0.01">
@@ -246,7 +298,47 @@
 <script>
 const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
 const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+// Date formatters — backend dates can be raw ISO ("2026-06-25T18:00:00.000Z"
+// or "2026-06-25T18:00") or pre-formatted strings. We always pull the
+// YYYY-MM-DD prefix and any HH:MM after a T, then render "Jun 25, 2026" or
+// "Jun 25, 2026 6:00 PM". Falls back to the raw string if the regex misses,
+// so we never lose info if the backend ships us something unexpected.
+const _MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtDate(s) {
+  if (!s) return "";
+  const m = String(s).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return String(s);
+  return `${_MONTH_ABBR[+m[2] - 1]} ${+m[3]}, ${m[1]}`;
+}
+function fmtDateTime(s) {
+  if (!s) return "";
+  const dm = String(s).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!dm) return String(s);
+  let out = `${_MONTH_ABBR[+dm[2] - 1]} ${+dm[3]}, ${dm[1]}`;
+  const tm = String(s).match(/T(\d{2}):(\d{2})/);
+  if (tm) {
+    let h = +tm[1]; const min = tm[2];
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    out += ` ${h}:${min} ${ampm}`;
+  }
+  return out;
+}
+const _todayIso = () => new Date().toISOString().slice(0, 10);
 let _rows = [];
+// Per-event-group total tickets ever bought (Lysted purchases / JeruJam /
+// manual / Viagogo available+sold, max across sources to avoid double-
+// counting overlapping inventory tracked in two systems). Backend-supplied.
+let _boughtByEvent = new Map();
+// Per-event-group list of currently-unsold inventory rows. Used to render
+// "still listed" rows under each event's sold rows when expanded.
+let _invByEvent = new Map();
+// Which event group keys are expanded in the All Sales / Recent tables.
+let _expanded = new Set();
+function _eventKey(r) {
+  if (r && r.event_group) return r.event_group;
+  return ((r?.event_name || "") + "|" + (r?.event_date_iso || r?.event_date || "")).toLowerCase();
+}
 
 function _sortCmp(mode, searching) {
   if (searching) {
@@ -282,6 +374,36 @@ function _roi(r) {
   return (n == null || !r.cost) ? null : (n / r.cost) * 100;
 }
 
+function _renderListingRow(r) {
+  const tr = document.createElement("tr");
+  tr.className = "listing-row";
+  const cost = r.cost != null ? r.cost : (r.cost_per_unit ? r.cost_per_unit * (r.qty_unsold || 0) : 0);
+  const list = r.list_price;
+  // Synthesized "(no detail)" rows have no source_id — can't delete those.
+  const canDelete = !!(r.source && r.source_id);
+  if (!canDelete) tr.dataset.clickable = "false";
+  const delBtn = canDelete
+    ? `<button class="row-action row-hide-list" title="Remove this listing from inventory" data-hide-source="${esc(r.source)}" data-hide-id="${esc(r.source_id)}">×</button>`
+    : "";
+  tr.innerHTML = `
+    <td class="col-check"></td>
+    <td><span class="muted">listed</span></td>
+    <td>${esc(r.event_name || "")}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(r.event_date_iso || r.event_date))}</div></td>
+    <td>${esc(r.venue || "")}</td>
+    <td>${esc(r.section || "")}${r.row ? " / " + esc(r.row) : ""}</td>
+    <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span></td>
+    <td>${esc(r.delivery_type || "")}</td>
+    <td class="muted" style="font-size:11px;"></td>
+    <td class="num">${r.qty_unsold ?? ""}</td>
+    <td class="num">${list != null ? money(list) : "—"}</td>
+    <td class="num">${money(cost)}</td>
+    <td class="num">—</td>
+    <td class="num">—</td>
+    <td>${delBtn}</td>
+  `;
+  return tr;
+}
+
 function _renderRow(r) {
   const payout = _payout(r);
   const net = _net(r);
@@ -312,12 +434,12 @@ function _renderRow(r) {
   if (isSelected) tr.classList.add("row-selected");
   tr.innerHTML = `
     <td class="col-check"><input type="checkbox" class="row-check" data-sel="${esc(selKey)}"${isSelected ? " checked" : ""}></td>
-    <td class="${ed('sale_date')}">${r.sale_date ? esc(r.sale_date) : '<span class="muted">—</span>'}</td>
-    <td class="${ed('event_name')}">${esc(r.event_name)}<div class="muted" style="font-size:11px;">${esc(r.event_date)}</div></td>
+    <td class="${ed('sale_date')}">${r.sale_date_iso || r.sale_date ? esc(fmtDate(r.sale_date_iso || r.sale_date)) : '<span class="muted">—</span>'}</td>
+    <td class="${ed('event_name')}">${esc(r.event_name)}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(r.event_date_iso || r.event_date))}</div></td>
     <td class="${ed('venue')}">${esc(r.venue)}</td>
     <td class="${ed('section')}">${esc(r.section)}${r.row ? " / " + esc(r.row) : ""}</td>
     <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span>${newBadge}</td>
-    <td class="${ed('platform')}">${esc(r.platform)}</td>
+    <td class="cell-edit ${ed('platform')}" data-edit-field="platform" title="Click to edit platform">${esc(r.platform)}</td>
     <td class="muted" style="font-size:11px;">${esc(r.order_id || "")}</td>
     <td class="num ${ed('qty')}">${r.qty ?? ""}</td>
     <td class="num ${ed('sale_price')}">${revCell}</td>
@@ -342,6 +464,104 @@ function _withinRecent(iso, days) {
   return d >= min && d <= now;
 }
 
+function _renderGrouped(tbody, rows, groupOrder) {
+  const groups = new Map();
+  for (const r of rows) {
+    const key = _eventKey(r);
+    if (!groups.has(key)) {
+      groups.set(key, { key, event_name: r.event_name, event_date: r.event_date, event_date_iso: r.event_date_iso, venue: r.venue, rows: [] });
+    }
+    groups.get(key).rows.push(r);
+  }
+  // Group order: caller picks. event-asc puts past events at the top and
+  // future at the bottom (paired with a scroll-to-today on first load so
+  // you land on the next upcoming event). Default = most-recent sale first
+  // — used by the Recent panel where "newest sale" is the natural anchor.
+  let ordered;
+  if (groupOrder === "event-asc") {
+    ordered = [...groups.values()].sort((a, b) => (a.event_date_iso || "zzz").localeCompare(b.event_date_iso || "zzz"));
+  } else if (groupOrder === "event-desc") {
+    ordered = [...groups.values()].sort((a, b) => (b.event_date_iso || "").localeCompare(a.event_date_iso || ""));
+  } else {
+    ordered = [...groups.values()].sort((a, b) => {
+      const ad = a.rows.reduce((m, r) => (r.sale_date_iso && r.sale_date_iso > m) ? r.sale_date_iso : m, "");
+      const bd = b.rows.reduce((m, r) => (r.sale_date_iso && r.sale_date_iso > m) ? r.sale_date_iso : m, "");
+      return bd.localeCompare(ad);
+    });
+  }
+  for (const g of ordered) {
+    const sold = g.rows.reduce((s, r) => s + (r.qty || 0), 0);
+    // Backend-supplied total bought; fall back to sold count if the event
+    // isn't in the map (e.g. a sale with no purchase record on file).
+    const total = Math.max(sold, _boughtByEvent.get(g.key) || 0);
+    const cost = g.rows.reduce((s, r) => s + (r.cost || 0), 0);
+    const payout = g.rows.reduce((s, r) => s + (_payout(r) || 0), 0);
+    const profit = payout - cost;
+    const expanded = _expanded.has(g.key);
+    const profCls = profit >= 0 ? "pos" : "neg";
+    const profSign = profit >= 0 ? "+" : "";
+    const hdr = document.createElement("tr");
+    hdr.className = "group-hdr" + (expanded ? " expanded" : "");
+    hdr.dataset.key = g.key;
+    hdr.dataset.eventDate = g.event_date_iso || "";
+    hdr.innerHTML = `
+      <td colspan="14">
+        <span class="chev">▸</span>
+        <span class="evt-title">${esc(g.event_name)}</span>
+        <span class="evt-meta">// ${esc(fmtDateTime(g.event_date_iso || g.event_date || ""))} · ${esc(g.venue || "")}</span>
+        <span class="evt-stats">
+          <span class="ratio">${sold}/${total} sold</span>
+          ${money(cost)} cost · ${money(payout)} payout ·
+          <span class="${profCls}">${profSign}${money(profit)} profit</span>
+        </span>
+      </td>
+    `;
+    tbody.appendChild(hdr);
+    if (expanded) {
+      const sorted = g.rows.slice().sort((a, b) => (b.sale_date_iso || "").localeCompare(a.sale_date_iso || ""));
+      for (const r of sorted) tbody.appendChild(_renderRow(r));
+      // Authoritative still-listed total comes from bought - sold (matches
+      // what the user sees in the X/Y header). The unified-inventory rows
+      // can overcount when the matcher hasn't paired external sales (e.g.
+      // JeruJam ticket whose copies were sold via Lysted), so we cap the
+      // displayed qty per row down to what's actually still out there.
+      const listings = _invByEvent.get(g.key) || [];
+      const totalUnsold = Math.max(0, total - sold);
+      if (totalUnsold > 0) {
+        const subhdr = document.createElement("tr");
+        subhdr.className = "listing-hdr";
+        subhdr.innerHTML = `<td colspan="14">// ${totalUnsold} ${totalUnsold === 1 ? "ticket" : "tickets"} still listed</td>`;
+        tbody.appendChild(subhdr);
+        let remaining = totalUnsold;
+        for (const l of listings) {
+          if (remaining <= 0) break;
+          const cap = Math.min(l.qty_unsold || 0, remaining);
+          if (cap <= 0) continue;
+          remaining -= cap;
+          tbody.appendChild(_renderListingRow({...l, qty_unsold: cap}));
+        }
+        if (remaining > 0) {
+          // No detail rows (or detail underflowed) — synthesize one so the
+          // user still sees the event/venue context for the missing count.
+          const sample = sorted[0] || {};
+          tbody.appendChild(_renderListingRow({
+            source: "lysted",
+            event_name: sample.event_name || g.event_name,
+            event_date: sample.event_date || g.event_date,
+            venue: sample.venue || g.venue,
+            section: "(no detail)",
+            row: "",
+            qty_unsold: remaining,
+            list_price: null,
+            cost: null,
+            delivery_type: "",
+          }));
+        }
+      }
+    }
+  }
+}
+
 function renderRecent() {
   const q = _searchNorm(document.getElementById("q-search").value);
   const src = document.getElementById("q-source").value;
@@ -357,7 +577,7 @@ function renderRecent() {
     .sort((a,b) => (b.sale_date_iso || "").localeCompare(a.sale_date_iso || ""));
   const tbody = document.getElementById("recentbody");
   tbody.innerHTML = "";
-  for (const r of recent) tbody.appendChild(_renderRow(r));
+  _renderGrouped(tbody, recent);
   document.getElementById("recentempty").style.display = recent.length ? "none" : "block";
   document.getElementById("recent-count").textContent = `(${recent.length} ${recent.length === 1 ? "sale" : "sales"})`;
   const rev = recent.reduce((a, r) => a + (r.sale_price || 0), 0);
@@ -370,6 +590,60 @@ function renderRecent() {
   const roiText = roi == null ? "—" : (roi >= 0 ? "+" : "") + roi.toFixed(1) + "% ROI";
   document.getElementById("recent-rev").innerHTML = `· ${money(rev)} rev · <span style="color:${profitColor};">${profitSign}${money(profit)} profit · ${roiText}</span>`;
 }
+
+// "Didn't Sell" archive — rows the user marked as not sold on the inventory
+// page. Rendered in a section below All Sales. × restores the row to active
+// inventory by removing the content-fingerprint tombstone.
+function renderUnsold(unsold, totals) {
+  const hdr = document.getElementById("unsold-header");
+  const tbl = document.getElementById("unsold-table");
+  const tbody = document.getElementById("unsoldbody");
+  tbody.innerHTML = "";
+  if (!unsold || unsold.length === 0) {
+    hdr.style.display = "none";
+    tbl.style.display = "none";
+    return;
+  }
+  hdr.style.display = "";
+  tbl.style.display = "";
+  document.getElementById("unsold-count").textContent =
+    `(${unsold.length} ${unsold.length === 1 ? "row" : "rows"} · ${totals.qty || 0} tickets)`;
+  const lossText = totals.cost ? `· ${money(totals.cost)} unrecovered cost` : "";
+  document.getElementById("unsold-loss").textContent = lossText;
+  for (const u of unsold) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(u.event_name || "")}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(u.event_date_iso || u.event_date))}</div></td>
+      <td>${esc(u.venue || "")}</td>
+      <td>${esc(u.section || "")}${u.row_label ? " / " + esc(u.row_label) : ""}</td>
+      <td class="muted" style="font-size:11px;">${esc(u.seats || "")}</td>
+      <td><span class="src src-${esc(u.source)}">${esc((u.source||"").toUpperCase())}</span></td>
+      <td class="num">${u.qty ?? ""}</td>
+      <td class="num">${money(u.cost)}</td>
+      <td class="muted" style="font-size:11px;">${esc(fmtDate(u.marked_at))}</td>
+      <td><button class="row-del" title="Restore to inventory" data-unmark="${esc(u.fingerprint)}">×</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-unmark]");
+  if (!btn) return;
+  e.stopPropagation();
+  const fp = btn.getAttribute("data-unmark");
+  if (!confirm("Restore this row to active inventory?")) return;
+  const res = await fetch("/api/inventory/unmark-unsold", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({fingerprint: fp}),
+  });
+  if (res.ok) {
+    await load();
+  } else {
+    alert("Failed to restore row");
+  }
+});
 
 const _searchNorm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 function render() {
@@ -386,7 +660,7 @@ function render() {
 
   const tbody = document.getElementById("tbody");
   tbody.innerHTML = "";
-  for (const r of rows) tbody.appendChild(_renderRow(r));
+  _renderGrouped(tbody, rows, sort);
   document.getElementById("empty").style.display = rows.length ? "none" : "block";
   document.getElementById("sub").textContent = `${rows.length} of ${_rows.length} shown`;
   document.getElementById("all-count").textContent = `(${rows.length})`;
@@ -401,10 +675,50 @@ document.getElementById("recent-pills").addEventListener("click", (e) => {
   renderRecent();
 });
 
+// Auto-scroll the All Sales table to "today" once on page load. With the
+// default event-asc sort, that puts the next upcoming event at the top of
+// the viewport — past events are above (scroll up to see), future below
+// (scroll down). scroll-margin-top on tr.group-hdr keeps it clear of the
+// sticky header. Skipped silently if there's no upcoming event.
+let _initialScrollDone = false;
+function _scrollToToday() {
+  if (_initialScrollDone) return;
+  const today = _todayIso();
+  const hdrs = document.querySelectorAll("#tbody tr.group-hdr");
+  for (const h of hdrs) {
+    const d = (h.dataset.eventDate || "").slice(0, 10);
+    if (d && d >= today) {
+      h.scrollIntoView({block: "start"});
+      _initialScrollDone = true;
+      return;
+    }
+  }
+  // No future events at all — stay at top of page.
+  _initialScrollDone = true;
+}
+
 async function load() {
-  const r = await fetch("/api/sales-all");
-  const d = await r.json();
+  const [salR, invR] = await Promise.all([
+    fetch("/api/sales-all"),
+    fetch("/api/inventory-all"),
+  ]);
+  const d = await salR.json();
   _rows = d.rows || [];
+  renderUnsold(d.unsold || [], d.unsold_totals || {});
+  // Backend computes per-event "tickets bought" already, taking max across
+  // overlapping sources — saves us doing it in JS.
+  _boughtByEvent = new Map(Object.entries(d.bought_by_event || {}));
+  // Bucket the still-listed rows by event_group so we can render them
+  // under the corresponding sold rows when the event is expanded.
+  _invByEvent = new Map();
+  if (invR.ok) {
+    const inv = await invR.json();
+    for (const ir of (inv.rows || [])) {
+      const k = _eventKey(ir);
+      if (!_invByEvent.has(k)) _invByEvent.set(k, []);
+      _invByEvent.get(k).push(ir);
+    }
+  }
   const t = d.totals || {};
   document.getElementById("s-rows").textContent = t.rows ?? 0;
   document.getElementById("s-qty").textContent = t.qty ?? 0;
@@ -422,6 +736,8 @@ async function load() {
   document.getElementById("s-crowdvolt").textContent = bs.crowdvolt || 0;
   document.getElementById("s-new").textContent = t.new_since_jerujam || 0;
   render();
+  // Wait one frame so the table is in the DOM before measuring/scrolling.
+  if (!_initialScrollDone) requestAnimationFrame(_scrollToToday);
 }
 
 for (const id of ["q-search", "q-source", "q-sort", "q-new"]) {
@@ -647,6 +963,41 @@ document.addEventListener("click", (e) => {
   if (row) hideSale(row);
 });
 
+// Hide-listing button on still-listed rows under expanded events.
+// Removes the row from inventory (same backend path used by the inventory
+// page's × button). The matching event header re-renders with one fewer
+// listing on next load().
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".row-hide-list");
+  if (!btn) return;
+  e.stopPropagation();
+  const source = btn.dataset.hideSource;
+  const source_id = btn.dataset.hideId;
+  if (!source || !source_id) return;
+  const tr = btn.closest("tr");
+  const evt = tr?.querySelector("td:nth-child(3)")?.textContent?.trim() || "this listing";
+  if (!confirm(`Remove this listing from inventory?\n\n${evt}\n\nUse × on the inventory page to undo.`)) return;
+  const res = await fetch("/api/inventory/hide", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source, source_id}),
+  });
+  if (!res.ok) { alert("Failed to remove listing"); return; }
+  showToast(`removed listing // ${evt}`);
+  await load();
+});
+
+// Click on a grouped event header → toggle expand/collapse.
+document.addEventListener("click", (e) => {
+  const hdr = e.target.closest("tr.group-hdr");
+  if (!hdr) return;
+  const key = hdr.dataset.key;
+  if (!key) return;
+  if (_expanded.has(key)) _expanded.delete(key);
+  else _expanded.add(key);
+  render();
+});
+
 document.addEventListener("keydown", (e) => {
   const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z";
   if (!isUndo) return;
@@ -658,12 +1009,14 @@ document.addEventListener("keydown", (e) => {
 });
 
 // --- row-level edit modal ---
-const SALE_FIELDS = ["sale_date","event_name","venue","section","row","platform","qty","sale_price","cost"];
+// sale_date is handled outside this list so we can dual-write iso + display
+// from a single date picker.
+const SALE_FIELDS = ["event_name","venue","section","row","platform","qty","sale_price","cost"];
 const SALE_NUMERIC = new Set(["qty","sale_price","cost"]);
 let _modalRow = null;
 let _modalInitial = {};
 
-function openEditModal(row) {
+function openEditModal(row, focusField) {
   _modalRow = row;
   _modalInitial = {};
   for (const f of SALE_FIELDS) {
@@ -671,11 +1024,28 @@ function openEditModal(row) {
     document.getElementById("m-" + f).value = v;
     _modalInitial[f] = String(v);
   }
+  const dateVal = row.sale_date_iso || "";
+  document.getElementById("m-sale_date").value = dateVal;
+  _modalInitial["sale_date"] = String(dateVal);
+  // Event date — same dual-write pattern. Strip any time suffix from
+  // event_date_iso since <input type="date"> only takes YYYY-MM-DD.
+  const evtDate = (row.event_date_iso || "").slice(0, 10);
+  document.getElementById("m-event_date").value = evtDate;
+  _modalInitial["event_date"] = String(evtDate);
   document.getElementById("m-meta").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.venue || ""}`;
   document.getElementById("m-src").textContent = (row.source || "").toUpperCase();
   document.getElementById("m-src").className = "src-tag src src-" + row.source;
   document.getElementById("modal-bg").classList.add("open");
-  setTimeout(() => document.getElementById("m-sale_date").focus(), 30);
+  // Default focus is the sale-date field (top of modal). When opened via a
+  // click-to-edit cell (e.g. the platform cell), focus that field's input
+  // and select its current value so the user can immediately type over it.
+  const focusId = focusField ? "m-" + focusField : "m-sale_date";
+  setTimeout(() => {
+    const el = document.getElementById(focusId);
+    if (!el) return;
+    el.focus();
+    if (el.select) el.select();
+  }, 30);
 }
 function closeEditModal() {
   document.getElementById("modal-bg").classList.remove("open");
@@ -698,6 +1068,19 @@ async function saveEditModal() {
       changes.push({field: f, value: parsed});
     }
   }
+  // Sale date: write both iso and display so monthly grouping + display agree.
+  const dateNew = document.getElementById("m-sale_date").value.trim();
+  if (dateNew !== _modalInitial.sale_date) {
+    changes.push({field: "sale_date_iso", value: dateNew});
+    changes.push({field: "sale_date", value: dateNew});
+  }
+  // Event date: same dual-write so the group key (which keys off
+  // event_date_iso) and the displayed date stay in sync.
+  const evtNew = document.getElementById("m-event_date").value.trim();
+  if (evtNew !== _modalInitial.event_date) {
+    changes.push({field: "event_date_iso", value: evtNew});
+    changes.push({field: "event_date", value: evtNew});
+  }
   if (changes.length === 0) { closeEditModal(); return; }
   for (const c of changes) {
     await fetch("/api/sales/edit", {
@@ -717,6 +1100,20 @@ document.addEventListener("dblclick", (e) => {
   if (!tr || !tr._row) return;
   e.preventDefault();
   openEditModal(tr._row);
+});
+
+// Single-click on a cell marked with .cell-edit (currently: platform) opens
+// the edit modal already focused on that field. Faster than waiting for the
+// double-click and remembering which row to drill into.
+document.addEventListener("click", (e) => {
+  const cell = e.target.closest("td.cell-edit");
+  if (!cell) return;
+  if (e.target.closest("button, input")) return;
+  const tr = cell.closest("tr");
+  if (!tr || !tr._row) return;
+  const field = cell.getAttribute("data-edit-field");
+  e.stopPropagation();
+  openEditModal(tr._row, field);
 });
 
 document.getElementById("m-close").addEventListener("click", closeEditModal);

@@ -695,7 +695,85 @@ def _build_unified_inventory():
         if ov:
             _apply_overrides(r, ov, _INV_NUMERIC)
         r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"), r.get("venue"))
+
+    # "Didn't Sell" archive — filter rows whose content fingerprint is in
+    # inventory_unsold. Done as a final pass so overrides are already applied
+    # (so the fingerprint matches what was captured at archive time).
+    unsold_fps = db.all_unsold_fingerprints()
+    if unsold_fps:
+        kept = []
+        for r in rows:
+            fp = db.unsold_fingerprint(
+                r.get("source"), r.get("event_name"), r.get("event_date_iso"),
+                r.get("section"), r.get("row"), r.get("seats"), r.get("qty_unsold"),
+            )
+            if fp in unsold_fps:
+                continue
+            kept.append(r)
+        rows = kept
     return rows, skipped_jerujam
+
+
+def _migrate_legacy_unsold_overrides():
+    """One-shot migration: convert pre-existing inventory_overrides rows
+    whose status field matches the "not sold" pattern into proper
+    inventory_unsold archive entries.
+
+    Idempotent — once an override is migrated and deleted, subsequent runs
+    find no candidates. Safe to call on every startup.
+
+    Returns the number of rows archived.
+    """
+    candidates = []
+    with db.connect() as conn:
+        for r in conn.execute(
+            "SELECT source, source_id, value FROM inventory_overrides "
+            "WHERE field = 'status'"
+        ).fetchall():
+            if r["value"] and _UNSOLD_RE.match(str(r["value"])):
+                candidates.append((r["source"], r["source_id"]))
+    if not candidates:
+        return 0
+    rows, _ = _build_unified_inventory()
+    by_key = {(r.get("source"), str(r.get("source_id"))): r for r in rows}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    archived = 0
+    for src, sid in candidates:
+        r = by_key.get((src, sid))
+        if r:
+            fp = db.unsold_fingerprint(
+                src, r.get("event_name"), r.get("event_date_iso"),
+                r.get("section"), r.get("row"), r.get("seats"), r.get("qty_unsold"),
+            )
+            snap = {
+                "fingerprint": fp, "source": src, "source_id": sid,
+                "event_name": r.get("event_name"),
+                "event_date": r.get("event_date"),
+                "event_date_iso": r.get("event_date_iso"),
+                "venue": r.get("venue"),
+                "section": r.get("section"),
+                "row_label": r.get("row"),
+                "seats": r.get("seats"),
+                "qty": r.get("qty_unsold"),
+                "cost": r.get("cost"),
+                "cost_per_unit": r.get("cost_per_unit"),
+                "list_price": r.get("list_price"),
+                "delivery_type": r.get("delivery_type"),
+                "note": "auto-migrated from legacy status='not sold' override",
+            }
+            db.mark_inventory_unsold(snap, now_iso)
+            archived += 1
+    # Drop the legacy overrides whether or not the row still exists — if the
+    # source row is gone, the override is dead weight; if it was migrated,
+    # the override would conflict with the displayed status next render.
+    with db.connect() as conn:
+        for src, sid in candidates:
+            conn.execute(
+                "DELETE FROM inventory_overrides "
+                "WHERE source = ? AND source_id = ? AND field = 'status'",
+                (src, sid),
+            )
+    return archived
 
 
 def _matched_cost(matches_idx, jerujam_idx, sale_source, sale_id, qty):
@@ -1181,11 +1259,22 @@ def api_sales_all():
         "by_source": by_source,
         "new_since_jerujam": new_count,
     }
+    # "Didn't Sell" archive — separate top-level array so existing rollups
+    # (revenue, profit, maaser) stay clean. Frontend renders these in their
+    # own section below the sold table.
+    unsold_rows = db.all_unsold()
+    unsold_totals = {
+        "rows": len(unsold_rows),
+        "qty": sum((u.get("qty") or 0) for u in unsold_rows),
+        "cost": round(sum((u.get("cost") or 0) for u in unsold_rows), 2),
+    }
     return jsonify({
         "rows": rows,
         "totals": totals,
         "bought_by_event": _bought_by_event(_event_groups()),
         "last_run": _last_run,
+        "unsold": unsold_rows,
+        "unsold_totals": unsold_totals,
     })
 
 
@@ -1968,6 +2057,13 @@ def api_match_now():
 _INV_EDITABLE = {"section", "row", "seats", "qty_unsold", "cost", "cost_per_unit", "list_price", "delivery_type", "status", "event_name", "venue", "event_date", "event_date_iso"}
 _SALE_EDITABLE = {"event_name", "venue", "section", "row", "qty", "sale_price", "cost", "platform", "sale_date", "sale_date_iso", "event_date", "event_date_iso"}
 
+# Status values that mean "this batch didn't sell" — triggers archive into
+# inventory_unsold instead of a normal status override. Editing the Status
+# field on the inventory page to any of these (case- and whitespace-
+# insensitive) hides the row and surfaces it on the sales page under the
+# "Didn't Sell" section.
+_UNSOLD_RE = re.compile(r"^\s*(not[\s_-]?sold|didn'?t\s*sell|did\s*not\s*sell|unsold)\s*$", re.IGNORECASE)
+
 
 @app.route("/api/inventory/edit", methods=["POST"])
 def api_inventory_edit():
@@ -1979,7 +2075,48 @@ def api_inventory_edit():
     value = body.get("value")
     if not source or not source_id or field not in _INV_EDITABLE:
         return jsonify({"error": "invalid source/source_id/field"}), 400
-    db.set_inv_override(source, source_id, field, value, datetime.now(timezone.utc).isoformat())
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # "Didn't sell" trigger: archive into inventory_unsold by content
+    # fingerprint so the tombstone survives source-id rotation on resync.
+    if field == "status" and value and _UNSOLD_RE.match(str(value)):
+        rows, _skipped = _build_unified_inventory()
+        inv = next(
+            (r for r in rows
+             if r.get("source") == source and str(r.get("source_id")) == source_id),
+            None,
+        )
+        if not inv:
+            return jsonify({"error": "row not found in current inventory"}), 404
+        fp = db.unsold_fingerprint(
+            source, inv.get("event_name"), inv.get("event_date_iso"),
+            inv.get("section"), inv.get("row"), inv.get("seats"), inv.get("qty_unsold"),
+        )
+        snap = {
+            "fingerprint": fp,
+            "source": source,
+            "source_id": source_id,
+            "event_name": inv.get("event_name"),
+            "event_date": inv.get("event_date"),
+            "event_date_iso": inv.get("event_date_iso"),
+            "venue": inv.get("venue"),
+            "section": inv.get("section"),
+            "row_label": inv.get("row"),
+            "seats": inv.get("seats"),
+            "qty": inv.get("qty_unsold"),
+            "cost": inv.get("cost"),
+            "cost_per_unit": inv.get("cost_per_unit"),
+            "list_price": inv.get("list_price"),
+            "delivery_type": inv.get("delivery_type"),
+            "note": None,
+        }
+        db.mark_inventory_unsold(snap, now_iso)
+        # Drop any active status override on this row — the unsold archive
+        # is now the source of truth for "this row is gone".
+        db.set_inv_override(source, source_id, "status", None, now_iso)
+        return jsonify({"ok": True, "archived": True, "fingerprint": fp})
+
+    db.set_inv_override(source, source_id, field, value, now_iso)
     return jsonify({"ok": True})
 
 
@@ -2025,6 +2162,23 @@ def api_inventory_unhide():
         db.delete_match(match["sale_source"], match["sale_id"])
     db.unhide_inventory(source, source_id)
     return jsonify({"ok": True, "source": source, "source_id": source_id, "from_match": bool(match)})
+
+
+@app.route("/api/inventory/unmark-unsold", methods=["POST"])
+def api_inventory_unmark_unsold():
+    """Restore a row from the Didn't Sell archive back to active inventory.
+
+    Removes the content-fingerprint tombstone from inventory_unsold. The row
+    will reappear on the next /api/inventory-all load if its source data is
+    still present (Lysted/Viagogo/JeruJam still expose the underlying ticket).
+    """
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    fp = (body.get("fingerprint") or "").strip()
+    if not fp:
+        return jsonify({"error": "fingerprint required"}), 400
+    db.unmark_inventory_unsold(fp)
+    return jsonify({"ok": True, "fingerprint": fp})
 
 
 @app.route("/api/refresh", methods=["POST"])
@@ -2580,6 +2734,17 @@ scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
 scheduler.add_job(run_tm_check, "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
 scheduler.add_job(run_mail_intake, "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
+
+# One-shot: archive any pre-existing inventory_overrides rows whose status
+# value was already typed as "not sold" (or a variant). Idempotent so
+# subsequent restarts find no candidates and do nothing.
+try:
+    _migrated = _migrate_legacy_unsold_overrides()
+    if _migrated:
+        print(f"[unsold-migration] archived {_migrated} legacy 'not sold' status override(s)")
+except Exception:
+    traceback.print_exc()
+
 scheduler.start()
 
 threading.Thread(target=run_backup, daemon=True).start()
