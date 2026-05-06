@@ -297,34 +297,83 @@ def render_pdfs(url, base_dir=None, on_progress=None, headless=None):
             # 0-indexed so ticket i maps to slide i+1. We assume the cover
             # is always present; if it ever isn't we fall back to slide i.
             slide_target = i + 1 if slide_offset_known else i
-            page.evaluate("""
+            # Hide other slides + force the active one to flow at the top of
+            # the page. Then return the active slide's pixel size so the PDF
+            # call below can use a page format that matches — without this,
+            # page.pdf("A4") emits a sheet with the ticket pinned in the
+            # middle and 70% blank space around it (looks "blank" at a glance).
+            box = page.evaluate("""
 (idx) => {
+  // Strip padding/margin from the document so the ticket flows from (0,0).
+  document.documentElement.style.margin = '0';
+  document.documentElement.style.padding = '0';
+  document.body.style.margin = '0';
+  document.body.style.padding = '0';
+  document.body.style.minHeight = 'auto';
+
   document.querySelectorAll('.swiper-slide').forEach((el, i) => {
     el.style.display = (i === idx) ? 'block' : 'none';
     el.style.transform = 'none';
     el.style.width = '100%';
+    el.style.margin = '0';
+    el.style.padding = '0';
   });
   document.querySelectorAll('.swiper-wrapper').forEach(w => {
     w.style.transform = 'none';
     w.style.width = '100%';
     w.style.display = 'block';
+    w.style.margin = '0';
+    w.style.padding = '0';
   });
   document.querySelectorAll('.swiper-container, .swiper').forEach(c => {
     c.style.width = '100%';
     c.style.height = 'auto';
     c.style.overflow = 'visible';
+    c.style.margin = '0';
+    c.style.padding = '0';
   });
-  // Re-render any canvas barcodes that were lazy-painted only when their
-  // slide became visible. Most Swiper sites also dispatch a 'resize' so
-  // the carousel recalculates — fire it for good measure.
-  window.dispatchEvent(new Event('resize'));
+  // Hoist the active slide all the way to the top — its ancestors may have
+  // app-shell padding/margins (the ticket sat in the lower half of an A4
+  // page before this fix because of those).
+  const active = document.querySelectorAll('.swiper-slide')[idx];
+  if (active) {
+    let p = active.parentElement;
+    while (p && p !== document.body) {
+      p.style.margin = '0';
+      p.style.padding = '0';
+      p.style.minHeight = 'auto';
+      p = p.parentElement;
+    }
+    // Repaint canvases that may have been culled while offscreen.
+    window.dispatchEvent(new Event('resize'));
+    const r = active.getBoundingClientRect();
+    return { w: Math.ceil(r.width), h: Math.ceil(r.height) };
+  }
+  return null;
 }
 """, slide_target)
             page.wait_for_timeout(350)  # let lazy canvases repaint
 
-            pdf_bytes = page.pdf(format="A4", print_background=True,
-                                  margin={"top": "10mm", "bottom": "10mm",
-                                          "left": "10mm", "right": "10mm"})
+            # Match the PDF page size to the ticket size (with a small margin
+            # for breathing room). Falls back to A4 if measurement failed.
+            if box and box.get("w") and box.get("h"):
+                # Convert px → inches at 96 DPI (Chromium's print default).
+                pad_px = 24
+                pdf_kwargs = {
+                    "width": f"{(box['w'] + pad_px*2) / 96:.2f}in",
+                    "height": f"{(box['h'] + pad_px*2) / 96:.2f}in",
+                    "print_background": True,
+                    "margin": {"top": f"{pad_px}px", "bottom": f"{pad_px}px",
+                                "left": f"{pad_px}px", "right": f"{pad_px}px"},
+                }
+            else:
+                pdf_kwargs = {
+                    "format": "A4",
+                    "print_background": True,
+                    "margin": {"top": "10mm", "bottom": "10mm",
+                                "left": "10mm", "right": "10mm"},
+                }
+            pdf_bytes = page.pdf(**pdf_kwargs)
             fname = ticket_filename(t)
             target = folder / fname
             target.write_bytes(pdf_bytes)
