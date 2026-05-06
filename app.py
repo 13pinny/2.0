@@ -383,7 +383,47 @@ def _event_groups():
         else:
             canonicals.append((norm, iso, venue))
             mapping[(name, iso, venue)] = f"{norm}|{iso}|{venue}"
+
+    # User-driven merges: overwrite the auto-cluster mapping for any raw
+    # group_key the user explicitly merged. Multiple raw keys can map to
+    # the same canonical key — that's how two unrelated names ("Ishay Ribo
+    # — early" + "Ishay Ribo — National Library of Israel") get unified
+    # into one display group.
+    user_merges = db.all_event_group_merges()
+    if user_merges:
+        for triple, auto_key in list(mapping.items()):
+            if auto_key in user_merges:
+                mapping[triple] = user_merges[auto_key]["canonical_group_key"]
     return mapping
+
+
+def _event_group_displays():
+    """Returns {canonical_group_key → {event_name, event_date,
+    event_date_iso, venue}} for each user-merged group. Used by row
+    builders to overwrite the per-row display fields after grouping so the
+    chosen canonical name shows everywhere the merged group appears."""
+    out = {}
+    for m in db.all_event_group_merges().values():
+        out[m["canonical_group_key"]] = {
+            "event_name": m.get("canonical_event_name"),
+            "event_date": m.get("canonical_event_date"),
+            "event_date_iso": m.get("canonical_event_date_iso"),
+            "venue": m.get("canonical_venue"),
+        }
+    return out
+
+
+def _apply_group_displays(rows, displays):
+    """Overwrite event_name/date/venue on rows whose group is in a merge."""
+    if not displays:
+        return
+    for r in rows:
+        d = displays.get(r.get("event_group"))
+        if not d:
+            continue
+        for f in ("event_name", "event_date", "event_date_iso", "venue"):
+            if d.get(f):
+                r[f] = d[f]
 
 
 def _bought_by_event(groups_map):
@@ -695,6 +735,10 @@ def _build_unified_inventory():
         if ov:
             _apply_overrides(r, ov, _INV_NUMERIC)
         r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"), r.get("venue"))
+    # Apply user-merged-group display overrides AFTER per-row overrides so a
+    # merged event uses the canonical name even if a single row had its own
+    # event_name override pre-merge.
+    _apply_group_displays(rows, _event_group_displays())
 
     # "Didn't Sell" archive — filter rows whose content fingerprint is in
     # inventory_unsold. Done as a final pass so overrides are already applied
@@ -1053,6 +1097,7 @@ def _build_combined_sales(only_canceled=False):
         if ov:
             _apply_overrides(r, ov, _SALE_NUMERIC)
         r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"), r.get("venue"))
+    _apply_group_displays(out, _event_group_displays())
     return out
 
 
@@ -1432,6 +1477,93 @@ def api_sales_uncancel():
         return jsonify({"error": "source and sale_id required"}), 400
     db.uncancel_sale(source, sale_id)
     return jsonify({"ok": True})
+
+
+@app.route("/api/event-groups/merge", methods=["POST"])
+def api_event_groups_merge():
+    """Merge 2+ raw event groups into one canonical group with a chosen
+    display name + date + venue. Subsequent inventory and sales rows that
+    fall in any of the merged raw groups will display under the canonical
+    name. Body:
+        {
+          "group_keys": ["<raw_key_1>", "<raw_key_2>", ...],
+          "event_name": "Ishay Ribo at the National Library",
+          "event_date_iso": "2026-06-12",       # optional
+          "event_date": "Jun 12, 2026",         # optional display text
+          "venue": "National Library of Israel" # optional
+        }
+    """
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    group_keys = body.get("group_keys") or []
+    event_name = (body.get("event_name") or "").strip()
+    if not isinstance(group_keys, list) or len(group_keys) < 2:
+        return jsonify({"error": "group_keys must be a list of 2+ raw group keys"}), 400
+    if not event_name:
+        return jsonify({"error": "event_name required"}), 400
+    iso = (body.get("event_date_iso") or "").strip()[:10]
+    raw_date = (body.get("event_date") or "").strip()
+    venue = (body.get("venue") or "").strip()
+    canonical_group_key = f"{_norm_event_name(event_name)}|{iso}|{_norm_venue(venue)}"
+    # Resolve already-merged group_keys: if the user selected a group that
+    # was itself a canonical from a prior merge, replace it with all its raw
+    # keys so we don't strand old mappings pointing at a now-orphan canonical.
+    existing = db.all_event_group_merges()
+    canonical_to_raws = {}
+    for raw, m in existing.items():
+        canonical_to_raws.setdefault(m["canonical_group_key"], []).append(raw)
+    expanded = set()
+    for k in group_keys:
+        expanded.add(k)
+        if k in canonical_to_raws:
+            for raw in canonical_to_raws[k]:
+                expanded.add(raw)
+    db.merge_event_groups(
+        sorted(expanded), canonical_group_key,
+        event_name, raw_date, iso, venue,
+        datetime.now(timezone.utc).isoformat(),
+    )
+    return jsonify({
+        "ok": True,
+        "canonical_group_key": canonical_group_key,
+        "merged_raw_keys": sorted(expanded),
+    })
+
+
+@app.route("/api/event-groups/unmerge", methods=["POST"])
+def api_event_groups_unmerge():
+    """Drop a merge. Body either:
+      {"canonical_group_key": "..."}  → splits the entire merged group
+      {"raw_group_key": "..."}        → removes just one raw key from its merge
+    """
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    canonical = (body.get("canonical_group_key") or "").strip()
+    raw = (body.get("raw_group_key") or "").strip()
+    if canonical:
+        db.unmerge_canonical(canonical)
+    elif raw:
+        db.unmerge_event_group(raw)
+    else:
+        return jsonify({"error": "canonical_group_key or raw_group_key required"}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/event-groups/merges")
+def api_event_groups_merges():
+    """List all current merges grouped by canonical key."""
+    merges = db.all_event_group_merges()
+    by_canonical = {}
+    for raw, m in merges.items():
+        by_canonical.setdefault(m["canonical_group_key"], {
+            "canonical_group_key": m["canonical_group_key"],
+            "event_name": m.get("canonical_event_name"),
+            "event_date": m.get("canonical_event_date"),
+            "event_date_iso": m.get("canonical_event_date_iso"),
+            "venue": m.get("canonical_venue"),
+            "raw_keys": [],
+        })["raw_keys"].append(raw)
+    return jsonify({"merges": list(by_canonical.values())})
 
 
 @app.route("/pending")

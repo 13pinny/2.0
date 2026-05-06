@@ -93,6 +93,21 @@ CREATE TABLE IF NOT EXISTS sales_canceled (
     reason TEXT,
     PRIMARY KEY (source, sale_id)
 );
+CREATE TABLE IF NOT EXISTS event_group_merges (
+    -- raw_group_key is the auto-clustered group key Kartis would assign on
+    -- its own (norm_name|iso|norm_venue). When the user merges two or more
+    -- groups, every raw key in that merge gets a row pointing to the
+    -- canonical_group_key — a single shared key across all merged groups.
+    raw_group_key TEXT PRIMARY KEY,
+    canonical_group_key TEXT NOT NULL,
+    canonical_event_name TEXT NOT NULL,
+    canonical_event_date TEXT,
+    canonical_event_date_iso TEXT,
+    canonical_venue TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_group_merges_canonical
+    ON event_group_merges(canonical_group_key);
 CREATE TABLE IF NOT EXISTS inventory_overrides (
     source TEXT NOT NULL,
     source_id TEXT NOT NULL,
@@ -708,6 +723,61 @@ def all_canceled_sales():
             "ORDER BY canceled_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- Event-group merges ---
+# When the user manually merges two or more event groups (different names
+# for the same show), each raw group_key gets a row pointing to the same
+# canonical group_key + display fields. The grouping logic in app.py
+# rewrites raw_group_key → canonical_group_key and overrides the row's
+# event_name/date/venue display fields.
+
+def merge_event_groups(raw_group_keys, canonical_group_key,
+                      canonical_event_name, canonical_event_date,
+                      canonical_event_date_iso, canonical_venue, now_iso):
+    with connect() as conn:
+        for raw in raw_group_keys:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO event_group_merges
+                    (raw_group_key, canonical_group_key,
+                     canonical_event_name, canonical_event_date,
+                     canonical_event_date_iso, canonical_venue, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (raw, canonical_group_key, canonical_event_name,
+                 canonical_event_date, canonical_event_date_iso,
+                 canonical_venue, now_iso),
+            )
+
+
+def unmerge_event_group(raw_group_key):
+    """Remove a single raw_group_key from its merge."""
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM event_group_merges WHERE raw_group_key = ?",
+            (raw_group_key,),
+        )
+
+
+def unmerge_canonical(canonical_group_key):
+    """Drop the entire merge for a canonical group (all raw keys split apart)."""
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM event_group_merges WHERE canonical_group_key = ?",
+            (canonical_group_key,),
+        )
+
+
+def all_event_group_merges():
+    """Returns {raw_group_key: dict_of_canonical_fields}."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT raw_group_key, canonical_group_key, canonical_event_name, "
+            "canonical_event_date, canonical_event_date_iso, canonical_venue, "
+            "created_at FROM event_group_merges"
+        ).fetchall()
+    return {r["raw_group_key"]: dict(r) for r in rows}
 
 
 def set_inv_override(source, source_id, field, value, now_iso):

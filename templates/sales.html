@@ -96,6 +96,23 @@
     content: "✎"; position: absolute; right: 4px; top: 50%;
     transform: translateY(-50%); color: var(--accent); font-size: 10px; opacity: 0.7;
   }
+  /* Group-merge UI: checkbox in each event-group header lets the user
+     pick 2+ groups, and the floating bar at the bottom opens the merge
+     modal. ⊟ MERGED badge marks groups that were already merged together,
+     click to split. */
+  .grp-check { width: 13px; height: 13px; vertical-align: middle; margin-right: 6px; cursor: pointer; accent-color: var(--accent); }
+  .grp-unmerge { background: transparent; border: 1px solid var(--purple); color: var(--purple); padding: 1px 6px; font-size: 9px; letter-spacing: 1.5px; margin-left: 8px; cursor: pointer; font-family: inherit; border-radius: 1px; }
+  .grp-unmerge:hover { background: rgba(167,139,250,0.12); }
+  #merge-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--purple); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; z-index: 999; letter-spacing: 0.5px; gap: 12px; align-items: center; }
+  #merge-bar.open { display: flex; }
+  #merge-bar .bulk-count { color: var(--purple); font-weight: 600; }
+  #merge-bar button { font-family: inherit; font-size: 11px; padding: 6px 12px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; }
+  #merge-bar button.primary { color: var(--purple); border-color: var(--purple); }
+  #merge-bar button.primary:hover { background: rgba(167,139,250,0.1); }
+  #merge-modal-bg .merge-opt { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; padding: 4px 0; }
+  #merge-modal-bg .merge-opt input[type="radio"] { accent-color: var(--purple); }
+  #merge-modal-bg .merge-opt .name { flex: 1; }
+  #merge-modal-bg .merge-opt .meta { color: var(--muted); font-size: 11px; }
   /* edit modal */
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
   .modal-bg.open { display: flex; }
@@ -248,6 +265,30 @@
   <button id="bulk-clear">Clear</button>
 </div>
 
+<div id="merge-bar">
+  <span class="bulk-count" id="merge-count">0 groups</span>
+  <button class="primary" id="merge-go">Merge into one event</button>
+  <button id="merge-clear">Clear</button>
+</div>
+
+<div id="merge-modal-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>// MERGE EVENT GROUPS <span class="src-tag" id="merge-modal-count" style="color:var(--purple);border-color:var(--purple);">0 GROUPS</span></span><button class="close" id="merge-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Pick which event name to use for the merged group, or type your own. Future inventory + sales rows that match any of these groups will display under the chosen name.</div>
+      <div id="merge-opts"></div>
+      <label>Custom name</label><input id="merge-custom-name" type="text" placeholder="(or pick one above)">
+      <label>Date</label><input id="merge-date" type="date">
+      <label>Venue</label><input id="merge-venue" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="merge-foot-note">Merging is reversible — click ⊟ MERGED on the group header to split.</span>
+      <button id="merge-cancel">Cancel</button>
+      <button class="primary" id="merge-save" style="background:var(--purple);border-color:var(--purple);color:var(--bg);">Merge</button>
+    </div>
+  </div>
+</div>
+
 
 <div id="bulk-bg" class="modal-bg">
   <div class="modal">
@@ -347,6 +388,12 @@ let _boughtByEvent = new Map();
 let _invByEvent = new Map();
 // Which event group keys are expanded in the All Sales / Recent tables.
 let _expanded = new Set();
+// Group-merge selection: which event-group keys the user has checkboxed
+// in the All-Sales / Recent tables. When 2+ are selected, the merge bar
+// appears and clicking "Merge" opens the modal.
+let _selectedGroupKeys = new Set();
+// canonical_group_key set of currently-merged groups (for the ⊟ MERGED badge).
+let _mergedGroupKeys = new Set();
 function _eventKey(r) {
   if (r && r.event_group) return r.event_group;
   return ((r?.event_name || "") + "|" + (r?.event_date_iso || r?.event_date || "")).toLowerCase();
@@ -516,11 +563,16 @@ function _renderGrouped(tbody, rows, groupOrder) {
     hdr.className = "group-hdr" + (expanded ? " expanded" : "");
     hdr.dataset.key = g.key;
     hdr.dataset.eventDate = g.event_date_iso || "";
+    const isMerged = _mergedGroupKeys.has(g.key);
+    const checked = _selectedGroupKeys.has(g.key) ? " checked" : "";
+    const mergedBadge = isMerged ? `<button class="grp-unmerge" title="Unmerge — split this back into the original groups" data-canonical="${esc(g.key)}">⊟ MERGED</button>` : "";
     hdr.innerHTML = `
       <td colspan="14">
+        <input type="checkbox" class="grp-check" data-grp-key="${esc(g.key)}" title="Select to merge with another event"${checked}>
         <span class="chev">▸</span>
         <span class="evt-title">${esc(g.event_name)}</span>
         <span class="evt-meta">// ${esc(fmtDateTime(g.event_date_iso || g.event_date || ""))} · ${esc(g.venue || "")}</span>
+        ${mergedBadge}
         <span class="evt-stats">
           <span class="ratio">${sold}/${total} sold</span>
           ${money(cost)} cost · ${money(payout)} payout ·
@@ -739,6 +791,136 @@ document.addEventListener("click", async (e) => {
   }
 });
 
+// --- Event-group merge ---
+function _renderMergeBar() {
+  const bar = document.getElementById("merge-bar");
+  const count = _selectedGroupKeys.size;
+  if (count < 2) { bar.classList.remove("open"); return; }
+  bar.classList.add("open");
+  document.getElementById("merge-count").textContent = `${count} groups selected`;
+}
+
+document.addEventListener("change", (e) => {
+  const cb = e.target.closest(".grp-check");
+  if (!cb) return;
+  const k = cb.getAttribute("data-grp-key");
+  if (cb.checked) _selectedGroupKeys.add(k);
+  else _selectedGroupKeys.delete(k);
+  _renderMergeBar();
+});
+
+// Stop the checkbox click from also expanding the group.
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".grp-check")) e.stopPropagation();
+});
+
+document.getElementById("merge-clear").addEventListener("click", () => {
+  _selectedGroupKeys.clear();
+  document.querySelectorAll(".grp-check:checked").forEach(c => { c.checked = false; });
+  _renderMergeBar();
+});
+
+document.getElementById("merge-go").addEventListener("click", () => {
+  if (_selectedGroupKeys.size < 2) return;
+  // Build the modal: list each selected group's name + date + venue,
+  // radio-buttons to pick one as canonical, plus a custom-name override.
+  const optsEl = document.getElementById("merge-opts");
+  optsEl.innerHTML = "";
+  // Pull the group metadata from the rendered headers — they have data-key
+  // and the header text already includes name/date/venue.
+  const groupMeta = [];
+  document.querySelectorAll("tr.group-hdr").forEach(tr => {
+    const k = tr.dataset.key;
+    if (!_selectedGroupKeys.has(k)) return;
+    const name = (tr.querySelector(".evt-title")?.textContent || "").trim();
+    const meta = (tr.querySelector(".evt-meta")?.textContent || "").trim();
+    const dateIso = tr.dataset.eventDate || "";
+    if (!groupMeta.find(g => g.key === k)) {
+      groupMeta.push({key: k, name, meta, dateIso});
+    }
+  });
+  groupMeta.forEach((g, i) => {
+    const div = document.createElement("div");
+    div.className = "merge-opt";
+    div.innerHTML = `
+      <input type="radio" name="merge-name" id="merge-r-${i}" value="${esc(g.name)}" data-date="${esc(g.dateIso)}" data-venue="${esc(g.meta)}"${i===0?" checked":""}>
+      <label for="merge-r-${i}" class="name">${esc(g.name)}</label>
+      <span class="meta">${esc(g.meta)}</span>
+    `;
+    optsEl.appendChild(div);
+  });
+  document.getElementById("merge-modal-count").textContent = `${groupMeta.length} GROUPS`;
+  document.getElementById("merge-custom-name").value = "";
+  // Pre-fill date/venue from the first selected group.
+  const first = groupMeta[0];
+  if (first) {
+    document.getElementById("merge-date").value = (first.dateIso || "").slice(0, 10);
+    // Strip the leading "// " and the date prefix from .evt-meta to recover the venue.
+    const venueMatch = first.meta.match(/·\s*(.+)$/);
+    document.getElementById("merge-venue").value = venueMatch ? venueMatch[1].trim() : "";
+  }
+  document.getElementById("merge-modal-bg").classList.add("open");
+});
+
+document.getElementById("merge-close").addEventListener("click", () => {
+  document.getElementById("merge-modal-bg").classList.remove("open");
+});
+document.getElementById("merge-cancel").addEventListener("click", () => {
+  document.getElementById("merge-modal-bg").classList.remove("open");
+});
+
+document.getElementById("merge-save").addEventListener("click", async () => {
+  const custom = document.getElementById("merge-custom-name").value.trim();
+  let chosenName = custom;
+  let chosenDate = document.getElementById("merge-date").value.trim();
+  if (!chosenName) {
+    const r = document.querySelector("input[name='merge-name']:checked");
+    if (!r) { alert("Pick a name (or type a custom one)"); return; }
+    chosenName = r.value;
+    chosenDate = chosenDate || (r.dataset.date || "");
+  }
+  const venue = document.getElementById("merge-venue").value.trim();
+  if (!chosenName) { alert("Event name required"); return; }
+  const res = await fetch("/api/event-groups/merge", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      group_keys: Array.from(_selectedGroupKeys),
+      event_name: chosenName,
+      event_date_iso: chosenDate,
+      venue,
+    }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    alert("Merge failed: " + (j.error || res.status));
+    return;
+  }
+  document.getElementById("merge-modal-bg").classList.remove("open");
+  _selectedGroupKeys.clear();
+  _renderMergeBar();
+  await load();
+});
+
+// Unmerge — clicked on the ⊟ MERGED badge of a previously-merged group.
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button.grp-unmerge");
+  if (!btn) return;
+  e.stopPropagation();
+  const canonical = btn.getAttribute("data-canonical");
+  if (!confirm("Split this merged group back into its original event groups?")) return;
+  const res = await fetch("/api/event-groups/unmerge", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({canonical_group_key: canonical}),
+  });
+  if (res.ok) {
+    await load();
+  } else {
+    alert("Unmerge failed");
+  }
+});
+
 
 const _searchNorm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 function render() {
@@ -793,12 +975,21 @@ function _scrollToToday() {
 }
 
 async function load() {
-  const [salR, invR] = await Promise.all([
+  const [salR, invR, mergesR] = await Promise.all([
     fetch("/api/sales-all"),
     fetch("/api/inventory-all"),
+    fetch("/api/event-groups/merges"),
   ]);
   const d = await salR.json();
   _rows = d.rows || [];
+  // Build a set of canonical_group_keys that are actively merged so the
+  // group header can show a "⊟ MERGED" badge. Click to split.
+  if (mergesR.ok) {
+    const mj = await mergesR.json();
+    _mergedGroupKeys = new Set((mj.merges || []).map(m => m.canonical_group_key));
+  } else {
+    _mergedGroupKeys = new Set();
+  }
   renderUnsold(d.unsold || [], d.unsold_totals || {});
   renderCanceled(d.canceled || [], d.canceled_totals || {});
   // Backend computes per-event "tickets bought" already, taking max across
