@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS sales_hidden (
     hidden_at TEXT NOT NULL,
     PRIMARY KEY (source, sale_id)
 );
+CREATE TABLE IF NOT EXISTS sales_canceled (
+    source TEXT NOT NULL,
+    sale_id TEXT NOT NULL,
+    canceled_at TEXT NOT NULL,
+    reason TEXT,
+    PRIMARY KEY (source, sale_id)
+);
 CREATE TABLE IF NOT EXISTS inventory_overrides (
     source TEXT NOT NULL,
     source_id TEXT NOT NULL,
@@ -663,6 +670,44 @@ def all_hidden_sale_keys():
     with connect() as conn:
         rows = conn.execute("SELECT source, sale_id FROM sales_hidden").fetchall()
     return {(r["source"], r["sale_id"]) for r in rows}
+
+
+# --- Canceled sales archive ---
+# Distinct from sales_hidden ("× delete from view"). Canceled means the sale
+# was reversed by the platform — the ticket goes back to inventory (which the
+# platform's own scrape will pick up again on relist). Excluded from totals
+# and surfaced in a separate archive on the sales page.
+
+def cancel_sale(source, sale_id, now_iso, reason=None):
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO sales_canceled (source, sale_id, canceled_at, reason) "
+            "VALUES (?, ?, ?, ?)",
+            (source, sale_id, now_iso, reason),
+        )
+
+
+def uncancel_sale(source, sale_id):
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM sales_canceled WHERE source = ? AND sale_id = ?",
+            (source, sale_id),
+        )
+
+
+def all_canceled_sale_keys():
+    with connect() as conn:
+        rows = conn.execute("SELECT source, sale_id FROM sales_canceled").fetchall()
+    return {(r["source"], r["sale_id"]) for r in rows}
+
+
+def all_canceled_sales():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT source, sale_id, canceled_at, reason FROM sales_canceled "
+            "ORDER BY canceled_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def set_inv_override(source, source_id, field, value, now_iso):

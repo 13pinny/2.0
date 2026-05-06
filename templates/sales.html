@@ -228,6 +228,17 @@
     </tr></thead>
     <tbody id="unsoldbody"></tbody>
   </table>
+
+  <h2 id="canceled-header" style="display:none; color:var(--amber);">// CANCELED <span class="count" id="canceled-count"></span><span class="count" id="canceled-lost"></span></h2>
+  <table id="canceled-table" style="display:none">
+    <thead><tr>
+      <th>SOLD</th><th>EVENT</th><th>VENUE</th><th>SEC/ROW</th>
+      <th>SRC</th><th>PLATFORM</th><th>ORDER#</th>
+      <th class="num">QTY</th><th class="num">SALE</th><th class="num">COST</th>
+      <th>CANCELED</th><th></th>
+    </tr></thead>
+    <tbody id="canceledbody"></tbody>
+  </table>
 </main>
 
 <div id="bulk-bar">
@@ -236,6 +247,7 @@
   <button class="danger" id="bulk-delete">Delete</button>
   <button id="bulk-clear">Clear</button>
 </div>
+
 
 <div id="bulk-bg" class="modal-bg">
   <div class="modal">
@@ -446,7 +458,7 @@ function _renderRow(r) {
     <td class="num ${ed('cost')}">${money(r.cost)}</td>
     <td class="num" style="color:${netColor};">${net == null ? '—' : money(net)}</td>
     <td class="num" style="color:${roiColor};">${roiText}</td>
-    <td><button class="row-del" title="Delete this sale" data-source="${esc(r.source)}" data-id="${esc(r.sale_id)}">×</button></td>
+    <td style="white-space:nowrap;"><button class="row-del row-cancel" title="Cancel sale (sale was reversed; releases the matched inventory)" data-cancel-source="${esc(r.source)}" data-cancel-id="${esc(r.sale_id)}" style="color:var(--amber);">↺</button><button class="row-del" title="Delete this sale" data-source="${esc(r.source)}" data-id="${esc(r.sale_id)}">×</button></td>
   `;
   tr._row = r;
   return tr;
@@ -645,6 +657,89 @@ document.addEventListener("click", async (e) => {
   }
 });
 
+// Canceled sales — sale was reversed (e.g. Viagogo canceled by buyer or
+// platform). Removes the sale from active rollups, releases any matcher
+// pairing, and surfaces the row in the "// CANCELED" section below. Won't
+// re-create the inventory row because the platform relists the ticket
+// itself; the regular Kartis scrape picks that up on the next pass.
+function renderCanceled(canceled, totals) {
+  const hdr = document.getElementById("canceled-header");
+  const tbl = document.getElementById("canceled-table");
+  const tbody = document.getElementById("canceledbody");
+  tbody.innerHTML = "";
+  if (!canceled || canceled.length === 0) {
+    hdr.style.display = "none";
+    tbl.style.display = "none";
+    return;
+  }
+  hdr.style.display = "";
+  tbl.style.display = "";
+  document.getElementById("canceled-count").textContent =
+    `(${canceled.length} ${canceled.length === 1 ? "row" : "rows"} · ${totals.qty || 0} tickets)`;
+  document.getElementById("canceled-lost").textContent =
+    totals.lost_revenue ? `· ${money(totals.lost_revenue)} lost revenue` : "";
+  for (const r of canceled) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.sale_date_iso || r.sale_date ? esc(fmtDate(r.sale_date_iso || r.sale_date)) : '<span class="muted">—</span>'}</td>
+      <td>${esc(r.event_name || "")}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(r.event_date_iso || r.event_date))}</div></td>
+      <td>${esc(r.venue || "")}</td>
+      <td>${esc(r.section || "")}${r.row ? " / " + esc(r.row) : ""}</td>
+      <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span></td>
+      <td>${esc(r.platform || "")}</td>
+      <td class="muted" style="font-size:11px;">${esc(r.order_id || "")}</td>
+      <td class="num">${r.qty ?? ""}</td>
+      <td class="num">${money(r.sale_price)}</td>
+      <td class="num">${money(r.cost)}</td>
+      <td class="muted" style="font-size:11px;">${esc(fmtDate(r.canceled_at))}${r.cancel_reason ? `<div>${esc(r.cancel_reason)}</div>` : ''}</td>
+      <td><button class="row-del" title="Restore — sale wasn't actually canceled" data-uncancel-source="${esc(r.source)}" data-uncancel-id="${esc(r.sale_id)}">×</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+// Cancel button on each active sale row.
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-cancel-source]");
+  if (!btn) return;
+  e.stopPropagation();
+  const source = btn.getAttribute("data-cancel-source");
+  const sale_id = btn.getAttribute("data-cancel-id");
+  const reason = prompt("Cancel this sale?\n\nThe sale will move to the // CANCELED archive at the bottom and any matched inventory row will be released.\n\nOptional reason:", "");
+  if (reason === null) return;  // user pressed Cancel on the prompt
+  const res = await fetch("/api/sales/cancel", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source, sale_id, reason}),
+  });
+  if (res.ok) {
+    await load();
+  } else {
+    alert("Failed to cancel sale");
+  }
+});
+
+// Restore button on canceled rows.
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-uncancel-source]");
+  if (!btn) return;
+  e.stopPropagation();
+  if (!confirm("Restore this sale to active sales?")) return;
+  const source = btn.getAttribute("data-uncancel-source");
+  const sale_id = btn.getAttribute("data-uncancel-id");
+  const res = await fetch("/api/sales/uncancel", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source, sale_id}),
+  });
+  if (res.ok) {
+    await load();
+  } else {
+    alert("Failed to restore sale");
+  }
+});
+
+
 const _searchNorm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 function render() {
   const q = _searchNorm(document.getElementById("q-search").value);
@@ -705,6 +800,7 @@ async function load() {
   const d = await salR.json();
   _rows = d.rows || [];
   renderUnsold(d.unsold || [], d.unsold_totals || {});
+  renderCanceled(d.canceled || [], d.canceled_totals || {});
   // Backend computes per-event "tickets bought" already, taking max across
   // overlapping sources — saves us doing it in JS.
   _boughtByEvent = new Map(Object.entries(d.bought_by_event || {}));

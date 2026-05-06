@@ -791,13 +791,30 @@ def _matched_cost(matches_idx, jerujam_idx, sale_source, sale_id, qty):
     return round(cpt * (qty or 0), 2)
 
 
-def _build_combined_sales():
+def _build_combined_sales(only_canceled=False):
     """Combine sale events across sources. Sources differ in fidelity:
     JeruJam has per-sale rows; Lysted/Viagogo only expose aggregates so
     each sold-row contributes a single coarse entry.
+
+    By default returns the active sales list (excludes both hidden and
+    canceled). Pass only_canceled=True to invert the filter and return only
+    rows in the canceled archive — used to power the "// CANCELED" section
+    on the sales page.
     """
     out = []
     hidden_sales = db.all_hidden_sale_keys()
+    canceled_sales = db.all_canceled_sale_keys()
+    if only_canceled:
+        sale_skip = hidden_sales  # keep canceled, drop hidden
+    else:
+        sale_skip = hidden_sales | canceled_sales
+
+    def _skip_sale(key):
+        if key in sale_skip:
+            return True
+        if only_canceled and key not in canceled_sales:
+            return True
+        return False
 
     j_tickets = {t["id"]: t for t in db.all_jerujam_tickets()}
     matches_idx = {(m["sale_source"], m["sale_id"]): m for m in db.all_matches()}
@@ -810,7 +827,7 @@ def _build_combined_sales():
             s.get("quantity") or 0,
             round(s.get("sale_price") or 0, 0),
         ))
-        if ("jerujam", str(s.get("id"))) in hidden_sales:
+        if _skip_sale(("jerujam", str(s.get("id")))):
             continue
         sale_price = s.get("sale_price") or 0
         out.append({
@@ -859,7 +876,7 @@ def _build_combined_sales():
                     cost = mc
         sale_iso_short = (r.get("sale_date_iso") or "")[:10]
         key = (_norm(r.get("event_name")), sale_iso_short, qty, round(r.get("sale_price") or 0, 0))
-        if ("lysted", str(r.get("id"))) in hidden_sales:
+        if _skip_sale(("lysted", str(r.get("id")))):
             continue
         payout = r.get("payout") if r.get("payout") is not None else r.get("sale_price")
         out.append({
@@ -923,7 +940,7 @@ def _build_combined_sales():
             if mc is not None:
                 cost = mc
         key = (_norm(r.get("event_name")), (r.get("sale_date_iso") or "")[:10], qty, round(r.get("sale_price") or 0, 0))
-        if ("viagogo", str(r.get("id"))) in hidden_sales:
+        if _skip_sale(("viagogo", str(r.get("id")))):
             continue
         out.append({
             "source": "viagogo",
@@ -981,7 +998,7 @@ def _build_combined_sales():
             mc = _matched_cost(matches_idx, j_tickets, "crowdvolt", r.get("id"), qty)
             if mc is not None:
                 cost = mc
-        if ("crowdvolt", str(r.get("id"))) in hidden_sales:
+        if _skip_sale(("crowdvolt", str(r.get("id")))):
             continue
         out.append({
             "source": "crowdvolt",
@@ -1004,7 +1021,7 @@ def _build_combined_sales():
         })
 
     for m in db.all_manual_sales():
-        if ("manual", str(m.get("id"))) in hidden_sales:
+        if _skip_sale(("manual", str(m.get("id")))):
             continue
         qty = m.get("qty") or 0
         sale_price = m.get("sale_price") or 0
@@ -1268,6 +1285,19 @@ def api_sales_all():
         "qty": sum((u.get("qty") or 0) for u in unsold_rows),
         "cost": round(sum((u.get("cost") or 0) for u in unsold_rows), 2),
     }
+    # Canceled-sale archive — same pattern. Each row carries the platform's
+    # canceled_at + optional reason on top of the regular sale fields.
+    canceled_rows = _build_combined_sales(only_canceled=True)
+    canceled_meta = {(c["source"], c["sale_id"]): c for c in db.all_canceled_sales()}
+    for cr in canceled_rows:
+        meta = canceled_meta.get((cr.get("source"), str(cr.get("sale_id"))), {})
+        cr["canceled_at"] = meta.get("canceled_at")
+        cr["cancel_reason"] = meta.get("reason")
+    canceled_totals = {
+        "rows": len(canceled_rows),
+        "qty": sum((c.get("qty") or 0) for c in canceled_rows),
+        "lost_revenue": round(sum((c.get("sale_price") or 0) for c in canceled_rows), 2),
+    }
     return jsonify({
         "rows": rows,
         "totals": totals,
@@ -1275,6 +1305,8 @@ def api_sales_all():
         "last_run": _last_run,
         "unsold": unsold_rows,
         "unsold_totals": unsold_totals,
+        "canceled": canceled_rows,
+        "canceled_totals": canceled_totals,
     })
 
 
@@ -1347,6 +1379,58 @@ def api_sales_unhide():
     if not source or not sale_id:
         return jsonify({"error": "source and sale_id required"}), 400
     db.unhide_sale(source, sale_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sales/cancel", methods=["POST"])
+def api_sales_cancel():
+    """Mark a sale as canceled. Distinct from hide (× delete):
+    - Sale moves out of active sales rollups (revenue / profit / maaser)
+    - Surfaced separately on the sales page under "// CANCELED"
+    - Any matcher pairing for this sale is cleared, and if the inventory
+      row was auto-hidden because of the match, it is restored
+    - Matcher blocklist gets the sale_id so the next pass doesn't re-pair
+    The platform (Viagogo etc.) typically auto-relists the underlying
+    ticket; the regular scrape picks that up — Kartis doesn't synthesize
+    a new inventory row.
+    """
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    sale_id = (body.get("sale_id") or "").strip()
+    reason = (body.get("reason") or "").strip() or None
+    if not source or not sale_id:
+        return jsonify({"error": "source and sale_id required"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.cancel_sale(source, sale_id, now_iso, reason=reason)
+    # Match cleanup — find any inventory_matches row for this sale, drop it,
+    # and unhide the matched inventory row (matcher.py:247 hides whole-qty
+    # matches). Also blocklist the sale so the matcher doesn't immediately
+    # re-pair on next run.
+    matched_inv = []
+    for m in db.all_matches():
+        if m.get("sale_source") == source and m.get("sale_id") == sale_id:
+            matched_inv.append((m.get("inv_source"), m.get("inv_source_id")))
+    for inv_src, inv_sid in matched_inv:
+        db.unhide_inventory(inv_src, inv_sid)
+    db.delete_match(source, sale_id)
+    db.add_blocklist(source, sale_id, now_iso)
+    return jsonify({
+        "ok": True,
+        "source": source, "sale_id": sale_id,
+        "released_inventory": [{"source": s, "source_id": i} for s, i in matched_inv],
+    })
+
+
+@app.route("/api/sales/uncancel", methods=["POST"])
+def api_sales_uncancel():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    sale_id = (body.get("sale_id") or "").strip()
+    if not source or not sale_id:
+        return jsonify({"error": "source and sale_id required"}), 400
+    db.uncancel_sale(source, sale_id)
     return jsonify({"ok": True})
 
 
