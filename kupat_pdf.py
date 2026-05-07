@@ -27,6 +27,7 @@ chars get scrubbed so the path is always a legal Windows path.
 
 The browser stays headless (default). Set KUPAT_PDF_HEADLESS=0 to watch.
 """
+import io
 import json
 import os
 import re
@@ -232,9 +233,12 @@ def render_pdfs(url, base_dir=None, on_progress=None, headless=None):
     saved = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=headless)
+        # 2x device scale → retina-quality screenshots so the embedded PNG
+        # in each PDF stays sharp at print resolution.
         ctx = browser.new_context(
             locale="he-IL",
             viewport={"width": 1100, "height": 1700},
+            device_scale_factor=2,
         )
         page = ctx.new_page()
 
@@ -298,10 +302,15 @@ def render_pdfs(url, base_dir=None, on_progress=None, headless=None):
             # is always present; if it ever isn't we fall back to slide i.
             slide_target = i + 1 if slide_offset_known else i
             # Hide other slides + force the active one to flow at the top of
-            # the page. Then return the active slide's pixel size so the PDF
-            # call below can use a page format that matches — without this,
-            # page.pdf("A4") emits a sheet with the ticket pinned in the
-            # middle and 70% blank space around it (looks "blank" at a glance).
+            # the page. Also bake every canvas inside the active slide into
+            # an <img src=data:image/png>: Chromium's print-to-PDF path
+            # serializes <canvas> as inline vector ops which some PDF
+            # viewers/printer drivers silently drop ("blank ticket"
+            # symptom). A real <img> lands as a regular Image XObject,
+            # rendered reliably anywhere. Then return the active slide's
+            # pixel size so the PDF call below can use a page format that
+            # matches — without this, page.pdf("A4") emits a sheet with the
+            # ticket pinned in the middle and 70% blank space around it.
             box = page.evaluate("""
 (idx) => {
   // Strip padding/margin from the document so the ticket flows from (0,0).
@@ -346,6 +355,23 @@ def render_pdfs(url, base_dir=None, on_progress=None, headless=None):
     }
     // Repaint canvases that may have been culled while offscreen.
     window.dispatchEvent(new Event('resize'));
+    // Bake each canvas → <img> so the QR code lands in the PDF as a real
+    // raster image (Image XObject), not as fragile inline vector paint.
+    active.querySelectorAll('canvas').forEach(c => {
+      try {
+        const dataUrl = c.toDataURL('image/png');
+        const img = document.createElement('img');
+        img.src = dataUrl;
+        img.width = c.width;
+        img.height = c.height;
+        // Match canvas's box so the layout doesn't shift.
+        const cs = getComputedStyle(c);
+        img.style.cssText = c.style.cssText;
+        img.style.width = cs.width;
+        img.style.height = cs.height;
+        c.parentNode.replaceChild(img, c);
+      } catch (e) { /* tainted canvas — leave the canvas in place */ }
+    });
     const r = active.getBoundingClientRect();
     return { w: Math.ceil(r.width), h: Math.ceil(r.height) };
   }
@@ -354,26 +380,39 @@ def render_pdfs(url, base_dir=None, on_progress=None, headless=None):
 """, slide_target)
             page.wait_for_timeout(350)  # let lazy canvases repaint
 
-            # Match the PDF page size to the ticket size (with a small margin
-            # for breathing room). Falls back to A4 if measurement failed.
+            # Capture the active slide as a PNG screenshot, then wrap it
+            # in a PDF via Pillow. Why not page.pdf()? Chromium's print-to-
+            # PDF path emits content Adobe Acrobat Reader sometimes
+            # renders as a blank page (canvas-as-vector + tagged-pdf
+            # quirks). A raster PNG embedded as an Image XObject in a
+            # one-page PDF renders identically in every viewer (Adobe,
+            # Edge, Chrome, Preview, mobile) and prints reliably to any
+            # printer. Tradeoff: text isn't selectable in the PDF — for a
+            # ticket that gets scanned at the venue, that's a fine trade.
+            from PIL import Image
             if box and box.get("w") and box.get("h"):
-                # Convert px → inches at 96 DPI (Chromium's print default).
-                pad_px = 24
-                pdf_kwargs = {
-                    "width": f"{(box['w'] + pad_px*2) / 96:.2f}in",
-                    "height": f"{(box['h'] + pad_px*2) / 96:.2f}in",
-                    "print_background": True,
-                    "margin": {"top": f"{pad_px}px", "bottom": f"{pad_px}px",
-                                "left": f"{pad_px}px", "right": f"{pad_px}px"},
-                }
+                # Locate the active slide via the same selector trick we
+                # used during DOM manipulation, get its element handle,
+                # take a screenshot of just that element. element.screenshot()
+                # respects device_scale_factor so we get retina pixel density.
+                handle = page.evaluate_handle(
+                    "(idx) => document.querySelectorAll('.swiper-slide')[idx]",
+                    slide_target,
+                ).as_element()
+                if handle:
+                    png_bytes = handle.screenshot(type="png", omit_background=False)
+                else:
+                    png_bytes = page.screenshot(type="png", full_page=False)
             else:
-                pdf_kwargs = {
-                    "format": "A4",
-                    "print_background": True,
-                    "margin": {"top": "10mm", "bottom": "10mm",
-                                "left": "10mm", "right": "10mm"},
-                }
-            pdf_bytes = page.pdf(**pdf_kwargs)
+                png_bytes = page.screenshot(type="png", full_page=True)
+
+            img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+            pdf_buf = io.BytesIO()
+            # resolution=144 — the screenshot is 2x DPI; declaring 144 in
+            # the PDF means each px maps to 1/144 inch on a printed page,
+            # so the printed ticket comes out at its natural size (~5.5×8").
+            img.save(pdf_buf, format="PDF", resolution=144.0)
+            pdf_bytes = pdf_buf.getvalue()
             fname = ticket_filename(t)
             target = folder / fname
             target.write_bytes(pdf_bytes)
