@@ -539,12 +539,22 @@ def _build_unified_inventory():
     sold_per_ticket = {}
     for s in j_sales:
         sold_per_ticket[s["ticket_id"]] = sold_per_ticket.get(s["ticket_id"], 0) + (s.get("quantity") or 0)
-    # Cross-source matches (Lysted/Viagogo/CrowdVolt sales paired to JeruJam tickets)
+    # Cross-source / manual matches keyed by (inv_source, str(inv_source_id)).
+    # Same dict feeds:
+    #   - the JeruJam branch (was the only one honoring matches before — kept
+    #     for backwards compatibility via ext_matched_per_ticket below)
+    #   - Lysted / Viagogo / manual branches (NEW: previously ignored matches,
+    #     so "Mark as Loss" on a Viagogo or Lysted row left the row sitting
+    #     in active inventory because no qty was subtracted).
+    matched_qty = {}
     ext_matched_per_ticket = {}
     for m in db.all_matches():
-        if m.get("inv_source") == "jerujam":
-            tid = m["inv_source_id"]
-            ext_matched_per_ticket[tid] = ext_matched_per_ticket.get(tid, 0) + (m.get("qty_matched") or 0)
+        src = m.get("inv_source")
+        sid = m.get("inv_source_id")
+        q = m.get("qty_matched") or 0
+        matched_qty[(src, str(sid))] = matched_qty.get((src, str(sid)), 0) + q
+        if src == "jerujam":
+            ext_matched_per_ticket[sid] = ext_matched_per_ticket.get(sid, 0) + q
 
     rows = []
 
@@ -565,6 +575,11 @@ def _build_unified_inventory():
             lysted_ga_event_rows.add((ek, ""))
         if ("lysted", str(r.get("id"))) in hidden:
             continue
+        qty_full = r.get("qty") or 0
+        consumed = matched_qty.get(("lysted", str(r.get("id"))), 0)
+        qty_remaining = max(0, qty_full - consumed)
+        if qty_remaining <= 0:
+            continue
         rows.append({
             "source": "lysted",
             "source_id": r.get("id"),
@@ -575,7 +590,7 @@ def _build_unified_inventory():
             "section": r.get("section"),
             "row": r.get("row_label"),
             "seats": r.get("seats"),
-            "qty_unsold": r.get("qty") or 0,
+            "qty_unsold": qty_remaining,
             "cost": r.get("total_cost") or 0,
             "cost_per_unit": r.get("cost_per_unit"),
             "delivery_type": r.get("delivery_type"),
@@ -601,6 +616,10 @@ def _build_unified_inventory():
             continue
         if ("lysted", str(inv.get("id"))) in hidden:
             continue
+        consumed = matched_qty.get(("lysted", str(inv.get("id"))), 0)
+        qty_remaining = max(0, qty - consumed)
+        if qty_remaining <= 0:
+            continue
         total_cost = inv.get("total_cost") or 0
         cost_per = round(total_cost / qty, 2) if qty else None
         rows.append({
@@ -613,7 +632,7 @@ def _build_unified_inventory():
             "section": "",
             "row": "",
             "seats": "",
-            "qty_unsold": qty,
+            "qty_unsold": qty_remaining,
             "cost": total_cost,
             "cost_per_unit": cost_per,
             "delivery_type": "",
@@ -635,6 +654,10 @@ def _build_unified_inventory():
             viagogo_ga_events.add(ek)
         if ("viagogo", str(r.get("id"))) in hidden:
             continue
+        consumed = matched_qty.get(("viagogo", str(r.get("id"))), 0)
+        avail_remaining = max(0, avail - consumed)
+        if avail_remaining <= 0:
+            continue
         rows.append({
             "source": "viagogo",
             "source_id": r.get("id"),
@@ -645,11 +668,11 @@ def _build_unified_inventory():
             "section": r.get("section"),
             "row": "",
             "seats": r.get("ticket_type"),
-            "qty_unsold": avail,
+            "qty_unsold": avail_remaining,
             "cost": r.get("cost") or 0,
             "cost_per_unit": r.get("face_value"),
             "delivery_type": r.get("ticket_type"),
-            "list_price": (r.get("price") or 0) * avail,
+            "list_price": (r.get("price") or 0) * avail_remaining,
             "status": r.get("visibility") or "active",
         })
 
@@ -709,6 +732,10 @@ def _build_unified_inventory():
         if ("manual", str(m.get("id"))) in hidden:
             continue
         qty = m.get("qty") or 0
+        if qty <= 0:
+            continue
+        consumed = matched_qty.get(("manual", str(m.get("id"))), 0)
+        qty = max(0, qty - consumed)
         if qty <= 0:
             continue
         cost_per = m.get("cost_per_unit")
