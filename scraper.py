@@ -921,10 +921,23 @@ def scrape_all():
         try:
             browser = p.chromium.connect_over_cdp(CDP_URL)
         except Exception as e:
-            raise RuntimeError(
-                f"Can't reach Chrome at {CDP_URL}. Run `python login.py` and "
-                f"keep that Chrome window open. (Underlying: {e})"
-            )
+            # Chrome was down or just-closed (auto-update, accidental close,
+            # transient hiccup). Try to bring it back up automatically by
+            # invoking the same launcher login.py uses, then retry the
+            # connect once. Only raise if that second attempt still fails —
+            # otherwise the scraper recovers silently across Chrome restarts.
+            try:
+                import login
+                if login.launch_chrome():
+                    browser = p.chromium.connect_over_cdp(CDP_URL)
+                else:
+                    raise RuntimeError("login.launch_chrome() returned False")
+            except Exception as e2:
+                raise RuntimeError(
+                    f"Can't reach Chrome at {CDP_URL} and auto-launch failed. "
+                    f"Run `python login.py` and keep that Chrome window open. "
+                    f"(Connect: {e}. Auto-launch: {e2})"
+                )
         context = browser.contexts[0] if browser.contexts else browser.new_context()
 
         page = context.new_page()
