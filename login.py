@@ -73,6 +73,13 @@ def launch_chrome(urls=None):
     args = [
         chrome,
         "--remote-debugging-port=9222",
+        # Chrome 111+ silently drops external WebSocket CDP connections
+        # unless the allowed origin is whitelisted. Without this flag,
+        # curl http://localhost:9222/json/version returns fine (HTTP path)
+        # but playwright's connect_over_cdp hangs on the WebSocket
+        # upgrade. * is safe here because Chrome only listens on
+        # localhost — same risk profile as before the mitigation.
+        "--remote-allow-origins=*",
         f"--user-data-dir={USER_DATA.resolve()}",
         "--no-first-run",
         "--no-default-browser-check",
