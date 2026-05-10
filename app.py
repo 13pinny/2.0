@@ -2651,6 +2651,46 @@ def _check_one_watcher(w, now_iso):
     return len(added), None
 
 
+def _purge_past_watchers():
+    """Auto-delete watchers whose event date has already passed.
+
+    For each watcher we read the cached label payload (no network call) and
+    check meta.firstPerfMs / firstPerfText. Once today's local date is past
+    the event's date, the watcher has nothing left to watch, so we drop it.
+
+    Returns the number of watchers deleted. Soft-fails on any per-watcher
+    error so a single broken cache file can't block the cleanup pass.
+    """
+    today = datetime.now().date()
+    deleted = 0
+    for w in db.tm_all_watchers():
+        try:
+            src_name = w.get("source") or "ticketmaster"
+            src = WATCHER_SOURCES.get(src_name, ticketmaster)
+            lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
+            meta = (lbls or {}).get("meta") or {}
+            event_date = None
+            ms = meta.get("firstPerfMs")
+            if ms:
+                try:
+                    event_date = datetime.fromtimestamp(int(ms) / 1000).date()
+                except (TypeError, ValueError, OSError):
+                    event_date = None
+            if event_date is None:
+                txt = (meta.get("firstPerfText") or "")[:10]
+                try:
+                    event_date = datetime.strptime(txt, "%Y-%m-%d").date()
+                except ValueError:
+                    event_date = None
+            if event_date and event_date < today:
+                db.tm_delete_watcher(w["id"])
+                deleted += 1
+        except Exception:
+            # Don't let one broken watcher block the rest of the purge.
+            traceback.print_exc()
+    return deleted
+
+
 def run_tm_check():
     """Iterate active watchers, run one check each. Lock prevents overlap if
     a tick exceeds the interval. Honors the master_paused setting — when
@@ -2665,6 +2705,9 @@ def run_tm_check():
                 checked=0, drops=0, errors=0, paused=True,
             )
             return
+        # Drop any watchers whose event date has passed before we burn
+        # network calls on them.
+        _purge_past_watchers()
         watchers = db.tm_active_watchers()
         now_iso = datetime.now(timezone.utc).isoformat()
         drops = 0
@@ -2721,6 +2764,9 @@ def api_kupat_pdf():
 
 @app.route("/api/watchers")
 def api_watchers():
+    # Sweep past-event watchers on every page load so the UI doesn't have to
+    # wait for the next periodic tick to clean them out.
+    _purge_past_watchers()
     watchers = db.tm_all_watchers()
     drops = db.tm_recent_drops(limit=200)
     settings = db.all_settings()
