@@ -650,9 +650,13 @@ def _parse_viagogo_sale_row(cells, tab):
 def _scrape_viagogo_sales(context):
     page = context.new_page()
     try:
-        page.goto("https://inv.viagogo.com/Transactions", wait_until="domcontentloaded", timeout=15000)
+        # 60s goto + 30s selector wait: Viagogo's Transactions page ships a
+        # heavy JS bundle that's slow to render from a fresh datacenter IP.
+        # The defaults (15s / 15s) tripped consistently on the VPS even
+        # though local laptop runs were fine.
+        page.goto("https://inv.viagogo.com/Transactions", wait_until="domcontentloaded", timeout=60000)
         try:
-            page.wait_for_selector("li.state", timeout=15000)
+            page.wait_for_selector("li.state", timeout=30000)
         except Exception as e:
             print(f"[kartis] viagogo sales tabs never rendered: {e}")
             _save_debug(page, "viagogo-sales")
@@ -746,9 +750,11 @@ VIAGOGO_EXTRACT_JS = r"""
 def _scrape_viagogo(context):
     page = context.new_page()
     try:
-        page.goto("https://inv.viagogo.com/Listings", wait_until="domcontentloaded")
+        # 60s goto + 30s selector wait — same reason as _scrape_viagogo_sales:
+        # the Listings page is JS-heavy and slow to render from a datacenter IP.
+        page.goto("https://inv.viagogo.com/Listings", wait_until="domcontentloaded", timeout=60000)
         try:
-            page.wait_for_selector("tr.eventRow", timeout=15000)
+            page.wait_for_selector("tr.eventRow", timeout=30000)
         except Exception as e:
             print(f"[kartis] viagogo inventory never rendered: {e}")
             _save_debug(page, "viagogo")
