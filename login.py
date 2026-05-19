@@ -26,13 +26,17 @@ import urllib.request
 from pathlib import Path
 
 USER_DATA = Path(__file__).parent / "user_data"
-CDP_URL = "http://localhost:9222"
+CDP_URL = os.getenv("KARTIS_CDP_URL", "http://localhost:9222")
+# KARTIS_CHROME_BIN lets the VPS deploy point at /usr/bin/chromium (or a
+# Patchright-shipped chromium) without editing this file. When unset we fall
+# back to the auto-search list below.
 CHROME_PATHS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
 ]
 
 # All three logins open as tabs on launch. Order matters — Lysted first
@@ -54,6 +58,9 @@ def is_chrome_running():
 
 
 def find_chrome():
+    env_bin = os.getenv("KARTIS_CHROME_BIN")
+    if env_bin and Path(env_bin).exists():
+        return env_bin
     for path in CHROME_PATHS:
         if Path(path).exists():
             return path
@@ -72,9 +79,17 @@ def launch_chrome(urls=None):
         print("ERROR: Google Chrome not found. Install it from https://www.google.com/chrome/")
         return False
     USER_DATA.mkdir(exist_ok=True)
+    # Keep CDP port in sync with KARTIS_CDP_URL so a deploy can move the
+    # main Chrome off 9222 without code edits. Falls back to 9222 if the
+    # URL is malformed.
+    try:
+        from urllib.parse import urlparse
+        cdp_port = urlparse(CDP_URL).port or 9222
+    except Exception:
+        cdp_port = 9222
     args = [
         chrome,
-        "--remote-debugging-port=9222",
+        f"--remote-debugging-port={cdp_port}",
         # Chrome 111+ silently drops external WebSocket CDP connections
         # unless the allowed origin is whitelisted. Without this flag,
         # curl http://localhost:9222/json/version returns fine (HTTP path)

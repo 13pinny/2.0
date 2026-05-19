@@ -11,7 +11,14 @@ import db
 load_dotenv()
 
 DEBUG_DIR = Path(__file__).parent / "debug"
-CDP_URL = "http://localhost:9222"
+# KARTIS_CDP_URL points at the main Chrome the scraper attaches to. The
+# default matches the local-dev setup (login.py launches Chrome on 9222).
+# KARTIS_CDP_URL_VIAGOGO is an optional Phase-2 override that routes the
+# Viagogo scrape through a separate Chrome (different profile + residential
+# proxy) to dodge Cloudflare 403s. When unset, Viagogo uses the same Chrome
+# as everything else — i.e. behavior is identical to before this change.
+CDP_URL = os.getenv("KARTIS_CDP_URL", "http://localhost:9222")
+CDP_URL_VIAGOGO = os.getenv("KARTIS_CDP_URL_VIAGOGO") or CDP_URL
 
 
 def _parse_money(text):
@@ -1016,6 +1023,26 @@ def scrape_all():
                     )
         context = browser.contexts[0] if browser.contexts else browser.new_context()
 
+        # Phase 2 hook: if a dedicated Viagogo Chrome is configured (different
+        # CDP URL), connect to it and route Viagogo through that context only.
+        # If the connect fails we log and fall back to None so the Viagogo
+        # scrapes raise cleanly (caught by the per-source try/except below) —
+        # we don't want to abort the whole run just because Viagogo Chrome is
+        # down. When no override is set, Viagogo uses the same context as
+        # everything else (current behavior).
+        viagogo_context = context
+        if CDP_URL_VIAGOGO != CDP_URL:
+            try:
+                viagogo_browser = p.chromium.connect_over_cdp(CDP_URL_VIAGOGO)
+                viagogo_context = (
+                    viagogo_browser.contexts[0]
+                    if viagogo_browser.contexts
+                    else viagogo_browser.new_context()
+                )
+            except Exception as e:
+                print(f"[kartis] viagogo CDP connect failed at {CDP_URL_VIAGOGO}: {type(e).__name__}: {e}")
+                viagogo_context = None
+
         page = context.new_page()
         try:
             _ensure_logged_in(page)
@@ -1045,12 +1072,16 @@ def scrape_all():
             print(f"[kartis] lysted sales scrape failed: {type(e).__name__}: {e}")
 
         try:
-            result["viagogo"] = _scrape_viagogo(context)
+            if viagogo_context is None:
+                raise RuntimeError(f"viagogo CDP unavailable at {CDP_URL_VIAGOGO}")
+            result["viagogo"] = _scrape_viagogo(viagogo_context)
         except Exception as e:
             print(f"[kartis] viagogo scrape failed: {type(e).__name__}: {e}")
 
         try:
-            result["viagogo_sales"] = _scrape_viagogo_sales(context)
+            if viagogo_context is None:
+                raise RuntimeError(f"viagogo CDP unavailable at {CDP_URL_VIAGOGO}")
+            result["viagogo_sales"] = _scrape_viagogo_sales(viagogo_context)
         except Exception as e:
             print(f"[kartis] viagogo sales scrape failed: {type(e).__name__}: {e}")
 
