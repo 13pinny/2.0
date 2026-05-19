@@ -1,0 +1,28 @@
+[Unit]
+Description=Kartis Chrome (dedicated Viagogo session through residential proxy) - Phase 2 only
+Requires=kartis-xvfb.service
+After=kartis-xvfb.service
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+WorkingDirectory=/opt/kartis
+Environment=DISPLAY=:99
+# Phase 2 only. Enable when Phase 1 still 403s on Viagogo.
+# Set the proxy in the EnvironmentFile so creds aren't committed:
+#   /etc/kartis/viagogo-proxy.env should contain:
+#     PROXY_URL=http://user:pass@residential-proxy-host:port
+EnvironmentFile=/etc/kartis/viagogo-proxy.env
+ExecStart=/usr/bin/chromium \
+    --remote-debugging-port=9223 \
+    --remote-allow-origins=* \
+    --user-data-dir=/opt/kartis/user_data_viagogo \
+    --proxy-server=${PROXY_URL} \
+    --no-first-run \
+    --no-default-browser-check
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
