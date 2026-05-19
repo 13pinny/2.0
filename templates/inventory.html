@@ -26,6 +26,9 @@
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
   header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .meta .auth-warn { display: inline-block; margin-left: 10px; padding: 1px 8px; font-size: 10px; letter-spacing: 1.5px; color: var(--bg); background: var(--red); border: 1px solid var(--red); cursor: pointer; user-select: none; }
+  header .meta .auth-warn:hover { background: #ff6e64; }
+  header .meta .auth-warn.scraping { background: var(--amber); border-color: var(--amber); cursor: progress; }
   header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
   header .nav a:hover, header .nav a.active { color: var(--accent); }
   main { padding: 18px 24px 60px; }
@@ -96,10 +99,28 @@
   .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
   .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; }
   .row-del { color: var(--red); }
+  .row-pair { color: var(--accent); }
+  tbody tr .row-pair:hover { opacity: 1; background: rgba(88,166,255,0.1); border-color: var(--accent); }
   .row-sell { color: var(--green); }
   tbody tr:hover .row-action { opacity: 0.7; }
   tbody tr .row-del:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
   tbody tr .row-sell:hover { opacity: 1; background: rgba(86,211,100,0.1); border-color: var(--green); }
+  .row-attach { color: var(--muted); }
+  .row-attach.has-files { color: var(--accent); opacity: 0.95 !important; }
+  tbody tr .row-attach:hover { opacity: 1; background: rgba(88,166,255,0.1); border-color: var(--accent); }
+  .row-mkt { color: var(--muted); font-weight: 600; font-size: 10px; letter-spacing: 0.5px; }
+  tbody tr .row-mkt:hover { opacity: 1; background: rgba(88,166,255,0.1); border-color: var(--accent); color: var(--accent); }
+  .att-list { padding: 12px 18px; border-bottom: 1px dashed var(--line); }
+  .att-list .att-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; }
+  .att-list .att-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .att-list .att-item .size { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+  .att-list .att-item a { color: var(--accent); text-decoration: none; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--line); padding: 3px 8px; }
+  .att-list .att-item a:hover { background: #1f262e; }
+  .att-list .att-item button.del { background: transparent; color: var(--red); border: 1px solid var(--line); padding: 3px 8px; font-size: 11px; cursor: pointer; }
+  .att-list .att-item button.del:hover { background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .att-empty { color: var(--muted); font-size: 11px; padding: 6px 0; font-style: italic; }
+  .att-upload { padding: 12px 18px; display: flex; gap: 8px; align-items: center; }
+  .att-upload input[type="file"] { flex: 1; font-family: inherit; font-size: 11px; color: var(--text); }
   #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); color: var(--text); border: 1px solid var(--line); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; z-index: 1000; letter-spacing: 0.5px; }
   #toast button { margin-left: 12px; padding: 3px 10px; background: transparent; color: var(--amber); border: 1px solid var(--line-2); cursor: pointer; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
   #toast button:hover { background: #1f262e; }
@@ -118,6 +139,8 @@
     <a href="/sales">SALES</a>
     <a href="/profit">PROFIT</a>
     <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
     <a href="/sources">SOURCES</a>
     <a href="/jerujam">JERUJAM</a>
@@ -126,6 +149,11 @@
 </header>
 <main>
   <div id="errbox" class="err" style="display:none"></div>
+
+  <div style="margin-bottom:14px;font-size:11px;letter-spacing:1px;text-transform:uppercase;">
+    <a href="/" style="color:var(--accent);text-decoration:none;margin-right:14px;">All Inventory</a>
+    <a href="/pending" style="color:var(--muted);text-decoration:none;">Pending Only →</a>
+  </div>
 
   <div class="stats">
     <div class="stat"><div class="label">Unsold</div><div class="value" id="s-tickets">0</div></div>
@@ -174,11 +202,15 @@
     <h3><span>// ADD PENDING TICKET</span><button class="close" id="pend-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line">Tickets you have but haven't listed yet — auto-clears once Lysted/Viagogo picks them up.</div>
-      <label>Event Name *</label><input id="pend-event_name" type="text" placeholder="required">
+      <label>Event Name *</label><div style="position:relative">
+        <input id="pend-event_name" type="text" placeholder="required" autocomplete="off" style="width:100%;">
+        <ul id="pend-event-suggest" hidden style="position:absolute;top:100%;left:0;right:0;margin:0;padding:0;list-style:none;background:var(--bg-3);border:1px solid var(--line);max-height:220px;overflow-y:auto;z-index:200;font-size:12px;"></ul>
+      </div>
       <label>Event Date</label><input id="pend-event_date" type="date">
       <label>Venue</label><input id="pend-venue" type="text">
       <label>Section</label><input id="pend-section" type="text">
       <label>Row</label><input id="pend-row" type="text">
+      <label>Seats</label><input id="pend-seats" type="text" placeholder="e.g. 12, 13 or 12-15 (optional)">
       <label>Qty *</label><input id="pend-qty" type="number" step="1" min="1" value="1">
       <label>Cost / ticket</label><input id="pend-cost_per_unit" type="number" step="0.01" placeholder="enter either this...">
       <label>Total cost</label><input id="pend-total_cost" type="number" step="0.01" placeholder="...or this — auto-syncs">
@@ -198,6 +230,11 @@
     <h3><span>// RECORD SALE <span id="sell-src" class="src-tag"></span></span><button class="close" id="sell-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line" id="sell-meta"></div>
+      <label id="sell-seats-label" style="align-self:start;">Seats sold</label>
+      <div id="sell-seats-wrap">
+        <div id="sell-seats-checks" style="display:flex;flex-wrap:wrap;gap:6px 12px;font-size:11px;"></div>
+        <input id="sell-seats-text" type="text" placeholder="optional — leave blank if you don't track seat numbers" style="font-family:inherit;font-size:12px;padding:7px 10px;background:var(--bg-3);color:var(--text);border:1px solid var(--line);width:100%;display:none;">
+      </div>
       <label>Qty</label><input id="sell-qty" type="number" step="1" min="1">
       <label>Sale Price</label><input id="sell-price" type="number" step="0.01" placeholder="leave blank for $0">
       <label>Sale Date</label><input id="sell-date" type="date">
@@ -221,6 +258,21 @@
   </div>
 </div>
 
+<div id="att-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>// ATTACHMENTS <span id="att-event" class="src-tag" style="border-color:var(--line);color:var(--muted);"></span></span><button class="close" id="att-close">×</button></h3>
+    <div class="att-list" id="att-list"></div>
+    <div class="att-upload">
+      <input type="file" id="att-file">
+      <button class="primary" id="att-upload" style="font-family:inherit;font-size:11px;padding:7px 14px;letter-spacing:1.5px;text-transform:uppercase;background:var(--accent);color:var(--bg);border:1px solid var(--accent);cursor:pointer;">Upload</button>
+    </div>
+    <div class="modal-foot">
+      <span class="muted" style="margin-right:auto;align-self:center;font-size:10px;letter-spacing:1px;">Files survive in OneDrive even if the ticket is deleted.</span>
+      <button id="att-done">Done</button>
+    </div>
+  </div>
+</div>
+
 <div id="modal-bg" class="modal-bg">
   <div class="modal">
     <h3><span>// EDIT LISTING <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
@@ -236,12 +288,27 @@
       <label>List Price</label><input id="m-list_price" type="number" step="0.01">
       <label>Status</label><input id="m-status" type="text">
       <label>Event Name</label><input id="m-event_name" type="text">
+      <label>Event Date</label><input id="m-event_date" type="date">
       <label>Venue</label><input id="m-venue" type="text">
     </div>
     <div class="modal-foot">
       <span class="muted" id="m-foot-note">Tip: clear a field to revert it to the scraped value</span>
       <button id="m-cancel">Cancel</button>
       <button class="primary" id="m-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="pair-bg" class="modal-bg">
+  <div class="modal" style="max-width:640px;">
+    <h3><span>// PAIR WITH SALE <span id="pair-event" class="src-tag" style="border-color:var(--line);color:var(--muted);"></span></span><button class="close" id="pair-close">×</button></h3>
+    <div class="modal-body" style="display:block;">
+      <div class="meta-line" style="grid-column:unset;">Pick an unmatched sale to pair with this inventory row. Use this when the auto-matcher missed because of a section or row label mismatch.</div>
+      <div id="pair-list" style="margin-top:10px;font-size:12px;"></div>
+    </div>
+    <div class="modal-foot">
+      <span class="muted" style="margin-right:auto;align-self:center;font-size:10px;letter-spacing:1px;">Pairing hides this row and decrements its qty.</span>
+      <button id="pair-cancel">Cancel</button>
     </div>
   </div>
 </div>
@@ -359,7 +426,11 @@ function render() {
         <td class="num ${ed('cost_per_unit')}">${money(costPer)}</td>
         <td class="${ed('status')}"><span class="${statusClass}">${esc(r.status)}</span></td>
         <td style="white-space:nowrap;">
+          <button class="row-action row-mkt" data-mkt="stubhub" title="Search on StubHub">SH</button>
+          <button class="row-action row-mkt" data-mkt="seatgeek" title="Search on SeatGeek">SG</button>
+          ${r.source === "manual" ? `<button class="row-action row-attach ${(r.attachments||[]).length ? 'has-files' : ''}" title="Attach files (PDFs, etc.)">📎${(r.attachments||[]).length ? ` ${(r.attachments||[]).length}` : ''}</button>` : ''}
           <button class="row-action row-sell" title="Record manual sale">$</button>
+          <button class="row-action row-pair" title="Pair with an unmatched sale">↔</button>
           <button class="row-action row-del" title="Hide this listing" data-source="${esc(r.source)}" data-id="${esc(r.source_id)}">×</button>
         </td>
       `;
@@ -425,7 +496,18 @@ async function load() {
   const parts = [];
   parts.push(lr.running ? "scraping..." : lr.at ? "last_scrape=" + new Date(lr.at).toLocaleString() : "no_scrape_yet");
   if (lb.at) parts.push("last_backup=" + new Date(lb.at).toLocaleString());
-  document.getElementById("lastrun").textContent = parts.join(" // ");
+  // Surface session-expired sources from the last scrape so the user knows
+  // they need to re-log-in instead of staring at stale data wondering why.
+  // Click the badge → confirm → re-run the scraper.
+  const authErrors = (lr.count && lr.count.auth_errors) || [];
+  let metaHtml = parts.map(p => p.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))).join(" // ");
+  for (const src of authErrors) {
+    const safe = String(src).toUpperCase().replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+    const cls = (window._reauthRunning && window._reauthRunning.has(src)) ? "auth-warn scraping" : "auth-warn";
+    const label = (window._reauthRunning && window._reauthRunning.has(src)) ? `⏳ ${safe} RE-SCRAPING…` : `⚠ ${safe} LOGIN EXPIRED — click to retry`;
+    metaHtml += ` <span class="${cls}" data-auth-src="${safe.toLowerCase()}" title="Click after you've re-signed-in to ${safe} in the dedicated Chrome window. The scraper will run again immediately.">${label}</span>`;
+  }
+  document.getElementById("lastrun").innerHTML = metaHtml;
 
   const err = document.getElementById("errbox");
   if (lr.error) { err.style.display = "block"; err.textContent = "// scrape error: " + lr.error; }
@@ -487,12 +569,230 @@ async function undoLast() {
 document.getElementById("toast-undo").addEventListener("click", undoLast);
 
 document.addEventListener("click", (e) => {
-  const btn = e.target.closest(".row-del");
+  const del = e.target.closest(".row-del");
+  if (del) {
+    e.stopPropagation();
+    const tr = del.closest("tr");
+    const row = tr && tr._row;
+    if (row) hideRow(row);
+    return;
+  }
+  const pair = e.target.closest(".row-pair");
+  if (pair) {
+    e.stopPropagation();
+    const tr = pair.closest("tr");
+    const row = tr && tr._row;
+    if (row) openPairModal(row);
+    return;
+  }
+  const mkt = e.target.closest(".row-mkt");
+  if (mkt) {
+    e.stopPropagation();
+    const tr = mkt.closest("tr");
+    const row = tr && tr._row;
+    if (!row) return;
+    const parts = [row.event_name, row.venue, row.event_date_iso].filter(Boolean);
+    const q = encodeURIComponent(parts.join(" "));
+    const url = mkt.dataset.mkt === "stubhub"
+      ? `https://www.stubhub.com/secure/search?q=${q}`
+      : `https://seatgeek.com/search?search=${q}`;
+    window.open(url, "_blank", "noopener");
+  }
+});
+
+// --- pair-with-sale fallback --------------------------------------------
+let _pairCurrent = null;
+
+function openPairModal(row) {
+  _pairCurrent = row;
+  const eventBadge = document.getElementById("pair-event");
+  const label = `${row.event_name || ""}${row.section ? " · " + row.section : ""}${row.row ? "/" + row.row : ""} · qty ${row.qty_unsold}`;
+  eventBadge.textContent = label;
+  const list = document.getElementById("pair-list");
+  list.innerHTML = '<div style="color:var(--muted);font-size:11px;">// loading unmatched sales…</div>';
+  document.getElementById("pair-bg").classList.add("open");
+  fetch("/api/sales/unmatched?event=" + encodeURIComponent(row.event_name || ""))
+    .then(r => r.ok ? r.json() : {rows: []})
+    .then(d => renderPairList(d.rows || []))
+    .catch(() => { list.innerHTML = '<div style="color:var(--red);">// failed to load unmatched sales</div>'; });
+}
+
+function renderPairList(rows) {
+  const list = document.getElementById("pair-list");
+  if (!rows.length) {
+    list.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0;">// no unmatched sales for this event</div>';
+    return;
+  }
+  list.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr style="border-bottom:1px solid var(--line);color:var(--muted);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;">
+        <th style="text-align:left;padding:6px 8px;">SOURCE</th>
+        <th style="text-align:left;padding:6px 8px;">SOLD</th>
+        <th style="text-align:left;padding:6px 8px;">SECTION</th>
+        <th style="text-align:left;padding:6px 8px;">ROW</th>
+        <th style="text-align:right;padding:6px 8px;">QTY</th>
+        <th style="text-align:left;padding:6px 8px;">EVENT DATE</th>
+        <th></th>
+      </tr></thead>
+      <tbody>
+        ${rows.map((s, i) => `
+          <tr data-i="${i}" style="border-bottom:1px solid var(--line);">
+            <td style="padding:6px 8px;"><span class="src src-${esc(s.sale_source)}">${esc((s.sale_source||"").toUpperCase())}</span></td>
+            <td style="padding:6px 8px;">${esc((s.sale_date || "").slice(0,10))}</td>
+            <td style="padding:6px 8px;">${esc(s.section || "")}</td>
+            <td style="padding:6px 8px;">${esc(s.row || "")}</td>
+            <td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums;">${s.qty || 0}</td>
+            <td style="padding:6px 8px;">${esc(s.event_date_iso || "")}</td>
+            <td style="padding:6px 8px;text-align:right;"><button class="primary pair-go" data-i="${i}" style="font-family:inherit;font-size:11px;padding:5px 10px;letter-spacing:1.5px;text-transform:uppercase;background:var(--accent);color:var(--bg);border:1px solid var(--accent);cursor:pointer;">Pair</button></td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+  list._rows = rows;
+}
+
+async function confirmPair(saleRow) {
+  if (!_pairCurrent) return;
+  const inv = _pairCurrent;
+  const qty = Math.min(saleRow.qty || 0, inv.qty_unsold || 0);
+  if (qty <= 0) { alert("Sale qty exceeds inventory remaining"); return; }
+  const res = await fetch("/api/sales/pair", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      sale_source: saleRow.sale_source,
+      sale_id: saleRow.sale_id,
+      inv_source: inv.source,
+      inv_source_id: String(inv.source_id),
+      qty,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    alert("Pair failed: " + (e.error || res.status));
+    return;
+  }
+  closePairModal();
+  await load();
+}
+
+function closePairModal() {
+  document.getElementById("pair-bg").classList.remove("open");
+  _pairCurrent = null;
+}
+
+document.getElementById("pair-close").addEventListener("click", closePairModal);
+document.getElementById("pair-cancel").addEventListener("click", closePairModal);
+document.getElementById("pair-bg").addEventListener("click", (e) => {
+  if (e.target.id === "pair-bg") closePairModal();
+});
+document.getElementById("pair-list").addEventListener("click", (e) => {
+  const btn = e.target.closest("button.pair-go");
   if (!btn) return;
-  e.stopPropagation();
-  const tr = btn.closest("tr");
-  const row = tr && tr._row;
-  if (row) hideRow(row);
+  const list = document.getElementById("pair-list");
+  const idx = parseInt(btn.dataset.i, 10);
+  const row = list._rows && list._rows[idx];
+  if (row) confirmPair(row);
+});
+
+// --- attachments ---------------------------------------------------------
+let _attCurrentTicket = null;
+
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function renderAttList(items) {
+  const list = document.getElementById("att-list");
+  if (!items || !items.length) {
+    list.innerHTML = '<div class="att-empty">// no files attached yet</div>';
+    return;
+  }
+  list.innerHTML = items.map(a => `
+    <div class="att-item" data-id="${esc(a.id)}">
+      <span class="name" title="${esc(a.filename)}">${esc(a.filename)}</span>
+      <span class="size">${fmtBytes(a.size_bytes)}</span>
+      <a href="/api/attachments/${esc(a.id)}/download">Download</a>
+      <button class="del" data-id="${esc(a.id)}">×</button>
+    </div>
+  `).join("");
+}
+
+async function refreshAttModal() {
+  if (!_attCurrentTicket) return;
+  // Reload everything from /api/inventory-all so the badge counts stay
+  // consistent with what's open in the modal.
+  await load();
+  const row = _rows.find(r => r.source === "manual" && r.source_id === _attCurrentTicket);
+  renderAttList(row ? (row.attachments || []) : []);
+}
+
+function openAttModal(row) {
+  _attCurrentTicket = row.source_id;
+  document.getElementById("att-event").textContent = row.event_name || "";
+  renderAttList(row.attachments || []);
+  document.getElementById("att-file").value = "";
+  document.getElementById("att-bg").classList.add("open");
+}
+
+function closeAttModal() {
+  document.getElementById("att-bg").classList.remove("open");
+  _attCurrentTicket = null;
+}
+
+document.addEventListener("click", async (e) => {
+  const open = e.target.closest(".row-attach");
+  if (open) {
+    e.stopPropagation();
+    const tr = open.closest("tr");
+    const row = tr && tr._row;
+    if (row && row.source === "manual") openAttModal(row);
+    return;
+  }
+  if (e.target.id === "att-bg") { closeAttModal(); return; }
+  if (e.target.id === "att-close" || e.target.id === "att-done") { closeAttModal(); return; }
+  const del = e.target.closest("#att-list button.del");
+  if (del) {
+    e.stopPropagation();
+    if (!confirm("Delete this attachment?")) return;
+    const id = del.dataset.id;
+    const res = await fetch("/api/attachments/delete", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({id}),
+    });
+    if (!res.ok) { alert("Delete failed"); return; }
+    await refreshAttModal();
+    return;
+  }
+});
+
+document.getElementById("att-upload").addEventListener("click", async () => {
+  if (!_attCurrentTicket) return;
+  const input = document.getElementById("att-file");
+  const f = input.files && input.files[0];
+  if (!f) { alert("Pick a file first"); return; }
+  const fd = new FormData();
+  fd.append("ticket_id", _attCurrentTicket);
+  fd.append("file", f);
+  const btn = document.getElementById("att-upload");
+  btn.disabled = true; btn.textContent = "...";
+  try {
+    const res = await fetch("/api/inventory/manual-attach", {method: "POST", body: fd});
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      alert("Upload failed: " + (e.error || res.status));
+      return;
+    }
+    input.value = "";
+    await refreshAttModal();
+  } finally {
+    btn.disabled = false; btn.textContent = "Upload";
+  }
 });
 
 document.addEventListener("keydown", (e) => {
@@ -523,6 +823,12 @@ function openEditModal(row) {
     document.getElementById("m-" + f).value = v;
     _modalInitial[f] = String(v);
   }
+  // Event date input is independent of INV_FIELDS — bound to event_date_iso
+  // since native date pickers need YYYY-MM-DD; on save we write both
+  // event_date_iso AND event_date so display + sort stay in sync.
+  const dateVal = row.event_date_iso || "";
+  document.getElementById("m-event_date").value = dateVal;
+  _modalInitial["event_date"] = String(dateVal);
   document.getElementById("m-event").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.venue || ""}`;
   document.getElementById("m-src").textContent = (row.source || "").toUpperCase();
   document.getElementById("m-src").className = "src-tag src src-" + row.source;
@@ -551,6 +857,12 @@ async function saveEditModal() {
       changes.push({field: f, value: parsed});
     }
   }
+  // Event date: write both iso and display fields so sort + UI stay aligned.
+  const dateNew = document.getElementById("m-event_date").value.trim();
+  if (dateNew !== _modalInitial.event_date) {
+    changes.push({field: "event_date_iso", value: dateNew});
+    changes.push({field: "event_date", value: dateNew});
+  }
   if (changes.length === 0) { closeEditModal(); return; }
   for (const c of changes) {
     await fetch("/api/inventory/edit", {
@@ -574,6 +886,59 @@ document.addEventListener("dblclick", (e) => {
 
 // --- record sale ---
 let _sellRow = null;
+function _parseSeats(s) {
+  // Try to expand "12, 13, 15-17" into ["12","13","15","16","17"]. Returns
+  // null if any token isn't a number/range — caller falls back to free text.
+  if (!s) return null;
+  const out = [];
+  for (let part of s.split(",")) {
+    part = part.trim();
+    if (!part) continue;
+    const range = part.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (range) {
+      const a = parseInt(range[1], 10);
+      const b = parseInt(range[2], 10);
+      if (!Number.isFinite(a) || !Number.isFinite(b) || a > b) return null;
+      for (let i = a; i <= b; i++) out.push(String(i));
+    } else if (/^\d+$/.test(part)) {
+      out.push(part);
+    } else {
+      return null;
+    }
+  }
+  return out.length ? out : null;
+}
+function _renderSellSeats(row) {
+  const wrap = document.getElementById("sell-seats-checks");
+  const fallback = document.getElementById("sell-seats-text");
+  const label = document.getElementById("sell-seats-label");
+  const seatsRaw = row && row.seats ? String(row.seats) : "";
+  const parsed = _parseSeats(seatsRaw);
+  if (parsed && parsed.length) {
+    wrap.style.display = "flex";
+    fallback.style.display = "none";
+    fallback.value = "";
+    wrap.innerHTML = parsed.map((seat, i) => `
+      <label style="display:inline-flex;gap:4px;align-items:center;cursor:pointer;color:var(--text);">
+        <input type="checkbox" class="sell-seat-cb" data-seat="${esc(seat)}" style="cursor:pointer;">
+        ${esc(seat)}
+      </label>
+    `).join("");
+    label.textContent = "Seats sold";
+  } else {
+    wrap.style.display = "none";
+    wrap.innerHTML = "";
+    fallback.style.display = "block";
+    fallback.value = seatsRaw;
+    label.textContent = "Seats sold";
+  }
+}
+function _selectedSeats() {
+  const fallback = document.getElementById("sell-seats-text");
+  if (fallback.style.display !== "none") return fallback.value.trim();
+  const checked = [...document.querySelectorAll(".sell-seat-cb:checked")].map(cb => cb.dataset.seat);
+  return checked.join(", ");
+}
 function openSellModal(row) {
   _sellRow = row;
   document.getElementById("sell-qty").value = row.qty_unsold || 1;
@@ -582,6 +947,7 @@ function openSellModal(row) {
   document.getElementById("sell-date").value = new Date().toISOString().slice(0, 10);
   document.getElementById("sell-platform").value = "viagogo";
   document.getElementById("sell-note").value = "";
+  _renderSellSeats(row);
   document.getElementById("sell-meta").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.section || ""}${row.row ? "/" + row.row : ""} · cost/ea ${row.cost_per_unit != null ? "$" + row.cost_per_unit.toFixed(2) : "?"}`;
   document.getElementById("sell-src").textContent = (row.source || "").toUpperCase();
   document.getElementById("sell-src").className = "src-tag src src-" + row.source;
@@ -606,6 +972,7 @@ async function saveSellModal(asLoss) {
     alert(`Qty must be between 1 and ${_sellRow.qty_unsold}`);
     return;
   }
+  const seats = _selectedSeats();
   const res = await fetch("/api/sales/manual-record", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -614,6 +981,7 @@ async function saveSellModal(asLoss) {
       inv_source_id: String(_sellRow.source_id),
       qty, sale_price, sale_date, platform, note,
       is_loss: isLoss,
+      seats,
     }),
   });
   if (!res.ok) { alert("Failed to record sale"); return; }
@@ -623,15 +991,114 @@ async function saveSellModal(asLoss) {
 
 // --- add pending ---
 function openPendingModal() {
-  for (const id of ["event_name","event_date","venue","section","row","cost_per_unit","total_cost","email","note"]) {
+  for (const id of ["event_name","event_date","venue","section","row","seats","cost_per_unit","total_cost","email","note"]) {
     document.getElementById("pend-" + id).value = "";
   }
   document.getElementById("pend-qty").value = 1;
+  hideEventSuggest();
+  setupEventAutocomplete();
   document.getElementById("pend-bg").classList.add("open");
   setTimeout(() => document.getElementById("pend-event_name").focus(), 30);
 }
 function closePendingModal() {
   document.getElementById("pend-bg").classList.remove("open");
+  hideEventSuggest();
+}
+
+// --- event-name autocomplete ---------------------------------------------
+let _suggestItems = [];
+let _suggestActive = -1;
+let _suggestTimer = null;
+let _suggestBlurTimer = null;
+
+function hideEventSuggest() {
+  const ul = document.getElementById("pend-event-suggest");
+  if (ul) { ul.hidden = true; ul.innerHTML = ""; }
+  _suggestItems = [];
+  _suggestActive = -1;
+}
+
+function renderSuggestList() {
+  const ul = document.getElementById("pend-event-suggest");
+  if (!ul) return;
+  if (!_suggestItems.length) { ul.hidden = true; ul.innerHTML = ""; return; }
+  ul.innerHTML = _suggestItems.map((s, i) => {
+    const date = s.event_date_iso || "";
+    const venue = s.venue || "";
+    const meta = [date, venue].filter(Boolean).join(" · ");
+    return `<li data-i="${i}" class="suggest-item${i === _suggestActive ? ' active' : ''}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line);${i === _suggestActive ? 'background:var(--bg-2);' : ''}">
+      <span style="color:var(--text);">${esc(s.event_name)}</span>
+      ${meta ? `<span style="color:var(--muted);margin-left:8px;font-size:11px;">${esc(meta)}</span>` : ''}
+    </li>`;
+  }).join("");
+  ul.hidden = false;
+}
+
+async function fetchEventSuggestions(q) {
+  try {
+    const res = await fetch("/api/events/suggest?q=" + encodeURIComponent(q));
+    if (!res.ok) return [];
+    const d = await res.json();
+    return d.suggestions || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function pickSuggestion(idx) {
+  const s = _suggestItems[idx];
+  if (!s) return;
+  document.getElementById("pend-event_name").value = s.event_name || "";
+  if (s.event_date_iso) document.getElementById("pend-event_date").value = s.event_date_iso;
+  if (s.venue) document.getElementById("pend-venue").value = s.venue;
+  hideEventSuggest();
+}
+
+function setupEventAutocomplete() {
+  const inp = document.getElementById("pend-event_name");
+  const ul = document.getElementById("pend-event-suggest");
+  if (!inp || !ul || inp._wired) return;
+  inp._wired = true;
+  inp.addEventListener("input", () => {
+    const v = inp.value.trim();
+    clearTimeout(_suggestTimer);
+    if (v.length < 2) { hideEventSuggest(); return; }
+    _suggestTimer = setTimeout(async () => {
+      _suggestItems = await fetchEventSuggestions(v);
+      _suggestActive = _suggestItems.length ? 0 : -1;
+      renderSuggestList();
+    }, 150);
+  });
+  inp.addEventListener("keydown", (e) => {
+    if (ul.hidden || !_suggestItems.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      _suggestActive = (_suggestActive + 1) % _suggestItems.length;
+      renderSuggestList();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      _suggestActive = (_suggestActive - 1 + _suggestItems.length) % _suggestItems.length;
+      renderSuggestList();
+    } else if (e.key === "Enter") {
+      if (_suggestActive >= 0) {
+        e.preventDefault();
+        pickSuggestion(_suggestActive);
+      }
+    } else if (e.key === "Escape") {
+      hideEventSuggest();
+    }
+  });
+  inp.addEventListener("blur", () => {
+    clearTimeout(_suggestBlurTimer);
+    _suggestBlurTimer = setTimeout(hideEventSuggest, 120);
+  });
+  ul.addEventListener("mousedown", (e) => {
+    const li = e.target.closest("li.suggest-item");
+    if (!li) return;
+    e.preventDefault();
+    const idx = parseInt(li.dataset.i, 10);
+    if (Number.isFinite(idx)) pickSuggestion(idx);
+  });
 }
 // Two-way link: cost/ticket × qty = total cost. Whichever the user typed last wins;
 // we update the *other* field. Skip if qty is unset/invalid.
@@ -688,6 +1155,7 @@ async function savePendingModal() {
     venue: document.getElementById("pend-venue").value.trim(),
     section: document.getElementById("pend-section").value.trim(),
     row: document.getElementById("pend-row").value.trim(),
+    seats: document.getElementById("pend-seats").value.trim(),
     qty,
     cost_per_unit: costPer || null,
     email: document.getElementById("pend-email").value.trim(),
@@ -722,6 +1190,13 @@ document.getElementById("sell-loss").addEventListener("click", () => {
 });
 document.getElementById("sell-bg").addEventListener("click", (e) => {
   if (e.target.id === "sell-bg") closeSellModal();
+});
+// Sync qty to the count of checked seat boxes so the user doesn't have to
+// touch both. Only applies when the checkbox path is active.
+document.getElementById("sell-seats-checks").addEventListener("change", (e) => {
+  if (!e.target.classList.contains("sell-seat-cb")) return;
+  const n = document.querySelectorAll(".sell-seat-cb:checked").length;
+  if (n > 0) document.getElementById("sell-qty").value = n;
 });
 
 document.addEventListener("click", (e) => {
@@ -760,6 +1235,62 @@ document.addEventListener("keydown", (e) => {
 
 load();
 setInterval(load, 30000);
+
+// Click an auth-warn badge to re-trigger the scraper after the user has
+// re-signed-in to that source. Polls until the run finishes, then refreshes
+// the page so the new state (and any cleared badges) shows up.
+window._reauthRunning = window._reauthRunning || new Set();
+document.addEventListener("click", async (e) => {
+  const badge = e.target.closest(".auth-warn");
+  if (!badge) return;
+  if (badge.classList.contains("scraping")) return;  // already in flight
+  const src = badge.dataset.authSrc || "the source";
+  if (!confirm(`I've re-signed into ${src.toUpperCase()} in the dedicated Chrome window. Run the scraper again now?`)) return;
+  window._reauthRunning.add(src);
+  badge.classList.add("scraping");
+  badge.textContent = `⏳ ${src.toUpperCase()} RE-SCRAPING…`;
+  let res;
+  try {
+    res = await fetch("/api/refresh", {method: "POST"});
+  } catch (err) {
+    alert("Couldn't reach the server: " + err.message);
+    window._reauthRunning.delete(src);
+    badge.classList.remove("scraping");
+    return;
+  }
+  if (!res.ok) {
+    alert("Refresh failed: " + res.status);
+    window._reauthRunning.delete(src);
+    badge.classList.remove("scraping");
+    return;
+  }
+  // Poll every 5s until lr.running === false AND lr.at is fresher than now,
+  // then reload the page so all stats and badges reflect the new state.
+  const startedAt = Date.now();
+  const maxWaitMs = 5 * 60 * 1000;  // 5 min safety cap
+  const poll = setInterval(async () => {
+    if (Date.now() - startedAt > maxWaitMs) {
+      clearInterval(poll);
+      alert("Scrape is taking longer than expected. Reload the page when it's done.");
+      window._reauthRunning.delete(src);
+      return;
+    }
+    try {
+      const m = await fetch("/api/maaser").then(r => r.json());
+      const lr = m.last_run || {};
+      const finished = !lr.running && lr.at && new Date(lr.at).getTime() >= startedAt;
+      if (finished) {
+        clearInterval(poll);
+        window._reauthRunning.delete(src);
+        // Page reload picks up the new last_run.count.auth_errors — if the
+        // re-login worked, the badge for `src` will simply not render anymore.
+        window.location.reload();
+      }
+    } catch (err) {
+      // transient; just keep polling
+    }
+  }, 5000);
+});
 </script>
 </body>
 </html>

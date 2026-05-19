@@ -163,6 +163,8 @@
     <a href="/sales" class="active">SALES</a>
     <a href="/profit">PROFIT</a>
     <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
     <a href="/sources">SOURCES</a>
     <a href="/jerujam">JERUJAM</a>
@@ -172,26 +174,46 @@
 </header>
 <main>
   <div class="stats">
-    <div class="stat"><div class="label">Sales</div><div class="value" id="s-rows">0</div></div>
-    <div class="stat"><div class="label">Tickets Sold</div><div class="value" id="s-qty">0</div></div>
-    <div class="stat green"><div class="label">Revenue</div><div class="value" id="s-rev">$0</div></div>
-    <div class="stat amber"><div class="label">Cost</div><div class="value" id="s-cost">$0</div></div>
-    <div class="stat green"><div class="label">Net</div><div class="value" id="s-net">$0</div></div>
-    <div class="stat green"><div class="label">New v JJ</div><div class="value" id="s-new">0</div></div>
-    <div class="stat"><div class="label">JeruJam</div><div class="value" id="s-jerujam">0</div></div>
-    <div class="stat"><div class="label">Lysted</div><div class="value" id="s-lysted">0</div></div>
-    <div class="stat"><div class="label">Viagogo</div><div class="value" id="s-viagogo">0</div></div>
-    <div class="stat"><div class="label">CrowdVolt</div><div class="value" id="s-crowdvolt">0</div></div>
+    <div class="stat"><div class="label">Tickets</div><div class="value" id="s-tickets">0</div></div>
+    <div class="stat"><div class="label">Sales</div><div class="value" id="s-sales">0</div></div>
+    <div class="stat"><div class="label">Events</div><div class="value" id="s-events">0</div></div>
+    <div class="stat amber"><div class="label">My Cost</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat green"><div class="label">Total Sales</div><div class="value" id="s-total">$0</div></div>
+    <div class="stat green"><div class="label">My Payout</div><div class="value" id="s-payout">$0</div></div>
+    <div class="stat"><div class="label">My ROI</div><div class="value" id="s-roi">—</div></div>
+    <div class="stat green"><div class="label">My Profit</div><div class="value" id="s-profit">$0</div></div>
+  </div>
+
+  <div class="bar" style="margin-bottom:6px;">
+    <span class="muted" style="font-size:10px;letter-spacing:1.5px;align-self:center;">FILTER BY</span>
+    <div class="pill-bar" id="basis-pills" style="margin:0;">
+      <button type="button" class="pill active" data-basis="sale">Sale date</button>
+      <button type="button" class="pill" data-basis="event">Event date</button>
+    </div>
+    <div class="pill-bar" id="range-pills" style="margin:0;">
+      <button type="button" class="pill" data-range="3">Last 3</button>
+      <button type="button" class="pill" data-range="7">Last 7</button>
+      <button type="button" class="pill" data-range="14">Last 14</button>
+      <button type="button" class="pill" data-range="30">Last 30</button>
+      <button type="button" class="pill" data-range="ytd">YTD</button>
+      <button type="button" class="pill active" data-range="all">All time</button>
+      <button type="button" class="pill" data-range="custom">Custom</button>
+    </div>
+    <span id="custom-range" style="display:none; gap:4px; align-items:center;">
+      <input type="date" id="date-from" style="font-size:11px;padding:5px 8px;">
+      <span class="muted" style="font-size:11px;">→</span>
+      <input type="date" id="date-to" style="font-size:11px;padding:5px 8px;">
+    </span>
   </div>
 
   <div class="bar">
     <input type="search" id="q-search" placeholder="search // event venue platform" style="flex:1; min-width:200px;">
     <select id="q-source">
       <option value="all">SRC: ALL</option>
-      <option value="jerujam">JERUJAM</option>
       <option value="lysted">LYSTED</option>
       <option value="viagogo">VIAGOGO</option>
       <option value="crowdvolt">CROWDVOLT</option>
+      <option value="jerujam">JJT</option>
     </select>
     <select id="q-new">
       <option value="all">SHOW: ALL</option>
@@ -206,24 +228,21 @@
     </select>
   </div>
 
-  <h2>// RECENT <span class="count" id="recent-count"></span><span class="count" id="recent-rev"></span></h2>
-  <div class="pill-bar" id="recent-pills">
-    <button class="pill" data-days="1">Today</button>
-    <button class="pill" data-days="3">3 days</button>
-    <button class="pill active" data-days="7">7 days</button>
-    <button class="pill" data-days="14">14 days</button>
-    <button class="pill" data-days="month">This month</button>
+  <h2 id="recent-header">// RECENT <span class="count" id="recent-count"></span><span class="count" id="recent-rev"></span>
+    <button type="button" id="toggle-recent" class="pill" style="margin-left:auto;font-size:10px;letter-spacing:1.5px;padding:4px 10px;background:var(--bg-2);color:var(--muted);border:1px solid var(--line);cursor:pointer;text-transform:uppercase;">Hide</button>
+  </h2>
+  <div id="recent-wrap">
+    <table>
+      <thead><tr>
+        <th class="col-check"><input type="checkbox" class="row-check" id="check-all-recent" title="Select all visible"></th>
+        <th>SOLD</th><th>EVENT</th><th>VENUE</th><th>SEC/ROW</th>
+        <th>SRC</th><th>PLATFORM</th><th>ORDER#</th><th class="num">QTY</th>
+        <th class="num">REV</th><th class="num">COST</th><th class="num">NET</th><th class="num">ROI</th><th></th>
+      </tr></thead>
+      <tbody id="recentbody"></tbody>
+    </table>
+    <div id="recentempty" class="empty" style="display:none">// no sales in this window</div>
   </div>
-  <table>
-    <thead><tr>
-      <th class="col-check"><input type="checkbox" class="row-check" id="check-all-recent" title="Select all visible"></th>
-      <th>SOLD</th><th>EVENT</th><th>VENUE</th><th>SEC/ROW</th>
-      <th>SRC</th><th>PLATFORM</th><th>ORDER#</th><th class="num">QTY</th>
-      <th class="num">REV</th><th class="num">COST</th><th class="num">NET</th><th class="num">ROI</th><th></th>
-    </tr></thead>
-    <tbody id="recentbody"></tbody>
-  </table>
-  <div id="recentempty" class="empty" style="display:none">// no sales in this window</div>
 
   <h2>// ALL SALES <span class="count" id="all-count"></span></h2>
   <table>
@@ -422,6 +441,9 @@ function _sortCmp(mode, searching) {
   return (a,b) => (b.sale_date || "").localeCompare(a.sale_date || "");
 }
 
+function _srcLabel(s) {
+  return s === "jerujam" ? "JJT" : (s || "").toUpperCase();
+}
 function _payout(r) {
   return (r.payout != null) ? r.payout : r.sale_price;
 }
@@ -451,7 +473,7 @@ function _renderListingRow(r) {
     <td>${esc(r.event_name || "")}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(r.event_date_iso || r.event_date))}</div></td>
     <td>${esc(r.venue || "")}</td>
     <td>${esc(r.section || "")}${r.row ? " / " + esc(r.row) : ""}</td>
-    <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span></td>
+    <td><span class="src src-${esc(r.source)}">${esc(_srcLabel(r.source))}</span></td>
     <td>${esc(r.delivery_type || "")}</td>
     <td class="muted" style="font-size:11px;"></td>
     <td class="num">${r.qty_unsold ?? ""}</td>
@@ -498,7 +520,7 @@ function _renderRow(r) {
     <td class="${ed('event_name')}">${esc(r.event_name)}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(r.event_date_iso || r.event_date))}</div></td>
     <td class="${ed('venue')}">${esc(r.venue)}</td>
     <td class="${ed('section')}">${esc(r.section)}${r.row ? " / " + esc(r.row) : ""}</td>
-    <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span>${newBadge}</td>
+    <td><span class="src src-${esc(r.source)}">${esc(_srcLabel(r.source))}</span>${newBadge}</td>
     <td class="cell-edit ${ed('platform')}" data-edit-field="platform" title="Click to edit platform">${esc(r.platform)}</td>
     <td class="muted" style="font-size:11px;">${esc(r.order_id || "")}</td>
     <td class="num ${ed('qty')}">${r.qty ?? ""}</td>
@@ -512,15 +534,35 @@ function _renderRow(r) {
   return tr;
 }
 
-let _recentDays = "7";
+// Global date filter state. Basis = which date on the row to test against
+// the range. Range = preset name or "custom" (uses _dateFrom / _dateTo).
+let _dateBasis = "sale";  // "sale" | "event"
+let _dateRange = "all";
+let _dateFrom = "";
+let _dateTo = "";
 
-function _withinRecent(iso, days) {
+function _rowDate(r) {
+  return _dateBasis === "event"
+    ? (r.event_date_iso || (r.event_date ? String(r.event_date).slice(0,10) : ""))
+    : (r.sale_date_iso || (r.sale_date ? String(r.sale_date).slice(0,10) : ""));
+}
+
+function _inDateRange(r) {
+  if (_dateRange === "all") return true;
+  const iso = _rowDate(r);
   if (!iso) return false;
   const d = new Date(iso + "T00:00:00");
   if (isNaN(d)) return false;
   const now = new Date(); now.setHours(0,0,0,0);
-  if (days === "month") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-  const min = new Date(now); min.setDate(min.getDate() - (Number(days) - 1));
+  if (_dateRange === "ytd") return d.getFullYear() === now.getFullYear() && d <= now;
+  if (_dateRange === "custom") {
+    if (_dateFrom && iso < _dateFrom) return false;
+    if (_dateTo && iso > _dateTo) return false;
+    return true;
+  }
+  const days = Number(_dateRange);
+  if (!Number.isFinite(days) || days <= 0) return true;
+  const min = new Date(now); min.setDate(min.getDate() - (days - 1));
   return d >= min && d <= now;
 }
 
@@ -627,19 +669,41 @@ function _renderGrouped(tbody, rows, groupOrder) {
   }
 }
 
-function renderRecent() {
+function _filterRows() {
   const q = _searchNorm(document.getElementById("q-search").value);
   const src = document.getElementById("q-source").value;
   const onlyNew = document.getElementById("q-new").value === "new";
-  const recent = _rows
-    .filter(r => _withinRecent(r.sale_date_iso, _recentDays))
-    .filter(r => {
-      if (src !== "all" && r.source !== src) return false;
-      if (onlyNew && !r.is_new) return false;
-      if (q && !(_searchNorm(r.event_name).includes(q) || _searchNorm(r.venue).includes(q) || _searchNorm(r.platform).includes(q))) return false;
-      return true;
-    })
-    .sort((a,b) => (b.sale_date_iso || "").localeCompare(a.sale_date_iso || ""));
+  return _rows.filter(r => {
+    if (!_inDateRange(r)) return false;
+    if (src !== "all" && r.source !== src) return false;
+    if (onlyNew && !r.is_new) return false;
+    if (q && !(_searchNorm(r.event_name).includes(q) || _searchNorm(r.venue).includes(q) || _searchNorm(r.platform).includes(q))) return false;
+    return true;
+  });
+}
+
+function _updateMetrics(filtered) {
+  const tickets = filtered.reduce((s, r) => s + (r.qty || 0), 0);
+  const events = new Set(filtered.map(r => (r.event_name || "") + "|" + (r.event_date_iso || ""))).size;
+  const cost = filtered.reduce((s, r) => s + (r.cost || 0), 0);
+  const total = filtered.reduce((s, r) => s + (r.sale_price || 0), 0);
+  const payout = filtered.reduce((s, r) => s + (_payout(r) || 0), 0);
+  const profit = payout - cost;
+  const roi = cost ? (profit / cost) * 100 : null;
+  document.getElementById("s-tickets").textContent = tickets;
+  document.getElementById("s-sales").textContent = filtered.length;
+  document.getElementById("s-events").textContent = events;
+  document.getElementById("s-cost").textContent = money(cost);
+  document.getElementById("s-total").textContent = money(total);
+  document.getElementById("s-payout").textContent = money(payout);
+  document.getElementById("s-roi").textContent = roi == null ? "—" : (roi >= 0 ? "+" : "") + roi.toFixed(1) + "%";
+  document.getElementById("s-profit").textContent = money(profit);
+  const profitBox = document.getElementById("s-profit").parentElement;
+  profitBox.className = "stat " + (profit >= 0 ? "green" : "red");
+}
+
+function renderRecent(filtered) {
+  const recent = filtered.slice().sort((a,b) => (b.sale_date_iso || "").localeCompare(a.sale_date_iso || ""));
   const tbody = document.getElementById("recentbody");
   tbody.innerHTML = "";
   _renderGrouped(tbody, recent);
@@ -682,7 +746,7 @@ function renderUnsold(unsold, totals) {
       <td>${esc(u.venue || "")}</td>
       <td>${esc(u.section || "")}${u.row_label ? " / " + esc(u.row_label) : ""}</td>
       <td class="muted" style="font-size:11px;">${esc(u.seats || "")}</td>
-      <td><span class="src src-${esc(u.source)}">${esc((u.source||"").toUpperCase())}</span></td>
+      <td><span class="src src-${esc(u.source)}">${esc(_srcLabel(u.source))}</span></td>
       <td class="num">${u.qty ?? ""}</td>
       <td class="num">${money(u.cost)}</td>
       <td class="muted" style="font-size:11px;">${esc(fmtDate(u.marked_at))}</td>
@@ -738,7 +802,7 @@ function renderCanceled(canceled, totals) {
       <td>${esc(r.event_name || "")}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(r.event_date_iso || r.event_date))}</div></td>
       <td>${esc(r.venue || "")}</td>
       <td>${esc(r.section || "")}${r.row ? " / " + esc(r.row) : ""}</td>
-      <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span></td>
+      <td><span class="src src-${esc(r.source)}">${esc(_srcLabel(r.source))}</span></td>
       <td>${esc(r.platform || "")}</td>
       <td class="muted" style="font-size:11px;">${esc(r.order_id || "")}</td>
       <td class="num">${r.qty ?? ""}</td>
@@ -925,16 +989,10 @@ document.addEventListener("click", async (e) => {
 
 const _searchNorm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 function render() {
-  const q = _searchNorm(document.getElementById("q-search").value);
-  const src = document.getElementById("q-source").value;
+  const q = document.getElementById("q-search").value;
   const sort = document.getElementById("q-sort").value;
-  const onlyNew = document.getElementById("q-new").value === "new";
-  const rows = _rows.filter(r => {
-    if (src !== "all" && r.source !== src) return false;
-    if (onlyNew && !r.is_new) return false;
-    if (q && !(_searchNorm(r.event_name).includes(q) || _searchNorm(r.venue).includes(q) || _searchNorm(r.platform).includes(q))) return false;
-    return true;
-  }).sort(_sortCmp(sort, !!q));
+  const filtered = _filterRows();
+  const rows = filtered.slice().sort(_sortCmp(sort, !!q));
 
   const tbody = document.getElementById("tbody");
   tbody.innerHTML = "";
@@ -942,15 +1000,41 @@ function render() {
   document.getElementById("empty").style.display = rows.length ? "none" : "block";
   document.getElementById("sub").textContent = `${rows.length} of ${_rows.length} shown`;
   document.getElementById("all-count").textContent = `(${rows.length})`;
-  renderRecent();
+  _updateMetrics(filtered);
+  renderRecent(filtered);
 }
 
-document.getElementById("recent-pills").addEventListener("click", (e) => {
+// Date filter wiring
+document.getElementById("basis-pills").addEventListener("click", (e) => {
   const b = e.target.closest(".pill");
   if (!b) return;
-  document.querySelectorAll("#recent-pills .pill").forEach(p => p.classList.toggle("active", p === b));
-  _recentDays = b.dataset.days;
-  renderRecent();
+  document.querySelectorAll("#basis-pills .pill").forEach(p => p.classList.toggle("active", p === b));
+  _dateBasis = b.dataset.basis;
+  render();
+});
+document.getElementById("range-pills").addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (!b) return;
+  document.querySelectorAll("#range-pills .pill").forEach(p => p.classList.toggle("active", p === b));
+  _dateRange = b.dataset.range;
+  const custom = document.getElementById("custom-range");
+  custom.style.display = _dateRange === "custom" ? "inline-flex" : "none";
+  render();
+});
+for (const id of ["date-from", "date-to"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    _dateFrom = document.getElementById("date-from").value;
+    _dateTo = document.getElementById("date-to").value;
+    if (_dateRange === "custom") render();
+  });
+}
+
+// Hide / Show the Recent section
+let _recentHidden = false;
+document.getElementById("toggle-recent").addEventListener("click", () => {
+  _recentHidden = !_recentHidden;
+  document.getElementById("recent-wrap").style.display = _recentHidden ? "none" : "";
+  document.getElementById("toggle-recent").textContent = _recentHidden ? "Show" : "Hide";
 });
 
 // Auto-scroll the All Sales table to "today" once on page load. With the
@@ -1007,22 +1091,6 @@ async function load() {
       _invByEvent.get(k).push(ir);
     }
   }
-  const t = d.totals || {};
-  document.getElementById("s-rows").textContent = t.rows ?? 0;
-  document.getElementById("s-qty").textContent = t.qty ?? 0;
-  document.getElementById("s-rev").textContent = money(t.revenue);
-  document.getElementById("s-cost").textContent = money(t.cost);
-  const sumPayout = (_rows || []).reduce((a, r) => a + (_payout(r) || 0), 0);
-  const net = sumPayout - (t.cost || 0);
-  const ne = document.getElementById("s-net");
-  ne.textContent = money(net);
-  ne.parentElement.className = "stat " + (net >= 0 ? "green" : "red");
-  const bs = t.by_source || {};
-  document.getElementById("s-jerujam").textContent = bs.jerujam || 0;
-  document.getElementById("s-lysted").textContent = bs.lysted || 0;
-  document.getElementById("s-viagogo").textContent = bs.viagogo || 0;
-  document.getElementById("s-crowdvolt").textContent = bs.crowdvolt || 0;
-  document.getElementById("s-new").textContent = t.new_since_jerujam || 0;
   render();
   // Wait one frame so the table is in the DOM before measuring/scrolling.
   if (!_initialScrollDone) requestAnimationFrame(_scrollToToday);
@@ -1321,7 +1389,7 @@ function openEditModal(row, focusField) {
   document.getElementById("m-event_date").value = evtDate;
   _modalInitial["event_date"] = String(evtDate);
   document.getElementById("m-meta").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.venue || ""}`;
-  document.getElementById("m-src").textContent = (row.source || "").toUpperCase();
+  document.getElementById("m-src").textContent = _srcLabel(row.source);
   document.getElementById("m-src").className = "src-tag src src-" + row.source;
   document.getElementById("modal-bg").classList.add("open");
   // Default focus is the sale-date field (top of modal). When opened via a

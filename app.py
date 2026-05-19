@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import tempfile
 import threading
 import traceback
 import uuid
@@ -18,12 +19,14 @@ import db
 import filters as watcher_filters
 import import_jerujam
 import kupat
+import kupat_credits
 import kupat_pdf
 import mail_intake
 import matcher
 import notify
 import scraper
 import tickchak
+import tickchak_pdf
 import ticketmaster
 
 # Drop-checker sources keyed by the value stored in tm_watchers.source.
@@ -220,7 +223,14 @@ _DATE_FORMATS = (
     "%Y-%m-%d",
     "%d %b %Y",
     "%d %B %Y",
+    # Comma-less variants — e.g. Viagogo's "Jun 14 2026" after stripping the
+    # leading day-of-week and trailing time.
+    "%b %d %Y",
+    "%B %d %Y",
 )
+
+_DAYNAMES = {"mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
+             "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
 
 
 def _parse_event_date(text):
@@ -228,6 +238,11 @@ def _parse_event_date(text):
         return None
     head = (text or "").split("•")[0].split("@")[0].strip().rstrip(",").strip()
     head = head.split(" ")
+    # Strip leading day-of-week tokens like "Sun", "Sun,", "Sunday" — Viagogo
+    # dates frequently start with these and they aren't part of any strptime
+    # format we use.
+    while head and head[0].rstrip(",").lower() in _DAYNAMES:
+        head.pop(0)
     # Strip trailing time tokens like "08:00PM" if they slipped in
     while head and any(c.isdigit() for c in head[-1]) and (":" in head[-1] or head[-1].lower().endswith(("am", "pm"))):
         head.pop()
@@ -556,10 +571,21 @@ def _build_unified_inventory():
         if src == "jerujam":
             ext_matched_per_ticket[sid] = ext_matched_per_ticket.get(sid, 0) + q
 
+    # Pool of auto-detected Lysted sales keyed by (event_group, section_norm, row_norm).
+    # Lysted's purchase-orders scrape returns the original purchase qty unchanged
+    # after partial sales, so without this we'd show "12 unsold" on a listing
+    # where Lysted has separately reported 4 sales. Allocated greedily across
+    # matching listings as we iterate them below.
+    lysted_sales_pool = {}
+    for s in db.all_lysted_sales():
+        ek_g = _row_group(groups, s.get("event_name"), s.get("event_date_iso"), s.get("venue"))
+        bucket = (ek_g, _norm(s.get("section")), _norm(s.get("row_label")))
+        lysted_sales_pool[bucket] = lysted_sales_pool.get(bucket, 0) + (s.get("qty") or 0)
+
     rows = []
 
     lysted_keys = set()
-    lysted_event_keys = set()  # event-level dedup for inventory-aggregate fallback below
+    lysted_event_groups = set()  # canonical group-level dedup for inventory-aggregate fallback below
     lysted_ga_event_rows = set()  # (event_key, row) for any GA-style Lysted listing
     for r in lysted:
         if (r.get("status") or "").strip().lower() == "sold":
@@ -569,7 +595,7 @@ def _build_unified_inventory():
         sec_n = _norm(r.get("section"))
         row_n = _norm(r.get("row_label"))
         lysted_keys.add((ek, sec_n, row_n))
-        lysted_event_keys.add(ek)
+        lysted_event_groups.add(_row_group(groups, r.get("event_name"), iso, r.get("venue")))
         if _ga_like(sec_n):
             lysted_ga_event_rows.add((ek, row_n))
             lysted_ga_event_rows.add((ek, ""))
@@ -577,7 +603,17 @@ def _build_unified_inventory():
             continue
         qty_full = r.get("qty") or 0
         consumed = matched_qty.get(("lysted", str(r.get("id"))), 0)
-        qty_remaining = max(0, qty_full - consumed)
+        # Greedy draw from the auto-sales pool for this (event, section, row) bucket.
+        bucket = (
+            _row_group(groups, r.get("event_name"), iso, r.get("venue")),
+            sec_n,
+            row_n,
+        )
+        pool_left = lysted_sales_pool.get(bucket, 0)
+        auto_consumed = min(max(0, qty_full - consumed), pool_left)
+        if auto_consumed > 0:
+            lysted_sales_pool[bucket] = pool_left - auto_consumed
+        qty_remaining = max(0, qty_full - consumed - auto_consumed)
         if qty_remaining <= 0:
             continue
         rows.append({
@@ -598,6 +634,20 @@ def _build_unified_inventory():
             "status": r.get("status") or "active",
         })
 
+    # Pre-scan Viagogo + JeruJam canonical group keys so the inventory-aggregate
+    # fallback below can dedup against them too. Use _row_group (the same
+    # canonical clustering the UI uses) so cross-source venue-string variants
+    # like "Mortgage Matchup Center" vs "Mortgage Matchup Center • Phoenix, AZ"
+    # collapse to the same group instead of slipping past the dedup.
+    viagogo_event_groups = {
+        _row_group(groups, r.get("event_name"), _resolve_iso(r), r.get("venue"))
+        for r in viagogo if (r.get("available") or 0) > 0
+    }
+    jerujam_event_groups = {
+        _row_group(groups, t.get("event_name"), _resolve_iso(t), t.get("venue"))
+        for t in jerujam if (t.get("status") or "").strip().lower() != "sold"
+    }
+
     # Fallback: include the inventory-table aggregate for events not covered
     # by lysted_purchases above. Tickets you've listed on Lysted that don't
     # have a matching purchase order (e.g. purchased outside Lysted, or the
@@ -608,8 +658,8 @@ def _build_unified_inventory():
     # inventory_hidden works the same way.
     for inv in db.all_inventory():
         iso_i = _resolve_iso(inv)
-        ek = _event_key(inv.get("event_name"), iso_i, inv.get("venue"))
-        if ek in lysted_event_keys:
+        eg = _row_group(groups, inv.get("event_name"), iso_i, inv.get("venue"))
+        if eg in lysted_event_groups or eg in viagogo_event_groups or eg in jerujam_event_groups:
             continue
         qty = inv.get("tickets_count") or 0
         if qty <= 0:
@@ -758,11 +808,13 @@ def _build_unified_inventory():
         })
 
     inv_overrides = db.all_inv_overrides()
+    seats_sold_map = db.seats_sold_by_inv()
     for r in rows:
         ov = inv_overrides.get((r.get("source"), str(r.get("source_id"))))
         if ov:
             _apply_overrides(r, ov, _INV_NUMERIC)
         r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"), r.get("venue"))
+        r["seats_sold_already"] = seats_sold_map.get((r.get("source"), str(r.get("source_id"))), "")
     # Apply user-merged-group display overrides AFTER per-row overrides so a
     # merged event uses the canonical name even if a single row had its own
     # event_name override pre-merge.
@@ -1175,6 +1227,65 @@ def api_inventory_all():
         "auto_matched": len(db.all_matches()),
     }
     return jsonify({"rows": rows, "totals": totals, "last_run": _last_run, "last_backup": _last_backup})
+
+
+@app.route("/api/events/suggest")
+def api_events_suggest():
+    """Slim event suggestions for the Pending modal autocomplete. Aggregates
+    raw (event_name, iso, venue) triples from every source so a typed prefix
+    finds events the user has touched anywhere in the app.
+
+    Returns up to 8 suggestions of {event_name, event_date_iso, venue}, sorted
+    by date descending so upcoming/recent events surface first.
+    """
+    from flask import request
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify({"suggestions": []})
+    qn = _norm_event_name(q)
+    if not qn:
+        return jsonify({"suggestions": []})
+
+    raw = []
+    for r in db.all_lysted_purchases():
+        raw.append((r.get("event_name") or "", _date_only(_resolve_iso(r) or ""), r.get("venue") or ""))
+    for r in db.all_viagogo():
+        raw.append((r.get("event_name") or "", _date_only(_resolve_iso(r) or ""), r.get("venue") or ""))
+    for r in db.all_jerujam_tickets():
+        raw.append((r.get("event_name") or "", _date_only(r.get("event_date_iso") or ""), r.get("venue") or ""))
+    for r in db.all_manual_inventory():
+        raw.append((r.get("event_name") or "", _date_only(r.get("event_date_iso") or ""), r.get("venue") or ""))
+    for r in db.all_inventory():
+        raw.append((r.get("event_name") or "", _date_only(_resolve_iso(r) or ""), r.get("venue") or ""))
+
+    # Dedupe by (norm_name, iso, norm_venue) and keep the longest raw name +
+    # longest raw venue per cluster — that's our display representative.
+    by_key = {}
+    for name, iso, venue in raw:
+        if not name:
+            continue
+        nn = _norm_event_name(name)
+        if qn not in nn:
+            continue
+        key = (nn, iso, _norm_venue(venue))
+        cur = by_key.get(key)
+        if cur is None:
+            by_key[key] = (name, iso, venue)
+        else:
+            cn, ci, cv = cur
+            new_name = name if len(name) > len(cn) else cn
+            new_venue = venue if len(venue or "") > len(cv or "") else cv
+            by_key[key] = (new_name, ci, new_venue)
+
+    items = list(by_key.values())
+    items.sort(key=lambda t: t[1] or "", reverse=True)
+    items = items[:8]
+    return jsonify({
+        "suggestions": [
+            {"event_name": name, "event_date_iso": iso, "venue": venue}
+            for (name, iso, venue) in items
+        ]
+    })
 
 
 @app.route("/profit")
@@ -2150,6 +2261,246 @@ def api_owed_delete():
     return jsonify({"ok": True})
 
 
+# --- Cashback ledger -----------------------------------------------------
+# Manual log of credit-card cashback rewards. Purely informational — does
+# not feed into Maaser (user opted out: cashback is treated as a rebate,
+# not income). Pattern mirrors /owed exactly.
+_CASHBACK_EDITABLE = {"date_iso", "amount", "card_name"}
+
+
+@app.route("/cashback")
+def cashback_page():
+    return render_template("cashback.html")
+
+
+@app.route("/api/cashback")
+def api_cashback():
+    return jsonify({
+        "items": db.all_cashback_entries(),
+        "known_cards": db.distinct_cashback_cards(),
+    })
+
+
+@app.route("/api/cashback/add", methods=["POST"])
+def api_cashback_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    date_iso = (body.get("date_iso") or "").strip()
+    if not _parse_iso(date_iso):
+        return jsonify({"error": "date_iso required (YYYY-MM-DD)"}), 400
+    try:
+        amount = float(body.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0:
+        return jsonify({"error": "amount must be > 0"}), 400
+    card_name = (body.get("card_name") or "").strip()
+    if not card_name:
+        return jsonify({"error": "card_name required"}), 400
+    row = {
+        "id": "cb-" + uuid.uuid4().hex[:12],
+        "date_iso": date_iso,
+        "amount": amount,
+        "card_name": card_name,
+    }
+    db.insert_cashback_entry(row, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "id": row["id"]})
+
+
+@app.route("/api/cashback/edit", methods=["POST"])
+def api_cashback_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    fields = {}
+    for k in _CASHBACK_EDITABLE:
+        if k in body:
+            v = body[k]
+            if k == "amount":
+                try:
+                    v = float(v) if v not in (None, "") else None
+                except (TypeError, ValueError):
+                    continue
+                if v is None or v <= 0:
+                    continue
+            elif isinstance(v, str):
+                v = v.strip()
+                if k in ("date_iso", "card_name") and not v:
+                    continue
+            fields[k] = v
+    db.update_cashback_entry(id_, fields)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/cashback/delete", methods=["POST"])
+def api_cashback_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.delete_cashback_entry(id_)
+    return jsonify({"ok": True})
+
+
+# ---------------- Kupat credits ---------------------------------------------
+
+_CREDIT_EDITABLE = {"issued_date", "ils_amount", "original_usd_cost", "note"}
+
+
+@app.route("/credits")
+def credits_page():
+    return render_template("credits.html")
+
+
+@app.route("/api/credits")
+def api_credits():
+    return jsonify(kupat_credits.build_credits_view())
+
+
+@app.route("/api/credits/add", methods=["POST"])
+def api_credits_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    issued_date = (body.get("issued_date") or "").strip()
+    if not _parse_iso(issued_date):
+        return jsonify({"error": "issued_date required (YYYY-MM-DD)"}), 400
+    try:
+        ils_amount = float(body.get("ils_amount") or 0)
+    except (TypeError, ValueError):
+        ils_amount = 0
+    if ils_amount <= 0:
+        return jsonify({"error": "ils_amount must be > 0"}), 400
+    original_usd_cost = body.get("original_usd_cost")
+    if original_usd_cost in (None, ""):
+        original_usd_cost = None
+    else:
+        try:
+            original_usd_cost = float(original_usd_cost)
+        except (TypeError, ValueError):
+            return jsonify({"error": "original_usd_cost must be numeric"}), 400
+        if original_usd_cost < 0:
+            return jsonify({"error": "original_usd_cost must be >= 0"}), 400
+    note = (body.get("note") or "").strip()
+    row = {
+        "id": "kc-" + uuid.uuid4().hex[:12],
+        "issued_date": issued_date,
+        "ils_amount": ils_amount,
+        "original_usd_cost": original_usd_cost,
+        "note": note,
+    }
+    db.insert_kupat_credit(row, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "id": row["id"]})
+
+
+@app.route("/api/credits/edit", methods=["POST"])
+def api_credits_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    fields = {}
+    for k in _CREDIT_EDITABLE:
+        if k not in body:
+            continue
+        v = body[k]
+        if k == "ils_amount":
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if v <= 0:
+                continue
+        elif k == "original_usd_cost":
+            if v in (None, ""):
+                v = None
+            else:
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if v < 0:
+                    continue
+        elif isinstance(v, str):
+            v = v.strip()
+            if k == "issued_date" and not v:
+                continue
+        fields[k] = v
+    db.update_kupat_credit(id_, fields)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/credits/delete", methods=["POST"])
+def api_credits_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.delete_kupat_credit(id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/credits/spend/add", methods=["POST"])
+def api_credits_spend_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    credit_id = (body.get("credit_id") or "").strip()
+    if not credit_id:
+        return jsonify({"error": "credit_id required"}), 400
+    spend_date = (body.get("spend_date") or "").strip()
+    if not _parse_iso(spend_date):
+        return jsonify({"error": "spend_date required (YYYY-MM-DD)"}), 400
+    try:
+        ils_amount = float(body.get("ils_amount") or 0)
+    except (TypeError, ValueError):
+        ils_amount = 0
+    if ils_amount <= 0:
+        return jsonify({"error": "ils_amount must be > 0"}), 400
+
+    credits_by_id = {c["id"]: c for c in db.all_kupat_credits()}
+    credit = credits_by_id.get(credit_id)
+    if not credit:
+        return jsonify({"error": "credit not found"}), 404
+    spent_so_far = sum(
+        float(s["ils_amount"] or 0)
+        for s in db.all_kupat_spends()
+        if s["credit_id"] == credit_id
+    )
+    if spent_so_far + ils_amount > float(credit["ils_amount"] or 0) + 0.001:
+        remaining = float(credit["ils_amount"] or 0) - spent_so_far
+        return jsonify({
+            "error": f"overspend: only {remaining:.2f} ILS remaining on this credit"
+        }), 400
+
+    rate, _, _ = kupat_credits.current_fx_rate()
+    note = (body.get("note") or "").strip()
+    row = {
+        "id": "ks-" + uuid.uuid4().hex[:12],
+        "credit_id": credit_id,
+        "spend_date": spend_date,
+        "ils_amount": ils_amount,
+        "fx_rate": rate,
+        "note": note,
+    }
+    db.insert_kupat_spend(row, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "id": row["id"], "fx_rate": rate})
+
+
+@app.route("/api/credits/spend/delete", methods=["POST"])
+def api_credits_spend_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.delete_kupat_spend(id_)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/maaser")
 def api_maaser():
     summary = _maaser_summary()
@@ -2180,6 +2531,8 @@ def api_maaser_add():
         "recipient": (body.get("recipient") or "").strip(),
         "amount": amount,
         "notes": (body.get("notes") or "").strip(),
+        # Stored as 0/1 to match the SQLite NOT NULL DEFAULT 0 column.
+        "tax_deductible": 1 if body.get("tax_deductible") else 0,
     }
     db.insert_maaser(row, datetime.now(timezone.utc).isoformat())
     return jsonify({"ok": True, "id": row["id"]})
@@ -2193,7 +2546,7 @@ def api_maaser_edit():
     if not id_:
         return jsonify({"error": "id required"}), 400
     fields = {}
-    for k in ("date_iso", "recipient", "amount", "notes"):
+    for k in ("date_iso", "recipient", "amount", "notes", "tax_deductible"):
         if k in body:
             v = body[k]
             if k == "amount":
@@ -2201,6 +2554,13 @@ def api_maaser_edit():
                     v = float(v) if v not in (None, "") else None
                 except (TypeError, ValueError):
                     continue
+            elif k == "tax_deductible":
+                # Accept bool / 0 / 1 / "0" / "1" / "true" / "false" — coerce to 0/1.
+                if isinstance(v, str):
+                    v = v.strip().lower()
+                    v = 1 if v in ("1", "true", "yes", "on") else 0
+                else:
+                    v = 1 if v else 0
             elif isinstance(v, str):
                 v = v.strip()
             fields[k] = v
@@ -2246,6 +2606,9 @@ def api_sales_manual_record():
     sale_iso = sale_date[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", sale_date) else sale_date
     platform = (body.get("platform") or ("loss" if is_loss else "manual")).strip()
     note = (body.get("note") or "").strip()
+    # Optional override: which seat numbers were sold. Falls back to the
+    # inventory row's full seat list if the caller leaves it blank.
+    seats_sold = (body.get("seats") or "").strip() if "seats" in body else None
     cost_per = inv.get("cost_per_unit")
     if cost_per is None and (inv.get("qty_unsold") or 0) > 0:
         cost_per = (inv.get("cost") or 0) / (inv.get("qty_unsold") or 1)
@@ -2262,7 +2625,7 @@ def api_sales_manual_record():
         "venue": inv.get("venue") or "",
         "section": inv.get("section") or "",
         "row_label": inv.get("row") or "",
-        "seats": inv.get("seats") or "",
+        "seats": seats_sold if seats_sold is not None else (inv.get("seats") or ""),
         "qty": qty,
         "sale_price": sale_price,
         "cost": cost,
@@ -2294,8 +2657,107 @@ def api_sales_manual_delete():
 
 @app.route("/api/match-now", methods=["POST"])
 def api_match_now():
+    # Pending-match first so manual rows already linked to a Lysted/Viagogo
+    # listing get flagged before the auto-matcher considers them.
+    pending_listed = matcher.run_pending_match()
     matched, skipped = matcher.run_match_pass()
-    return jsonify({"matched": matched, "unmatched": skipped})
+    return jsonify({"matched": matched, "unmatched": skipped, "pending_listed": pending_listed})
+
+
+@app.route("/api/sales/unmatched")
+def api_sales_unmatched():
+    """External (Lysted/Viagogo/CrowdVolt) sales not yet paired with any
+    inventory row. Powers the manual pair-with-sale fallback UI for cases
+    where the auto-matcher's section/row scoring misses."""
+    from flask import request
+    q = (request.args.get("event") or "").strip()
+    qn = _norm_event_name(q) if q else ""
+    matched_keys = {(m["sale_source"], m["sale_id"]) for m in db.all_matches()}
+    blocked = db.all_blocklist_keys()
+    rows = []
+    for s in matcher._collect_external_sales():
+        key = (s["source"], s["id"])
+        if key in matched_keys or key in blocked:
+            continue
+        if qn and qn not in _norm_event_name(s.get("event_name") or ""):
+            continue
+        rows.append({
+            "sale_source": s["source"],
+            "sale_id": s["id"],
+            "event_name": s.get("event_name") or "",
+            "event_date_iso": s.get("event_date_iso") or "",
+            "section": s.get("section") or "",
+            "row": s.get("row") or "",
+            "qty": s.get("qty") or 0,
+            "sale_date": s.get("sale_date") or "",
+        })
+    rows.sort(key=lambda r: r.get("sale_date") or "", reverse=True)
+    return jsonify({"rows": rows})
+
+
+@app.route("/api/sales/pair", methods=["POST"])
+def api_sales_pair():
+    """Manually pair an external sale with an inventory row when auto-match
+    couldn't (e.g. section label mismatch). Writes inventory_matches and
+    hides the inventory row when fully consumed."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    sale_source = (body.get("sale_source") or "").strip()
+    sale_id = (body.get("sale_id") or "").strip()
+    inv_source = (body.get("inv_source") or "").strip()
+    inv_source_id = (body.get("inv_source_id") or "").strip()
+    if not (sale_source and sale_id and inv_source and inv_source_id):
+        return jsonify({"error": "sale_source, sale_id, inv_source, inv_source_id required"}), 400
+    try:
+        qty = int(body.get("qty") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    if qty <= 0:
+        return jsonify({"error": "qty must be > 0"}), 400
+    # Reject duplicate pair (inventory_matches PRIMARY KEY is sale-side).
+    existing = {(m["sale_source"], m["sale_id"]) for m in db.all_matches()}
+    if (sale_source, sale_id) in existing:
+        return jsonify({"error": "sale already paired"}), 409
+    rows, _ = _build_unified_inventory()
+    inv = next((r for r in rows if r.get("source") == inv_source and str(r.get("source_id")) == inv_source_id), None)
+    if not inv:
+        return jsonify({"error": "inventory row not found"}), 404
+    if qty > (inv.get("qty_unsold") or 0):
+        return jsonify({"error": "qty exceeds remaining"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.record_match(
+        sale_source=sale_source, sale_id=sale_id,
+        inv_source=inv_source, inv_source_id=inv_source_id,
+        qty=qty, reason="manual-pair", now_iso=now_iso,
+    )
+    if qty >= (inv.get("qty_unsold") or 0):
+        db.hide_inventory(inv_source, inv_source_id, now_iso)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sales/unpair", methods=["POST"])
+def api_sales_unpair():
+    """Reverse a manual pair: drop the inventory_matches row and unhide the
+    inventory row so it returns to the active list."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    sale_source = (body.get("sale_source") or "").strip()
+    sale_id = (body.get("sale_id") or "").strip()
+    if not (sale_source and sale_id):
+        return jsonify({"error": "sale_source and sale_id required"}), 400
+    target = next(
+        (m for m in db.all_matches()
+         if m.get("sale_source") == sale_source and m.get("sale_id") == sale_id),
+        None,
+    )
+    if not target:
+        return jsonify({"error": "match not found"}), 404
+    db.delete_match(sale_source, sale_id)
+    inv_src = target.get("inv_source")
+    inv_id = target.get("inv_source_id")
+    if inv_src and inv_id is not None:
+        db.unhide_inventory(inv_src, str(inv_id))
+    return jsonify({"ok": True})
 
 
 _INV_EDITABLE = {"section", "row", "seats", "qty_unsold", "cost", "cost_per_unit", "list_price", "delivery_type", "status", "event_name", "venue", "event_date", "event_date_iso"}
@@ -2759,6 +3221,35 @@ def api_kupat_pdf():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"Unexpected: {e}"}), 500
+    return jsonify(manifest)
+
+
+@app.route("/api/tickchak-pdf", methods=["POST"])
+def api_tickchak_pdf():
+    """Redact + split an uploaded Tickchak ticket PDF. Multipart upload
+    (field name "file") rather than JSON because the PDF can be a few
+    hundred KB. Returns the same manifest shape as /api/kupat-pdf."""
+    from flask import request
+    f = request.files.get("file")
+    if not f or not (f.filename or "").lower().endswith(".pdf"):
+        return jsonify({"error": "upload a .pdf file"}), 400
+    # fitz reads from disk reliably; spool the upload to a tempfile so
+    # we don't have to worry about Flask's stream pointer state.
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    try:
+        f.save(tmp.name)
+        tmp.close()
+        manifest = tickchak_pdf.redact_and_split(tmp.name)
+    except tickchak_pdf.TickchakPdfError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Unexpected: {e}"}), 500
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
     return jsonify(manifest)
 
 

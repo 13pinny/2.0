@@ -54,8 +54,9 @@ def _date_only(iso):
     return iso[:10]
 
 
-def _candidate_jerujam_inventory(hidden_keys, sold_per_ticket):
+def _candidate_jerujam_inventory(hidden_keys, sold_per_ticket, matched_qty=None):
     """Return JeruJam tickets that still have unsold qty and aren't hidden."""
+    matched_qty = matched_qty or {}
     out = []
     for t in db.all_jerujam_tickets():
         status = (t.get("status") or "").strip().lower()
@@ -63,7 +64,8 @@ def _candidate_jerujam_inventory(hidden_keys, sold_per_ticket):
             continue
         qty = t.get("quantity") or 0
         sold = sold_per_ticket.get(t.get("id"), 0)
-        remaining = max(0, qty - sold)
+        ext = matched_qty.get(("jerujam", str(t.get("id"))), 0)
+        remaining = max(0, qty - sold - ext)
         if remaining <= 0:
             continue
         if ("jerujam", str(t.get("id"))) in hidden_keys:
@@ -76,6 +78,38 @@ def _candidate_jerujam_inventory(hidden_keys, sold_per_ticket):
             "section": t.get("section") or "",
             "row": t.get("row_label") or "",
             "seats": t.get("seat_numbers") or "",
+            "qty": remaining,
+        })
+    return out
+
+
+def _candidate_manual_inventory(hidden_keys, matched_qty):
+    """Return manual_inventory rows still pending and unmatched.
+
+    Skip rows already tied to a Lysted/Viagogo listing via run_pending_match
+    (matched_source set) — the listing row owns the decrement. Skip rows hidden
+    via inventory_hidden under ("manual", id).
+    """
+    out = []
+    for m in db.all_manual_inventory():
+        if m.get("matched_source"):
+            continue
+        mid = str(m.get("id"))
+        if ("manual", mid) in hidden_keys:
+            continue
+        qty = m.get("qty") or 0
+        consumed = matched_qty.get(("manual", mid), 0)
+        remaining = max(0, qty - consumed)
+        if remaining <= 0:
+            continue
+        out.append({
+            "source": "manual",
+            "source_id": mid,
+            "event_name": m.get("event_name") or "",
+            "event_date_iso": _date_only(m.get("event_date_iso")),
+            "section": m.get("section") or "",
+            "row": m.get("row_label") or "",
+            "seats": m.get("seats") or "",
             "qty": remaining,
         })
     return out
@@ -186,10 +220,19 @@ MIN_SCORE = 130  # event (100) + section (30)
 
 def run_match_pass():
     """One pass over external sales. Each unmatched sale is paired with the
-    best-scoring JeruJam candidate. Returns (n_matched, n_skipped).
+    best-scoring inventory candidate (JeruJam first, then unlisted manual rows).
+    Returns (n_matched, n_skipped).
     """
     db.init()
-    already_matched = {(m["sale_source"], m["sale_id"]) for m in db.all_matches()}
+    all_match_rows = db.all_matches()
+    already_matched = {(m["sale_source"], m["sale_id"]) for m in all_match_rows}
+    # Pre-existing per-inventory consumption from prior matches (e.g. previous
+    # passes, manual sales, manual pair-with-sale). Lets candidate builders
+    # report the *remaining* qty so we don't double-consume.
+    consumed_inv = {}
+    for m in all_match_rows:
+        key = (m.get("inv_source"), str(m.get("inv_source_id")))
+        consumed_inv[key] = consumed_inv.get(key, 0) + (m.get("qty_matched") or 0)
     blocked = db.all_blocklist_keys()
 
     # Pre-compute JeruJam sold-per-ticket for the candidate pool
@@ -197,7 +240,8 @@ def run_match_pass():
     for s in db.all_jerujam_sales():
         sold_per[s["ticket_id"]] = sold_per.get(s["ticket_id"], 0) + (s.get("quantity") or 0)
     hidden = db.all_hidden_keys()
-    candidates = _candidate_jerujam_inventory(hidden, sold_per)
+    candidates = _candidate_jerujam_inventory(hidden, sold_per, consumed_inv)
+    candidates += _candidate_manual_inventory(hidden, consumed_inv)
 
     sales = _collect_external_sales()
     sales = [s for s in sales if (s["source"], s["id"]) not in already_matched
@@ -211,16 +255,21 @@ def run_match_pass():
         s["sale_date"] or "",
     ), reverse=True)
 
-    # Track running consumption so multiple sales can pair to the same
-    # JeruJam row (e.g. one inventory entry of qty 14 absorbing several
-    # smaller Lysted sales over time).
-    consumed = {}  # inv_source_id -> total qty already paired
+    # Track running consumption keyed by (source, source_id) so a manual UUID
+    # can't collide with a JeruJam id. Multiple sales can pair to the same
+    # inventory row (e.g. one entry of qty 14 absorbing several smaller sales).
+    consumed = {}
     matched_pairs = []
     for sale in sales:
         best = None
+        sale_qty = sale.get("qty") or 0
         for inv in candidates:
-            remaining = (inv["qty"] or 0) - consumed.get(inv["source_id"], 0)
+            inv_key = (inv["source"], inv["source_id"])
+            remaining = (inv["qty"] or 0) - consumed.get(inv_key, 0)
             if remaining <= 0:
+                continue
+            # Don't over-consume: a 4-qty sale can't absorb a 2-qty inventory row.
+            if sale_qty > remaining:
                 continue
             sc, reason = _score(sale, inv)
             if sc < MIN_SCORE:
@@ -230,11 +279,13 @@ def run_match_pass():
         if best is None:
             continue
         inv, sc, reason = best
-        consumed[inv["source_id"]] = consumed.get(inv["source_id"], 0) + (sale["qty"] or 0)
+        inv_key = (inv["source"], inv["source_id"])
+        consumed[inv_key] = consumed.get(inv_key, 0) + sale_qty
         matched_pairs.append((sale, inv, reason))
 
     now_iso = datetime.now(timezone.utc).isoformat()
     for sale, inv, reason in matched_pairs:
+        inv_key = (inv["source"], inv["source_id"])
         db.record_match(
             sale_source=sale["source"], sale_id=sale["id"],
             inv_source=inv["source"], inv_source_id=inv["source_id"],
@@ -243,7 +294,7 @@ def run_match_pass():
         # Only fully hide when remaining qty hits zero — partial sells leave
         # the inventory row visible with a reduced count (handled in
         # _build_unified_inventory).
-        if consumed[inv["source_id"]] >= (inv["qty"] or 0):
+        if consumed[inv_key] >= (inv["qty"] or 0):
             db.hide_inventory(inv["source"], inv["source_id"], now_iso)
     return len(matched_pairs), len(sales) - len(matched_pairs)
 
@@ -308,7 +359,9 @@ def run_pending_match():
 
 
 if __name__ == "__main__":
-    matched, skipped = run_match_pass()
-    print(f"matched: {matched} · unmatched: {skipped}")
+    # Pending-match runs first so manual rows already linked to a Lysted/Viagogo
+    # listing get flagged before the auto-matcher considers them as candidates.
     moved = run_pending_match()
     print(f"pending → listed: {moved}")
+    matched, skipped = run_match_pass()
+    print(f"matched: {matched} · unmatched: {skipped}")

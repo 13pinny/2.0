@@ -42,6 +42,12 @@
   td.balance-pos { color: var(--red); }
   td.balance-zero { color: var(--green); }
   td.balance-neg { color: var(--amber); }
+  .chip-taxded { display: inline-block; padding: 1px 6px; font-size: 9px; letter-spacing: 1.5px; border: 1px solid var(--green); color: var(--green); border-radius: 1px; text-transform: uppercase; }
+  /* Stack the checkbox label inline so it doesn't get the standard grid
+     two-column layout — checkboxes look weird as the only thing in a row. */
+  .modal-body .check-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+  .modal-body .check-row input { width: auto; cursor: pointer; accent-color: var(--green); }
+  .modal-body .check-row label { font-size: 11px; color: var(--text); letter-spacing: 1px; text-transform: none; cursor: pointer; }
   .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; color: var(--red); }
   tbody tr:hover .row-action { opacity: 0.7; }
   tbody tr .row-action:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
@@ -75,6 +81,8 @@
     <a href="/sales">SALES</a>
     <a href="/profit">PROFIT</a>
     <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/credits">CREDITS</a>
     <a href="/maaser" class="active">MAASER</a>
     <a href="/sources">SOURCES</a>
     <a href="/jerujam">JERUJAM</a>
@@ -87,6 +95,7 @@
     <div class="stat green"><div class="label">Given Lifetime</div><div class="value" id="s-given">$0</div></div>
     <div class="stat"><div class="label">Outstanding</div><div class="value" id="s-out">$0</div></div>
     <div class="stat amber"><div class="label">Owed This Month</div><div class="value" id="s-thismonth">$0</div></div>
+    <div class="stat green"><div class="label">Tax-Deductible YTD</div><div class="value" id="s-taxded">$0</div></div>
   </div>
   <div style="font-size:11px;color:var(--muted);margin-bottom:18px;letter-spacing:0.5px;">
     Maaser is calculated as <span style="color:var(--text);">10% × max(0, profit − operating expenses)</span> per <span style="color:var(--text);">event month</span> — i.e. profit attributed to the month each show takes place in, not the month the ticket was sold.
@@ -113,7 +122,7 @@
   </h2>
   <table id="pay-table">
     <thead><tr>
-      <th>DATE</th><th>RECIPIENT</th><th class="num">AMOUNT</th><th>NOTES</th><th></th>
+      <th>DATE</th><th>RECIPIENT</th><th class="num">AMOUNT</th><th>TAX</th><th>NOTES</th><th></th>
     </tr></thead>
     <tbody id="pay-tbody"></tbody>
   </table>
@@ -129,6 +138,10 @@
       <label>Recipient</label><input id="pay-recipient" type="text" placeholder="e.g. Tomchei Shabbos">
       <label>Amount *</label><input id="pay-amount" type="number" step="0.01" min="0" placeholder="USD">
       <label>Notes</label><input id="pay-notes" type="text" placeholder="optional">
+      <div class="check-row">
+        <input id="pay-taxded" type="checkbox">
+        <label for="pay-taxded">Tax-deductible (501(c)(3) — keep receipt)</label>
+      </div>
     </div>
     <div class="modal-foot">
       <span class="muted">ctrl+enter saves</span>
@@ -170,6 +183,16 @@ function render() {
   else if (out < -0.005) $("s-out").parentElement.classList.add("amber");
   else $("s-out").parentElement.classList.add("green");
   $("s-thismonth").textContent = fmt(_state.summary.owed_this_month);
+  // Tax-deductible YTD — sum of payments in the current calendar year
+  // where tax_deductible flag is set. Used for filing-season prep.
+  const tYear = today().slice(0, 4);
+  const taxYtd = (_state.payments || []).reduce((acc, p) => {
+    if (p.tax_deductible && (p.date_iso || "").slice(0, 4) === tYear) {
+      return acc + (Number(p.amount) || 0);
+    }
+    return acc;
+  }, 0);
+  $("s-taxded").textContent = fmt(taxYtd);
   if (_state.last_run && _state.last_run.at) {
     $("lastrun").textContent = "last_scrape=" + new Date(_state.last_run.at).toLocaleString();
   }
@@ -224,10 +247,12 @@ function renderPayments() {
     const tr = document.createElement("tr");
     tr.className = "payment-row";
     tr.dataset.id = p.id;
+    const taxChip = p.tax_deductible ? '<span class="chip-taxded">Tax-deduct</span>' : '';
     tr.innerHTML = `
       <td>${escape(p.date_iso || "")}</td>
       <td>${escape(p.recipient || "")}</td>
       <td class="num">${fmt(p.amount)}</td>
+      <td>${taxChip}</td>
       <td>${escape(p.notes || "")}</td>
       <td><button class="row-action" data-act="del-pay" title="Delete payment">×</button></td>
     `;
@@ -247,6 +272,9 @@ function openPayModal(p) {
   $("pay-recipient").value = p ? (p.recipient || "") : "";
   $("pay-amount").value = p ? (p.amount || "") : "";
   $("pay-notes").value = p ? (p.notes || "") : "";
+  // tax_deductible is stored as 0/1 in the DB but reads back as a number;
+  // coerce to boolean for the checkbox state.
+  $("pay-taxded").checked = p ? !!p.tax_deductible : false;
   $("pay-bg").classList.add("open");
   setTimeout(() => $("pay-recipient").focus(), 30);
 }
@@ -261,6 +289,7 @@ async function savePayModal() {
     date_iso, amount,
     recipient: $("pay-recipient").value.trim(),
     notes: $("pay-notes").value.trim(),
+    tax_deductible: $("pay-taxded").checked ? 1 : 0,
   };
   const url = _editingPayId ? "/api/maaser/edit" : "/api/maaser/add";
   const res = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });

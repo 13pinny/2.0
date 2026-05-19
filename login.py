@@ -17,6 +17,8 @@ Two modes:
 Keep the Chrome window open (minimized is fine). If you close it, run
 this again before the next scrape.
 """
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -96,6 +98,87 @@ def launch_chrome(urls=None):
             return True
         time.sleep(1)
     return False
+
+
+def find_scraper_chrome_pids():
+    """Return PIDs of Chrome processes whose --user-data-dir points at our
+    dedicated scraper profile. Matches the resolved absolute path so it
+    never picks up your personal Chrome (which uses Chrome's default
+    user_data dir, not ours)."""
+    target = str(USER_DATA.resolve())
+    pids = []
+    try:
+        if sys.platform == "win32":
+            # PowerShell + CIM is the modern replacement for the deprecated
+            # WMIC. Escape single quotes in the path for the embedded filter.
+            target_ps = target.replace("'", "''")
+            ps = (
+                "Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\" | "
+                "Where-Object { $_.CommandLine -like '*--user-data-dir=" + target_ps + "*' } | "
+                "Select-Object -ExpandProperty ProcessId"
+            )
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in (r.stdout or "").splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pids.append(int(line))
+        else:
+            r = subprocess.run(
+                ["pgrep", "-af", "--user-data-dir=" + target],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in (r.stdout or "").splitlines():
+                parts = line.split(None, 1)
+                if parts and parts[0].isdigit():
+                    pids.append(int(parts[0]))
+    except Exception as e:
+        print(f"[login] failed to enumerate scraper Chrome PIDs: {e}")
+    return pids
+
+
+def kill_scraper_chrome():
+    """Terminate any Chrome processes belonging to the scraper's dedicated
+    profile. Returns the number of processes terminated. Personal Chrome
+    windows are untouched — we match strictly by --user-data-dir."""
+    pids = find_scraper_chrome_pids()
+    if not pids:
+        return 0
+    for pid in pids:
+        try:
+            if sys.platform == "win32":
+                # /T kills the whole tree (renderers, gpu helper, etc.)
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid), "/T"],
+                    capture_output=True, timeout=5,
+                )
+            else:
+                os.kill(pid, signal.SIGTERM)
+        except Exception as e:
+            print(f"[login] failed to kill pid {pid}: {e}")
+    # Wait for the port to actually free up — taskkill returns before the
+    # process tree is fully gone, and a relaunch on a still-bound port
+    # would silently attach to the corpse.
+    for _ in range(20):
+        if not is_chrome_running():
+            return len(pids)
+        time.sleep(0.5)
+    return len(pids)
+
+
+def restart_chrome(urls=None):
+    """Kill the dedicated scraper Chrome (if running) and relaunch it
+    cleanly with the right CDP flags. Use this when connect_over_cdp keeps
+    failing because an older Chrome is bound to port 9222 without
+    --remote-allow-origins=* (the most common cause of "Connection closed
+    while reading from the driver"). Returns True if Chrome is reachable
+    on CDP afterwards."""
+    killed = kill_scraper_chrome()
+    if killed:
+        print(f"[login] terminated {killed} stale scraper Chrome process(es)")
+    return launch_chrome(urls)
 
 
 def main():

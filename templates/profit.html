@@ -78,6 +78,8 @@
     <a href="/sales">SALES</a>
     <a href="/profit" class="active">PROFIT</a>
     <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
     <a href="/sources">SOURCES</a>
     <a href="/jerujam">JERUJAM</a>
@@ -86,28 +88,45 @@
 </header>
 <main>
   <div class="stats">
-    <div class="stat"><div class="label">Sales</div><div class="value" id="t-count">0</div></div>
-    <div class="stat"><div class="label">Tickets Sold</div><div class="value" id="t-qty">0</div></div>
-    <div class="stat green"><div class="label">Total Sales</div><div class="value" id="t-rev">$0</div></div>
-    <div class="stat amber"><div class="label">Cost</div><div class="value" id="t-cost">$0</div></div>
-    <div class="stat green"><div class="label">Profit</div><div class="value" id="t-profit">$0</div><div class="sub" id="t-pct">—</div></div>
-    <div class="stat"><div class="label">Lysted Payout</div><div class="value" id="t-payout">$0</div></div>
+    <div class="stat"><div class="label">Tickets</div><div class="value" id="t-tickets">0</div></div>
+    <div class="stat"><div class="label">Sales</div><div class="value" id="t-sales">0</div></div>
+    <div class="stat"><div class="label">Events</div><div class="value" id="t-events">0</div></div>
+    <div class="stat amber"><div class="label">My Cost</div><div class="value" id="t-cost">$0</div></div>
+    <div class="stat green"><div class="label">Total Sales</div><div class="value" id="t-total">$0</div></div>
+    <div class="stat green"><div class="label">My Payout</div><div class="value" id="t-payout">$0</div></div>
+    <div class="stat"><div class="label">My ROI</div><div class="value" id="t-roi">—</div></div>
+    <div class="stat green"><div class="label">My Profit</div><div class="value" id="t-profit">$0</div><div class="sub" id="t-pct">—</div></div>
+  </div>
+
+  <div class="bar" style="margin-bottom:6px;">
+    <span class="muted" style="font-size:10px;letter-spacing:1.5px;align-self:center;">FILTER BY</span>
+    <div class="pill-bar" id="basis-pills" style="display:inline-flex;gap:4px;margin:0;">
+      <button type="button" class="pill active" data-basis="sale">Sale date</button>
+      <button type="button" class="pill" data-basis="event">Event date</button>
+    </div>
+    <div class="pill-bar" id="range-pills" style="display:inline-flex;gap:4px;margin:0;">
+      <button type="button" class="pill" data-range="3">Last 3</button>
+      <button type="button" class="pill" data-range="7">Last 7</button>
+      <button type="button" class="pill" data-range="14">Last 14</button>
+      <button type="button" class="pill" data-range="30">Last 30</button>
+      <button type="button" class="pill" data-range="ytd">YTD</button>
+      <button type="button" class="pill active" data-range="all">All time</button>
+      <button type="button" class="pill" data-range="custom">Custom</button>
+    </div>
+    <span id="custom-range" style="display:none; gap:4px; align-items:center;">
+      <input type="date" id="date-from" style="font-size:11px;padding:5px 8px;background:var(--bg-2);color:var(--text);border:1px solid var(--line);">
+      <span class="muted" style="font-size:11px;">→</span>
+      <input type="date" id="date-to" style="font-size:11px;padding:5px 8px;background:var(--bg-2);color:var(--text);border:1px solid var(--line);">
+    </span>
   </div>
 
   <div class="bar">
-    <select id="q-range">
-      <option value="all">RANGE: ALL TIME</option>
-      <option value="ytd">YTD</option>
-      <option value="mtd">MTD</option>
-      <option value="30">LAST 30D</option>
-      <option value="7">LAST 7D</option>
-    </select>
     <select id="q-source">
       <option value="all">SRC: ALL</option>
       <option value="lysted">LYSTED</option>
       <option value="viagogo">VIAGOGO</option>
-      <option value="jerujam">JERUJAM</option>
       <option value="crowdvolt">CROWDVOLT</option>
+      <option value="jerujam">JJT</option>
     </select>
   </div>
 
@@ -158,55 +177,93 @@ const moneyShort = (n) => {
 };
 const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 let _data = null;
+let _sales = [];
 // Default to event-date buckets — that's the canonical "May profit"
 // the user wants and what the Maaser obligation reads from. The toggle
 // flips it for cash-flow inspection.
 let _monthView = (typeof localStorage !== "undefined" && localStorage.getItem("profit.monthView")) || "event";
 
-function _inRange(date, range) {
-  if (range === "all") return true;
-  if (!date) return false;
-  const d = new Date(date + "T00:00:00");
-  const now = new Date(); now.setHours(0,0,0,0);
-  if (range === "7" || range === "30") {
-    const min = new Date(now); min.setDate(min.getDate() - Number(range));
-    return d >= min && d <= now;
-  }
-  if (range === "ytd") return d.getFullYear() === now.getFullYear();
-  if (range === "mtd") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-  return true;
+// Global date filter state. Drives both the top metric boxes (from raw
+// _sales) and the Daily table (from pre-aggregated _data.days).
+let _dateBasis = "sale";  // "sale" | "event"
+let _dateRange = "all";
+let _dateFrom = "";
+let _dateTo = "";
+
+function _srcLabel(s) {
+  return s === "jerujam" ? "JJT" : (s || "").toUpperCase();
 }
+function _payout(r) {
+  return (r.payout != null) ? r.payout : r.sale_price;
+}
+
+function _rowDate(r) {
+  return _dateBasis === "event"
+    ? (r.event_date_iso || (r.event_date ? String(r.event_date).slice(0,10) : ""))
+    : (r.sale_date_iso || (r.sale_date ? String(r.sale_date).slice(0,10) : ""));
+}
+
+function _inDateRangeIso(iso) {
+  if (_dateRange === "all") return true;
+  if (!iso) return false;
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return false;
+  const now = new Date(); now.setHours(0,0,0,0);
+  if (_dateRange === "ytd") return d.getFullYear() === now.getFullYear() && d <= now;
+  if (_dateRange === "custom") {
+    if (_dateFrom && iso < _dateFrom) return false;
+    if (_dateTo && iso > _dateTo) return false;
+    return true;
+  }
+  const days = Number(_dateRange);
+  if (!Number.isFinite(days) || days <= 0) return true;
+  const min = new Date(now); min.setDate(min.getDate() - (days - 1));
+  return d >= min && d <= now;
+}
+
+function _inDateRangeRow(r) { return _inDateRangeIso(_rowDate(r)); }
 
 function profitClass(n) { return n == null ? "muted" : (n >= 0 ? "pos" : "neg"); }
 
 function render() {
   if (!_data) return;
-  const range = document.getElementById("q-range").value;
   const src = document.getElementById("q-source").value;
 
-  // Filter daily rows by date range. Source filter is informational on the daily/monthly views — we still show totals from the unfiltered by_source table for accuracy.
-  const days = _data.days.filter(r => _inRange(r.date, range)).filter(r => {
+  // Top 8 metric boxes come from raw sales — that's the only place we can
+  // count unique events, and it lets us honor the basis toggle (sale vs
+  // event date) without rebucketing the aggregated data on the server.
+  const fSales = _sales.filter(r => {
+    if (src !== "all" && r.source !== src) return false;
+    return _inDateRangeRow(r);
+  });
+  const tickets = fSales.reduce((s, r) => s + (r.qty || 0), 0);
+  const eventsN = new Set(fSales.map(r => (r.event_name || "") + "|" + (r.event_date_iso || ""))).size;
+  const cost = fSales.reduce((s, r) => s + (r.cost || 0), 0);
+  const total = fSales.reduce((s, r) => s + (r.sale_price || 0), 0);
+  const payout = fSales.reduce((s, r) => s + (_payout(r) || 0), 0);
+  const profit = payout - cost;
+  const roi = cost ? (profit / cost) * 100 : null;
+  const tpct = total ? (profit / total * 100) : null;
+  document.getElementById("t-tickets").textContent = tickets;
+  document.getElementById("t-sales").textContent = fSales.length;
+  document.getElementById("t-events").textContent = eventsN;
+  document.getElementById("t-cost").textContent = money(cost);
+  document.getElementById("t-total").textContent = money(total);
+  document.getElementById("t-payout").textContent = money(payout);
+  document.getElementById("t-roi").textContent = roi == null ? "—" : (roi >= 0 ? "+" : "") + roi.toFixed(1) + "%";
+  const tp = document.getElementById("t-profit");
+  tp.textContent = money(profit);
+  tp.parentElement.className = "stat " + (profit >= 0 ? "green" : "red");
+  document.getElementById("t-pct").textContent = tpct == null ? "—" : (tpct >= 0 ? "+" : "") + tpct.toFixed(1) + "% margin";
+
+  // Daily table uses the pre-aggregated rows. Each day has its own date,
+  // so the basis toggle doesn't apply here — we always filter by the day's
+  // (sale) date. Source filter is informational (filters days that had at
+  // least one sale from that source).
+  const days = _data.days.filter(r => _inDateRangeIso(r.date)).filter(r => {
     if (src === "all") return true;
     return (r.by_source[src] || 0) > 0;
   });
-
-  // Recompute totals from filtered days
-  const totals = days.reduce((a, r) => {
-    a.count += r.count; a.qty += r.qty; a.revenue += r.revenue;
-    a.cost += r.cost; a.profit += r.profit; a.payout += r.payout;
-    return a;
-  }, {count:0,qty:0,revenue:0,cost:0,profit:0,payout:0});
-  const tpct = totals.revenue ? (totals.profit / totals.revenue * 100) : null;
-
-  document.getElementById("t-count").textContent = totals.count;
-  document.getElementById("t-qty").textContent = totals.qty;
-  document.getElementById("t-rev").textContent = money(totals.revenue);
-  document.getElementById("t-cost").textContent = money(totals.cost);
-  const tp = document.getElementById("t-profit");
-  tp.textContent = money(totals.profit);
-  tp.parentElement.className = "stat " + (totals.profit >= 0 ? "green" : "red");
-  document.getElementById("t-pct").textContent = tpct == null ? "—" : (tpct >= 0 ? "+" : "") + tpct.toFixed(1) + "% margin";
-  document.getElementById("t-payout").textContent = money(totals.payout);
 
   // By source table
   const sb = document.getElementById("srcbody");
@@ -215,7 +272,7 @@ function render() {
     const margin = v.revenue ? (v.profit / v.revenue * 100) : null;
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><span class="muted" style="display:inline-block;width:8px;height:8px;background:var(--${name === 'lysted' ? 'accent' : name === 'viagogo' ? 'orange' : name === 'jerujam' ? 'purple' : 'pink'});margin-right:8px;"></span>${name.toUpperCase()}</td>
+      <td><span class="muted" style="display:inline-block;width:8px;height:8px;background:var(--${name === 'lysted' ? 'accent' : name === 'viagogo' ? 'orange' : name === 'jerujam' ? 'purple' : 'pink'});margin-right:8px;"></span>${_srcLabel(name)}</td>
       <td class="num">${v.count}</td>
       <td class="num">${v.qty}</td>
       <td class="num">${money(v.revenue)}</td>
@@ -288,8 +345,13 @@ function render() {
 }
 
 async function load() {
-  const r = await fetch("/api/profit/daily");
+  const [r, sR] = await Promise.all([
+    fetch("/api/profit/daily"),
+    fetch("/api/sales-all"),
+  ]);
   _data = await r.json();
+  const sJ = await sR.json();
+  _sales = sJ.rows || [];
   document.getElementById("meta").textContent = `${_data.days.length} days // ${_data.months.length} months`;
   render();
 }
@@ -304,9 +366,31 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("mview-sale").addEventListener("click", () => _setMonthView("sale"));
 });
 
-for (const id of ["q-range", "q-source"]) {
-  document.getElementById(id).addEventListener("change", render);
+document.getElementById("q-source").addEventListener("change", render);
+
+document.getElementById("basis-pills").addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (!b) return;
+  document.querySelectorAll("#basis-pills .pill").forEach(p => p.classList.toggle("active", p === b));
+  _dateBasis = b.dataset.basis;
+  render();
+});
+document.getElementById("range-pills").addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (!b) return;
+  document.querySelectorAll("#range-pills .pill").forEach(p => p.classList.toggle("active", p === b));
+  _dateRange = b.dataset.range;
+  document.getElementById("custom-range").style.display = _dateRange === "custom" ? "inline-flex" : "none";
+  render();
+});
+for (const id of ["date-from", "date-to"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    _dateFrom = document.getElementById("date-from").value;
+    _dateTo = document.getElementById("date-to").value;
+    if (_dateRange === "custom") render();
+  });
 }
+
 load();
 </script>
 </body>

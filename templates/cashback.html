@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Cashback</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg-2: #161b22; --bg-3: #11161d;
+    --line: #21262d; --line-2: #2a3038;
+    --text: #c9d1d9; --muted: #6e7681;
+    --accent: #58a6ff; --green: #56d364; --red: #f85149;
+    --amber: #d29922; --orange: #f97316; --purple: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums; }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); display: flex; align-items: center; }
+  h2 .count { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: 10px; }
+  .blurb { color: var(--muted); font-size: 11px; letter-spacing: 0.5px; margin-bottom: 14px; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #1f262e; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.cb-row { cursor: pointer; }
+  tr.month-hdr td { background: var(--bg-2); padding: 9px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
+  tr.month-hdr .total { float: right; color: var(--green); }
+  .breakdown { background: var(--bg-2); border: 1px solid var(--line); padding: 0; margin-bottom: 18px; }
+  .breakdown table { font-size: 12px; }
+  .breakdown th { padding: 8px 14px; }
+  .breakdown td { padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  .breakdown tbody tr:last-child td { border-bottom: none; }
+  .breakdown td.card-name { color: var(--text); font-weight: 600; }
+  .breakdown td.num { color: var(--green); font-variant-numeric: tabular-nums; }
+  .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; color: var(--red); }
+  tbody tr:hover .row-action { opacity: 0.7; }
+  tbody tr .row-action:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+  .chip { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; color: var(--accent); border-color: var(--accent); }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 540px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #79b8ff; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>// CASHBACK</h1>
+    <span class="meta" id="sub">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback" class="active">CASHBACK</a>
+    <a href="/credits">CREDITS</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/watchers">WATCHERS</a>
+  </nav>
+</header>
+<main>
+  <!-- Top totals — combined across all cards -->
+  <div class="stats">
+    <div class="stat"><div class="label">This Month</div><div class="value" id="s-month">$0</div></div>
+    <div class="stat"><div class="label">This Year</div><div class="value" id="s-year">$0</div></div>
+    <div class="stat"><div class="label">All-Time</div><div class="value" id="s-all">$0</div></div>
+  </div>
+
+  <h2>Per-card breakdown <span class="count" id="card-count"></span>
+    <button id="add-cb" style="margin-left:auto;font-size:11px;letter-spacing:1px;">+ Add Entry</button>
+  </h2>
+  <div class="blurb">
+    Cashback is purely informational and is not part of Maaser income. Add a new card by typing
+    its name in the Card field — it'll appear in the dropdown next time.
+  </div>
+  <div class="breakdown">
+    <table>
+      <thead><tr>
+        <th>Card</th>
+        <th class="num">This Month</th>
+        <th class="num">This Year</th>
+        <th class="num">All-Time</th>
+      </tr></thead>
+      <tbody id="cards-tbody"></tbody>
+    </table>
+  </div>
+
+  <h2>Entries</h2>
+  <table id="cb-table">
+    <thead><tr>
+      <th>Date</th>
+      <th>Card</th>
+      <th class="num">Amount</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="cb-tbody"></tbody>
+  </table>
+  <div id="cb-empty" class="empty" style="display:none">// no cashback logged yet — click + Add Entry above</div>
+</main>
+
+<!-- Add/edit modal -->
+<div id="cb-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span id="cb-title">// ADD ENTRY</span><button class="close" id="cb-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Log a cashback reward. Date, amount, and card are all required.</div>
+      <label>Date *</label><input id="cb-date" type="date">
+      <label>Amount *</label><input id="cb-amount" type="number" step="0.01" min="0" placeholder="USD">
+      <label>Card *</label><input id="cb-card" type="text" list="card-suggestions" placeholder="e.g. Capital One Savor" autocomplete="off">
+      <datalist id="card-suggestions"></datalist>
+    </div>
+    <div class="modal-foot">
+      <span class="muted">ctrl+enter saves</span>
+      <button id="cb-cancel">Cancel</button>
+      <button class="primary" id="cb-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => "$" + (Number(n) || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const today = () => new Date().toISOString().slice(0,10);
+// Two cards seeded into the datalist out-of-the-box. The datalist also
+// gets populated with any other card names the user has previously
+// entered (server returns them via /api/cashback as known_cards).
+const SEED_CARDS = ["Capital One Savor", "Capital One Spark"];
+
+let _state = { items: [], known_cards: [] };
+let _editingId = null;
+
+function escape(s) {
+  return String(s || "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+}
+
+async function load() {
+  const res = await fetch("/api/cashback");
+  if (!res.ok) { console.error("failed to load"); return; }
+  _state = await res.json();
+  render();
+}
+
+function _monthKey(iso) { return (iso || "").slice(0, 7); }   // YYYY-MM
+function _yearKey(iso)  { return (iso || "").slice(0, 4); }   // YYYY
+
+function _sums() {
+  // Totals, plus per-card breakdown for this month / this year / all-time.
+  const tMonth = _monthKey(today());
+  const tYear  = _yearKey(today());
+  let totalMonth = 0, totalYear = 0, totalAll = 0;
+  const byCard = new Map();   // card -> {month, year, all}
+  for (const r of (_state.items || [])) {
+    const amt = Number(r.amount) || 0;
+    const m = _monthKey(r.date_iso);
+    const y = _yearKey(r.date_iso);
+    totalAll += amt;
+    if (y === tYear) totalYear += amt;
+    if (m === tMonth) totalMonth += amt;
+    const card = r.card_name || "(unknown)";
+    if (!byCard.has(card)) byCard.set(card, {month: 0, year: 0, all: 0});
+    const slot = byCard.get(card);
+    slot.all += amt;
+    if (y === tYear) slot.year += amt;
+    if (m === tMonth) slot.month += amt;
+  }
+  return {totalMonth, totalYear, totalAll, byCard};
+}
+
+function _allKnownCards() {
+  // Seed values + cards from server's known_cards (which is anything the
+  // user has saved) + any cards from current items, deduped.
+  const set = new Set(SEED_CARDS);
+  for (const c of (_state.known_cards || [])) set.add(c);
+  for (const r of (_state.items || [])) if (r.card_name) set.add(r.card_name);
+  return [...set].sort();
+}
+
+function render() {
+  const {totalMonth, totalYear, totalAll, byCard} = _sums();
+  $("s-month").textContent = fmt(totalMonth);
+  $("s-year").textContent  = fmt(totalYear);
+  $("s-all").textContent   = fmt(totalAll);
+  $("sub").textContent     = `${(_state.items || []).length} entr${(_state.items || []).length === 1 ? "y" : "ies"} · ${byCard.size} card${byCard.size === 1 ? "" : "s"}`;
+
+  // --- Per-card breakdown table ---
+  const cards = _allKnownCards();
+  // Show seeded + saved cards always; cards with non-zero data float to top.
+  cards.sort((a, b) => {
+    const ba = byCard.get(a)?.all || 0;
+    const bb = byCard.get(b)?.all || 0;
+    if (ba !== bb) return bb - ba;
+    return a.localeCompare(b);
+  });
+  const ctbody = $("cards-tbody");
+  ctbody.innerHTML = "";
+  for (const c of cards) {
+    const slot = byCard.get(c) || {month: 0, year: 0, all: 0};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="card-name">${escape(c)}</td>
+      <td class="num">${fmt(slot.month)}</td>
+      <td class="num">${fmt(slot.year)}</td>
+      <td class="num">${fmt(slot.all)}</td>
+    `;
+    ctbody.appendChild(tr);
+  }
+  $("card-count").textContent = `· ${cards.length} card${cards.length === 1 ? "" : "s"}`;
+
+  // --- Entries table, grouped by month with subtotal headers ---
+  const tbody = $("cb-tbody");
+  tbody.innerHTML = "";
+  if (!_state.items || !_state.items.length) {
+    $("cb-empty").style.display = "";
+  } else {
+    $("cb-empty").style.display = "none";
+    // Group items by YYYY-MM (already date-desc from backend).
+    const groups = new Map();
+    for (const r of _state.items) {
+      const k = _monthKey(r.date_iso);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(r);
+    }
+    for (const [mkey, items] of groups) {
+      const sub = items.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+      const hdrLabel = mkey ? new Date(mkey + "-01T00:00:00").toLocaleDateString(undefined, {month: "long", year: "numeric"}) : "(no date)";
+      const hdr = document.createElement("tr");
+      hdr.className = "month-hdr";
+      hdr.innerHTML = `<td colspan="4">// ${escape(hdrLabel.toUpperCase())} <span class="total">${fmt(sub)}</span></td>`;
+      tbody.appendChild(hdr);
+      for (const r of items) {
+        const tr = document.createElement("tr");
+        tr.className = "cb-row";
+        tr.dataset.id = r.id;
+        tr.innerHTML = `
+          <td>${escape(r.date_iso || "")}</td>
+          <td><span class="chip">${escape(r.card_name || "")}</span></td>
+          <td class="num">${fmt(r.amount)}</td>
+          <td><button class="row-action" data-act="del" title="Delete entry">×</button></td>
+        `;
+        tr.addEventListener("click", (e) => {
+          if (e.target.closest("button")) return;
+          openModal(r);
+        });
+        tbody.appendChild(tr);
+      }
+    }
+  }
+
+  // --- Refresh datalist with all known card names ---
+  const dl = $("card-suggestions");
+  dl.innerHTML = "";
+  for (const c of _allKnownCards()) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    dl.appendChild(opt);
+  }
+}
+
+function openModal(item) {
+  _editingId = item ? item.id : null;
+  $("cb-title").textContent = item ? "// EDIT ENTRY" : "// ADD ENTRY";
+  $("cb-date").value = item ? (item.date_iso || "") : today();
+  $("cb-amount").value = item ? (item.amount || "") : "";
+  $("cb-card").value = item ? (item.card_name || "") : "";
+  $("cb-bg").classList.add("open");
+  setTimeout(() => $(item ? "cb-amount" : "cb-amount").focus(), 30);
+}
+
+function closeModal() { $("cb-bg").classList.remove("open"); _editingId = null; }
+
+async function saveModal() {
+  const date_iso = $("cb-date").value;
+  const amount = parseFloat($("cb-amount").value);
+  const card_name = $("cb-card").value.trim();
+  if (!date_iso) { alert("Date required"); return; }
+  if (!amount || amount <= 0) { alert("Amount must be > 0"); return; }
+  if (!card_name) { alert("Card required"); return; }
+  const body = {id: _editingId, date_iso, amount, card_name};
+  const url = _editingId ? "/api/cashback/edit" : "/api/cashback/add";
+  const res = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return; }
+  closeModal();
+  await load();
+}
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".row-action");
+  if (!btn) return;
+  const tr = btn.closest("tr");
+  const id = tr && tr.dataset.id;
+  if (!id) return;
+  if (btn.dataset.act === "del") {
+    if (!confirm("Delete this cashback entry?")) return;
+    await fetch("/api/cashback/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id}) });
+    await load();
+  }
+});
+
+$("add-cb").addEventListener("click", () => openModal(null));
+$("cb-close").addEventListener("click", closeModal);
+$("cb-cancel").addEventListener("click", closeModal);
+$("cb-save").addEventListener("click", saveModal);
+$("cb-bg").addEventListener("click", e => { if (e.target.id === "cb-bg") closeModal(); });
+
+document.addEventListener("keydown", (e) => {
+  if (!$("cb-bg").classList.contains("open")) return;
+  if (e.key === "Escape") closeModal();
+  else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) saveModal();
+});
+
+load();
+</script>
+</body>
+</html>

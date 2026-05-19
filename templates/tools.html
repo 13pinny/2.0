@@ -63,6 +63,8 @@
     <a href="/sales">SALES</a>
     <a href="/profit">PROFIT</a>
     <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
     <a href="/sources">SOURCES</a>
     <a href="/jerujam">JERUJAM</a>
@@ -89,6 +91,25 @@
       <button id="kupat-go">Print PDFs</button>
     </form>
     <div id="kupat-status" class="status" style="display:none"></div>
+  </div>
+
+  <h2>// TICKCHAK · REDACT + SPLIT TICKETS</h2>
+  <div class="tool-card">
+    <div class="desc">
+      Upload a multi-page Tickchak ticket PDF. We strip the buyer name,
+      phone, ticket price, and Tickchak logo from every page, then split
+      it into one PDF per ticket — saved into the same per-event folder
+      under <code style="color:var(--cyan);">$KARTIS_TICKETS_DIR</code>
+      as the Kupat tool, named
+      <code style="color:var(--cyan);">&lt;EventName&gt;_&lt;Date&gt;_&lt;Section&gt;_Row&lt;N&gt;_Seat&lt;N&gt;.pdf</code>.
+    </div>
+    <form id="tickchak-form" onsubmit="return false;">
+      <label for="tickchak-file">Tickchak PDF</label>
+      <input id="tickchak-file" type="file" accept="application/pdf"
+             style="width:100%;font-family:inherit;font-size:12px;padding:9px 12px;background:var(--bg-3);color:var(--text);border:1px solid var(--line);">
+      <button id="tickchak-go">Process PDF</button>
+    </form>
+    <div id="tickchak-status" class="status" style="display:none"></div>
   </div>
 </main>
 <script>
@@ -135,6 +156,50 @@ $("kupat-go").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = "Print PDFs";
+  }
+});
+
+$("tickchak-go").addEventListener("click", async () => {
+  const fileInput = $("tickchak-file");
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) { alert("Pick a Tickchak PDF first"); return; }
+  const btn = $("tickchak-go");
+  const statusEl = $("tickchak-status");
+  btn.disabled = true;
+  btn.textContent = "Working...";
+  statusEl.className = "status";
+  statusEl.style.display = "block";
+  statusEl.innerHTML = `<div class="row"><span class="spinner"></span> Redacting + splitting ${esc(file.name)}…</div>`;
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/tickchak-pdf", {method: "POST", body: fd});
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      statusEl.className = "status error";
+      statusEl.innerHTML = `<div class="row">⚠ ${esc(data.error || "Unknown error")}</div>`;
+      return;
+    }
+    statusEl.className = "status success";
+    const fileList = (data.tickets || []).map(t => {
+      const seat = t.seat ? `seat ${esc(t.seat)}` : "";
+      const row = t.row ? `row ${esc(t.row)}` : "";
+      const meta = [row, seat].filter(Boolean).join(" · ");
+      return `<li>${esc(t.filename)}${meta ? ` <span class="seat">(${meta})</span>` : ""}</li>`;
+    }).join("");
+    statusEl.innerHTML = `
+      <div class="row">✓ Saved <strong>${data.tickets.length}</strong> ticket${data.tickets.length === 1 ? "" : "s"} for
+        <strong>${esc(data.event_name || "")}</strong>${data.venue ? ` at <strong>${esc(data.venue)}</strong>` : ""}
+        ${data.event_date ? ` · ${esc(data.event_date)}` : ""}</div>
+      <div class="row">Folder: <span class="folder">${esc(data.folder)}</span></div>
+      <ul class="file-list">${fileList}</ul>
+    `;
+  } catch (e) {
+    statusEl.className = "status error";
+    statusEl.innerHTML = `<div class="row">⚠ ${esc(e.message || e)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Process PDF";
   }
 });
 </script>

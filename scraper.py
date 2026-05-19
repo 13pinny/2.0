@@ -66,6 +66,34 @@ def _save_debug(page, label):
     print(f"[kartis] saved debug artifacts to {base}.*")
 
 
+# Cleared at the start of each scrape_all(). Sources whose pages got bounced to
+# a login URL during scrape (typically session expired) end up here so the
+# dashboard can show a "VIAGOGO LOGIN EXPIRED" badge instead of failing silently.
+_auth_errors = set()
+
+
+def _is_login_redirect(url):
+    if not url:
+        return False
+    u = url.lower()
+    return (
+        "account.viagogo.com" in u
+        or "automatiq.com" in u  # Lysted's auth provider
+        or "/login" in u
+        or "/signin" in u
+    )
+
+
+def _flag_auth_if_login(page, source):
+    """Call after a scrape failure where the page might have redirected to
+    login. Records the source in _auth_errors so the dashboard can surface it."""
+    try:
+        if _is_login_redirect(page.url):
+            _auth_errors.add(source)
+    except Exception:
+        pass
+
+
 def _ensure_logged_in(page):
     url = os.environ.get("LYSTED_INVENTORY_URL", "https://app.lysted.com/tickets")
     page.goto(url, wait_until="domcontentloaded")
@@ -78,7 +106,14 @@ def _ensure_logged_in(page):
                 "Cloudflare is challenging the browser. Switch to the Chrome "
                 "window, complete the 'Verify you are human' check, then retry."
             )
-        if "login" in page.url or "automatiq.com" in page.url:
+        # Logged-out signal: redirected to a login page, the auth provider,
+        # or the marketing root (anything other than app.lysted.com — Lysted
+        # bounces logged-out users to lysted.com/ rather than a /login URL).
+        cur = (page.url or "").lower()
+        if ("login" in cur
+                or "automatiq.com" in cur
+                or "app.lysted.com" not in cur):
+            _auth_errors.add("lysted")
             raise RuntimeError(
                 "Chrome session is logged out. Run `python login.py` and sign "
                 "back into Lysted in that window."
@@ -370,6 +405,7 @@ def _scrape_lysted_sales(context):
             except Exception:
                 print("[kartis] timed out waiting for ninja-auth in localStorage; Lysted session may be expired.")
                 _save_debug(page, "sales")
+                _auth_errors.add("lysted")
                 page.close()
                 return []
         raw_auth = page.evaluate('localStorage.getItem("ninja-auth")')
@@ -384,6 +420,7 @@ def _scrape_lysted_sales(context):
             if exp_ms and exp_ms < now_ms:
                 print("[kartis] Lysted JWT in localStorage is expired. "
                       "Open the Lysted tab in Chrome and click around (or re-log in) to refresh it.")
+                _auth_errors.add("lysted")
                 if created_page:
                     page.close()
                 return []
@@ -392,6 +429,7 @@ def _scrape_lysted_sales(context):
         if not raw_auth:
             print("[kartis] no ninja-auth in localStorage — Lysted login may be expired.")
             _save_debug(page, "sales")
+            _auth_errors.add("lysted")
             return []
         auth = _json.loads(raw_auth)
         token = auth.get("token")
@@ -399,6 +437,7 @@ def _scrape_lysted_sales(context):
         if not token:
             print("[kartis] ninja-auth has no token — login expired.")
             _save_debug(page, "sales")
+            _auth_errors.add("lysted")
             return []
         since = (datetime.now() - timedelta(days=LYSTED_SALES_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
         url = f"{api_base}/api/sales?search=saledate.min:{since}&dateOffset=240&perPage=500&force=true"
@@ -437,6 +476,7 @@ def _scrape_lysted_purchases(context):
         except Exception as e:
             print(f"[kartis] purchases table never rendered: {e}")
             _save_debug(page, "purchases")
+            _flag_auth_if_login(page, "lysted")
             return []
         page.wait_for_timeout(1500)
 
@@ -609,6 +649,7 @@ def _scrape_viagogo_sales(context):
         except Exception as e:
             print(f"[kartis] viagogo sales tabs never rendered: {e}")
             _save_debug(page, "viagogo-sales")
+            _flag_auth_if_login(page, "viagogo")
             return []
         page.wait_for_timeout(1500)
 
@@ -704,6 +745,7 @@ def _scrape_viagogo(context):
         except Exception as e:
             print(f"[kartis] viagogo inventory never rendered: {e}")
             _save_debug(page, "viagogo")
+            _flag_auth_if_login(page, "viagogo")
             return []
         page.wait_for_timeout(1500)
 
@@ -869,17 +911,33 @@ def _parse_crowdvolt_row(cells):
 
 
 def _scrape_crowdvolt_sales(context):
-    url = os.environ.get("CROWDVOLT_SALES_URL", "https://www.crowdvolt.com/dashboard/sales?orderType=completed")
+    # CrowdVolt redesigned the page in May 2026: /dashboard/sales redirects
+    # to /selling, the layout swapped from a single table to tabs (Incomplete
+    # / Completed), and the ?orderType=completed query param is no longer
+    # honored — the page always defaults to "Incomplete" (which is usually
+    # empty), so a naïve goto found no table rows and returned 0 sales.
+    # Fix: navigate, wait for the SPA to render, click the Completed tab,
+    # then wait for the table to populate.
+    url = os.environ.get("CROWDVOLT_SALES_URL", "https://www.crowdvolt.com/selling")
     page = context.new_page()
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_timeout(2500)  # let Next.js hydrate
+        # Click the Completed tab (text-match — selector classes are utility
+        # hashes that change on every deploy, so don't rely on them).
+        try:
+            page.get_by_text("Completed", exact=True).first.click(timeout=5000)
+        except Exception as e:
+            print(f"[kartis] couldn't click Completed tab on crowdvolt: {e}")
+        page.wait_for_timeout(2000)
         try:
             page.wait_for_selector("table tbody tr", timeout=15000)
         except Exception as e:
             print(f"[kartis] crowdvolt sales table never rendered: {e}")
             _save_debug(page, "crowdvolt-sales")
+            _flag_auth_if_login(page, "crowdvolt")
             return []
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(1500)
         rows_data = page.evaluate(
             """() => Array.from(document.querySelectorAll('table tbody tr')).map(tr => ({
               cells: Array.from(tr.querySelectorAll('td')).map(td => (td.innerText || '').trim())
@@ -909,6 +967,7 @@ def _parse_int(text):
 
 
 def scrape_all():
+    _auth_errors.clear()
     result = {
         "lysted": [],
         "lysted_purchases": [],
@@ -921,23 +980,40 @@ def scrape_all():
         try:
             browser = p.chromium.connect_over_cdp(CDP_URL)
         except Exception as e:
-            # Chrome was down or just-closed (auto-update, accidental close,
-            # transient hiccup). Try to bring it back up automatically by
-            # invoking the same launcher login.py uses, then retry the
-            # connect once. Only raise if that second attempt still fails —
-            # otherwise the scraper recovers silently across Chrome restarts.
+            # Three failure modes we try to self-heal:
+            #  1. Chrome is down (auto-update, accidental close, reboot) —
+            #     launch_chrome() spawns it fresh and we retry.
+            #  2. Chrome is up but the CDP WebSocket is broken — usually an
+            #     older Chrome bound to :9222 without --remote-allow-origins=*.
+            #     launch_chrome() short-circuits because is_chrome_running()
+            #     sees the HTTP endpoint and returns True, so the connect
+            #     still fails. Second pass: restart_chrome() kills the stale
+            #     Chrome (matched by --user-data-dir, so your personal
+            #     Chrome is untouched) and relaunches with the right flags.
+            #  3. Both attempts still fail — surface a clear error.
+            import login
+            e1 = e2 = None
             try:
-                import login
                 if login.launch_chrome():
                     browser = p.chromium.connect_over_cdp(CDP_URL)
                 else:
                     raise RuntimeError("login.launch_chrome() returned False")
-            except Exception as e2:
-                raise RuntimeError(
-                    f"Can't reach Chrome at {CDP_URL} and auto-launch failed. "
-                    f"Run `python login.py` and keep that Chrome window open. "
-                    f"(Connect: {e}. Auto-launch: {e2})"
-                )
+            except Exception as ex1:
+                e1 = ex1
+                try:
+                    print(f"[kartis] first relaunch attempt failed ({ex1}); forcing kill+restart")
+                    if login.restart_chrome():
+                        browser = p.chromium.connect_over_cdp(CDP_URL)
+                    else:
+                        raise RuntimeError("login.restart_chrome() returned False")
+                except Exception as ex2:
+                    e2 = ex2
+                    raise RuntimeError(
+                        f"Can't reach Chrome at {CDP_URL} and auto-launch failed. "
+                        f"Double-click restart_chrome.bat (or run `python login.py`) "
+                        f"and keep that Chrome window open. "
+                        f"(Connect: {e}. Auto-launch: {e1}. Force-restart: {e2})"
+                    )
         context = browser.contexts[0] if browser.contexts else browser.new_context()
 
         page = context.new_page()
@@ -945,9 +1021,13 @@ def scrape_all():
             _ensure_logged_in(page)
             _save_debug(page, "tickets")
             result["lysted"] = _scrape_inventory(page)
-        except Exception:
+        except Exception as e:
             _save_debug(page, "failure")
-            raise
+            # Don't re-raise — a Lysted logout/timeout used to abort the whole
+            # batch, leaving Viagogo + CrowdVolt unscraped. Now we log it,
+            # let the auth_errors signal surface to the dashboard, and let the
+            # other sources still run.
+            print(f"[kartis] lysted inventory scrape failed: {type(e).__name__}: {e}")
         finally:
             try:
                 page.close()
@@ -994,8 +1074,11 @@ def run_and_save():
     pending_listed = 0
     try:
         import matcher
-        matched, _ = matcher.run_match_pass()
+        # Pending-match first: flag manual rows already listed on Lysted/Viagogo
+        # so the auto-matcher skips them as candidates (the listing row owns
+        # decrement).
         pending_listed = matcher.run_pending_match()
+        matched, _ = matcher.run_match_pass()
     except Exception as e:
         print(f"[kartis] matcher pass failed: {type(e).__name__}: {e}")
     return {
@@ -1007,6 +1090,7 @@ def run_and_save():
         "crowdvolt_sales": len(data["crowdvolt_sales"]),
         "auto_matched": matched,
         "pending_listed": pending_listed,
+        "auth_errors": sorted(_auth_errors),
     }
 
 

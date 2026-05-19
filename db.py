@@ -309,6 +309,33 @@ CREATE TABLE IF NOT EXISTS owed_items (
     direction TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cashback_entries (
+    id TEXT PRIMARY KEY,
+    date_iso TEXT NOT NULL,
+    amount REAL NOT NULL,
+    card_name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cashback_date ON cashback_entries(date_iso);
+CREATE TABLE IF NOT EXISTS kupat_credits (
+    id TEXT PRIMARY KEY,
+    issued_date TEXT NOT NULL,
+    ils_amount REAL NOT NULL,
+    original_usd_cost REAL,
+    note TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kupat_credits_date ON kupat_credits(issued_date);
+CREATE TABLE IF NOT EXISTS kupat_credit_spends (
+    id TEXT PRIMARY KEY,
+    credit_id TEXT NOT NULL,
+    spend_date TEXT NOT NULL,
+    ils_amount REAL NOT NULL,
+    fx_rate REAL,
+    note TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kupat_spends_credit ON kupat_credit_spends(credit_id);
 CREATE TABLE IF NOT EXISTS maaser_payments (
     id TEXT PRIMARY KEY,
     date TEXT,
@@ -316,6 +343,7 @@ CREATE TABLE IF NOT EXISTS maaser_payments (
     recipient TEXT,
     amount REAL NOT NULL,
     notes TEXT,
+    tax_deductible INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS jerujam_expenses (
@@ -444,6 +472,12 @@ def init():
         td_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tm_drops)").fetchall()}
         if "notify_count" not in td_cols:
             conn.execute("ALTER TABLE tm_drops ADD COLUMN notify_count INTEGER")
+        # Maaser tax-deductible flag — existing rows default to 0 (not
+        # claimed) which is a safe default; user can edit any back-history
+        # entries to flip them on.
+        mp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(maaser_payments)").fetchall()}
+        if "tax_deductible" not in mp_cols:
+            conn.execute("ALTER TABLE maaser_payments ADD COLUMN tax_deductible INTEGER NOT NULL DEFAULT 0")
 
 
 def upsert_lysted_purchases(rows, now_iso):
@@ -892,6 +926,21 @@ def delete_manual_sale(sale_id):
         conn.execute("DELETE FROM manual_sales WHERE id = ?", (sale_id,))
 
 
+def seats_sold_by_inv():
+    """Map (inv_source, inv_source_id) -> combined seats string from manual_sales,
+    so the pending modal can hide seats that were already recorded as sold."""
+    out = {}
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT inv_source, inv_source_id, seats FROM manual_sales "
+            "WHERE seats IS NOT NULL AND seats <> ''"
+        ).fetchall()
+    for r in rows:
+        key = (r["inv_source"], str(r["inv_source_id"]))
+        out.setdefault(key, []).append(r["seats"])
+    return {k: ", ".join(v) for k, v in out.items()}
+
+
 def all_sale_overrides():
     with connect() as conn:
         rows = conn.execute("SELECT source, sale_id, field, value FROM sales_overrides").fetchall()
@@ -1284,6 +1333,46 @@ def delete_owed_item(id_):
         conn.execute("DELETE FROM owed_items WHERE id = ?", (id_,))
 
 
+def insert_cashback_entry(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO cashback_entries (id, date_iso, amount, card_name, created_at)
+            VALUES (:id, :date_iso, :amount, :card_name, :created_at)
+            """,
+            {**row, "created_at": now_iso},
+        )
+
+
+def all_cashback_entries():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM cashback_entries ORDER BY date_iso DESC, created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_cashback_entry(id_, fields):
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=:{k}" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE cashback_entries SET {sets} WHERE id=:_id", {**fields, "_id": id_})
+
+
+def delete_cashback_entry(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM cashback_entries WHERE id = ?", (id_,))
+
+
+def distinct_cashback_cards():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT card_name FROM cashback_entries WHERE card_name <> '' ORDER BY card_name"
+        ).fetchall()
+    return [r["card_name"] for r in rows]
+
+
 def insert_attachment(row):
     with connect() as conn:
         conn.execute(
@@ -1422,10 +1511,10 @@ def insert_maaser(row, now_iso):
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO maaser_payments (id, date, date_iso, recipient, amount, notes, created_at)
-            VALUES (:id, :date, :date_iso, :recipient, :amount, :notes, :created_at)
+            INSERT INTO maaser_payments (id, date, date_iso, recipient, amount, notes, tax_deductible, created_at)
+            VALUES (:id, :date, :date_iso, :recipient, :amount, :notes, :tax_deductible, :created_at)
             """,
-            {**row, "created_at": now_iso},
+            {**{"tax_deductible": 0}, **row, "created_at": now_iso},
         )
 
 
@@ -1592,3 +1681,62 @@ def tm_recent_drops(watcher_id=None, limit=200):
                 "SELECT * FROM tm_drops ORDER BY detected_at DESC LIMIT ?", (limit,),
             ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------- Kupat credits ---------------------------------------------
+
+def insert_kupat_credit(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO kupat_credits (id, issued_date, ils_amount, original_usd_cost, note, created_at)
+            VALUES (:id, :issued_date, :ils_amount, :original_usd_cost, :note, :created_at)
+            """,
+            {**row, "created_at": now_iso},
+        )
+
+
+def all_kupat_credits():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM kupat_credits ORDER BY issued_date DESC, created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_kupat_credit(id_, fields):
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=:{k}" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE kupat_credits SET {sets} WHERE id=:_id", {**fields, "_id": id_})
+
+
+def delete_kupat_credit(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM kupat_credit_spends WHERE credit_id = ?", (id_,))
+        conn.execute("DELETE FROM kupat_credits WHERE id = ?", (id_,))
+
+
+def insert_kupat_spend(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO kupat_credit_spends (id, credit_id, spend_date, ils_amount, fx_rate, note, created_at)
+            VALUES (:id, :credit_id, :spend_date, :ils_amount, :fx_rate, :note, :created_at)
+            """,
+            {**row, "created_at": now_iso},
+        )
+
+
+def all_kupat_spends():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM kupat_credit_spends ORDER BY spend_date DESC, created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_kupat_spend(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM kupat_credit_spends WHERE id = ?", (id_,))

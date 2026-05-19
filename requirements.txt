@@ -3,3 +3,4 @@ patchright>=1.48
 APScheduler>=3.10
 python-dotenv>=1.0
 openpyxl>=3.1
+PyMuPDF>=1.24
