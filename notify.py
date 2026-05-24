@@ -252,6 +252,84 @@ def send_test(label="Kartis test"):
     return {"discord": discord_result, "email": email_result}
 
 
+def send_todo_digest(due_today, overdue):
+    """Daily reminder for the to-do page: one digest message per channel,
+    not one per task. `due_today` and `overdue` are lists of todo dicts
+    (from db.todo_due_open). Returns the same shape as notify_drop so the
+    caller can log the result.
+    """
+    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    gmail_user = os.environ.get("GMAIL_USER", "").strip()
+    gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
+
+    def _fmt_task(t):
+        bits = [t.get("title") or "(untitled)"]
+        urgency = (t.get("urgency") or "").upper()
+        if urgency and urgency != "NORMAL":
+            bits.append(f"[{urgency}]")
+        return " ".join(bits)
+
+    n_today = len(due_today)
+    n_over = len(overdue)
+
+    discord_result = "skipped (no DISCORD_WEBHOOK_URL)"
+    if discord_url:
+        desc_lines = []
+        if overdue:
+            desc_lines.append(f"**Overdue ({n_over}):**")
+            for t in overdue[:20]:
+                days_late = ""
+                try:
+                    from datetime import date, datetime
+                    d = datetime.strptime((t.get("due_date_iso") or "")[:10], "%Y-%m-%d").date()
+                    days_late = f" — {(date.today() - d).days}d late"
+                except Exception:
+                    pass
+                desc_lines.append(f"• {_fmt_task(t)}{days_late}")
+            if n_over > 20:
+                desc_lines.append(f"... +{n_over - 20} more")
+        if due_today:
+            if desc_lines:
+                desc_lines.append("")
+            desc_lines.append(f"**Due today ({n_today}):**")
+            for t in due_today[:20]:
+                desc_lines.append(f"• {_fmt_task(t)}")
+            if n_today > 20:
+                desc_lines.append(f"... +{n_today - 20} more")
+        embed = {
+            "title": f"📋 {n_over + n_today} to-do reminder{'s' if (n_over + n_today) != 1 else ''}",
+            "description": "\n".join(desc_lines)[:4000] or "(empty)",
+            "url": "http://localhost:5000/todos",
+            "color": 0xF97316 if n_over else 0x58A6FF,
+        }
+        discord_result = _post_discord(discord_url, {"embeds": [embed]})
+
+    email_result = "skipped (no GMAIL creds)"
+    if gmail_user and gmail_pwd and to_addr:
+        body_lines = [f"{n_over + n_today} to-do reminder(s):", ""]
+        if overdue:
+            body_lines.append(f"OVERDUE ({n_over}):")
+            for t in overdue:
+                body_lines.append(f"  • {_fmt_task(t)} — due {t.get('due_date_iso') or '?'}")
+            body_lines.append("")
+        if due_today:
+            body_lines.append(f"DUE TODAY ({n_today}):")
+            for t in due_today:
+                body_lines.append(f"  • {_fmt_task(t)}")
+            body_lines.append("")
+        body_lines.append("Open the to-do page: http://localhost:5000/todos")
+        subj_bits = ["[Kartis] To-Do reminders"]
+        if n_over:
+            subj_bits.append(f"— {n_over} overdue")
+        if n_today:
+            subj_bits.append(f"— {n_today} due today")
+        email_result = _send_email(" ".join(subj_bits)[:200], "\n".join(body_lines),
+                                   gmail_user, gmail_pwd, to_addr)
+
+    return {"discord": discord_result, "email": email_result}
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()

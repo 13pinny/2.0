@@ -28,6 +28,7 @@ import scraper
 import tickchak
 import tickchak_pdf
 import ticketmaster
+import todos as todos_mod
 
 # Drop-checker sources keyed by the value stored in tm_watchers.source.
 # Each module exposes parse_url, perf_url, fetch_selectable_seats,
@@ -90,6 +91,11 @@ _last_intake = {"at": None, "fetched": 0, "saved": 0, "skipped_dupe": 0, "errors
 _intake_lock = threading.Lock()
 INTAKE_INTERVAL_MINUTES = int(os.getenv("KARTIS_INTAKE_INTERVAL_MINUTES") or 10)
 
+_last_todo_remind = {"at": None, "sent_count": 0, "due_today": 0, "overdue": 0,
+                     "error": None, "running": False, "paused": False,
+                     "muted": False, "result": None}
+_todo_remind_lock = threading.Lock()
+
 
 def run_mail_intake():
     if not _intake_lock.acquire(blocking=False):
@@ -111,6 +117,66 @@ def run_mail_intake():
     finally:
         _last_intake["running"] = False
         _intake_lock.release()
+
+
+def run_todo_remind():
+    """Daily digest of open to-dos that are due today or overdue. Mirrors the
+    drop-checker gating: master_paused skips entirely, master_muted logs but
+    doesn't send. Each task gets `notified_at` stamped so the same item
+    isn't re-pinged later the same day."""
+    if not _todo_remind_lock.acquire(blocking=False):
+        return
+    _last_todo_remind["running"] = True
+    try:
+        today_iso = date.today().strftime("%Y-%m-%d")
+        if db.setting_get_bool("master_paused", default=False):
+            _last_todo_remind.update(
+                at=datetime.now(timezone.utc).isoformat(),
+                sent_count=0, due_today=0, overdue=0,
+                paused=True, muted=False, error=None, result=None,
+            )
+            return
+        due = db.todo_due_open(today_iso)
+        if not due:
+            _last_todo_remind.update(
+                at=datetime.now(timezone.utc).isoformat(),
+                sent_count=0, due_today=0, overdue=0,
+                paused=False, muted=False, error=None, result=None,
+            )
+            return
+        due_today = [t for t in due if (t.get("due_date_iso") or "")[:10] == today_iso]
+        overdue = [t for t in due if (t.get("due_date_iso") or "")[:10] < today_iso]
+        muted = db.setting_get_bool("master_muted", default=False)
+        if muted:
+            _last_todo_remind.update(
+                at=datetime.now(timezone.utc).isoformat(),
+                sent_count=0,
+                due_today=len(due_today), overdue=len(overdue),
+                paused=False, muted=True, error=None,
+                result={"discord": "skipped (master_muted)", "email": "skipped (master_muted)"},
+            )
+            return
+        result = notify.send_todo_digest(due_today, overdue)
+        # Only stamp notified_at if at least one channel actually sent — that
+        # way a transient credential outage doesn't suppress the next day's
+        # digest from re-trying these same items.
+        if any(str(v).startswith("ok") for v in result.values()):
+            db.todo_mark_notified([t["id"] for t in due], today_iso)
+        _last_todo_remind.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            sent_count=len(due),
+            due_today=len(due_today), overdue=len(overdue),
+            paused=False, muted=False, error=None, result=result,
+        )
+    except Exception as e:
+        _last_todo_remind.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_todo_remind["running"] = False
+        _todo_remind_lock.release()
 
 
 def run_jerujam_import():
@@ -2581,6 +2647,156 @@ def api_maaser_delete():
     return jsonify({"ok": True})
 
 
+# ----- To-Do list ----------------------------------------------------------
+
+@app.route("/todos")
+def todos_page():
+    return render_template("todos.html")
+
+
+@app.route("/api/todos")
+def api_todos():
+    from flask import request
+    status = (request.args.get("status") or "all").strip().lower()
+    rows, stats = todos_mod.list_todos(status=status)
+    return jsonify({
+        "todos": rows,
+        "stats": stats,
+        "last_remind": _last_todo_remind,
+        "linkable_sources": list(todos_mod.VALID_SOURCES),
+        "urgencies": list(todos_mod.VALID_URGENCIES),
+        "recurrences": list(todos_mod.VALID_RECURRENCES),
+    })
+
+
+@app.route("/api/todos/add", methods=["POST"])
+def api_todos_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    new_id, err = todos_mod.create(body)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/todos/edit", methods=["POST"])
+def api_todos_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    ok, err = todos_mod.edit(id_, body)
+    if not ok:
+        return jsonify({"error": err}), (404 if err == "not found" else 400)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/todos/delete", methods=["POST"])
+def api_todos_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.todo_delete(id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/todos/toggle", methods=["POST"])
+def api_todos_toggle():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    ok, payload = todos_mod.toggle(id_)
+    if not ok:
+        return jsonify({"error": payload}), 404
+    return jsonify({"ok": True, "result": payload})
+
+
+@app.route("/api/todos/subtask/add", methods=["POST"])
+def api_todos_subtask_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    todo_id = (body.get("todo_id") or "").strip()
+    title = (body.get("title") or "").strip()
+    if not todo_id or not db.todo_get(todo_id):
+        return jsonify({"error": "todo_id required"}), 400
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    existing = db.subtask_list(todo_id)
+    row = {
+        "id": todos_mod.new_subtask_id(),
+        "todo_id": todo_id,
+        "title": title[:300],
+        "done": 0,
+        "order_idx": len(existing),
+    }
+    db.subtask_insert(row, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "id": row["id"]})
+
+
+@app.route("/api/todos/subtask/toggle", methods=["POST"])
+def api_todos_subtask_toggle():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.subtask_toggle(id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/todos/subtask/delete", methods=["POST"])
+def api_todos_subtask_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.subtask_delete(id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/todos/suggestions")
+def api_todos_suggestions():
+    return jsonify({"suggestions": todos_mod.compute_suggestions()})
+
+
+@app.route("/api/todos/suggestions/accept", methods=["POST"])
+def api_todos_suggestions_accept():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    key = (body.get("key") or "").strip()
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    new_id, err = todos_mod.accept_suggestion(key)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/todos/suggestions/dismiss", methods=["POST"])
+def api_todos_suggestions_dismiss():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    key = (body.get("key") or "").strip()
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    until = todos_mod.dismiss_suggestion(key, body.get("days") or 7)
+    return jsonify({"ok": True, "until": until})
+
+
+@app.route("/api/todos/remind-now", methods=["POST"])
+def api_todos_remind_now():
+    """Force-run the digest. Useful for manual testing without waiting for
+    the 08:00 cron."""
+    threading.Thread(target=run_todo_remind, daemon=True).start()
+    return jsonify({"started": True})
+
+
 @app.route("/api/sales/manual-record", methods=["POST"])
 def api_sales_manual_record():
     from flask import request
@@ -3542,6 +3758,7 @@ scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
 scheduler.add_job(run_tm_check, "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
 scheduler.add_job(run_mail_intake, "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
+scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
 
 # One-shot: archive any pre-existing inventory_overrides rows whose status
 # value was already typed as "not sold" (or a variant). Idempotent so

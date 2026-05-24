@@ -425,6 +425,41 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS todos (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    notes TEXT,
+    due_date_iso TEXT,
+    urgency TEXT NOT NULL DEFAULT 'normal',
+    status TEXT NOT NULL DEFAULT 'open',
+    linked_source TEXT,
+    linked_source_id TEXT,
+    tags TEXT,
+    amount REAL,
+    amount_currency TEXT,
+    recurrence TEXT,
+    auto_source TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    notified_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_todos_status_due ON todos(status, due_date_iso);
+CREATE INDEX IF NOT EXISTS idx_todos_auto_source ON todos(auto_source);
+CREATE TABLE IF NOT EXISTS todo_subtasks (
+    id TEXT PRIMARY KEY,
+    todo_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    order_idx INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_todo_subtasks_parent ON todo_subtasks(todo_id, order_idx);
+CREATE TABLE IF NOT EXISTS todo_suggestion_dismissals (
+    suggestion_key TEXT PRIMARY KEY,
+    dismissed_until TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -1740,3 +1775,186 @@ def all_kupat_spends():
 def delete_kupat_spend(id_):
     with connect() as conn:
         conn.execute("DELETE FROM kupat_credit_spends WHERE id = ?", (id_,))
+
+
+# ---------------- To-Do list -----------------------------------------------
+
+def todo_insert(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO todos (id, title, notes, due_date_iso, urgency, status,
+                linked_source, linked_source_id, tags, amount, amount_currency,
+                recurrence, auto_source, created_at, updated_at, completed_at,
+                notified_at)
+            VALUES (:id, :title, :notes, :due_date_iso, :urgency, :status,
+                :linked_source, :linked_source_id, :tags, :amount, :amount_currency,
+                :recurrence, :auto_source, :created_at, :updated_at, :completed_at,
+                :notified_at)
+            """,
+            {
+                "notes": None, "due_date_iso": None, "urgency": "normal",
+                "status": "open", "linked_source": None, "linked_source_id": None,
+                "tags": None, "amount": None, "amount_currency": None,
+                "recurrence": None, "auto_source": None,
+                "completed_at": None, "notified_at": None,
+                **row,
+                "created_at": now_iso, "updated_at": now_iso,
+            },
+        )
+
+
+def todo_get(id_):
+    with connect() as conn:
+        r = conn.execute("SELECT * FROM todos WHERE id = ?", (id_,)).fetchone()
+    return dict(r) if r else None
+
+
+def todo_all(status=None):
+    sql = "SELECT * FROM todos"
+    args = ()
+    if status and status != "all":
+        sql += " WHERE status = ?"
+        args = (status,)
+    sql += (
+        " ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END,"
+        " due_date_iso IS NULL, due_date_iso,"
+        " CASE urgency WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
+        " WHEN 'normal' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,"
+        " created_at"
+    )
+    with connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return [dict(r) for r in rows]
+
+
+def todo_update(id_, fields, now_iso):
+    if not fields:
+        return
+    fields = {**fields, "updated_at": now_iso}
+    sets = ", ".join(f"{k}=:{k}" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE todos SET {sets} WHERE id=:_id", {**fields, "_id": id_})
+
+
+def todo_delete(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM todo_subtasks WHERE todo_id = ?", (id_,))
+        conn.execute("DELETE FROM todos WHERE id = ?", (id_,))
+
+
+def todo_open_by_auto_source(auto_source):
+    """Returns the open todo (if any) linked to a given suggestion key — used
+    by the suggestion engine to avoid double-surfacing once the user has
+    converted a suggestion into a real task."""
+    if not auto_source:
+        return None
+    with connect() as conn:
+        r = conn.execute(
+            "SELECT * FROM todos WHERE auto_source = ? AND status = 'open' LIMIT 1",
+            (auto_source,),
+        ).fetchone()
+    return dict(r) if r else None
+
+
+def todo_due_open(today_iso):
+    """Tasks that are open and due today or earlier and not already notified
+    today — feeds the daily reminder digest."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM todos WHERE status = 'open' "
+            "AND due_date_iso IS NOT NULL AND due_date_iso <= ? "
+            "AND (notified_at IS NULL OR notified_at < ?) "
+            "ORDER BY due_date_iso, urgency",
+            (today_iso, today_iso),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def todo_mark_notified(ids, today_iso):
+    if not ids:
+        return
+    placeholders = ",".join("?" * len(ids))
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE todos SET notified_at = ? WHERE id IN ({placeholders})",
+            (today_iso, *ids),
+        )
+
+
+def subtask_insert(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO todo_subtasks (id, todo_id, title, done, order_idx, created_at)
+            VALUES (:id, :todo_id, :title, :done, :order_idx, :created_at)
+            """,
+            {"done": 0, "order_idx": 0, **row, "created_at": now_iso},
+        )
+
+
+def subtask_list(todo_id):
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM todo_subtasks WHERE todo_id = ? ORDER BY order_idx, created_at",
+            (todo_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def subtask_list_for_todos(todo_ids):
+    """Batched: {todo_id: [subtask, ...]} — avoids N+1 on the list page."""
+    ids = [str(x) for x in todo_ids if x]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM todo_subtasks WHERE todo_id IN ({placeholders}) "
+            f"ORDER BY order_idx, created_at",
+            ids,
+        ).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["todo_id"], []).append(dict(r))
+    return out
+
+
+def subtask_toggle(id_):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE todo_subtasks SET done = 1 - done WHERE id = ?", (id_,)
+        )
+
+
+def subtask_update(id_, fields):
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=:{k}" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE todo_subtasks SET {sets} WHERE id=:_id", {**fields, "_id": id_})
+
+
+def subtask_delete(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM todo_subtasks WHERE id = ?", (id_,))
+
+
+def suggestion_dismiss(key, dismissed_until_iso, now_iso):
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO todo_suggestion_dismissals "
+            "(suggestion_key, dismissed_until, created_at) VALUES (?, ?, ?)",
+            (key, dismissed_until_iso, now_iso),
+        )
+
+
+def suggestion_active_dismissals(today_iso):
+    """Returns {key: dismissed_until} for dismissals that haven't expired."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT suggestion_key, dismissed_until FROM todo_suggestion_dismissals "
+            "WHERE dismissed_until > ?",
+            (today_iso,),
+        ).fetchall()
+    return {r["suggestion_key"]: r["dismissed_until"] for r in rows}
