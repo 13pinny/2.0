@@ -1,0 +1,21 @@
+[Unit]
+Description=Kartis x11vnc (bridge Xvfb :99 to VNC on localhost:5900)
+Requires=kartis-xvfb.service kartis-chrome.service
+After=kartis-xvfb.service kartis-chrome.service
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+Environment=DISPLAY=:99
+# -nopw: no VNC-level password (basic-auth via Caddy is the gate)
+# -listen localhost: never bind to public interface; Caddy proxies to it
+# -forever: keep running after a client disconnects
+# -shared: allow concurrent viewers
+# -quiet: only log warnings/errors
+ExecStart=/usr/bin/x11vnc -display :99 -nopw -listen localhost -xkb -forever -shared -quiet
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
