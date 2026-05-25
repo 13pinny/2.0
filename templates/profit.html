@@ -162,7 +162,7 @@
     .pill-bar .pill.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.06); }
   </style>
   <table>
-    <thead><tr><th>MONTH</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num">PROFIT</th><th class="num">EXPENSES</th><th class="num">NET</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
+    <thead><tr><th>MONTH</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num">PROFIT</th><th class="num">EXPENSES</th><th class="num">UNSOLD</th><th class="num">NET</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
     <tbody id="mbody"></tbody>
   </table>
 </main>
@@ -327,7 +327,10 @@ function render() {
       : "= profit by the month each ticket was sold (cash-flow style)";
   for (const r of monthRows) {
     const margin = r.revenue ? (r.profit / r.revenue * 100) : null;
-    const net = r.net_profit != null ? r.net_profit : ((r.profit || 0) - (r.expenses || 0));
+    const net = r.net_profit != null ? r.net_profit : ((r.profit || 0) - (r.expenses || 0) - (r.unsold_cost || 0));
+    const unsoldCell = (r.unsold_cost == null)
+      ? `<td class="num muted">—</td>`
+      : `<td class="num ${r.unsold_cost ? 'neg' : ''}">${r.unsold_cost ? '-' + money(r.unsold_cost) : money(0)}</td>`;
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${esc(r.month)}</td>
@@ -337,6 +340,7 @@ function render() {
       <td class="num">${money(r.cost)}</td>
       <td class="num ${profitClass(r.profit)}">${money(r.profit)}</td>
       <td class="num">${money(r.expenses || 0)}</td>
+      ${unsoldCell}
       <td class="num ${profitClass(net)}">${money(net)}</td>
       <td class="num pct ${profitClass(r.profit)}">${margin == null ? "—" : margin.toFixed(1) + "%"}</td>
       <td class="num">${money(r.payout)}</td>
