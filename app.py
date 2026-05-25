@@ -1485,15 +1485,27 @@ def _profit_response():
         if not mk:
             continue
         expenses_by_month[mk] = expenses_by_month.get(mk, 0) + (e.get("amount") or 0)
+    # Cost of tickets that didn't sell, bucketed by the month the event
+    # took place. For the by-sale-date monthly view this is treated as a
+    # realized loss for that month — the show is over, the cost is sunk.
+    unsold_cost_by_month = {}
+    for u in db.all_unsold():
+        mk = (u.get("event_date_iso") or "")[:7]
+        if not mk:
+            continue
+        unsold_cost_by_month[mk] = unsold_cost_by_month.get(mk, 0) + (u.get("cost") or 0)
     for m in months:
         m["expenses"] = round(expenses_by_month.get(m["month"], 0), 2)
-        m["net_profit"] = round((m.get("profit") or 0) - m["expenses"], 2)
+        m["unsold_cost"] = round(unsold_cost_by_month.get(m["month"], 0), 2)
+        m["net_profit"] = round((m.get("profit") or 0) - m["expenses"] - m["unsold_cost"], 2)
     for m in months_by_event:
         m["expenses"] = round(expenses_by_month.get(m["month"], 0), 2)
         m["net_profit"] = round((m.get("profit") or 0) - m["expenses"], 2)
     totals_expenses = round(sum(expenses_by_month.values()), 2)
+    totals_unsold = round(sum(unsold_cost_by_month.values()), 2)
     totals["expenses"] = totals_expenses
-    totals["net_profit"] = round((totals.get("profit") or 0) - totals_expenses, 2)
+    totals["unsold_cost"] = totals_unsold
+    totals["net_profit"] = round((totals.get("profit") or 0) - totals_expenses - totals_unsold, 2)
 
     return {
         "days": days,
