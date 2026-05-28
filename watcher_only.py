@@ -170,6 +170,12 @@ def tick():
 
 
 def main():
+    # Watcher labels are Hebrew (TM event names); the default Windows console
+    # encoding (cp1252) can't render them and crashes the startup print.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     print(f"[kartis-watcher] starting; interval={INTERVAL}s; db={db.DB_PATH}", flush=True)
     watchers = db.tm_active_watchers()
     print(f"[kartis-watcher] {len(watchers)} active watcher(s):", flush=True)
