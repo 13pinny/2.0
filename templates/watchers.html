@@ -256,7 +256,11 @@ async function api(path, method='GET', body=null) {
 }
 
 const SRC_URLS = {
-  ticketmaster: (e, p) => `https://www.ticketmaster.co.il/performance/${e}/${p}/ALL/iw`,
+  // perf_code === 'ALL' marks event-level watchers — link to the /event/ page
+  // that covers every performance under the event, not a /performance/ URL.
+  ticketmaster: (e, p) => (p === 'ALL'
+    ? `https://www.ticketmaster.co.il/event/${e}/ALL/iw`
+    : `https://www.ticketmaster.co.il/performance/${e}/${p}/ALL/iw`),
   kupat:        (e, p) => `https://tickets.kupat.co.il/booking/features/${e}?display=list&prsntId=${p}`,
   // tickchak's slug IS the URL; perf_code is always "0" — ignore it.
   tickchak:     (e, _p) => `https://tickchak.co.il/${e}`,

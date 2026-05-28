@@ -55,9 +55,19 @@ def cmd_add(url):
         ):
             print(f"already watching {src_name} {event_code}/{perf_code} (id={existing['id']})")
             return
+    # Event-level (perf_code='ALL', ticketmaster only) watchers cover every
+    # performance under the event and use a different fetch path.
+    event_level = src is ticketmaster and perf_code == ticketmaster.EVENT_LEVEL_PERF
     try:
-        lbls = src.get_labels(event_code, perf_code, lang="iw")
-        label = src.event_summary(lbls) or f"{event_code}/{perf_code}"
+        if event_level:
+            perfs = ticketmaster.list_performances(event_code)
+            probe_perf = str((perfs[0] or {}).get("performanceCode") or "")
+            lbls = src.get_labels(event_code, probe_perf, lang="iw") if probe_perf else None
+            base = src.event_summary(lbls) if lbls else event_code
+            label = f"{base} — all dates" if base else f"{event_code} — all dates"
+        else:
+            lbls = src.get_labels(event_code, perf_code, lang="iw")
+            label = src.event_summary(lbls) or f"{event_code}/{perf_code}"
     except Exception:
         label = f"{event_code}/{perf_code}"
     wid = "tmw-" + uuid.uuid4().hex[:12]
@@ -67,7 +77,12 @@ def cmd_add(url):
         "paused": 0, "muted": 0, "notify_channels": "discord,email",
     }, datetime.now(timezone.utc).isoformat())
     print(f"added [{src_name}] {event_code}/{perf_code} :: {label} (id={wid})")
-    seats = src.fetch_selectable_seats(event_code, perf_code)
+    if event_level:
+        seats, perf_errors = ticketmaster.fetch_event_seats(event_code)
+        if perf_errors:
+            print(f"  per-perf errors at baseline: {perf_errors}")
+    else:
+        seats = src.fetch_selectable_seats(event_code, perf_code)
     db.tm_replace_seat_state(wid, seats)
     db.tm_update_watcher(wid, {
         "last_check_at": datetime.now(timezone.utc).isoformat(),

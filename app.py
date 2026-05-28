@@ -3015,12 +3015,14 @@ def export_xlsx():
     )
 
 
-def _diff_seats_set(prev_keys, curr_seats, src):
-    """Source-agnostic set diff. Each source provides its own seat_key()."""
+def _diff_seats_set(prev_keys, curr_seats, key_fn):
+    """Source-agnostic set diff. `key_fn` is the source's seat_key callable
+    (or `ticketmaster.event_seat_key` for event-level watchers, where the
+    perf code is part of the dedup key)."""
     prev = set(prev_keys)
     by_key = {}
     for s in curr_seats:
-        by_key.setdefault(src.seat_key(s), s)
+        by_key.setdefault(key_fn(s), s)
     curr = set(by_key)
     added = [by_key[k] for k in curr - prev]
     removed = list(prev - curr)
@@ -3035,6 +3037,11 @@ def _check_one_watcher(w, now_iso):
     currently available and DO NOT notify, otherwise the user gets a
     spam ping for seats that were already there at watch-create time.
 
+    Event-level watchers (perf_code='ALL', ticketmaster only) aggregate seats
+    across every active performance. The same baseline rule applies, plus
+    a "tickets just opened" headline fires when the aggregate flips from
+    zero to non-zero seats.
+
     Notification gating: master_muted (db setting), the watcher's own
     `muted` flag, and `notify_channels` all apply here. When notifications
     are suppressed the drop is still recorded in `tm_drops` so the
@@ -3045,10 +3052,22 @@ def _check_one_watcher(w, now_iso):
     label = w.get("label") or f"{w['event_code']}/{w['perf_code']}"
     src_name = w.get("source") or "ticketmaster"
     src = WATCHER_SOURCES.get(src_name, ticketmaster)
-    perf_url = src.perf_url(w["event_code"], w["perf_code"])
+
+    event_level = src is ticketmaster and ticketmaster.is_event_level(w)
+    if event_level:
+        perf_url = ticketmaster.event_url(w["event_code"])
+        key_fn = ticketmaster.event_seat_key
+    else:
+        perf_url = src.perf_url(w["event_code"], w["perf_code"])
+        key_fn = src.seat_key
 
     try:
-        seats = src.fetch_selectable_seats(w["event_code"], w["perf_code"])
+        if event_level:
+            seats, perf_errors = ticketmaster.fetch_event_seats(w["event_code"])
+            if perf_errors:
+                print(f"[{now_iso}] {label}: per-perf errors {perf_errors}", flush=True)
+        else:
+            seats = src.fetch_selectable_seats(w["event_code"], w["perf_code"])
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         db.tm_update_watcher(wid, {
@@ -3058,7 +3077,8 @@ def _check_one_watcher(w, now_iso):
 
     prev_keys = db.tm_get_seat_keys(wid)
     is_baseline = not prev_keys and not w.get("last_check_at")
-    added, removed = _diff_seats_set(prev_keys, seats, src)
+    was_empty = (w.get("last_seat_count") or 0) == 0
+    added, removed = _diff_seats_set(prev_keys, seats, key_fn)
     db.tm_replace_seat_state(wid, seats)
     db.tm_update_watcher(wid, {
         "last_check_at": now_iso,
@@ -3071,10 +3091,17 @@ def _check_one_watcher(w, now_iso):
 
     if added:
         probe_block = next((s.get("block") or s.get("b") for s in added if s.get("block") or s.get("b")), None)
-        try:
-            labels = src.get_labels(w["event_code"], w["perf_code"], lang="iw", missing_block=probe_block)
-        except Exception:
-            labels = None
+        if event_level:
+            probe_perf = next((s.get("_perf") for s in added if s.get("_perf")), None)
+            try:
+                labels = src.get_labels(w["event_code"], probe_perf, lang="iw", missing_block=probe_block) if probe_perf else None
+            except Exception:
+                labels = None
+        else:
+            try:
+                labels = src.get_labels(w["event_code"], w["perf_code"], lang="iw", missing_block=probe_block)
+            except Exception:
+                labels = None
 
         # Apply the watcher's filters (min consecutive seats, exclude sections,
         # price range). Diff against `seats` (current full availability) so
@@ -3088,12 +3115,19 @@ def _check_one_watcher(w, now_iso):
         if master_muted or watcher_muted:
             enabled = set()
 
+        # Status flip — fires on every sold-out → available transition (since
+        # last_seat_count returns to 0 between flips), satisfying the
+        # "keep notifying" requirement for event-level watchers.
+        status_flipped = event_level and was_empty and len(seats) > 0
+        headline = f"🎟️ {w['event_code']} — tickets just opened" if status_flipped and matched else None
+
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,
                 added_seats=matched, removed_count=len(removed),
                 total_now=len(seats), labels=labels,
                 channels=enabled,
+                headline=headline,
             )
         elif not matched and added:
             # All new seats filtered out — record the drop so the user sees
@@ -3129,7 +3163,21 @@ def _purge_past_watchers():
         try:
             src_name = w.get("source") or "ticketmaster"
             src = WATCHER_SOURCES.get(src_name, ticketmaster)
-            lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
+            # Event-level watchers don't have a single perf — use the last
+            # performance under the event as the date probe (so we only
+            # purge after the LAST date of a multi-date show has passed).
+            if src is ticketmaster and ticketmaster.is_event_level(w):
+                try:
+                    perfs = ticketmaster.list_performances(w["event_code"])
+                    perfs_sorted = sorted(perfs, key=lambda p: p.get("performanceDate") or 0)
+                    probe_perf = str(perfs_sorted[-1].get("performanceCode") or "") if perfs_sorted else None
+                except Exception:
+                    probe_perf = None
+                if not probe_perf:
+                    continue
+                lbls = src.get_labels(w["event_code"], probe_perf, lang="iw")
+            else:
+                lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
             meta = (lbls or {}).get("meta") or {}
             event_date = None
             ms = meta.get("firstPerfMs")
@@ -3268,6 +3316,12 @@ def api_watchers():
         src_name = w.get("source") or "ticketmaster"
         src = WATCHER_SOURCES.get(src_name, ticketmaster)
         try:
+            # Event-level watchers span multiple perfs and don't have a single
+            # venue-capacity number — skip the capacity enrichment for them.
+            if src is ticketmaster and ticketmaster.is_event_level(w):
+                w["total_seats"] = None
+                w["available_seats"] = None
+                continue
             lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
             meta = (lbls or {}).get("meta") or {}
             w["total_seats"] = meta.get("totalSeats")
@@ -3313,8 +3367,18 @@ def _add_one_watcher(url, label=None):
     final_label = (label or "").strip()
     if not final_label:
         try:
-            lbls = src.get_labels(event_code, perf_code, lang="iw")
-            final_label = src.event_summary(lbls) or f"{event_code}/{perf_code}"
+            # Event-level watchers don't have a single perf for labels —
+            # probe the first real perf so we still get the event name +
+            # venue, then tag it as covering all dates.
+            if src is ticketmaster and ticketmaster.is_event_level({"perf_code": perf_code}):
+                perfs = ticketmaster.list_performances(event_code)
+                probe_perf = str((perfs[0] or {}).get("performanceCode") or "")
+                lbls = src.get_labels(event_code, probe_perf, lang="iw") if probe_perf else None
+                base = src.event_summary(lbls) if lbls else event_code
+                final_label = f"{base} — all dates" if base else f"{event_code} — all dates"
+            else:
+                lbls = src.get_labels(event_code, perf_code, lang="iw")
+                final_label = src.event_summary(lbls) or f"{event_code}/{perf_code}"
         except Exception:
             final_label = f"{event_code}/{perf_code}"
     db.tm_insert_watcher({
@@ -3441,7 +3505,16 @@ def api_watchers_sections():
     src_name = w.get("source") or "ticketmaster"
     src = WATCHER_SOURCES.get(src_name, ticketmaster)
     try:
-        labels = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
+        # Event-level watchers don't have a single perf — probe the first
+        # performance under the event so the filter modal still gets a
+        # representative section/price list. Most multi-date shows share
+        # the same venue + block layout across perfs.
+        if src is ticketmaster and ticketmaster.is_event_level(w):
+            perfs = ticketmaster.list_performances(w["event_code"])
+            probe_perf = str((perfs[0] or {}).get("performanceCode") or "")
+            labels = src.get_labels(w["event_code"], probe_perf, lang="iw") if probe_perf else {}
+        else:
+            labels = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
     except Exception as e:
         return jsonify({"error": f"label fetch failed: {e}"}), 500
     blocks = (labels or {}).get("blocks") or {}
