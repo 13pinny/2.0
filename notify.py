@@ -55,29 +55,53 @@ def _short(seat, labels=None):
 def _format_seat_lines(seats, limit=40, labels=None):
     """Group seats by block (showing block name once, then row/seat pairs).
     Hebrew block names render right-to-left in Discord/Gmail naturally;
-    Unicode bidi handles it without any explicit marker."""
-    by_block = {}
-    for s in seats:
-        by_block.setdefault(_seat_block(s) or "?", []).append(s)
+    Unicode bidi handles it without any explicit marker.
+
+    When any seat carries a `_perf` field (event-level watchers aggregate
+    across performances), seats are first grouped by performance code, with
+    a `— Perf NNN —` separator between groups.
+    """
+    perf_groups = _group_by_perf(seats)
     lines = []
     shown = 0
-    for code, group in sorted(by_block.items(), key=lambda kv: (-len(kv[1]), kv[0])):
-        name, price = _block_info(labels, code)
-        header_bits = [str(name)]
-        if str(name) != str(code):
-            header_bits.append(f"({code})")
-        if price is not None:
-            header_bits.append(f"— ₪{price:.0f}")
-        if len(group) > 1:
-            header_bits.append(f"× {len(group)}")
-        lines.append(f"**{' '.join(header_bits)}**")
-        for seat in sorted(group, key=lambda s: (_seat_row(s), _seat_num(s))):
-            if shown >= limit:
-                lines.append(f"... +{len(seats) - shown} more")
-                return lines
-            lines.append(f"• row {_seat_row(seat)}, seat {_seat_num(seat)}")
-            shown += 1
+    multi_perf = perf_groups is not None and len(perf_groups) > 1
+    iterable = perf_groups.items() if perf_groups else [(None, seats)]
+    for perf_code, perf_seats in iterable:
+        if multi_perf:
+            lines.append(f"— Perf {perf_code} —")
+        by_block = {}
+        for s in perf_seats:
+            by_block.setdefault(_seat_block(s) or "?", []).append(s)
+        for code, group in sorted(by_block.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            name, price = _block_info(labels, code)
+            header_bits = [str(name)]
+            if str(name) != str(code):
+                header_bits.append(f"({code})")
+            if price is not None:
+                header_bits.append(f"— ₪{price:.0f}")
+            if len(group) > 1:
+                header_bits.append(f"× {len(group)}")
+            lines.append(f"**{' '.join(header_bits)}**")
+            for seat in sorted(group, key=lambda s: (_seat_row(s), _seat_num(s))):
+                if shown >= limit:
+                    lines.append(f"... +{len(seats) - shown} more")
+                    return lines
+                lines.append(f"• row {_seat_row(seat)}, seat {_seat_num(seat)}")
+                shown += 1
     return lines
+
+
+def _group_by_perf(seats):
+    """If any seat has a `_perf` field, return an ordered dict of perf_code
+    -> seat list, preserving first-seen perf order. Returns None otherwise so
+    the caller can fall back to the flat (single-perf) layout."""
+    if not any(s.get("_perf") for s in seats):
+        return None
+    groups = {}
+    for s in seats:
+        pc = s.get("_perf") or "?"
+        groups.setdefault(pc, []).append(s)
+    return groups
 
 
 def _total_price(seats, labels):
@@ -132,7 +156,7 @@ def _send_email(subject, body, gmail_user, gmail_pwd, to_addr):
         return f"{type(e).__name__}: {e}"
 
 
-def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, labels=None, channels=None):
+def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, labels=None, channels=None, headline=None):
     """Send a notification for added seats. Returns {'discord': str, 'email': str}.
 
     `label` — user-facing watcher name (e.g. "אגם בוחבוט · אמפי קיסריה …").
@@ -142,6 +166,9 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
         block codes are translated to human names and prices are shown.
     `channels` — iterable of {'discord', 'email'}. None = both. Empty = neither
         (the function still returns a result dict so the caller can record it).
+    `headline` — optional banner prepended to the Discord embed title and email
+        subject. Used by event-level watchers to flag a sold-out → available
+        transition (e.g. "🎟️ MSP03 — tickets just opened").
     """
     discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
@@ -170,7 +197,10 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
 
     discord_result = "skipped (channel disabled)" if "discord" not in channels else "skipped (no DISCORD_WEBHOOK_URL)"
     if "discord" in channels and discord_url:
-        title_bits = [f"🎟️ {n_added} new seat{'s' if n_added != 1 else ''} dropped"]
+        title_bits = []
+        if headline:
+            title_bits.append(headline)
+        title_bits.append(f"🎟️ {n_added} new seat{'s' if n_added != 1 else ''} dropped")
         if event_name:
             title_bits.append(f"— {event_name}")
         embed = {
@@ -196,7 +226,10 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
 
     email_result = "skipped (channel disabled)" if "email" not in channels else "skipped (no GMAIL creds)"
     if "email" in channels and gmail_user and gmail_pwd and to_addr:
-        subj_bits = [f"[Kartis] {n_added} new seat{'s' if n_added != 1 else ''}"]
+        subj_bits = []
+        if headline:
+            subj_bits.append(headline)
+        subj_bits.append(f"[Kartis] {n_added} new seat{'s' if n_added != 1 else ''}")
         if event_name:
             subj_bits.append(f"— {event_name}")
         subject = " ".join(subj_bits)[:200]

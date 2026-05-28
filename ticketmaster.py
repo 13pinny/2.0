@@ -51,44 +51,78 @@ class TicketmasterError(RuntimeError):
     pass
 
 
+# Sentinel `perf_code` used for event-level watchers — one watcher row covers
+# every performance under the event. Real TM perf codes are always numeric
+# (_PERF_RE above), so "ALL" can't collide with a real perf and it round-trips
+# the user-facing /event/<CODE>/ALL/iw URL form. Keeping the column NOT NULL
+# also preserves the UNIQUE(event_code, perf_code) constraint, which would
+# silently allow duplicates if we used SQL NULL (SQLite treats NULLs as
+# distinct in UNIQUE indexes).
+EVENT_LEVEL_PERF = "ALL"
+
+
 def parse_url(url):
     """Extract (event_code, perf_code) from a Ticketmaster.co.il URL.
 
     Accepts:
-      - https://www.ticketmaster.co.il/performance/MBP19/001/ALL/iw
-      - bare "MBP19/001" shorthand
-    Returns (event_code, perf_code) on success.
-    Raises TicketmasterError with a useful message on any failure, including
-    an /event/ URL (which is event-level and has no perf code yet).
+      - /performance/MBP19/001/ALL/iw         → ("MBP19", "001")  perf-level
+      - shorthand "MBP19/001"                 → ("MBP19", "001")  perf-level
+      - /event/MSP03/ALL/iw                   → ("MSP03", "ALL")  event-level
+      - shorthand "MSP03/ALL"                 → ("MSP03", "ALL")  event-level
+      - bare "MSP03" (alpha-prefixed event)   → ("MSP03", "ALL")  event-level
+    Returns (event_code, perf_code) on success; raises TicketmasterError
+    with a useful message on any failure.
     """
     if not url:
         raise TicketmasterError("URL is empty")
     s = url.strip()
-    # Shorthand "EVENT/PERF"
+    # Shorthand "EVENT/ALL" — event-level
+    m = re.fullmatch(r"\s*([A-Z][A-Z0-9]*)\s*/\s*ALL\s*", s, re.IGNORECASE)
+    if m:
+        return m.group(1).upper(), EVENT_LEVEL_PERF
+    # Shorthand "EVENT/PERF" — perf-level (digits)
     m = re.fullmatch(r"\s*([A-Z0-9]+)\s*/\s*(\d+)\s*", s, re.IGNORECASE)
     if m:
         return m.group(1).upper(), m.group(2)
+    # /performance/EVENT/PERF/... URL — perf-level
     m = _PERF_RE.search(s)
     if m:
         return m.group(1).upper(), m.group(2)
+    # /event/EVENT/... URL — event-level (covers all perfs)
     m = _EVENT_RE.search(s)
     if m:
-        raise TicketmasterError(
-            f"That's an event URL ({m.group(1)}); paste a /performance/<EVENT>/<PERF>/... URL "
-            "or use the shorthand 'EVENT/PERF' for the specific date you want to watch."
-        )
+        return m.group(1).upper(), EVENT_LEVEL_PERF
+    # Bare alpha-prefixed shorthand "MSP03" — event-level
+    m = re.fullmatch(r"\s*([A-Z][A-Z0-9]+)\s*", s, re.IGNORECASE)
+    if m:
+        return m.group(1).upper(), EVENT_LEVEL_PERF
     raise TicketmasterError(
-        "Couldn't parse that URL. Expected a ticketmaster.co.il /performance/ URL "
-        "or shorthand 'EVENT/PERF'."
+        "Couldn't parse that URL. Expected a ticketmaster.co.il /performance/ or "
+        "/event/ URL, or shorthand 'EVENT/PERF', 'EVENT/ALL', or bare 'EVENT'."
     )
 
 
 def perf_url(event_code, perf_code):
+    if (perf_code or "").upper() == EVENT_LEVEL_PERF:
+        return event_url(event_code)
     return f"{API_HOST}/performance/{event_code}/{perf_code}/ALL/iw"
 
 
 def event_url(event_code):
     return f"{API_HOST}/event/{event_code}/ALL/iw"
+
+
+def is_event_level(w):
+    """True when the watcher row covers every performance of the event."""
+    return (w.get("perf_code") or "").upper() == EVENT_LEVEL_PERF
+
+
+def display_url(w):
+    """The user-facing URL for a watcher — event page for event-level rows,
+    performance page for perf-level rows."""
+    if is_event_level(w):
+        return event_url(w["event_code"])
+    return perf_url(w["event_code"], w["perf_code"])
 
 
 def _http_get(url):
@@ -152,12 +186,85 @@ def fetch_selectable_seats(event_code, perf_code):
     return out
 
 
+def list_performances(event_code):
+    """Returns the list of performances under an event, with status.
+
+    Each item shape (from the public SPA endpoint /wbtxapi/.../getPerformanceList):
+        {"eventCode", "performanceCode", "performanceDate", "venueName",
+         "status", "active", "perfType", "doorOpeningTime", ...}
+
+    `active` is the buyable flag: false when sold out / not yet on sale.
+    `status` is a string code like "s02_soldout", "s01_selling", etc.
+    Raises TicketmasterError on network or shape failures.
+    """
+    url = f"{API_HOST}/wbtxapi/api/v1/bxcached/event/getPerformanceList/{event_code}/{CHANNEL}/iw"
+    status, raw = _http_get(url)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise TicketmasterError(f"invalid JSON from getPerformanceList: {e}") from e
+    if payload.get("status") != "SUCCESS":
+        raise TicketmasterError(
+            f"getPerformanceList API said: {payload.get('status')} — {payload.get('errors')}"
+        )
+    data = payload.get("data") or []
+    if not isinstance(data, list):
+        raise TicketmasterError(f"getPerformanceList unexpected shape for {event_code}")
+    if not data:
+        raise TicketmasterError(f"no performances found for event {event_code}")
+    return data
+
+
+def fetch_event_seats(event_code):
+    """Aggregate selectable seats across every active performance of an event.
+
+    Returns (seats, per_perf_errors). Each seat dict is stamped with
+    `_perf=<perf_code>` so the event-level dedup key (`event_seat_key`) can
+    keep seats from different perfs distinct.
+
+    Perfs that the API marks `active=false` (sold out / not yet selling) are
+    skipped entirely — they have no seats to fetch and skipping saves an
+    HTTP call per perf per tick.
+
+    Raises TicketmasterError if the perf list itself can't be fetched, or
+    if every active perf errored out. Partial per-perf failures land in
+    `per_perf_errors` so the caller can log them without failing the watcher.
+    """
+    perfs = list_performances(event_code)  # raises on failure
+    seats = []
+    per_perf_errors = {}
+    attempted = 0
+    for p in perfs:
+        perf_code = str(p.get("performanceCode") or "")
+        if not perf_code or not p.get("active"):
+            continue
+        attempted += 1
+        try:
+            ps = fetch_selectable_seats(event_code, perf_code)
+            for s in ps:
+                s["_perf"] = perf_code
+            seats.extend(ps)
+        except Exception as e:
+            per_perf_errors[perf_code] = f"{type(e).__name__}: {e}"
+    if attempted and len(per_perf_errors) == attempted:
+        raise TicketmasterError(
+            f"all {attempted} active perf(s) failed for {event_code}: {per_perf_errors}"
+        )
+    return seats, per_perf_errors
+
+
 def seat_key(seat):
     """Stable dedup key for a seat across calls. Uses the normalized
     block/row/seat keys; ignores the source's internal id (which can differ
     across calls for the same physical seat under different price profiles).
     """
     return f"{seat.get('block') or seat.get('b','')}|{seat.get('row') or seat.get('r','')}|{seat.get('seat') or seat.get('l','')}"
+
+
+def event_seat_key(seat):
+    """Event-level dedup key — prefixes with `_perf` so identical seat ids
+    from different performances don't collide in the watcher's seat-state set."""
+    return f"{seat.get('_perf','')}|{seat_key(seat)}"
 
 
 def format_seat(seat):

@@ -42,11 +42,11 @@ _lock = threading.Lock()
 _state = {"at": None, "checked": 0, "drops": 0, "errors": 0}
 
 
-def _diff_seats_set(prev_keys, curr_seats, src):
+def _diff_seats_set(prev_keys, curr_seats, key_fn):
     prev = set(prev_keys)
     by_key = {}
     for s in curr_seats:
-        by_key.setdefault(src.seat_key(s), s)
+        by_key.setdefault(key_fn(s), s)
     curr = set(by_key)
     return [by_key[k] for k in curr - prev], list(prev - curr)
 
@@ -56,10 +56,24 @@ def check_one(w, now_iso):
     label = w.get("label") or f"{w['event_code']}/{w['perf_code']}"
     src_name = w.get("source") or "ticketmaster"
     src = SOURCES.get(src_name, ticketmaster)
-    perf_url = src.perf_url(w["event_code"], w["perf_code"])
+
+    # Event-level watchers (ticketmaster only) aggregate seats across every
+    # active performance under the event; perf-level watchers hit one perf.
+    event_level = src is ticketmaster and ticketmaster.is_event_level(w)
+    if event_level:
+        perf_url = ticketmaster.event_url(w["event_code"])
+        key_fn = ticketmaster.event_seat_key
+    else:
+        perf_url = src.perf_url(w["event_code"], w["perf_code"])
+        key_fn = src.seat_key
 
     try:
-        seats = src.fetch_selectable_seats(w["event_code"], w["perf_code"])
+        if event_level:
+            seats, perf_errors = ticketmaster.fetch_event_seats(w["event_code"])
+            if perf_errors:
+                print(f"[{now_iso}] {label}: per-perf errors {perf_errors}", flush=True)
+        else:
+            seats = src.fetch_selectable_seats(w["event_code"], w["perf_code"])
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         db.tm_update_watcher(wid, {"last_check_at": now_iso, "last_check_error": err})
@@ -67,7 +81,8 @@ def check_one(w, now_iso):
 
     prev_keys = db.tm_get_seat_keys(wid)
     is_baseline = not prev_keys and not w.get("last_check_at")
-    added, removed = _diff_seats_set(prev_keys, seats, src)
+    was_empty = (w.get("last_seat_count") or 0) == 0
+    added, removed = _diff_seats_set(prev_keys, seats, key_fn)
     db.tm_replace_seat_state(wid, seats)
     db.tm_update_watcher(wid, {
         "last_check_at": now_iso,
@@ -78,11 +93,20 @@ def check_one(w, now_iso):
         return 0, None
 
     if added:
+        # Probe block: use the first added seat's block (and its perf for
+        # event-level watchers — labels are perf-scoped on TM's API).
         probe = next((s.get("block") or s.get("b") for s in added if s.get("block") or s.get("b")), None)
-        try:
-            lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw", missing_block=probe)
-        except Exception:
-            lbls = None
+        if event_level:
+            probe_perf = next((s.get("_perf") for s in added if s.get("_perf")), None)
+            try:
+                lbls = src.get_labels(w["event_code"], probe_perf, lang="iw", missing_block=probe) if probe_perf else None
+            except Exception:
+                lbls = None
+        else:
+            try:
+                lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw", missing_block=probe)
+            except Exception:
+                lbls = None
         matched = watcher_filters.apply(added, seats, w.get("filters"), labels=lbls)
         master_muted = db.setting_get_bool("master_muted", default=False)
         watcher_muted = bool(w.get("muted"))
@@ -90,11 +114,17 @@ def check_one(w, now_iso):
         enabled = {c for c in (s.strip() for s in channels_csv.split(",")) if c}
         if master_muted or watcher_muted:
             enabled = set()
+        # Status flip — fires on every sold-out → available transition (since
+        # last_seat_count returns to 0 between flips), satisfying the
+        # "keep notifying" requirement for event-level watchers.
+        status_flipped = event_level and was_empty and len(seats) > 0
+        headline = f"🎟️ {w['event_code']} — tickets just opened" if status_flipped and matched else None
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,
                 added_seats=matched, removed_count=len(removed),
                 total_now=len(seats), labels=lbls, channels=enabled,
+                headline=headline,
             )
         elif not matched:
             result = {"discord": "skipped (filtered)", "email": "skipped (filtered)"}
@@ -140,6 +170,12 @@ def tick():
 
 
 def main():
+    # Watcher labels are Hebrew (TM event names); the default Windows console
+    # encoding (cp1252) can't render them and crashes the startup print.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     print(f"[kartis-watcher] starting; interval={INTERVAL}s; db={db.DB_PATH}", flush=True)
     watchers = db.tm_active_watchers()
     print(f"[kartis-watcher] {len(watchers)} active watcher(s):", flush=True)
