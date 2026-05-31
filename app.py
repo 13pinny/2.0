@@ -86,6 +86,10 @@ _jerujam_lock = threading.Lock()
 _last_tm = {"at": None, "checked": 0, "drops": 0, "errors": 0, "running": False}
 _tm_lock = threading.Lock()
 TM_CHECK_INTERVAL_SECONDS = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
+# Drop-checking can be disabled here when the watcher runs on another machine
+# (e.g. the VPS), so the dashboard still serves inventory/sales without
+# double-pinging Discord. Manual "check now" from the UI still works.
+TM_CHECK_ENABLED = (os.getenv("TM_CHECK_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 
 _last_intake = {"at": None, "fetched": 0, "saved": 0, "skipped_dupe": 0, "errors": 0, "error": None, "running": False}
 _intake_lock = threading.Lock()
@@ -541,8 +545,19 @@ def _bought_by_event(groups_map):
         _add("lysted_purchases", r.get("event_name"), _resolve_iso(r), r.get("venue"), r.get("qty"))
     # Lysted's currently-active scraped inventory + recent sales tells us
     # the same event existed even if the purchases page rolled it off.
+    today_iso = datetime.now(timezone.utc).date().isoformat()
     for r in db.all_inventory():
         if ("lysted", str(r.get("id"))) in hidden:
+            continue
+        # Skip stale inventory for past events. A show that already happened
+        # can't have tickets "still listed", but Lysted keeps reporting a
+        # nonzero tickets_count on sold-out past listings for a while. Counting
+        # it makes bought = stale_listed + sold overcount the true buy and
+        # spawns an undeletable phantom "still listed" row on the sales page.
+        # Sales still feed lysted_active below, so bought stays >= sold here.
+        # (Blank-date rows fall through and are still counted.)
+        iso_i = _date_only(_resolve_iso(r) or "")
+        if iso_i and iso_i < today_iso:
             continue
         _add("lysted_active", r.get("event_name"), _resolve_iso(r), r.get("venue"), r.get("tickets_count"))
     for r in db.all_lysted_sales():
@@ -3567,6 +3582,7 @@ def api_watchers():
         "drops": drops,
         "last_tm": _last_tm,
         "interval_seconds": TM_CHECK_INTERVAL_SECONDS,
+        "check_enabled": TM_CHECK_ENABLED,
         "settings": {
             "master_paused": settings.get("master_paused", "false") in ("1", "true", "True"),
             "master_muted": settings.get("master_muted", "false") in ("1", "true", "True"),
@@ -3841,7 +3857,10 @@ def api_watchers_check_now():
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
-scheduler.add_job(run_tm_check, "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
+if TM_CHECK_ENABLED:
+    scheduler.add_job(run_tm_check, "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
+else:
+    print("[tm_check] disabled via TM_CHECK_ENABLED=0 — drop-checking runs elsewhere (e.g. the VPS watcher)")
 scheduler.add_job(run_mail_intake, "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
 

@@ -29,13 +29,19 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 REPO_DIR = Path(__file__).parent
-PYTHON = REPO_DIR / ".venv" / "Scripts" / "python.exe"
+# venv layout differs by OS: Scripts\python.exe on Windows, bin/python on POSIX.
+_WIN_PY = REPO_DIR / ".venv" / "Scripts" / "python.exe"
+_POSIX_PY = REPO_DIR / ".venv" / "bin" / "python"
+PYTHON = _WIN_PY if _WIN_PY.exists() else _POSIX_PY
 WATCHER = REPO_DIR / "watcher_only.py"
 load_dotenv(REPO_DIR / ".env")
 
 PULL_INTERVAL = int(os.getenv("KARTIS_PULL_INTERVAL_SECONDS") or 300)
 MAX_CRASH_BACKOFF = 3600  # cap exponential backoff at 1 hour
 GIT_BRANCH = os.getenv("KARTIS_GIT_BRANCH")  # optional pin; default = current
+# Which requirements file to refresh after a pull. A watcher-only box sets
+# this to requirements-watcher.txt (no Flask/patchright/PyMuPDF) to stay lean.
+REQUIREMENTS = os.getenv("KARTIS_REQUIREMENTS") or "requirements.txt"
 
 
 def log(msg):
@@ -67,7 +73,7 @@ def reinstall_deps():
     success; failures don't kill the supervisor — the watcher just starts
     with whatever's installed and may surface the error itself."""
     res = subprocess.run(
-        [str(PYTHON), "-m", "pip", "install", "-q", "-r", "requirements.txt"],
+        [str(PYTHON), "-m", "pip", "install", "-q", "-r", REQUIREMENTS],
         cwd=REPO_DIR, capture_output=True, text=True,
     )
     if res.returncode != 0:

@@ -19,6 +19,7 @@ import time
 import threading
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
@@ -30,7 +31,9 @@ import notify
 import tickchak
 import ticketmaster
 
-load_dotenv()
+# Load .env from the repo root next to this script, not the current working
+# directory — so notify creds resolve even when launched from elsewhere.
+load_dotenv(Path(__file__).parent / ".env")
 db.init()
 
 SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak}
