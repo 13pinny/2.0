@@ -700,13 +700,20 @@ def _scrape_viagogo_sales(context):
 def _parse_viagogo_date(date_str):
     if not date_str:
         return None
-    try:
-        return datetime.strptime(date_str.strip(), "%a %d %b %Y %H:%M").isoformat(timespec="minutes")
-    except ValueError:
+    s = date_str.strip()
+    # Viagogo emits month-before-day, e.g. "Wed Apr 08 2026 14:17". The
+    # day-before-month variants are kept as fallbacks in case the locale flips.
+    for fmt in ("%a %b %d %Y %H:%M", "%a %d %b %Y %H:%M"):
         try:
-            return datetime.strptime(date_str.strip(), "%a %d %b %Y").date().isoformat()
+            return datetime.strptime(s, fmt).isoformat(timespec="minutes")
         except ValueError:
-            return None
+            pass
+    for fmt in ("%a %b %d %Y", "%a %d %b %Y"):
+        try:
+            return datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return None
 
 
 VIAGOGO_EXTRACT_JS = r"""
