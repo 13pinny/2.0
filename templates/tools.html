@@ -112,6 +112,26 @@
     </form>
     <div id="tickchak-status" class="status" style="display:none"></div>
   </div>
+
+  <h2>// PACHA NY · FETCH TICKETS FROM GMAIL</h2>
+  <div class="tool-card">
+    <div class="desc">
+      Scans the dashboard&rsquo;s Gmail inbox for Pacha New York / FourVenues ticket
+      emails (forward them to <code style="color:var(--cyan);">fwd.pbtsign@gmail.com</code>),
+      downloads each ticket PDF, and keeps <strong>page&nbsp;1</strong> of each &mdash;
+      grouped per event and numbered, e.g.
+      <code style="color:var(--cyan);">Pacha ticket 1 of 10 - Alok.pdf</code>.
+      The tickets are bundled into a <strong>zip you download in your browser</strong>
+      (de-duped, totals self-correct).
+    </div>
+    <form id="pacha-form" onsubmit="return false;">
+      <label for="pacha-days">Look back (days)</label>
+      <input id="pacha-days" type="text" inputmode="numeric" value="60"
+             style="max-width:120px;">
+      <button id="pacha-go">Fetch Tickets</button>
+    </form>
+    <div id="pacha-status" class="status" style="display:none"></div>
+  </div>
 </main>
 <script>
 const esc = s => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
@@ -201,6 +221,64 @@ $("tickchak-go").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = "Process PDF";
+  }
+});
+
+$("pacha-go").addEventListener("click", async () => {
+  const days = ($("pacha-days").value || "").trim();
+  if (!/^\d+$/.test(days)) { alert("Enter a number of days"); return; }
+  const btn = $("pacha-go");
+  const statusEl = $("pacha-status");
+  btn.disabled = true;
+  btn.textContent = "Working...";
+  statusEl.className = "status";
+  statusEl.style.display = "block";
+  statusEl.innerHTML = `<div class="row"><span class="spinner"></span> Scanning Gmail + downloading tickets…</div>`;
+  try {
+    const res = await fetch("/api/pacha-fetch", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({days: Number(days)}),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      statusEl.className = "status error";
+      statusEl.innerHTML = `<div class="row">⚠ ${esc(data.error || "Unknown error")}</div>`;
+      return;
+    }
+    const total = data.tickets || 0;
+    const groups = (data.groups || []).map(g =>
+      `<li>${esc(g.event)} <span class="seat">(${esc(g.date || "no date")})</span> — ${g.count} ticket${g.count === 1 ? "" : "s"}</li>`
+    ).join("");
+    const skipped = (data.skipped || []).length
+      ? `<div class="row">Skipped ${data.skipped.length}: <span class="seat">${esc(data.skipped.join("; "))}</span></div>`
+      : "";
+    if (total === 0) {
+      statusEl.className = "status";
+      statusEl.innerHTML = `<div class="row">No Pacha tickets found in the last ${esc(days)} day(s).</div>${skipped}`;
+      return;
+    }
+    statusEl.className = "status success";
+    statusEl.innerHTML = `
+      <div class="row">✓ Found <strong>${total}</strong> ticket${total === 1 ? "" : "s"}
+        across <strong>${data.events}</strong> event${data.events === 1 ? "" : "s"}.</div>
+      <ul class="file-list">${groups}</ul>
+      ${skipped}
+    `;
+    // Trigger the zip download automatically, and leave a manual link too.
+    if (data.download_url) {
+      const href = data.download_url + "?name=" + encodeURIComponent(data.download_name || "Pacha tickets.zip");
+      const a = document.createElement("a");
+      a.href = href; a.download = data.download_name || "Pacha tickets.zip";
+      document.body.appendChild(a); a.click(); a.remove();
+      statusEl.innerHTML += `<div class="row" style="margin-top:8px;">⬇ <a href="${esc(href)}" style="color:var(--accent);">Download ${esc(data.download_name || "tickets.zip")}</a> (starts automatically)</div>`;
+    }
+  } catch (e) {
+    statusEl.className = "status error";
+    statusEl.innerHTML = `<div class="row">⚠ ${esc(e.message || e)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Fetch Tickets";
   }
 });
 </script>

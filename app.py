@@ -24,6 +24,7 @@ import kupat_pdf
 import mail_intake
 import matcher
 import notify
+import pacha_tickets
 import scraper
 import tickchak
 import tickchak_pdf
@@ -82,6 +83,11 @@ _backup_lock = threading.Lock()
 
 _last_jerujam = {"at": None, "count": None, "error": None, "running": False}
 _jerujam_lock = threading.Lock()
+
+# Pacha ticket fetch is on-demand from the Tools page. Synchronous like the
+# kupat/tickchak PDF tools, but guarded by a lock so two clicks can't hit Gmail
+# at once.
+_pacha_lock = threading.Lock()
 
 _last_tm = {"at": None, "checked": 0, "drops": 0, "errors": 0, "running": False}
 _tm_lock = threading.Lock()
@@ -3542,6 +3548,70 @@ def api_tickchak_pdf():
         except OSError:
             pass
     return jsonify(manifest)
+
+
+_PACHA_TMP = Path(tempfile.gettempdir()) / "kartis_pacha"
+
+
+@app.route("/api/pacha-fetch", methods=["POST"])
+def api_pacha_fetch():
+    """Fetch Pacha tickets from Gmail and bundle the first-page PDFs into a zip
+    for browser download. The dashboard runs on the VPS, which can't write to
+    the user's PC — so we hand the tickets back through the browser instead of
+    saving to disk. Synchronous, lock-guarded. Body: {days: int}. Returns the
+    summary plus a download_url, or {error}."""
+    from flask import request
+    import time
+    body = request.get_json(silent=True) or {}
+    try:
+        days = int(body.get("days") or pacha_tickets.DEFAULT_LOOKBACK_DAYS)
+    except (TypeError, ValueError):
+        return jsonify({"error": "days must be a number"}), 400
+    days = max(1, min(days, 365))
+    if not _pacha_lock.acquire(blocking=False):
+        return jsonify({"error": "a Pacha fetch is already running"}), 429
+    try:
+        zip_bytes, summary = pacha_tickets.fetch_zip(days=days)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+    finally:
+        _pacha_lock.release()
+
+    if zip_bytes:
+        _PACHA_TMP.mkdir(parents=True, exist_ok=True)
+        # Sweep zips older than an hour so the temp dir doesn't grow.
+        cutoff = time.time() - 3600
+        for old in _PACHA_TMP.glob("*.zip"):
+            try:
+                if old.stat().st_mtime < cutoff:
+                    old.unlink()
+            except OSError:
+                pass
+        token = uuid.uuid4().hex
+        (_PACHA_TMP / f"{token}.zip").write_bytes(zip_bytes)
+        groups = summary.get("groups") or []
+        if len(groups) == 1:
+            g = groups[0]
+            summary["download_name"] = f"{g['event']} {g['date'] or ''}".strip() + " tickets.zip"
+        else:
+            summary["download_name"] = "Pacha tickets.zip"
+        summary["download_url"] = f"/api/pacha-download/{token}"
+    return jsonify(summary)
+
+
+@app.route("/api/pacha-download/<token>")
+def api_pacha_download(token):
+    """Serve a previously-built Pacha ticket zip (see api_pacha_fetch)."""
+    from flask import request
+    if not re.fullmatch(r"[0-9a-f]{32}", token or ""):
+        return jsonify({"error": "bad token"}), 400
+    path = _PACHA_TMP / f"{token}.zip"
+    if not path.exists():
+        return jsonify({"error": "download expired — fetch again"}), 404
+    name = request.args.get("name") or "Pacha tickets.zip"
+    return send_file(str(path), as_attachment=True, download_name=name,
+                     mimetype="application/zip")
 
 
 @app.route("/api/watchers")

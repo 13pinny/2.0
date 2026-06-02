@@ -27,6 +27,7 @@ All commands assume the venv at `.venv\Scripts\`. On Windows use `.venv\Scripts\
 | Remove a watcher | `.venv\Scripts\python add_watcher.py --remove <id>` |
 | Smoke-test Discord + Gmail | `.venv\Scripts\python notify.py` (expects `{'discord': 'ok (204)', 'email': 'ok'}`) |
 | Probe a single drop endpoint directly | `.venv\Scripts\python ticketmaster.py EVENT/PERF` (also `kupat.py`, `tickchak.py`) |
+| Extract Pacha NY ticket first-pages from Gmail | `.venv\Scripts\python pacha_tickets.py` (add `--dry-run`, `--days N`, `--folder`) |
 
 There is no test suite, no linter, and no build step — the project ships as plain Python scripts.
 
