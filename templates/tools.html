@@ -74,17 +74,20 @@
   </nav>
 </header>
 <main>
-  <h2>// SCRAPER · RESTART CHROME (AFTER RE-LOGIN)</h2>
+  <h2>// SCRAPER · RE-LOGIN (NO SSH)</h2>
   <div class="tool-card">
     <div class="desc">
-      When a source shows <strong>LOGIN EXPIRED</strong>, re-login in the noVNC
-      window (<a href="https://vnc.kartis.homes/vnc.html" target="_blank"
-      style="color:var(--accent);">vnc.kartis.homes</a>), then click here to
-      bounce the scraper&rsquo;s Chrome so it picks up the fresh session &mdash;
-      runs <code style="color:var(--cyan);">sudo systemctl restart kartis-chrome</code>
-      on the box. No SSH needed. Takes a few seconds.
+      When a source shows <strong>LOGIN EXPIRED</strong>:
+      <strong>1)</strong> click <em>Open noVNC</em> to pop the box&rsquo;s Chrome
+      desktop in a new tab (enter the same login as this dashboard; it
+      auto-connects, no &ldquo;Connect&rdquo; button to hunt for) and sign back
+      into the source. <strong>2)</strong> come back here and click
+      <em>Restart Chrome</em> so the scraper re-attaches with the fresh session
+      (<code style="color:var(--cyan);">sudo systemctl restart kartis-chrome</code>
+      on the box). No SSH at any step.
     </div>
-    <button id="chrome-restart-go">Restart Chrome</button>
+    <button id="vnc-open-go">Open noVNC</button>
+    <button id="chrome-restart-go" style="background:var(--bg-2);color:var(--accent);border-color:var(--line-2);">Restart Chrome</button>
     <div id="chrome-restart-status" class="status" style="display:none"></div>
   </div>
 
@@ -151,6 +154,14 @@
 const esc = s => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 
 const $ = id => document.getElementById(id);
+
+// noVNC login window. autoconnect=true skips the manual Connect screen;
+// resize=remote fits the box's display to the tab; reconnect retries if the
+// VNC server blips. Opens in the user's own browser (Chrome) as a new tab.
+const VNC_URL = "https://vnc.kartis.homes/vnc.html?autoconnect=true&resize=remote&reconnect=true&reconnect_delay=2000";
+$("vnc-open-go").addEventListener("click", () => {
+  window.open(VNC_URL, "_blank", "noopener");
+});
 
 $("chrome-restart-go").addEventListener("click", async () => {
   const btn = $("chrome-restart-go");
