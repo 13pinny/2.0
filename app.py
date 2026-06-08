@@ -3651,6 +3651,53 @@ def api_chrome_restart():
         _chrome_restart_lock.release()
 
 
+@app.route("/api/chrome/open-logins", methods=["POST"])
+def api_chrome_open_logins():
+    """Open the Lysted/Viagogo/CrowdVolt login tabs in the box's Chrome (via the
+    CDP /json/new endpoint on :9222) so they're already waiting when the user
+    opens the noVNC window to re-sign-in. Dedupes against tabs already open —
+    repeat clicks (or a source you're still logged into) won't spam duplicates.
+    Reuses login.DEFAULT_URLS so the tab list stays in one place."""
+    import urllib.request
+    from urllib.parse import urlparse
+    import login as login_mod
+
+    cdp = os.getenv("KARTIS_CDP_URL", "http://localhost:9222")
+    if not login_mod.is_chrome_running():
+        return jsonify({"error": "Chrome isn't running — click Restart Chrome first."}), 503
+
+    def base_domain(url_or_host):
+        host = urlparse(url_or_host).hostname if "//" in url_or_host else url_or_host
+        parts = (host or "").split(".")
+        return ".".join(parts[-2:]) if len(parts) >= 2 else (host or "")
+
+    # Domains already open, so we don't reopen a source the user is on/into.
+    open_domains = set()
+    try:
+        with urllib.request.urlopen(f"{cdp}/json/list", timeout=8) as r:
+            for t in json.load(r):
+                if t.get("type") == "page":
+                    open_domains.add(base_domain(t.get("url", "")))
+    except Exception:
+        pass
+
+    opened, skipped, errors = [], [], []
+    for url in login_mod.DEFAULT_URLS:
+        if base_domain(url) in open_domains:
+            skipped.append(url)
+            continue
+        try:
+            req = urllib.request.Request(f"{cdp}/json/new?{url}", method="PUT")
+            with urllib.request.urlopen(req, timeout=8) as r:
+                (opened if r.status == 200 else errors).append(url)
+        except Exception as e:
+            errors.append(f"{url} ({type(e).__name__})")
+
+    if errors and not opened and not skipped:
+        return jsonify({"error": "; ".join(errors)}), 502
+    return jsonify({"ok": True, "opened": opened, "skipped": skipped, "errors": errors})
+
+
 @app.route("/api/watchers")
 def api_watchers():
     # Sweep past-event watchers on every page load so the UI doesn't have to

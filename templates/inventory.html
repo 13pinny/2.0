@@ -170,6 +170,8 @@
 
   <div class="bar">
     <button id="refresh">Refresh</button>
+    <button id="relogin" title="Open the box's Chrome (Lysted / Viagogo / CrowdVolt tabs) in a noVNC window so you can re-sign-in — no SSH">noVNC Login</button>
+    <button id="chrome-restart" title="After re-signing in, bounce the scraper's Chrome so it picks up the fresh session">Restart Chrome</button>
     <button id="add-pending" title="Add a ticket I have but haven't listed yet">+ Pending</button>
     <input type="search" id="q-search" placeholder="search // event venue section" style="flex:1; min-width:200px;">
     <select id="q-source"><option value="all">SRC: ALL</option><option value="lysted">LYSTED</option><option value="viagogo">VIAGOGO</option><option value="jerujam">JERUJAM</option></select>
@@ -522,6 +524,38 @@ document.getElementById("refresh").addEventListener("click", async (e) => {
   const btn = e.currentTarget; btn.disabled = true; btn.textContent = "refreshing...";
   await fetch("/api/refresh", { method: "POST" });
   setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh"; load(); }, 4000);
+});
+
+// noVNC login window. autoconnect=true skips the manual Connect screen so it
+// lands straight on the box's desktop; resize fits it to the tab; reconnect
+// retries if the VNC server blips while Chrome is opening the tabs.
+const VNC_URL = "https://vnc.kartis.homes/vnc.html?autoconnect=true&resize=remote&reconnect=true&reconnect_delay=2000";
+document.getElementById("relogin").addEventListener("click", (e) => {
+  // Open the viewer synchronously inside the click gesture (dodges popup
+  // blockers), THEN tell the box to open the Lysted/Viagogo/CrowdVolt tabs —
+  // they pop in within ~1s and noVNC's autoconnect renders them.
+  window.open(VNC_URL, "_blank", "noopener");
+  const btn = e.currentTarget; btn.disabled = true; const orig = btn.textContent; btn.textContent = "opening…";
+  fetch("/api/chrome/open-logins", { method: "POST" })
+    .catch(() => {})
+    .finally(() => { btn.disabled = false; btn.textContent = orig; });
+});
+
+document.getElementById("chrome-restart").addEventListener("click", async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; const orig = btn.textContent; btn.textContent = "restarting…";
+  try {
+    const res = await fetch("/api/chrome/restart", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      btn.textContent = "✓ restarted";
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; load(); }, 3000);
+      return;
+    }
+    alert("Restart failed: " + (data.error || ("HTTP " + res.status)));
+  } catch (err) {
+    alert("Restart failed: " + err);
+  }
+  btn.disabled = false; btn.textContent = orig;
 });
 for (const id of ["q-search", "q-source", "q-sort", "q-range"]) {
   document.getElementById(id).addEventListener("input", render);
