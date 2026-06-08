@@ -280,8 +280,19 @@ You're in Phase 2 territory. The Hetzner range is probably flagged for
 your Viagogo account specifically. Move to the residential proxy.
 
 **"LOGIN EXPIRED" badge in the UI for one source.**
-The session cookie aged out. Re-run the noVNC login (step 7) for just
-that source, then `sudo systemctl restart kartis-chrome`.
+The session cookie aged out. This is the recurring chore (esp. Lysted).
+Once the permanent VNC stack is up (services + `vnc.kartis.homes` Caddy
+block), you do **not** need SSH or the manual bridge from step 7 — just
+open the bookmark `https://vnc.kartis.homes/vnc.html` (same basic-auth as
+the dashboard), re-login in the Chrome window there, then back on the box
+`sudo systemctl restart kartis-chrome`. The Chrome restart can also be
+triggered from anywhere with `curl`-able access if you wire up an endpoint.
+
+**noVNC bookmark shows "Failed to connect" but services look "active".**
+x11vnc drifted off port 5900 (auto-probed to 5901 after a quick restart)
+while websockify still bridges 5900. The `kartis-vnc.service` unit pins
+`-rfbport 5900` to prevent this; if you see it, confirm with
+`ss -tlnp | grep 5900` and that the unit has the `-rfbport 5900` flag.
 
 **B2 sync silently doing nothing.**
 `rclone config show b2` to confirm the remote exists; `--max-age 36h`

@@ -8,14 +8,21 @@ Type=simple
 User=kartis
 Group=kartis
 Environment=DISPLAY=:99
+# -rfbport 5900: PIN the port. Without this, x11vnc auto-probes starting at
+#   5900 and silently bumps to 5901 if 5900 is still in TIME_WAIT from a quick
+#   restart. websockify (kartis-novnc) is hardcoded to bridge localhost:5900,
+#   so any drift to 5901 breaks noVNC with "Failed to connect". Pinning makes
+#   the port deterministic; if 5900 is briefly busy x11vnc exits and systemd
+#   restarts it until the port frees (self-healing, no manual intervention).
 # -nopw: no VNC-level password (basic-auth via Caddy is the gate)
 # -listen localhost: never bind to public interface; Caddy proxies to it
 # -forever: keep running after a client disconnects
 # -shared: allow concurrent viewers
 # -quiet: only log warnings/errors
-ExecStart=/usr/bin/x11vnc -display :99 -nopw -listen localhost -xkb -forever -shared -quiet
+ExecStart=/usr/bin/x11vnc -display :99 -rfbport 5900 -nopw -listen localhost -xkb -forever -shared -quiet
 Restart=always
-RestartSec=3
+# 5s (not 3s) gives the old socket time to leave TIME_WAIT before the rebind.
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
