@@ -74,6 +74,20 @@
   </nav>
 </header>
 <main>
+  <h2>// SCRAPER · RESTART CHROME (AFTER RE-LOGIN)</h2>
+  <div class="tool-card">
+    <div class="desc">
+      When a source shows <strong>LOGIN EXPIRED</strong>, re-login in the noVNC
+      window (<a href="https://vnc.kartis.homes/vnc.html" target="_blank"
+      style="color:var(--accent);">vnc.kartis.homes</a>), then click here to
+      bounce the scraper&rsquo;s Chrome so it picks up the fresh session &mdash;
+      runs <code style="color:var(--cyan);">sudo systemctl restart kartis-chrome</code>
+      on the box. No SSH needed. Takes a few seconds.
+    </div>
+    <button id="chrome-restart-go">Restart Chrome</button>
+    <div id="chrome-restart-status" class="status" style="display:none"></div>
+  </div>
+
   <h2>// KUPAT · PRINT TICKETS TO PDF</h2>
   <div class="tool-card">
     <div class="desc">
@@ -137,6 +151,33 @@
 const esc = s => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 
 const $ = id => document.getElementById(id);
+
+$("chrome-restart-go").addEventListener("click", async () => {
+  const btn = $("chrome-restart-go");
+  const statusEl = $("chrome-restart-status");
+  btn.disabled = true;
+  btn.textContent = "Restarting...";
+  statusEl.className = "status";
+  statusEl.style.display = "block";
+  statusEl.innerHTML = `<div class="row"><span class="spinner"></span> Restarting Chrome on the box…</div>`;
+  try {
+    const res = await fetch("/api/chrome/restart", {method: "POST"});
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      statusEl.className = "status error";
+      statusEl.innerHTML = `<div class="row">⚠ ${esc(data.error || "Unknown error")}</div>`;
+      return;
+    }
+    statusEl.className = "status success";
+    statusEl.innerHTML = `<div class="row">✓ Restarted <strong>${esc(data.service || "kartis-chrome")}</strong>. Give it ~10s, then trigger a resync to confirm the login took.</div>`;
+  } catch (e) {
+    statusEl.className = "status error";
+    statusEl.innerHTML = `<div class="row">⚠ ${esc(e.message || e)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Restart Chrome";
+  }
+});
 
 $("kupat-go").addEventListener("click", async () => {
   const url = $("kupat-url").value.trim();

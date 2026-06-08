@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import tempfile
 import threading
 import traceback
@@ -3612,6 +3613,42 @@ def api_pacha_download(token):
     name = request.args.get("name") or "Pacha tickets.zip"
     return send_file(str(path), as_attachment=True, download_name=name,
                      mimetype="application/zip")
+
+
+# systemd unit for the scraper's Chrome on the VPS. Override via env if the
+# unit is named differently. Exposed on the Tools page so finalizing a
+# Lysted/Viagogo/CrowdVolt re-login (done in the noVNC window) needs no SSH.
+CHROME_SERVICE = os.getenv("KARTIS_CHROME_SERVICE", "kartis-chrome")
+_chrome_restart_lock = threading.Lock()
+
+
+@app.route("/api/chrome/restart", methods=["POST"])
+def api_chrome_restart():
+    """Restart the scraper's Chrome service (`sudo systemctl restart
+    kartis-chrome`). After re-logging into a source in the noVNC window, Chrome
+    must be bounced so the scraper re-attaches with the fresh session — this
+    lets the user do that from the dashboard instead of SSHing in. Only
+    meaningful on the Linux/systemd VPS; returns a friendly error elsewhere.
+    Uses `sudo -n` so a missing NOPASSWD rule fails fast instead of hanging."""
+    import shutil
+    if not _chrome_restart_lock.acquire(blocking=False):
+        return jsonify({"error": "a restart is already running"}), 429
+    try:
+        if not shutil.which("systemctl"):
+            return jsonify({"error": "systemctl not found — this control only works on the VPS"}), 400
+        try:
+            proc = subprocess.run(
+                ["sudo", "-n", "systemctl", "restart", CHROME_SERVICE],
+                capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "restart timed out after 60s"}), 504
+        if proc.returncode != 0:
+            msg = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+            return jsonify({"error": f"systemctl failed: {msg}"}), 500
+        return jsonify({"ok": True, "service": CHROME_SERVICE})
+    finally:
+        _chrome_restart_lock.release()
 
 
 @app.route("/api/watchers")
