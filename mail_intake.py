@@ -23,6 +23,7 @@ from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
 
 import attachments as attachments_mod
+import cashback_email
 import db
 
 GMAIL_HOST = "imap.gmail.com"
@@ -521,6 +522,7 @@ def run_intake():
     fetched = imap_fetch_new()
     seen = 0
     saved = 0
+    cashback_saved = 0
     skipped_dupe = 0
     skipped_provider = 0
     errors = 0
@@ -538,6 +540,26 @@ def run_intake():
             parsed["from"] = eff_from
             parsed["subject"] = eff_subject
             parsed["body"] = eff_body
+            # Capital One cash-back redemptions aren't ticket purchases — route
+            # them straight to the /cashback page instead of pending_intake.
+            # Checked before provider detection (capitalone isn't a provider, so
+            # it would otherwise be dropped as "unknown"). Idempotent via the
+            # source_ref dedup, so re-polls of the same mail are no-ops.
+            if cashback_email.is_capitalone_cashback(parsed["from"], parsed["subject"], parsed["body"]):
+                cb = cashback_email.parse_cashback(
+                    parsed["from"], parsed["subject"], parsed["body"],
+                    parsed["received_at"], message_id=parsed["message_id"],
+                )
+                if cb and not db.has_cashback_source_ref(cb["source_ref"]):
+                    db.insert_cashback_entry({
+                        "id": "cb-" + uuid.uuid4().hex[:12],
+                        "date_iso": cb["date_iso"],
+                        "amount": cb["amount"],
+                        "card_name": cb["card_name"],
+                        "source_ref": cb["source_ref"],
+                    }, datetime.now(timezone.utc).isoformat())
+                    cashback_saved += 1
+                continue
             provider = _detect_provider(parsed["from"])
             if provider == "unknown" and not allow_unknown:
                 skipped_provider += 1
@@ -579,6 +601,7 @@ def run_intake():
     return {
         "fetched": seen,
         "saved": saved,
+        "cashback_saved": cashback_saved,
         "skipped_dupe": skipped_dupe,
         "skipped_provider": skipped_provider,
         "errors": errors,

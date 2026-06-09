@@ -314,6 +314,7 @@ CREATE TABLE IF NOT EXISTS cashback_entries (
     date_iso TEXT NOT NULL,
     amount REAL NOT NULL,
     card_name TEXT NOT NULL,
+    source_ref TEXT,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cashback_date ON cashback_entries(date_iso);
@@ -513,6 +514,17 @@ def init():
         mp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(maaser_payments)").fetchall()}
         if "tax_deductible" not in mp_cols:
             conn.execute("ALTER TABLE maaser_payments ADD COLUMN tax_deductible INTEGER NOT NULL DEFAULT 0")
+        # Cash-back entries auto-captured from Capital One emails carry a
+        # source_ref (the rewards order number) so re-polls don't duplicate
+        # them. Manual entries leave it NULL; the partial unique index ignores
+        # NULLs so it never conflicts with hand-added rows.
+        cb_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cashback_entries)").fetchall()}
+        if "source_ref" not in cb_cols:
+            conn.execute("ALTER TABLE cashback_entries ADD COLUMN source_ref TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_cashback_source_ref "
+            "ON cashback_entries(source_ref) WHERE source_ref IS NOT NULL"
+        )
 
 
 def upsert_lysted_purchases(rows, now_iso):
@@ -1372,11 +1384,21 @@ def insert_cashback_entry(row, now_iso):
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO cashback_entries (id, date_iso, amount, card_name, created_at)
-            VALUES (:id, :date_iso, :amount, :card_name, :created_at)
+            INSERT INTO cashback_entries (id, date_iso, amount, card_name, source_ref, created_at)
+            VALUES (:id, :date_iso, :amount, :card_name, :source_ref, :created_at)
             """,
-            {**row, "created_at": now_iso},
+            {"source_ref": None, **row, "created_at": now_iso},
         )
+
+
+def has_cashback_source_ref(ref):
+    if not ref:
+        return False
+    with connect() as conn:
+        r = conn.execute(
+            "SELECT 1 FROM cashback_entries WHERE source_ref = ? LIMIT 1", (ref,)
+        ).fetchone()
+    return r is not None
 
 
 def all_cashback_entries():
