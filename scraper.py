@@ -986,6 +986,82 @@ def _parse_int(text):
     return int(m.group(0)) if m else None
 
 
+# Hosts whose leftover login tabs carry auth/silent-renewal or reCAPTCHA
+# iframes that periodically re-navigate on their own. patchright's
+# connect_over_cdp attaches to EVERY open tab and reads its frame tree; if such
+# a frame detaches mid-attach the Node driver dies ("Frame was detached" ->
+# "Connection closed while reading from the driver"). Standalone that's a quick
+# error, but inside the long-lived gunicorn worker it manifests as an
+# INDEFINITE hang that holds the scrape lock and wedges every source (the 2026-06
+# outage). The scrape never needs these tabs — the login lives in the on-disk
+# user_data profile and each source opens its own page — so we close them
+# before connecting. The noVNC "open-logins" button reopens them on demand.
+_CDP_STRAY_HOSTS = ("lysted.com", "automatiq.com", "crowdvolt.com", "viagogo.com")
+
+
+def _close_stray_cdp_pages(cdp_url):
+    """Best-effort: close leftover ticketing login tabs via the CDP HTTP API so
+    their self-navigating iframes can't crash connect_over_cdp. Never raises."""
+    import json as _json
+    import urllib.request
+    base = cdp_url.rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base}/json/list", timeout=5) as resp:
+            targets = _json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception as e:
+        print(f"[kartis] CDP /json/list unavailable for pre-connect cleanup: "
+              f"{type(e).__name__}: {e}")
+        return
+    pages = [t for t in targets if t.get("type") == "page"]
+    strays = [t for t in pages if t.get("id")
+              and any(h in (t.get("url") or "").lower() for h in _CDP_STRAY_HOSTS)]
+    if not strays:
+        return
+    # Closing the last remaining page makes Chrome quit (no windows left) ->
+    # systemd restarts it and reopens the very login tabs we're clearing. If the
+    # strays are all that's open, leave a frame-free about:blank keeper behind.
+    # (A prior run's blank keeper is a non-stray page, so keepers don't pile up.)
+    if len(strays) == len(pages):
+        try:
+            req = urllib.request.Request(f"{base}/json/new?about:blank", method="PUT")
+            urllib.request.urlopen(req, timeout=5).close()
+        except Exception as e:
+            print(f"[kartis] couldn't open keeper tab ({type(e).__name__}); "
+                  f"skipping cleanup so Chrome isn't killed")
+            return
+    closed = 0
+    for t in strays:
+        try:
+            urllib.request.urlopen(f"{base}/json/close/{t['id']}", timeout=5).close()
+            closed += 1
+        except Exception:
+            pass
+    if closed:
+        print(f"[kartis] closed {closed} stray login tab(s) before CDP connect")
+
+
+def _connect_over_cdp(p, cdp_url, attempts=3):
+    """connect_over_cdp hardened against the 'Frame was detached' driver crash.
+
+    Closes stray login tabs up front (the usual culprit), passes a real timeout
+    so a wedged attach can't hang the worker forever, and retries — the
+    reCAPTCHA-iframe variant is racy, so a second attempt against a quiet frame
+    tree usually succeeds. Raises the last error if every attempt fails.
+    """
+    import time
+    last = None
+    for i in range(1, attempts + 1):
+        _close_stray_cdp_pages(cdp_url)
+        try:
+            return p.chromium.connect_over_cdp(cdp_url, timeout=30000)
+        except Exception as e:
+            last = e
+            print(f"[kartis] connect_over_cdp attempt {i}/{attempts} failed: "
+                  f"{type(e).__name__}: {str(e)[:140]}")
+            time.sleep(2)
+    raise last
+
+
 def scrape_all():
     _auth_errors.clear()
     result = {
@@ -998,7 +1074,7 @@ def scrape_all():
     }
     with sync_playwright() as p:
         try:
-            browser = p.chromium.connect_over_cdp(CDP_URL)
+            browser = _connect_over_cdp(p, CDP_URL)
         except Exception as e:
             # Three failure modes we try to self-heal:
             #  1. Chrome is down (auto-update, accidental close, reboot) —
@@ -1015,7 +1091,7 @@ def scrape_all():
             e1 = e2 = None
             try:
                 if login.launch_chrome():
-                    browser = p.chromium.connect_over_cdp(CDP_URL)
+                    browser = _connect_over_cdp(p, CDP_URL)
                 else:
                     raise RuntimeError("login.launch_chrome() returned False")
             except Exception as ex1:
@@ -1023,7 +1099,7 @@ def scrape_all():
                 try:
                     print(f"[kartis] first relaunch attempt failed ({ex1}); forcing kill+restart")
                     if login.restart_chrome():
-                        browser = p.chromium.connect_over_cdp(CDP_URL)
+                        browser = _connect_over_cdp(p, CDP_URL)
                     else:
                         raise RuntimeError("login.restart_chrome() returned False")
                 except Exception as ex2:
@@ -1046,7 +1122,7 @@ def scrape_all():
         viagogo_context = context
         if CDP_URL_VIAGOGO != CDP_URL:
             try:
-                viagogo_browser = p.chromium.connect_over_cdp(CDP_URL_VIAGOGO)
+                viagogo_browser = _connect_over_cdp(p, CDP_URL_VIAGOGO)
                 viagogo_context = (
                     viagogo_browser.contexts[0]
                     if viagogo_browser.contexts
