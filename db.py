@@ -437,7 +437,6 @@ CREATE TABLE IF NOT EXISTS tickchak_sales_snapshots (
     sold INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_tcsnap ON tickchak_sales_snapshots(event_code, captured_at);
-CREATE INDEX IF NOT EXISTS idx_tcsnap2 ON tickchak_sales_snapshots(source, event_code, perf_code, captured_at);
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT,
@@ -535,6 +534,12 @@ def init():
         if "perf_code" not in ss_cols:
             conn.execute("ALTER TABLE tickchak_sales_snapshots ADD COLUMN perf_code TEXT")
             conn.execute("UPDATE tickchak_sales_snapshots SET perf_code = '0' WHERE perf_code IS NULL")
+        # Composite index created here (not in SCHEMA) so it lands AFTER the
+        # source/perf_code columns exist on pre-existing tables.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tcsnap2 ON "
+            "tickchak_sales_snapshots(source, event_code, perf_code, captured_at)"
+        )
         # Maaser tax-deductible flag — existing rows default to 0 (not
         # claimed) which is a safe default; user can edit any back-history
         # entries to flip them on.
