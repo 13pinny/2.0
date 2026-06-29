@@ -122,6 +122,17 @@ def check_one(w, now_iso):
         # "keep notifying" requirement for event-level watchers.
         status_flipped = event_level and was_empty and len(seats) > 0
         headline = f"🎟️ {w['event_code']} — tickets just opened" if status_flipped and matched else None
+        # Festival/hub watchers carry a status flag per tick (the seat key
+        # encodes it), so any transition shows up as an `added` seat —
+        # phrase the ping for the new status. (Keep in sync with app.py.)
+        _fest = next((s for s in added if s.get("festival")), None)
+        if _fest:
+            _nm = label or w["event_code"]
+            headline = {
+                "soldout": f"❌ Sold out — {_nm}",
+                "lasttickets": f"⚠️ Last tickets — {_nm}",
+                "available": f"🎟️ Available again — {_nm}",
+            }.get(_fest.get("status"), headline)
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,

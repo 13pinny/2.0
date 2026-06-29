@@ -425,6 +425,32 @@ async function onWatcherAction(e) {
 }
 
 function seatCell(w) {
+  // Festival/hub tickchak watchers: a colored status badge plus exact
+  // released/left counts when we have them, and a per-type breakdown in
+  // the hover tooltip (men's/accessible/price tiers).
+  if (w.festival_status) {
+    const palette = {
+      available:   ['Available',    '#16a34a'],
+      lasttickets: ['Last tickets', '#d97706'],
+      soldout:     ['Sold out',     '#dc2626'],
+    };
+    const [txt, color] = palette[w.festival_status] || [w.festival_status, '#888'];
+    const badge = `<span style="display:inline-block;padding:1px 6px;border-radius:6px;` +
+                  `background:${color};color:#fff;font-size:10px;font-weight:600">${txt}</span>`;
+    const total = w.total_seats, avail = w.available_seats;
+    let counts = '', tip = '';
+    if (total != null && avail != null) {
+      const sold = Math.max(0, total - avail);
+      const pctSold = total > 0 ? (sold / total * 100) : 0;
+      counts = `<div>${avail} / ${total}</div>` +
+               `<div style="font-size:10px;color:var(--muted)">${pctSold.toFixed(1)}% sold</div>`;
+      const rows = Object.entries(w.festival_types || {})
+        .filter(([k, v]) => v && v.amount)
+        .map(([k, v]) => `${v.name || k}: ${v.available}/${v.amount} left (${v.sold} sold)`);
+      if (rows.length) tip = ` title="${escape(rows.join('\n'))}"`;
+    }
+    return `<div${tip}>${badge}${counts}</div>`;
+  }
   // Prefer the source's own per-tick "available quantity" when it
   // exposes one (tickchak). Otherwise fall back to the watcher's
   // last_seat_count, which is what ticketmaster + kupat already

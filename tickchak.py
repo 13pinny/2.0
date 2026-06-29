@@ -55,6 +55,23 @@ CACHE_DIR = Path(__file__).parent / "tm_cache"
 CACHE_TTL_SECONDS = 3600
 REQUEST_TIMEOUT = 20
 
+# Festival/hub support. Some tickchak events (e.g. the Chutzot Hayotzer
+# festival) live under a hub: the plain event URL 302-redirects to
+# home.tickchak.co.il/<slug>, so the normal event-form scrape can't see
+# them. The hub's anonymous JSON feed exposes an eid->event_hash map plus
+# per-event status flags; the hash unlocks the same anonymous
+# /ajax/form/init counts as a standalone event. All pure HTTP — works
+# headless, no browser.
+API_LIVE_BASE = "https://api-live.tickchak.co.il"
+HOME_HOST = "home.tickchak.co.il"
+FESTIVAL_SLUG_TTL = 6 * 3600   # festival membership is stable; re-check rarely
+FESTIVAL_FEED_TTL = 25         # dedupe the ~60 KB feed across a tick's watchers
+FESTIVAL_SNAP_TTL = 20         # reuse a show's full snapshot within one tick
+
+_fest_slug_cache = {}   # event_code -> (ts, slug_or_None)
+_fest_feed_cache = {}   # slug -> (ts, {"hash_map": {...}, "events": {...}})
+_fest_snap_cache = {}   # event_code -> (ts, labels_payload)
+
 # New watchers default to NO group filter — tickchak offers are GA-style
 # ticket types, so "min 2 consecutive seats" doesn't apply.
 DEFAULT_FILTERS = {"min_group_size": 1}
@@ -146,6 +163,25 @@ def _http_get_html(url, referer=None):
     if resp.headers.get("Content-Encoding") == "gzip":
         raw = gzip.decompress(raw)
     return raw.decode("utf-8", errors="replace")
+
+
+def _http_get_final(url, referer=None):
+    """Like ``_http_get_html`` but also returns the post-redirect URL —
+    used to detect when an event slug bounces to a festival hub."""
+    headers = dict(REQUEST_HEADERS)
+    if referer:
+        headers["Referer"] = referer
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
+    except urllib.error.HTTPError as e:
+        raise TickchakError(f"HTTP {e.code} from {url}") from e
+    except urllib.error.URLError as e:
+        raise TickchakError(f"network error: {e.reason}") from e
+    raw = resp.read()
+    if resp.headers.get("Content-Encoding") == "gzip":
+        raw = gzip.decompress(raw)
+    return resp.geturl(), raw.decode("utf-8", errors="replace")
 
 
 _EV_JS_RE = re.compile(
@@ -378,6 +414,260 @@ def _parse_iso_perf(start_date):
         return None, text_display
 
 
+# --- Festival / hub support ----------------------------------------------
+
+def _israel_time_text(epoch_seconds):
+    """Format an epoch as venue-local (Asia/Jerusalem) 'YYYY-MM-DD HH:MM'.
+    The hub feed gives UTC epochs; without a fixed zone the dashboard's own
+    machine timezone would shift the time. Falls back to IDT (+3) when the
+    tz database isn't installed."""
+    from datetime import timezone, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Asia/Jerusalem")
+    except Exception:
+        tz = timezone(timedelta(hours=3))  # IDT; festival season is summer
+    return datetime.fromtimestamp(epoch_seconds, tz).strftime("%Y-%m-%d %H:%M")
+
+
+def _resolve_festival(event_code):
+    """Return the festival hub slug if this event's page redirects to a
+    home.tickchak.co.il hub, else None. Cached — membership is stable for
+    the life of the event, so non-festival events pay the redirect probe
+    only once."""
+    ev = str(event_code)
+    hit = _fest_slug_cache.get(ev)
+    if hit and (time.time() - hit[0] < FESTIVAL_SLUG_TTL):
+        return hit[1]
+    slug = None
+    try:
+        final_url, _ = _http_get_final(perf_url(ev))
+        parts = urlparse(final_url)
+        if parts.netloc.lower() == HOME_HOST:
+            slug = (parts.path or "").strip("/").split("/", 1)[0] or None
+    except TickchakError:
+        # Network hiccup — don't poison the cache; reuse any prior answer.
+        return hit[1] if hit else None
+    _fest_slug_cache[ev] = (time.time(), slug)
+    return slug
+
+
+def _iter_strings(o):
+    if isinstance(o, dict):
+        for v in o.values():
+            yield from _iter_strings(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from _iter_strings(v)
+    elif isinstance(o, str):
+        yield o
+
+
+def _fetch_festival_feed(slug):
+    """GET the anonymous hub feed and parse it into
+    ``{"hash_map": {eid: event_hash}, "events": {eid: {...status...}}}``.
+
+    The hash map lives in an inline ``var HASH = {"<eid>":"<hash>", ...}``
+    script blob (commented ``eid -> tick_encrypt('event'+eid)``); the hash
+    is what /ajax/form/init wants. Cached briefly so the festival's
+    watchers don't each refetch the feed every tick."""
+    hit = _fest_feed_cache.get(slug)
+    if hit and (time.time() - hit[0] < FESTIVAL_FEED_TTL):
+        return hit[1]
+    headers = dict(REQUEST_HEADERS)
+    headers["Accept"] = "application/json"
+    headers["Referer"] = f"https://{HOME_HOST}/"
+    req = urllib.request.Request(f"{API_LIVE_BASE}/page/{slug}", headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        raise TickchakError(f"festival feed fetch failed: {e}") from e
+    raw = resp.read()
+    if resp.headers.get("Content-Encoding") == "gzip":
+        raw = gzip.decompress(raw)
+    data = json.loads(raw.decode("utf-8", errors="replace"))
+
+    hash_map = {}
+    blob = next((s for s in _iter_strings(data) if "var HASH" in s), None)
+    if blob:
+        i = blob.find("var HASH")
+        start = blob.find("{", i)
+        end = blob.find("}", start)
+        if start != -1 and end != -1:
+            for m in re.finditer(r'"(\d{4,8})"\s*:\s*"([^"]+)"', blob[start:end + 1]):
+                hash_map[m.group(1)] = m.group(2)
+
+    events = {}
+
+    def _walk(o):
+        if isinstance(o, dict):
+            if "eid" in o and ("soldOut" in o or "title" in o):
+                eid = str(o.get("eid"))
+                if eid not in events:
+                    ven = o.get("venue")
+                    events[eid] = {
+                        "title": o.get("title") or o.get("name"),
+                        "venue": (ven.get("title") if isinstance(ven, dict) else None) or o.get("location"),
+                        "timeStart": o.get("timeStart") or o.get("date"),
+                        "soldOut": int(o.get("soldOut") or 0),
+                        "lastTickets": int(o.get("lastTickets") or 0),
+                        "preSale": int(o.get("preSale") or 0),
+                        "entityId": o.get("entityId"),
+                    }
+            for v in o.values():
+                _walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                _walk(v)
+
+    _walk(data)
+    feed = {"hash_map": hash_map, "events": events}
+    _fest_feed_cache[slug] = (time.time(), feed)
+    return feed
+
+
+def _festival_status(ev_info, total_available, have_counts):
+    """Derive a single status flag. The hub's own soldOut/lastTickets
+    flags are authoritative for the headline; live counts corroborate
+    sold-out (sometimes the flag lags)."""
+    sold_out = bool(ev_info.get("soldOut")) or (have_counts and total_available <= 0)
+    if sold_out:
+        return "soldout"
+    if ev_info.get("lastTickets"):
+        return "lasttickets"
+    return "available"
+
+
+def _festival_stub(event_code, slug, lang):
+    """Minimal festival payload for when the feed is unreachable and we
+    have no cached snapshot yet. Status defaults to 'available' so the
+    first (baseline) tick stores it without a spurious ping; real data
+    corrects it on the next successful fetch."""
+    return {
+        "_fetched_at": time.time(),
+        "source": SOURCE_NAME, "event_code": str(event_code), "perf_code": "0",
+        "lang": lang, "festival": True, "festival_slug": slug,
+        "meta": {
+            "eventName": "", "venueName": "", "venueCity": "",
+            "firstPerfMs": None, "firstPerfText": "",
+            "totalSeats": None, "availSeats": None,
+            "status": "unknown", "festival": True, "festivalStatus": "available",
+        },
+        "blocks": {},
+    }
+
+
+def _festival_snapshot(event_code, lang="iw"):
+    """Full festival labels payload (meta + per-type blocks) for a hub
+    event, or None if this isn't a festival event. Pure HTTP. Writes the
+    on-disk labels cache so get_labels() stays fresh, and an in-memory
+    snapshot cache so one tick's fetch_selectable_seats + get_labels share
+    a single fetch."""
+    ev = str(event_code)
+    hit = _fest_snap_cache.get(ev)
+    if hit and (time.time() - hit[0] < FESTIVAL_SNAP_TTL):
+        return hit[1]
+    slug = _resolve_festival(ev)
+    if not slug:
+        return None
+    try:
+        feed = _fetch_festival_feed(slug)
+    except TickchakError:
+        # Known festival event but the feed is momentarily unreachable —
+        # return stale data if we have it, else a minimal stub. Never fall
+        # back to the legacy event-page path (it redirects to the hub and
+        # yields the wrong event).
+        return hit[1] if hit else _festival_stub(ev, slug, lang)
+
+    ev_info = (feed.get("events") or {}).get(ev) or {}
+    event_hash = (feed.get("hash_map") or {}).get(ev)
+
+    blocks = {}
+    total_capacity = 0
+    total_available = 0
+    init = _fetch_form_init(ev, event_hash) if event_hash else None
+    have_counts = bool(init and isinstance(init.get("tickets"), list))
+    if have_counts:
+        types, total_capacity, total_available = _normalize_form_init_tickets(init)
+        for key, info in types.items():
+            blocks[key] = {
+                "name": info["name"],
+                "price": info["price"],
+                "currency": info.get("currency") or "ILS",
+                "amount": info["amount"],
+                "sold": info["sold"],
+                "available": info["available"],
+                "unlimited": info.get("unlimited", False),
+                "availability": "in_stock" if info["available"] > 0 else "out_of_stock",
+            }
+
+    status = _festival_status(ev_info, total_available, have_counts)
+
+    ts = ev_info.get("timeStart")
+    perf_ms = None
+    perf_text = ""
+    try:
+        if ts:
+            perf_ms = int(ts) * 1000
+            perf_text = _israel_time_text(int(ts))
+    except (TypeError, ValueError, OSError):
+        perf_ms, perf_text = None, ""
+
+    payload = {
+        "_fetched_at": time.time(),
+        "source": SOURCE_NAME,
+        "event_code": ev,
+        "perf_code": "0",
+        "lang": lang,
+        "festival": True,
+        "festival_slug": slug,
+        "meta": {
+            "eventName": ev_info.get("title") or "",
+            "venueName": ev_info.get("venue") or "",
+            "venueCity": "",
+            "firstPerfMs": perf_ms,
+            "firstPerfText": perf_text,
+            "totalSeats": (total_capacity or None),
+            "availSeats": (total_available if have_counts else None),
+            "status": status,
+            "festival": True,
+            "festivalStatus": status,
+        },
+        "blocks": blocks,
+    }
+    try:
+        _cache_path(ev, lang).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+    except OSError:
+        pass
+    _fest_snap_cache[ev] = (time.time(), payload)
+    return payload
+
+
+def _festival_seats(payload):
+    """One status-encoded virtual seat. Encoding the status into the seat
+    key (via ``block``) makes the standard add/remove diff fire a
+    notification on every status transition — sold-out, last-tickets, and
+    available-again — without touching the core tick loop."""
+    meta = (payload or {}).get("meta") or {}
+    status = meta.get("festivalStatus") or "available"
+    label = {
+        "available": "GA available",
+        "lasttickets": "GA last tickets",
+        "soldout": "GA sold out",
+    }.get(status, "GA available")
+    return [{
+        "block": label,
+        "row": "GA",
+        "seat": "1",
+        "festival": True,
+        "status": status,
+        "qty_available": meta.get("availSeats"),
+        "price": None,
+    }]
+
+
 # --- Public source-plugin API --------------------------------------------
 
 def _block_label(name, price):
@@ -412,6 +702,12 @@ def fetch_selectable_seats(event_code, perf_code="0"):
     (no per-seat selection in the booking flow) and keeps notification
     spam tolerable.
     """
+    # Festival/hub events redirect away from the normal event page — serve
+    # them from the hub feed instead (one status-encoded seat).
+    fest = _festival_snapshot(event_code)
+    if fest is not None:
+        return _festival_seats(fest)
+
     html = _http_get_html(perf_url(event_code))
     fb, event_hash = _fetch_event_meta_from_static_js(event_code, html)
     fb = fb or {}
@@ -498,6 +794,12 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
     ``meta.availSeats`` (capped current quantity) from this payload to
     show real "X / Y" ratios in the watchers table.
     """
+    # Festival/hub events: counts + status come from the hub feed +
+    # anonymous form/init, not the (redirecting) event page.
+    fest = _festival_snapshot(event_code, lang)
+    if fest is not None:
+        return fest
+
     html = _http_get_html(perf_url(event_code))
     ld = _extract_jsonld_event(html) or {}
     fb, event_hash = _fetch_event_meta_from_static_js(event_code, html)

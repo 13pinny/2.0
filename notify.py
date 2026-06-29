@@ -52,6 +52,20 @@ def _short(seat, labels=None):
     return f"{name} · row {_seat_row(seat)} · seat {_seat_num(seat)}"
 
 
+def _festival_status_line(seat):
+    """One-line status for a festival/hub watcher's status-encoded seat."""
+    st = seat.get("status")
+    qty = seat.get("qty_available")
+    base = {
+        "soldout": "❌ Sold out",
+        "lasttickets": "⚠️ Last tickets remaining",
+        "available": "🎟️ Available",
+    }.get(st, "🎟️ Available")
+    if qty is not None and st != "soldout":
+        base += f" — {qty} tickets left"
+    return base
+
+
 def _format_seat_lines(seats, limit=40, labels=None):
     """Group seats by block (showing block name once, then row/seat pairs).
     Hebrew block names render right-to-left in Discord/Gmail naturally;
@@ -60,7 +74,12 @@ def _format_seat_lines(seats, limit=40, labels=None):
     When any seat carries a `_perf` field (event-level watchers aggregate
     across performances), seats are first grouped by performance code, with
     a `— Perf NNN —` separator between groups.
+
+    Festival/hub watchers carry a single status-encoded seat (no per-seat
+    granularity), so render one status line instead of a seat list.
     """
+    if seats and all(s.get("festival") for s in seats):
+        return [_festival_status_line(seats[0])]
     perf_groups = _group_by_perf(seats)
     lines = []
     shown = 0
@@ -180,13 +199,16 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
         channels = {c.strip().lower() for c in channels}
 
     n_added = len(added_seats)
+    is_festival = bool(added_seats) and all(s.get("festival") for s in added_seats)
     seat_lines = _format_seat_lines(added_seats, labels=labels)
     seat_block = "\n".join(seat_lines)
     meta = ((labels or {}).get("meta")) or {}
     event_name = meta.get("eventName") or ""
     venue = meta.get("venueName") or ""
-    when = ""
-    if meta.get("firstPerfMs"):
+    # Prefer the source's venue-local time string (kupat/tickchak) so we
+    # don't shift it through UTC; fall back to the epoch for ticketmaster.
+    when = meta.get("firstPerfText") or ""
+    if not when and meta.get("firstPerfMs"):
         try:
             from datetime import datetime, timezone
             d = datetime.fromtimestamp(meta["firstPerfMs"] / 1000, tz=timezone.utc)
@@ -200,8 +222,9 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
         title_bits = []
         if headline:
             title_bits.append(headline)
-        title_bits.append(f"🎟️ {n_added} new seat{'s' if n_added != 1 else ''} dropped")
-        if event_name:
+        if not is_festival:
+            title_bits.append(f"🎟️ {n_added} new seat{'s' if n_added != 1 else ''} dropped")
+        if event_name and not (is_festival and headline and event_name in headline):
             title_bits.append(f"— {event_name}")
         embed = {
             "title": " ".join(title_bits)[:256],  # Discord embed title limit
@@ -226,14 +249,17 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
 
     email_result = "skipped (channel disabled)" if "email" not in channels else "skipped (no GMAIL creds)"
     if "email" in channels and gmail_user and gmail_pwd and to_addr:
-        subj_bits = []
+        subj_bits = ["[Kartis]"]
         if headline:
             subj_bits.append(headline)
-        subj_bits.append(f"[Kartis] {n_added} new seat{'s' if n_added != 1 else ''}")
-        if event_name:
+        if not is_festival:
+            subj_bits.append(f"{n_added} new seat{'s' if n_added != 1 else ''}")
+        if event_name and not (is_festival and headline and event_name in headline):
             subj_bits.append(f"— {event_name}")
         subject = " ".join(subj_bits)[:200]
-        body_lines = [f"{n_added} new seat{'s' if n_added != 1 else ''} available."]
+        # Festival: the status line is appended below as seat_block; don't
+        # prepend the misleading "N new seats available" line.
+        body_lines = [] if is_festival else [f"{n_added} new seat{'s' if n_added != 1 else ''} available."]
         if event_name:
             body_lines.append(f"Event: {event_name}")
         if venue:
