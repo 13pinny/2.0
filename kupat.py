@@ -51,6 +51,22 @@ REQUEST_TIMEOUT = 20
 
 SOURCE_NAME = "kupat"
 
+# kupat GA (standing) events expose only tickets-left (`availSeats`), no
+# per-seat map and no total capacity. We track them like tickchak festival
+# shows — a single status-encoded "seat" — and derive a low-stock flag from
+# a threshold since kupat has no "last tickets" signal of its own.
+GA_LOW_THRESHOLD = int(os.getenv("KARTIS_KUPAT_GA_LOW") or 25)
+
+
+def _ga_status(presentation):
+    """available | lasttickets | soldout for a GA presentation."""
+    avail = presentation.get("availSeats")
+    if presentation.get("soldout") or (isinstance(avail, (int, float)) and avail <= 0):
+        return "soldout"
+    if isinstance(avail, (int, float)) and avail <= GA_LOW_THRESHOLD:
+        return "lasttickets"
+    return "available"
+
 
 class KupatError(RuntimeError):
     pass
@@ -156,7 +172,21 @@ def fetch_selectable_seats(feature_id, presentation_id):
     array). Costs ~4s per call because the kupat API rejects out-of-page
     requests; we run a headless browser to capture the seats-status XHR.
     """
-    captured = _browse_capture(feature_id, presentation_id, want={"seats"})
+    captured = _browse_capture(feature_id, presentation_id, want={"seats", "presentation"})
+    presentation = captured.get("presentation") or {}
+    # GA (standing) events have no real per-seat map — track them as one
+    # status-encoded seat so the diff fires on every sold-out / last-tickets
+    # / available-again transition (mirrors the tickchak festival model).
+    if presentation.get("isGA"):
+        status = _ga_status(presentation)
+        label = {"available": "GA available", "lasttickets": "GA last tickets",
+                 "soldout": "GA sold out"}.get(status, "GA available")
+        return [{
+            "block": label, "row": "GA", "seat": "1",
+            "ga": True, "status": status,
+            "qty_available": presentation.get("availSeats"),
+            "price": None,
+        }]
     seats = captured.get("seats") or []
     out = []
     for s in seats:
@@ -261,6 +291,10 @@ def fetch_fresh(feature_id, presentation_id, lang="iw"):
             "status": "soldout" if presentation.get("soldout") else "selling",
             "availSeats": presentation.get("availSeats"),
             "totalSeats": total_seated or None,
+            # GA (standing) marker + low-stock-aware status for the GA Tracker
+            # page. Non-GA kupat events leave ga False and behave as before.
+            "ga": bool(presentation.get("isGA")),
+            "gaStatus": _ga_status(presentation) if presentation.get("isGA") else None,
         },
         "blocks": blocks,
     }

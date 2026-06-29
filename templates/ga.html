@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Kartis — Festival</title>
+<title>Kartis — GA Tracker</title>
 <style>
   :root {
     --bg: #0d1117; --bg-2: #161b22; --bg-3: #11161d; --line: #21262d; --line-2: #2a3038;
@@ -36,17 +36,16 @@
   a.tm-link { color: var(--accent); text-decoration: none; }
   a.tm-link:hover { text-decoration: underline; }
   .when { color: var(--muted); font-size: 11px; }
+  .price { font-size: 10px; color: var(--muted); }
   .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; }
   .badge.available { background: #16a34a; }
   .badge.lasttickets { background: #d97706; }
   .badge.soldout { background: #dc2626; }
   .badge.unknown { background: #888; }
-  .pct { font-size: 10px; color: var(--muted); }
   .vel { font-variant-numeric: tabular-nums; }
   .vel.zero { color: var(--muted); }
   .vel.hot { color: var(--green); font-weight: 600; }
   .vel .star { color: var(--amber); }
-  .types { font-size: 10px; color: var(--muted); white-space: pre-line; }
   .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
   .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
 </style>
@@ -54,7 +53,7 @@
 <body>
 <header>
   <div class="left">
-    <h1>// FESTIVAL</h1>
+    <h1>// GA TRACKER</h1>
     <span class="meta" id="meta">—</span>
   </div>
   <nav class="nav">
@@ -67,8 +66,8 @@
     <a href="/maaser">MAASER</a>
     <a href="/sources">SOURCES</a>
     <a href="/jerujam">JERUJAM</a>
-    <a href="/festival" class="active">FESTIVAL</a>
-    <a href="/ga">GA</a>
+    <a href="/festival">FESTIVAL</a>
+    <a href="/ga" class="active">GA</a>
     <a href="/watchers">WATCHERS</a>
     <a href="/todos">TO-DO</a>
     <a href="/tools">TOOLS</a>
@@ -77,18 +76,18 @@
 <main>
   <div class="err" id="errbox"></div>
 
-  <h2>Tickets sold (all shows)</h2>
+  <h2>Tickets sold (all GA shows)</h2>
   <p class="sub" id="totalsSub">—</p>
   <div class="stats" id="totals"></div>
 
-  <h2>Shows</h2>
+  <h2>GA shows</h2>
   <table>
     <thead>
       <tr>
         <th>Show</th>
         <th>Date</th>
         <th>Status</th>
-        <th class="num">Left / Released</th>
+        <th class="num">Left</th>
         <th class="num">+1h</th>
         <th class="num">+6h</th>
         <th class="num">+24h</th>
@@ -124,27 +123,26 @@ function velCell(wv){
   return `<td class="num ${cls}">${fmt(wv.sold)}${star}</td>`;
 }
 
-function typeTip(types){
-  const rows = Object.entries(types || {})
-    .filter(([k,v]) => v && v.amount)
-    .map(([k,v]) => `${v.name || k}: ${v.available}/${v.amount} left (${v.sold} sold)`);
-  return rows.join('\n');
+function priceOf(types){
+  const vals = Object.values(types || {}).map(v => v && v.price).filter(p => p != null);
+  if (!vals.length) return '';
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  return lo === hi ? `₪${lo}` : `₪${lo}–${hi}`;
 }
 
 async function load(){
   let d;
   try {
-    const r = await fetch('/api/festival', {cache:'no-store'});
+    const r = await fetch('/api/ga', {cache:'no-store'});
     d = await r.json();
   } catch (e) {
     $('errbox').style.display = 'block';
-    $('errbox').textContent = 'Failed to load /api/festival: ' + e;
+    $('errbox').textContent = 'Failed to load /api/ga: ' + e;
     return;
   }
   $('errbox').style.display = 'none';
   const wins = d.windows || ['1h','6h','24h','3d','7d'];
 
-  // Top totals box
   $('totals').innerHTML = wins.map(k => {
     const t = (d.totals || {})[k] || {};
     const zero = !t.sold ? ' zero' : '';
@@ -154,31 +152,28 @@ async function load(){
   }).join('');
 
   const ls = (d.last_sync || {}).at;
-  $('totalsSub').textContent = `${(d.shows||[]).length} shows · snapshot ${ls ? fmtAgo(ls) : 'pending'} · auto-refreshes`;
-  $('meta').textContent = `${(d.shows||[]).length} shows tracked`;
+  $('totalsSub').textContent = `${(d.shows||[]).length} GA shows · snapshot ${ls ? fmtAgo(ls) : 'pending'} · auto-refreshes`;
+  $('meta').textContent = `${(d.shows||[]).length} GA shows tracked`;
 
-  // Per-show rows
   const rows = d.shows || [];
   if (!rows.length) {
-    $('rows').innerHTML = `<tr><td colspan="9" class="empty">No festival shows tracked yet. Add tickchak hub events on the Watchers page.</td></tr>`;
+    $('rows').innerHTML = `<tr><td colspan="9" class="empty">No kupat GA shows tracked yet. Add a kupat GA event on the Watchers page and it shows up here.</td></tr>`;
     $('foot').innerHTML = '';
     return;
   }
   $('rows').innerHTML = rows.map(s => {
-    const total = s.total, avail = s.available;
-    const pct = (total && avail != null) ? ((total - avail) / total * 100).toFixed(1) : null;
-    const leftCell = (avail != null && total != null)
-      ? `<div>${fmt(avail)} / ${fmt(total)}</div><div class="pct">${pct}% sold</div>`
-      : '—';
-    const tip = typeTip(s.festival_types);
-    const url = `https://tickchak.co.il/${escape(s.event_code)}`;
+    const price = priceOf(s.festival_types);
+    const url = `https://tickets.kupat.co.il/booking/features/${escape(s.event_code)}?prsntId=${escape(s.perf_code)}`;
     const st = s.status || 'unknown';
     const name = s.event_name || s.label || s.event_code;
+    const left = (s.available != null)
+      ? (s.total != null ? `${fmt(s.available)} / ${fmt(s.total)}` : fmt(s.available))
+      : '—';
     return `<tr>
-      <td><a class="tm-link" href="${url}" target="_blank" rel="noopener">${escape(name)}</a></td>
+      <td><a class="tm-link" href="${url}" target="_blank" rel="noopener">${escape(name)}</a>${price ? ` <span class="price">${price}</span>` : ''}</td>
       <td class="when">${escape((s.when||'').slice(0,10))}</td>
       <td><span class="badge ${st}">${st === 'lasttickets' ? 'Last tickets' : st === 'soldout' ? 'Sold out' : st.charAt(0).toUpperCase()+st.slice(1)}</span></td>
-      <td class="num" ${tip ? `title="${escape(tip)}"` : ''}>${leftCell}</td>
+      <td class="num">${left}</td>
       ${velCell(s.windows['1h'])}
       ${velCell(s.windows['6h'])}
       ${velCell(s.windows['24h'])}
@@ -187,20 +182,16 @@ async function load(){
     </tr>`;
   }).join('');
 
-  // Totals footer row (sold-per-window across shows + aggregate left/released)
-  const sumTotal = rows.reduce((a,s)=>a+(s.total||0),0);
-  const sumAvail = rows.reduce((a,s)=>a+(s.available||0),0);
-  const pctAll = sumTotal ? ((sumTotal-sumAvail)/sumTotal*100).toFixed(1) : '0.0';
+  const sumLeft = rows.reduce((a,s)=>a+(s.available||0),0);
   $('foot').innerHTML = `<tr>
     <td>TOTAL</td><td></td><td></td>
-    <td class="num">${fmt(sumAvail)} / ${fmt(sumTotal)}<div class="pct">${pctAll}% sold</div></td>
+    <td class="num">${fmt(sumLeft)} left</td>
     ${wins.map(k => velCell((d.totals||{})[k])).join('')}
   </tr>`;
 
-  // Footnote about partial history
   const since = rows.map(s=>s.tracking_since).filter(Boolean).sort()[0];
   $('footnote').textContent = since
-    ? `* "limited history" = the window is longer than how long this has been tracked (since ${new Date(since).toLocaleString()}). Numbers fill in as more snapshots accrue.`
+    ? `"Sold" = drop in tickets-left between snapshots. * = window longer than tracking history (since ${new Date(since).toLocaleString()}); fills in over time. Kupat GA exposes only tickets-left, so there's no released/total.`
     : 'Sales tracking just started — rolling-window numbers fill in over the next minutes/days.';
 }
 

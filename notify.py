@@ -78,7 +78,7 @@ def _format_seat_lines(seats, limit=40, labels=None):
     Festival/hub watchers carry a single status-encoded seat (no per-seat
     granularity), so render one status line instead of a seat list.
     """
-    if seats and all(s.get("festival") for s in seats):
+    if seats and all(s.get("festival") or s.get("ga") for s in seats):
         return [_festival_status_line(seats[0])]
     perf_groups = _group_by_perf(seats)
     lines = []
@@ -199,7 +199,7 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
         channels = {c.strip().lower() for c in channels}
 
     n_added = len(added_seats)
-    is_festival = bool(added_seats) and all(s.get("festival") for s in added_seats)
+    is_festival = bool(added_seats) and all(s.get("festival") or s.get("ga") for s in added_seats)
     seat_lines = _format_seat_lines(added_seats, labels=labels)
     seat_block = "\n".join(seat_lines)
     meta = ((labels or {}).get("meta")) or {}
