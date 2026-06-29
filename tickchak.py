@@ -64,11 +64,19 @@ REQUEST_TIMEOUT = 20
 # headless, no browser.
 API_LIVE_BASE = "https://api-live.tickchak.co.il"
 HOME_HOST = "home.tickchak.co.il"
-FESTIVAL_SLUG_TTL = 6 * 3600   # festival membership is stable; re-check rarely
+# tickchak is inconsistent about redirecting a festival event to its hub —
+# the SAME event sometimes serves its own page directly. So festival
+# membership, once discovered (a redirect to home.tickchak.co.il), is
+# remembered STICKILY on disk and never downgraded; only events we've never
+# seen under a hub get re-probed, on a short negative TTL so they're caught
+# the next time they do redirect.
+FESTIVAL_NEG_TTL = 300         # re-probe a not-yet-festival event every 5 min
 FESTIVAL_FEED_TTL = 25         # dedupe the ~60 KB feed across a tick's watchers
 FESTIVAL_SNAP_TTL = 20         # reuse a show's full snapshot within one tick
 
-_fest_slug_cache = {}   # event_code -> (ts, slug_or_None)
+_FEST_MEMBER_FILE = CACHE_DIR / "festival_members.json"
+_fest_members = None    # {event_code: slug} — sticky, loaded from disk
+_fest_slug_cache = {}   # event_code -> (ts, None) — short negative cache only
 _fest_feed_cache = {}   # slug -> (ts, {"hash_map": {...}, "events": {...}})
 _fest_snap_cache = {}   # event_code -> (ts, labels_payload)
 
@@ -430,26 +438,57 @@ def _israel_time_text(epoch_seconds):
     return datetime.fromtimestamp(epoch_seconds, tz).strftime("%Y-%m-%d %H:%M")
 
 
+def _load_fest_members():
+    global _fest_members
+    if _fest_members is None:
+        try:
+            _fest_members = json.loads(_FEST_MEMBER_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            _fest_members = {}
+    return _fest_members
+
+
+def _remember_fest_member(event_code, slug):
+    members = _load_fest_members()
+    if members.get(str(event_code)) != slug:
+        members[str(event_code)] = slug
+        try:
+            CACHE_DIR.mkdir(exist_ok=True)
+            _FEST_MEMBER_FILE.write_text(json.dumps(members, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+
 def _resolve_festival(event_code):
-    """Return the festival hub slug if this event's page redirects to a
-    home.tickchak.co.il hub, else None. Cached — membership is stable for
-    the life of the event, so non-festival events pay the redirect probe
-    only once."""
+    """Return the festival hub slug for this event, else None.
+
+    Sticky: once an event has redirected to a home.tickchak.co.il hub we
+    record (event_code -> slug) on disk and always treat it as that
+    festival, because tickchak flip-flops between redirecting the event to
+    its hub and serving the event page directly — without stickiness a
+    festival watcher would oscillate between representations and fire
+    spurious drops. Events we've never seen under a hub are re-probed on a
+    short negative TTL so the next redirect catches them."""
     ev = str(event_code)
+    members = _load_fest_members()
+    if ev in members:
+        return members[ev]
     hit = _fest_slug_cache.get(ev)
-    if hit and (time.time() - hit[0] < FESTIVAL_SLUG_TTL):
-        return hit[1]
-    slug = None
+    if hit and (time.time() - hit[0] < FESTIVAL_NEG_TTL):
+        return None
     try:
         final_url, _ = _http_get_final(perf_url(ev))
         parts = urlparse(final_url)
         if parts.netloc.lower() == HOME_HOST:
             slug = (parts.path or "").strip("/").split("/", 1)[0] or None
+            if slug:
+                _remember_fest_member(ev, slug)
+                return slug
     except TickchakError:
-        # Network hiccup — don't poison the cache; reuse any prior answer.
-        return hit[1] if hit else None
-    _fest_slug_cache[ev] = (time.time(), slug)
-    return slug
+        # Network hiccup — don't start the negative timer; retry next call.
+        return None
+    _fest_slug_cache[ev] = (time.time(), None)
+    return None
 
 
 def _iter_strings(o):
