@@ -3506,6 +3506,132 @@ def watchers_page():
     return render_template("watchers.html")
 
 
+# ---------------- Festival page (tickchak hub events) -----------------------
+
+# Rolling windows for the "tickets sold in the last …" box. (label, seconds).
+FESTIVAL_WINDOWS = [
+    ("1h", 3600), ("6h", 6 * 3600), ("24h", 24 * 3600),
+    ("3d", 3 * 86400), ("7d", 7 * 86400),
+]
+FESTIVAL_SYNC_MINUTES = int(os.getenv("KARTIS_FESTIVAL_SYNC_MINUTES") or 10)
+_last_festival_sync = {"at": None, "recorded": 0, "error": None, "running": False}
+_festival_sync_lock = threading.Lock()
+
+
+def _festival_watchers():
+    """All tickchak watchers that are festival/hub events, with fresh labels."""
+    out = []
+    for w in db.tm_all_watchers():
+        if (w.get("source") or "") != "tickchak":
+            continue
+        try:
+            lbls = tickchak.get_labels(w["event_code"], w["perf_code"], lang="iw")
+        except Exception:
+            continue
+        meta = (lbls or {}).get("meta") or {}
+        if meta.get("festival"):
+            out.append((w, lbls, meta))
+    return out
+
+
+def run_festival_sync():
+    """Snapshot each festival event's capacity/available/sold so the Festival
+    page can show how many were sold over rolling windows. Forces a fresh
+    fetch (not the 1 h label cache) so each snapshot reflects the moment."""
+    if not _festival_sync_lock.acquire(blocking=False):
+        return
+    _last_festival_sync["running"] = True
+    try:
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        recorded = 0
+        for w in db.tm_all_watchers():
+            if (w.get("source") or "") != "tickchak":
+                continue
+            try:
+                lbls = tickchak.get_labels(w["event_code"], w["perf_code"], lang="iw", force=True)
+            except Exception:
+                continue
+            meta = (lbls or {}).get("meta") or {}
+            if not meta.get("festival"):
+                continue
+            cap, avail = meta.get("totalSeats"), meta.get("availSeats")
+            if cap is None or avail is None:
+                continue
+            db.tickchak_snapshot_insert(w["event_code"], cap, avail, max(0, cap - avail), now_iso)
+            recorded += 1
+        db.tickchak_snapshot_prune((now - timedelta(days=8)).isoformat())
+        _last_festival_sync.update(at=now_iso, recorded=recorded, error=None)
+    except Exception as e:
+        _last_festival_sync.update(error=str(e))
+        traceback.print_exc()
+    finally:
+        _last_festival_sync["running"] = False
+        _festival_sync_lock.release()
+
+
+@app.route("/festival")
+def festival_page():
+    return render_template("festival.html")
+
+
+@app.route("/api/festival")
+def api_festival():
+    now = datetime.now(timezone.utc)
+    shows = []
+    for w, lbls, meta in _festival_watchers():
+        ec = w["event_code"]
+        cap, avail = meta.get("totalSeats"), meta.get("availSeats")
+        latest = db.tickchak_snapshot_latest(ec)
+        cur_sold = (latest or {}).get("sold")
+        if cur_sold is None and cap is not None and avail is not None:
+            cur_sold = max(0, cap - avail)
+        earliest = db.tickchak_snapshot_earliest(ec)
+        windows = {}
+        for key, secs in FESTIVAL_WINDOWS:
+            # Baseline = latest snapshot at/before (now - window); if we don't
+            # have history that far back yet, fall back to the earliest
+            # snapshot and flag the window "partial" (sold since tracking began).
+            base = db.tickchak_snapshot_asof(ec, (now - timedelta(seconds=secs)).isoformat()) or earliest
+            if base is not None and cur_sold is not None:
+                base_age = (now - datetime.fromisoformat(base["captured_at"])).total_seconds()
+                partial = base_age < secs * 0.9
+                windows[key] = {"sold": max(0, cur_sold - base["sold"]), "partial": partial}
+            else:
+                windows[key] = {"sold": None, "partial": True}
+        shows.append({
+            "event_code": ec,
+            "label": w.get("label"),
+            "event_name": meta.get("eventName"),
+            "when": meta.get("firstPerfText"),
+            "status": meta.get("festivalStatus"),
+            "total": cap,
+            "available": avail,
+            "sold": cur_sold,
+            "festival_types": lbls.get("blocks") or {},
+            "windows": windows,
+            "tracking_since": (earliest or {}).get("captured_at"),
+        })
+    shows.sort(key=lambda s: (s.get("when") or ""))
+    totals = {k: {"sold": 0, "partial": False} for k, _ in FESTIVAL_WINDOWS}
+    for s in shows:
+        for key, _ in FESTIVAL_WINDOWS:
+            wv = s["windows"][key]
+            if wv["sold"] is None:
+                totals[key]["partial"] = True
+            else:
+                totals[key]["sold"] += wv["sold"]
+                if wv["partial"]:
+                    totals[key]["partial"] = True
+    return jsonify({
+        "shows": shows,
+        "totals": totals,
+        "windows": [k for k, _ in FESTIVAL_WINDOWS],
+        "last_sync": _last_festival_sync,
+        "now": now.isoformat(),
+    })
+
+
 @app.route("/tools")
 def tools_page():
     return render_template("tools.html")
@@ -4034,6 +4160,10 @@ else:
     print("[tm_check] disabled via TM_CHECK_ENABLED=0 — drop-checking runs elsewhere (e.g. the VPS watcher)")
 scheduler.add_job(run_mail_intake, "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
+# Festival sales snapshots — fire one immediately (next_run_time) so the
+# Festival page has a baseline right after a restart, then every N minutes.
+scheduler.add_job(run_festival_sync, "interval", minutes=FESTIVAL_SYNC_MINUTES,
+                  id="festival_sync", next_run_time=datetime.now())
 
 # One-shot: archive any pre-existing inventory_overrides rows whose status
 # value was already typed as "not sold" (or a variant). Idempotent so

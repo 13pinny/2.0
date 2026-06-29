@@ -421,6 +421,18 @@ CREATE TABLE IF NOT EXISTS tm_drops (
     notify_result TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tm_drops_watcher ON tm_drops(watcher_id, detected_at DESC);
+-- Periodic snapshots of tickchak festival/hub events' capacity + sold counts.
+-- Lets the Festival page compute "sold in the last hour / 6h / 24h / 3d / 7d"
+-- as deltas between snapshots (the DB otherwise only holds current state).
+CREATE TABLE IF NOT EXISTS tickchak_sales_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_code TEXT NOT NULL,
+    captured_at TEXT NOT NULL,
+    capacity INTEGER,
+    available INTEGER,
+    sold INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_tcsnap ON tickchak_sales_snapshots(event_code, captured_at);
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT,
@@ -1738,6 +1750,54 @@ def tm_recent_drops(watcher_id=None, limit=200):
                 "SELECT * FROM tm_drops ORDER BY detected_at DESC LIMIT ?", (limit,),
             ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------- Tickchak festival sales snapshots -------------------------
+
+def tickchak_snapshot_insert(event_code, capacity, available, sold, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO tickchak_sales_snapshots
+               (event_code, captured_at, capacity, available, sold)
+               VALUES (?, ?, ?, ?, ?)""",
+            (str(event_code), now_iso, capacity, available, sold),
+        )
+
+
+def tickchak_snapshot_latest(event_code):
+    with connect() as conn:
+        r = conn.execute(
+            "SELECT * FROM tickchak_sales_snapshots WHERE event_code = ? "
+            "ORDER BY captured_at DESC LIMIT 1", (str(event_code),),
+        ).fetchone()
+    return dict(r) if r else None
+
+
+def tickchak_snapshot_earliest(event_code):
+    with connect() as conn:
+        r = conn.execute(
+            "SELECT * FROM tickchak_sales_snapshots WHERE event_code = ? "
+            "ORDER BY captured_at ASC LIMIT 1", (str(event_code),),
+        ).fetchone()
+    return dict(r) if r else None
+
+
+def tickchak_snapshot_asof(event_code, ts_iso):
+    """Latest snapshot at or before ts_iso — the baseline for a rolling window."""
+    with connect() as conn:
+        r = conn.execute(
+            "SELECT * FROM tickchak_sales_snapshots WHERE event_code = ? AND captured_at <= ? "
+            "ORDER BY captured_at DESC LIMIT 1", (str(event_code), ts_iso),
+        ).fetchone()
+    return dict(r) if r else None
+
+
+def tickchak_snapshot_prune(cutoff_iso):
+    """Drop snapshots older than cutoff_iso (we only need ~7 days of history)."""
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM tickchak_sales_snapshots WHERE captured_at < ?", (cutoff_iso,),
+        )
 
 
 # ---------------- Kupat credits ---------------------------------------------
