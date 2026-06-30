@@ -48,6 +48,31 @@
   .vel .star { color: var(--amber); }
   .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
   .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  /* Add bar + per-row management */
+  .addbar { display: flex; gap: 8px; margin: 0 0 20px; flex-wrap: wrap; align-items: center; }
+  .addbar input { flex: 1; min-width: 320px; font-family: inherit; font-size: 12px; padding: 8px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); }
+  .addbar input:focus { outline: none; border-color: var(--accent); }
+  button { font-family: inherit; font-size: 12px; padding: 7px 12px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); cursor: pointer; }
+  button:hover { background: #1f262e; }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { background: #79b8ff; }
+  button.danger { color: var(--red); border-color: #4a1f1f; }
+  button.danger:hover { background: #2a1414; }
+  .addmsg { font-size: 11px; }
+  .addmsg.ok { color: var(--green); }
+  .addmsg.bad { color: var(--red); }
+  td.manage { white-space: nowrap; }
+  td.manage button { padding: 3px 8px; font-size: 11px; margin-left: 4px; }
+  select.chan { font-size: 11px; padding: 4px 6px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); }
+  .switch { position: relative; display: inline-block; width: 34px; height: 18px; vertical-align: middle; margin-left: 6px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider { position: absolute; cursor: pointer; inset: 0; background: var(--line-2); transition: .2s; border-radius: 18px; }
+  .switch .slider:before { position: absolute; content: ""; height: 12px; width: 12px; left: 3px; top: 3px; background: var(--text); transition: .2s; border-radius: 50%; }
+  .switch input:checked + .slider { background: var(--orange); }
+  .switch input:checked + .slider:before { transform: translateX(16px); background: #fff; }
+  tr.paused td { opacity: .45; }
+  .errdot { color: var(--red); font-size: 10px; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -76,6 +101,12 @@
 <main>
   <div class="err" id="errbox"></div>
 
+  <div class="addbar">
+    <input id="addUrl" placeholder="Paste a kupat GA show URL  (tickets.kupat.co.il/booking/features/…?prsntId=…)" />
+    <button id="addBtn" class="primary">+ Add GA show</button>
+    <span class="addmsg" id="addMsg"></span>
+  </div>
+
   <h2>Tickets sold (all GA shows)</h2>
   <p class="sub" id="totalsSub">—</p>
   <div class="stats" id="totals"></div>
@@ -93,6 +124,8 @@
         <th class="num">+24h</th>
         <th class="num">+3d</th>
         <th class="num">+7d</th>
+        <th>Alerts</th>
+        <th></th>
       </tr>
     </thead>
     <tbody id="rows"></tbody>
@@ -157,7 +190,7 @@ async function load(){
 
   const rows = d.shows || [];
   if (!rows.length) {
-    $('rows').innerHTML = `<tr><td colspan="9" class="empty">No kupat GA shows tracked yet. Add a kupat GA event on the Watchers page and it shows up here.</td></tr>`;
+    $('rows').innerHTML = `<tr><td colspan="11" class="empty">No kupat GA shows tracked yet. Paste a kupat GA show URL above to add one.</td></tr>`;
     $('foot').innerHTML = '';
     return;
   }
@@ -169,8 +202,9 @@ async function load(){
     const left = (s.available != null)
       ? (s.total != null ? `${fmt(s.available)} / ${fmt(s.total)}` : fmt(s.available))
       : '—';
-    return `<tr>
-      <td><a class="tm-link" href="${url}" target="_blank" rel="noopener">${escape(name)}</a>${price ? ` <span class="price">${price}</span>` : ''}</td>
+    const err = s.last_check_error ? `<span class="errdot" title="${escape(s.last_check_error)}">⚠</span>` : '';
+    return `<tr class="${s.paused ? 'paused' : ''}">
+      <td><a class="tm-link" href="${url}" target="_blank" rel="noopener">${escape(name)}</a>${price ? ` <span class="price">${price}</span>` : ''}${err}</td>
       <td class="when">${escape((s.when||'').slice(0,10))}</td>
       <td><span class="badge ${st}">${st === 'lasttickets' ? 'Last tickets' : st === 'soldout' ? 'Sold out' : st.charAt(0).toUpperCase()+st.slice(1)}</span></td>
       <td class="num">${left}</td>
@@ -179,6 +213,8 @@ async function load(){
       ${velCell(s.windows['24h'])}
       ${velCell(s.windows['3d'])}
       ${velCell(s.windows['7d'])}
+      <td class="manage">${chanSelect(s.id, s.notify_channels)}<label class="switch" title="mute (keep tracking, no pings)"><input type="checkbox" data-act="mute" data-id="${s.id}" ${s.muted ? 'checked' : ''}><span class="slider"></span></label></td>
+      <td class="manage"><button data-act="toggle" data-id="${s.id}" data-paused="${s.paused ? 0 : 1}">${s.paused ? 'Resume' : 'Pause'}</button><button class="danger" data-act="remove" data-id="${s.id}">Remove</button></td>
     </tr>`;
   }).join('');
 
@@ -194,6 +230,57 @@ async function load(){
     ? `"Sold" = drop in tickets-left between snapshots. * = window longer than tracking history (since ${new Date(since).toLocaleString()}); fills in over time. Kupat GA exposes only tickets-left, so there's no released/total.`
     : 'Sales tracking just started — rolling-window numbers fill in over the next minutes/days.';
 }
+
+function chanSelect(id, cur){
+  const opts = [['discord,email','D + E'], ['discord','Discord'], ['email','Email'], ['','Off']];
+  return `<select class="chan" data-act="chan" data-id="${id}">`
+    + opts.map(([v,t]) => `<option value="${v}" ${v === (cur||'') ? 'selected' : ''}>${t}</option>`).join('')
+    + `</select>`;
+}
+async function post(path, body){
+  return fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+}
+
+$('addBtn').addEventListener('click', async () => {
+  const url = $('addUrl').value.trim();
+  const msg = $('addMsg');
+  if (!url) { msg.textContent = 'paste a URL first'; msg.className = 'addmsg bad'; return; }
+  $('addBtn').disabled = true; msg.textContent = 'Adding…'; msg.className = 'addmsg';
+  try {
+    const r = await post('/api/watchers/add', {url});
+    const dd = await r.json();
+    if (r.ok) {
+      $('addUrl').value = '';
+      msg.textContent = dd.warning ? ('Added — note: ' + dd.warning) : 'Added ✓';
+      msg.className = 'addmsg ok';
+      setTimeout(load, 400);
+    } else {
+      msg.textContent = dd.error || ('failed (' + r.status + ')');
+      msg.className = 'addmsg bad';
+    }
+  } catch (e) { msg.textContent = 'error: ' + e; msg.className = 'addmsg bad'; }
+  finally { $('addBtn').disabled = false; }
+});
+$('addUrl').addEventListener('keydown', e => { if (e.key === 'Enter') $('addBtn').click(); });
+
+// Delegated row controls (the rows are rebuilt every refresh; the #rows
+// container persists, so one listener each survives reloads).
+$('rows').addEventListener('change', e => {
+  const el = e.target, id = el.dataset.id;
+  if (!id) return;
+  if (el.dataset.act === 'chan') post('/api/watchers/update', {id, notify_channels: el.value});
+  else if (el.dataset.act === 'mute') post('/api/watchers/update', {id, muted: el.checked});
+});
+$('rows').addEventListener('click', async e => {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const id = el.dataset.id;
+  if (el.dataset.act === 'toggle') { await post('/api/watchers/toggle', {id, paused: el.dataset.paused === '1'}); load(); }
+  else if (el.dataset.act === 'remove') {
+    if (!confirm('Remove this GA show and its watcher?')) return;
+    await post('/api/watchers/delete', {id}); load();
+  }
+});
 
 load();
 setInterval(load, 60000);

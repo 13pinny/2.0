@@ -3633,6 +3633,12 @@ def _counted_shows(source_name, flag_key, status_key):
             "total": total, "available": cur_avail, "sold": sold,
             "festival_types": lbls.get("blocks") or {},
             "windows": windows, "tracking_since": (earliest or {}).get("captured_at"),
+            # Watcher controls (manage from the page itself).
+            "id": w["id"],
+            "notify_channels": w.get("notify_channels") or "",
+            "muted": bool(w.get("muted")),
+            "paused": bool(w.get("paused")),
+            "last_check_error": w.get("last_check_error"),
         })
     shows.sort(key=lambda s: (s.get("when") or ""))
     return shows, now
