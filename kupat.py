@@ -290,7 +290,10 @@ def fetch_fresh(feature_id, presentation_id, lang="iw"):
             "firstPerfText": perf_text,
             "status": "soldout" if presentation.get("soldout") else "selling",
             "availSeats": presentation.get("availSeats"),
-            "totalSeats": total_seated or None,
+            # For GA, the seatplan capacity is the venue's *seated* dot-count,
+            # not the standing/GA allocation, so it's a misleading "total" —
+            # null it and show tickets-left only. Non-GA keeps the real total.
+            "totalSeats": None if presentation.get("isGA") else (total_seated or None),
             # GA (standing) marker + low-stock-aware status for the GA Tracker
             # page. Non-GA kupat events leave ga False and behave as before.
             "ga": bool(presentation.get("isGA")),
