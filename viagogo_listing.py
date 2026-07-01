@@ -210,72 +210,129 @@ def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
 
 
 def download_ticket_pdfs(ticket_url, qty=1):
-    """Render each Kupat e-ticket page to PDF bytes using headless Chromium.
+    """Render each Kupat e-ticket to its own PDF using headless Chromium.
 
-    The Kupat ticket viewer is a public link (no login required), so this
-    uses a fresh headless Chromium rather than the CDP session. Returns a
-    list of PDF bytes, one entry per ticket rendered (up to qty).
+    The Kupat viewer is a public link (no login), so this uses a fresh
+    headless Chromium rather than the CDP session. The tickets live in a
+    Swiper carousel: the first slide is an intro ("N tickets — swipe to
+    scan", no barcode) and each remaining slide is one real ticket with a
+    QR/barcode. page.pdf() only renders the *active* slide, so we advance
+    the carousel and PDF each slide that actually carries a barcode, up to
+    `qty`. Returns a list of PDF bytes (one per ticket).
     """
+    _margin = {"top": "8mm", "bottom": "8mm", "left": "8mm", "right": "8mm"}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
             page = browser.new_page()
             page.goto(ticket_url, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
+            page.wait_for_timeout(2500)
+
+            slides = page.query_selector_all(".swiper-slide")
+            if not slides:
+                # Not the expected carousel — best effort: one full-page PDF.
+                return [page.pdf(print_background=True, format="A4", margin=_margin)]
+
             pdfs = []
-            for i in range(qty):
-                pdf_bytes = page.pdf(
-                    print_background=True,
-                    format="A4",
-                    margin={"top": "10mm", "bottom": "10mm",
-                            "left": "10mm", "right": "10mm"},
-                )
-                pdfs.append(pdf_bytes)
-                if i < qty - 1:
-                    nxt = page.locator(
-                        "button:has-text('הבא'), a:has-text('הבא'), "
-                        "button:has-text('Next'), a:has-text('Next'), "
-                        "[class*='next-ticket'], [aria-label*='next']"
-                    ).first
-                    if nxt.count() and nxt.is_visible():
-                        nxt.click()
-                        page.wait_for_timeout(1500)
-                    else:
-                        break
+            seen = set()
+            # Walk the carousel a bounded number of steps (loop mode never
+            # disables next), PDF-ing each distinct barcode-bearing slide.
+            for _ in range(len(slides) + 3):
+                active = page.query_selector(".swiper-slide-active")
+                if active:
+                    key = active.evaluate(
+                        "e => e.getAttribute('data-swiper-slide-index') || e.innerText.slice(0,40)"
+                    )
+                    has_code = active.query_selector(".qr-code-box, canvas, .barcode")
+                    if has_code and key not in seen:
+                        seen.add(key)
+                        pdfs.append(page.pdf(print_background=True, format="A4", margin=_margin))
+                        if len(pdfs) >= qty:
+                            break
+                nxt = page.query_selector(".swiper-button-next")
+                if not nxt or "swiper-button-disabled" in (nxt.get_attribute("class") or ""):
+                    break
+                nxt.click()
+                page.wait_for_timeout(1200)
             return pdfs
         finally:
             browser.close()
 
 
-def _upload_ticket_pdfs(page, ticket_pdfs):
-    """Navigate to LISTINGS_URL and upload ticket PDFs via 'Upload Now'.
+def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section):
+    """Attach ticket PDFs to a just-created listing via its E-Tickets flow.
 
-    Non-fatal: raises ViagogoListingError so the caller can decide whether
-    to propagate or swallow. Cleans up temp files regardless.
+    On the Listings page each event card expands to per-section rows; the
+    row for a listing that still needs tickets shows an 'Upload Now' link
+    (class js-upload-etickets) that opens /Listings/UploadETickets. We set
+    the PDFs on that page's file input and click its 'continue' save button
+    (class js-save). Non-fatal — the listing already exists; the caller
+    swallows failures. Cleans up temp files regardless.
     """
     import tempfile, os, shutil
     tmp_dir = tempfile.mkdtemp(prefix="kartis_tickets_")
     try:
         paths = []
         for i, data in enumerate(ticket_pdfs):
-            p_ = os.path.join(tmp_dir, f"ticket_{i + 1}.pdf")
-            with open(p_, "wb") as fh:
+            pth = os.path.join(tmp_dir, f"ticket_{i + 1}.pdf")
+            with open(pth, "wb") as fh:
                 fh.write(data)
-            paths.append(p_)
+            paths.append(pth)
 
         page.goto(LISTINGS_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(2500)
 
-        upload = page.locator(
-            "text='Upload Now', a:has-text('Upload Now'), "
-            "button:has-text('Upload Now'), a:has-text('Upload'), "
-            "[title*='Upload']"
-        ).first
-        if not upload.count():
-            raise ViagogoListingError("Upload Now button not found on listings page")
+        # Expand the event's listing card so its per-section E-Ticket rows
+        # (each with an 'Upload Now' link) render. The card shows the event
+        # id in a [<id>] span; climb to the clickable card ancestor.
+        try:
+            page.wait_for_selector(
+                f"xpath=//span[contains(text(),'{event_id}')]", timeout=MODAL_TIMEOUT_MS
+            )
+        except Exception:
+            pass
+        node = page.query_selector(f"xpath=//span[contains(text(),'{event_id}')]")
+        if node is None:
+            raise ViagogoListingError(
+                f"listing card for event {event_id} not found on Listings page"
+            )
+        card = node
+        for _ in range(6):
+            parent = card.query_selector("xpath=..")
+            if not parent:
+                break
+            card = parent
+            box = card.bounding_box()
+            if box and box.get("height", 0) > 60:
+                break
+        card.click()
+        page.wait_for_timeout(2500)
 
-        with page.expect_file_chooser(timeout=10000) as fc:
-            upload.click()
-        fc.value.set_files(paths)
+        # Pick the 'Upload Now' link in the row matching our section (a fresh
+        # listing is the one still showing Upload Now rather than View).
+        upload_link = None
+        for h in page.query_selector_all(".js-upload-etickets"):
+            rowtext = h.evaluate(
+                "e => { let n=e; for (let i=0;i<5&&n.parentElement;i++) n=n.parentElement; return n.innerText; }"
+            )
+            if section and section in rowtext:
+                upload_link = h
+                break
+        if upload_link is None:
+            upload_link = page.query_selector(".js-upload-etickets")
+        if upload_link is None:
+            raise ViagogoListingError("no 'Upload Now' e-ticket link found for this listing")
+
+        upload_link.click()
+        page.wait_for_selector("#js-preUploadInput, #js-activeUploadInput", timeout=MODAL_TIMEOUT_MS)
+        file_input = (page.query_selector("#js-preUploadInput")
+                      or page.query_selector("#js-activeUploadInput"))
+        file_input.set_input_files(paths)  # the input is multiple — set all at once
+        # Let the uploads finish before committing.
+        page.wait_for_timeout(2000 + 2500 * len(paths))
+        save = page.locator(".js-save").first
+        save.wait_for(state="visible", timeout=MODAL_TIMEOUT_MS)
+        save.click()
         page.wait_for_timeout(3000)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -362,7 +419,7 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
 
             if ticket_pdfs:
                 try:
-                    _upload_ticket_pdfs(page, ticket_pdfs)
+                    _upload_ticket_pdfs(page, ticket_pdfs, event_id, section)
                 except Exception:
                     traceback.print_exc()
                     # Non-fatal — draft listing already saved
