@@ -122,7 +122,16 @@ def _unwrap_forwarded(parsed):
             inner_body = body[idx + len(m):]
             break
 
-    inner_from_match = _FWD_FROM_RX.search(inner_body)
+    # Search ALL From: headers in the unwrapped body and pick the first one
+    # that resolves to a known provider (handles double-forward where the
+    # first From is the re-forwarder, not the original ticket sender).
+    inner_from_match = None
+    for _m in _FWD_FROM_RX.finditer(inner_body):
+        if _detect_provider(_m.group(1)) != "unknown":
+            inner_from_match = _m
+            break
+    if inner_from_match is None:
+        inner_from_match = _FWD_FROM_RX.search(inner_body)
     inner_subject_match = _FWD_SUBJECT_INNER_RX.search(inner_body)
     eff_from = inner_from_match.group(1).strip() if inner_from_match else outer_from
     eff_subject = inner_subject_match.group(1).strip() if inner_subject_match else outer_subject
@@ -319,9 +328,18 @@ def _parse_kupat(subject, body, links=None):
     if links:
         for _url in links:
             _low = _url.lower()
-            if "kupat" in _low and any(k in _low for k in ("ticket", "/my-", "order", "print")):
+            if (("kupat" in _low or "2207.co.il" in _low)
+                    and any(k in _low for k in ("ticket", "/my-", "order", "print"))):
                 out["ticket_url"] = _url
                 break
+        else:
+            # Kupat routes links through SendGrid click-tracking; the browser
+            # follows the redirect automatically. Take the first HTTPS tracked
+            # link — typically the "view tickets" CTA is the first in the email.
+            for _url in links:
+                if _url.startswith("https://") and "sendgrid.net" in _url.lower():
+                    out["ticket_url"] = _url
+                    break
     return out
 
 
