@@ -336,10 +336,32 @@ def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section):
         file_input.set_input_files(paths)  # the input is multiple — set all at once
         # Let the uploads finish before committing.
         page.wait_for_timeout(2000 + 2500 * len(paths))
+
+        # If the exact ticket was uploaded before, viagogo stacks an "already
+        # uploaded — do you still want to upload?" confirm dialog per file.
+        # Dismiss from the top of the stack so a lower one can't intercept the
+        # next click. A fresh listing normally shows none of these.
+        for _ in range(2 * len(paths) + 2):
+            confirms = [c for c in page.query_selector_all(".js-vgDialog-button-confirm")
+                        if c.is_visible()]
+            if not confirms:
+                break
+            confirms[-1].click()
+            page.wait_for_timeout(1500)
+
         save = page.locator(".js-save").first
         save.wait_for(state="visible", timeout=MODAL_TIMEOUT_MS)
         save.click()
-        page.wait_for_timeout(3000)
+        # Commit navigates back to the Listings page — treat that as success;
+        # if we're still on UploadETickets after the wait the commit didn't take.
+        try:
+            page.wait_for_url("**/Listings", timeout=MODAL_TIMEOUT_MS)
+        except Exception:
+            page.wait_for_timeout(3000)
+            if "UploadETickets" in page.url:
+                raise ViagogoListingError(
+                    "ticket upload did not commit (still on UploadETickets)"
+                )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
