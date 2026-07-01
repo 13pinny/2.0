@@ -31,6 +31,7 @@ import tickchak
 import tickchak_pdf
 import ticketmaster
 import todos as todos_mod
+import viagogo_listing
 
 # Drop-checker sources keyed by the value stored in tm_watchers.source.
 # Each module exposes parse_url, perf_url, fetch_selectable_seats,
@@ -639,6 +640,17 @@ def _build_unified_inventory():
     j_sales = db.all_jerujam_sales()
     groups = _event_groups()
 
+    # Exact StubHub event URLs captured per event by the Lysted inventory-grid
+    # scrape (scraper.py:_row_stubhub_url). Keyed by the same canonical group
+    # key the UI uses so the grid event and its purchase-order rows line up
+    # despite event-date string differences.
+    stubhub_by_group = {}
+    for inv in db.all_inventory():
+        url = inv.get("stubhub_url")
+        if url:
+            g = _row_group(groups, inv.get("event_name"), inv.get("event_date_iso"), inv.get("venue"))
+            stubhub_by_group[g] = url
+
     sold_per_ticket = {}
     for s in j_sales:
         sold_per_ticket[s["ticket_id"]] = sold_per_ticket.get(s["ticket_id"], 0) + (s.get("quantity") or 0)
@@ -720,6 +732,9 @@ def _build_unified_inventory():
             "delivery_type": r.get("delivery_type"),
             "list_price": None,
             "status": r.get("status") or "active",
+            "stubhub_url": stubhub_by_group.get(
+                _row_group(groups, r.get("event_name"), iso, r.get("venue"))
+            ),
         })
 
     # Pre-scan Viagogo + JeruJam canonical group keys so the inventory-aggregate
@@ -776,6 +791,7 @@ def _build_unified_inventory():
             "delivery_type": "",
             "list_price": inv.get("total_list"),
             "status": "active",
+            "stubhub_url": inv.get("stubhub_url"),
         })
 
     viagogo_keys = set()
@@ -1917,6 +1933,121 @@ def api_pending_intake_reject():
             intake_dir.rmdir()
         except OSError:
             pass
+    return jsonify({"ok": True})
+
+
+# ---------------- viagogo draft-listing push (Kupat -> viagogo) ------------
+# Kupat purchase emails get auto-matched to a viagogo event + auto-priced at
+# 5x the FX-converted USD cost during intake (see mail_intake._push_kupat_to_
+# viagogo), landing here as 'awaiting_approval'. Creating the actual draft
+# listing always requires an explicit approve click — see viagogo_listing.
+# create_draft_listing's docstring for why.
+
+def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
+                          available_tickets, website_price, face_value, row,
+                          seat_from, seat_to, venue_for_map, kupat_section):
+    now = lambda: datetime.now(timezone.utc).isoformat()
+    db.viagogo_push_update(push_id, {"status": "creating"}, now())
+    try:
+        viagogo_listing.create_draft_listing(
+            event_id=event_id, search_query=search_query, ticket_type=ticket_type,
+            section=section, available_tickets=available_tickets,
+            website_price=website_price, face_value=face_value,
+            row=row, seat_from=seat_from, seat_to=seat_to,
+        )
+        if venue_for_map and kupat_section and section:
+            db.viagogo_section_map_set(venue_for_map, kupat_section, section, now())
+        db.viagogo_push_update(push_id, {"status": "created", "viagogo_section": section}, now())
+    except Exception as e:
+        db.viagogo_push_update(push_id, {"status": "error", "error": f"{type(e).__name__}: {e}"}, now())
+        traceback.print_exc()
+
+
+@app.route("/api/viagogo-push")
+def api_viagogo_push():
+    from flask import request
+    status = (request.args.get("status") or "").strip() or None
+    rows = db.viagogo_push_all(status=status)
+    for r in rows:
+        try:
+            r["candidates"] = json.loads(r["candidates_json"]) if r.get("candidates_json") else []
+        except Exception:
+            r["candidates"] = []
+        venue_for_map = r.get("chosen_venue") or r.get("venue") or ""
+        r["suggested_viagogo_section"] = (
+            db.viagogo_section_map_get(venue_for_map, r.get("section") or "")
+            if venue_for_map and r.get("section") else None
+        )
+    return jsonify({"rows": rows})
+
+
+@app.route("/api/viagogo-push/approve", methods=["POST"])
+def api_viagogo_push_approve():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    push_id = (body.get("id") or "").strip()
+    if not push_id:
+        return jsonify({"error": "id required"}), 400
+    push = db.viagogo_push_get(push_id)
+    if not push:
+        return jsonify({"error": "not found"}), 404
+    if push["status"] not in ("awaiting_approval", "error"):
+        return jsonify({"error": f"cannot approve from status '{push['status']}'"}), 400
+    event_id = (body.get("event_id") or push.get("chosen_event_id") or "").strip()
+    if not event_id:
+        return jsonify({"error": "event_id required (no matched event)"}), 400
+    section = (body.get("section") or "").strip()
+    if not section:
+        return jsonify({"error": "section required"}), 400
+    ticket_type = (body.get("ticket_type") or "E-Tickets").strip()
+    try:
+        available_tickets = int(body.get("available_tickets") or push.get("qty") or 0)
+    except (TypeError, ValueError):
+        available_tickets = 0
+    if available_tickets <= 0:
+        return jsonify({"error": "available_tickets must be > 0"}), 400
+    try:
+        website_price = float(body.get("website_price") or push.get("website_price_usd") or 0)
+    except (TypeError, ValueError):
+        website_price = 0
+    if website_price <= 0:
+        return jsonify({"error": "website_price must be > 0"}), 400
+    try:
+        fv = body.get("face_value")
+        face_value = float(fv) if fv not in (None, "") else float(push.get("cost_usd_per_ticket") or 0)
+    except (TypeError, ValueError):
+        face_value = 0
+    if face_value <= 0:
+        return jsonify({"error": "face_value must be > 0"}), 400
+    row = (body.get("row") or push.get("row_label") or "").strip() or None
+    seat_from = (body.get("seat_from") or "").strip() or None
+    seat_to = (body.get("seat_to") or "").strip() or None
+    if not seat_from and not seat_to and push.get("seats"):
+        m = re.search(r"(\d+)\s*-\s*(\d+)", push["seats"])
+        if m:
+            seat_from, seat_to = m.group(1), m.group(2)
+        elif push["seats"].strip().isdigit():
+            seat_from = push["seats"].strip()
+    search_query = push.get("chosen_event_name") or push.get("event_name") or push.get("venue") or ""
+    venue_for_map = push.get("chosen_venue") or push.get("venue") or ""
+    kupat_section = push.get("section") or ""
+    threading.Thread(
+        target=_run_viagogo_approve,
+        args=(push_id, event_id, search_query, ticket_type, section, available_tickets,
+              website_price, face_value, row, seat_from, seat_to, venue_for_map, kupat_section),
+        daemon=True,
+    ).start()
+    return jsonify({"ok": True, "status": "creating"})
+
+
+@app.route("/api/viagogo-push/reject", methods=["POST"])
+def api_viagogo_push_reject():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    push_id = (body.get("id") or "").strip()
+    if not push_id:
+        return jsonify({"error": "id required"}), 400
+    db.viagogo_push_update(push_id, {"status": "rejected"}, datetime.now(timezone.utc).isoformat())
     return jsonify({"ok": True})
 
 

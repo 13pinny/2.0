@@ -14,6 +14,7 @@ recognisable from the subject + body. Forward sample emails so the regexes
 can be tightened.
 """
 import imaplib
+import json
 import os
 import re
 import uuid
@@ -25,6 +26,9 @@ from email.utils import parsedate_to_datetime
 import attachments as attachments_mod
 import cashback_email
 import db
+import fx
+import notify
+import viagogo_listing
 
 GMAIL_HOST = "imap.gmail.com"
 GMAIL_PORT = 993
@@ -35,6 +39,11 @@ MAX_PER_POLL = int(os.getenv("KARTIS_INTAKE_MAX_PER_POLL") or 25)
 # rather than UNSEEN so re-polls can pick up messages we've already touched
 # (Message-ID dedup keeps it idempotent at the DB layer).
 LOOKBACK_DAYS = int(os.getenv("KARTIS_INTAKE_LOOKBACK_DAYS") or 3)
+# Capital One cash-back emails get a dedicated, targeted IMAP search (by
+# sender) so a busy inbox can't push them out of the capped general poll.
+# Wider lookback than the general poll since these are rare and must-not-miss;
+# the source_ref dedup makes a long window cheap and idempotent.
+CASHBACK_LOOKBACK_DAYS = int(os.getenv("KARTIS_CASHBACK_LOOKBACK_DAYS") or 14)
 
 
 # Map of sender substring → provider tag. Add more as we see real emails.
@@ -43,6 +52,7 @@ PROVIDER_HINTS = (
     ("ticketmaster.com", "ticketmaster_us"),
     ("ticketmaster", "ticketmaster"),
     ("kupat.co.il", "kupat"),
+    ("2207.co.il", "kupat"),   # real sender domain (donotreply1@2207.co.il)
     ("kupat", "kupat"),
     ("tickchak", "tickchak"),
 )
@@ -292,6 +302,106 @@ def _parse_kupat(subject, body):
     return out
 
 
+def _rank_viagogo_candidates(candidates, event_date_iso):
+    """Best-effort: prefer the candidate whose displayed date contains the
+    Kupat email's day-of-month. viagogo's picker doesn't return a parseable
+    ISO date, just a display string (e.g. "4 Jun 2026"), so this is a loose
+    tie-breaker among same-named events on different dates, not a strict
+    match — the user still confirms on /pending before anything is created.
+    """
+    if not candidates:
+        return None
+    day = (event_date_iso or "")[8:10]
+    if day:
+        for c in candidates:
+            if day in (c.get("date") or ""):
+                return c
+    return candidates[0]
+
+
+def _push_kupat_to_viagogo(intake_id, fields):
+    """Kupat-only: search viagogo for a matching event, price it at 5x the
+    USD-converted Kupat per-ticket cost, and stage a viagogo_push row for
+    the user to approve on /pending. Never creates a listing itself.
+
+    Best-effort by design — the caller wraps this in its own try/except so
+    a viagogo/FX hiccup never affects normal intake recording.
+    """
+    event_name = fields.get("event_name") or ""
+    venue = fields.get("venue") or ""
+    cost_per_unit = fields.get("cost_per_unit")
+    if not event_name or cost_per_unit is None:
+        return None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    push_id = "vgp-" + uuid.uuid4().hex[:12]
+    base_row = {
+        "id": push_id,
+        "intake_id": intake_id,
+        "event_name": event_name,
+        "venue": venue,
+        "event_date_iso": fields.get("event_date_iso") or "",
+        "section": fields.get("section") or "",
+        "row_label": fields.get("row_label") or "",
+        "seats": fields.get("seats") or "",
+        "qty": fields.get("qty"),
+        "cost": fields.get("cost"),
+        "cost_per_unit": cost_per_unit,
+    }
+
+    try:
+        candidates = viagogo_listing.search_event(event_name or venue, limit=8)
+    except Exception as e:
+        base_row["status"] = "error"
+        base_row["error"] = f"{type(e).__name__}: {e}"
+        db.viagogo_push_insert(base_row, now_iso)
+        push = db.viagogo_push_get(push_id)
+        _notify_viagogo_push(push)
+        return push
+
+    base_row["candidates_json"] = json.dumps(candidates, ensure_ascii=False)
+    if not candidates:
+        base_row["status"] = "no_match"
+        db.viagogo_push_insert(base_row, now_iso)
+        push = db.viagogo_push_get(push_id)
+        _notify_viagogo_push(push)
+        return push
+
+    chosen = _rank_viagogo_candidates(candidates, fields.get("event_date_iso"))
+    try:
+        fx_rate = fx.ils_to_usd_rate()
+        cost_usd = fx.ils_to_usd(cost_per_unit)
+        website_price = round(cost_usd * 5, 2) if cost_usd is not None else None
+    except Exception:
+        fx_rate = None
+        cost_usd = None
+        website_price = None
+
+    base_row.update({
+        "status": "awaiting_approval",
+        "chosen_event_id": chosen.get("event_id"),
+        "chosen_event_name": chosen.get("event_name"),
+        "chosen_venue": chosen.get("venue"),
+        "chosen_event_date": chosen.get("date"),
+        "fx_rate": fx_rate,
+        "cost_usd_per_ticket": cost_usd,
+        "website_price_usd": website_price,
+    })
+    db.viagogo_push_insert(base_row, now_iso)
+    push = db.viagogo_push_get(push_id)
+    _notify_viagogo_push(push)
+    return push
+
+
+def _notify_viagogo_push(push):
+    if not push:
+        return
+    try:
+        notify.notify_viagogo_match(push)
+    except Exception:
+        pass
+
+
 def _parse_tickchak(subject, sender, body):
     """Tickchak registration confirmation (Hebrew). The body doesn't show
     qty or cost, so the user fills those manually. The event name lives in
@@ -462,6 +572,82 @@ def imap_fetch_new(limit=MAX_PER_POLL, lookback_days=None):
         M.logout()
 
 
+def imap_fetch_from(sender_substr, lookback_days):
+    """Targeted fetch: messages whose From matches `sender_substr` within
+    `lookback_days`. For low-volume, must-not-miss senders (Capital One
+    cash-back) that the newest-N general poll can drop in a busy inbox.
+    Returns the same (uid, raw_bytes, message_id) tuples as imap_fetch_new."""
+    from datetime import date as _date, timedelta as _timedelta
+    since = (_date.today() - _timedelta(days=lookback_days)).strftime("%d-%b-%Y")
+    M = _connect()
+    try:
+        M.select(INTAKE_FOLDER)
+        typ, data = M.search(None, "FROM", sender_substr, "SINCE", since)
+        if typ != "OK":
+            return []
+        uids = data[0].split()
+        out = []
+        for uid in uids:
+            typ, msg_data = M.fetch(uid, "(BODY.PEEK[])")
+            if typ != "OK" or not msg_data or not msg_data[0]:
+                continue
+            raw = msg_data[0][1]
+            msg = message_from_bytes(raw)
+            mid = (msg.get("Message-ID") or "").strip()
+            out.append((uid.decode() if isinstance(uid, bytes) else uid, raw, mid))
+        return out
+    finally:
+        try:
+            M.close()
+        except Exception:
+            pass
+        M.logout()
+
+
+def _record_cashback(parsed):
+    """Parse an (already-unwrapped) email as a Capital One cash-back
+    redemption and insert it into cashback_entries if new. Returns True when a
+    row was added. Idempotent via the source_ref dedup."""
+    cb = cashback_email.parse_cashback(
+        parsed["from"], parsed["subject"], parsed["body"],
+        parsed["received_at"], message_id=parsed["message_id"],
+    )
+    if cb and not db.has_cashback_source_ref(cb["source_ref"]):
+        db.insert_cashback_entry({
+            "id": "cb-" + uuid.uuid4().hex[:12],
+            "date_iso": cb["date_iso"],
+            "amount": cb["amount"],
+            "card_name": cb["card_name"],
+            "source_ref": cb["source_ref"],
+        }, datetime.now(timezone.utc).isoformat())
+        return True
+    return False
+
+
+def sweep_cashback():
+    """Targeted Capital One cash-back capture, independent of the capped
+    general poll. Returns the number of new entries added."""
+    saved = 0
+    try:
+        candidates = imap_fetch_from("capitalone", CASHBACK_LOOKBACK_DAYS)
+    except Exception:
+        return 0
+    for _uid, raw, _mid in candidates:
+        try:
+            parsed = parse_email(raw)
+            eff_from, eff_subject, eff_body = _unwrap_forwarded(parsed)
+            parsed["from"] = eff_from
+            parsed["subject"] = eff_subject
+            parsed["body"] = eff_body
+            if not cashback_email.is_capitalone_cashback(parsed["from"], parsed["subject"], parsed["body"]):
+                continue
+            if _record_cashback(parsed):
+                saved += 1
+        except Exception:
+            continue
+    return saved
+
+
 def parse_email(raw_bytes):
     msg = message_from_bytes(raw_bytes)
     sender = _decode(msg.get("From") or "")
@@ -546,18 +732,7 @@ def run_intake():
             # it would otherwise be dropped as "unknown"). Idempotent via the
             # source_ref dedup, so re-polls of the same mail are no-ops.
             if cashback_email.is_capitalone_cashback(parsed["from"], parsed["subject"], parsed["body"]):
-                cb = cashback_email.parse_cashback(
-                    parsed["from"], parsed["subject"], parsed["body"],
-                    parsed["received_at"], message_id=parsed["message_id"],
-                )
-                if cb and not db.has_cashback_source_ref(cb["source_ref"]):
-                    db.insert_cashback_entry({
-                        "id": "cb-" + uuid.uuid4().hex[:12],
-                        "date_iso": cb["date_iso"],
-                        "amount": cb["amount"],
-                        "card_name": cb["card_name"],
-                        "source_ref": cb["source_ref"],
-                    }, datetime.now(timezone.utc).isoformat())
+                if _record_cashback(parsed):
                     cashback_saved += 1
                 continue
             provider = _detect_provider(parsed["from"])
@@ -590,6 +765,11 @@ def run_intake():
                 "status": "new",
             }
             db.insert_pending_intake(row, datetime.now(timezone.utc).isoformat())
+            if provider == "kupat":
+                try:
+                    _push_kupat_to_viagogo(intake_id, fields)
+                except Exception:
+                    pass
             for fname, ctype, payload in parsed["attachments"]:
                 try:
                     _save_intake_attachment(intake_id, fname, ctype, payload)
@@ -598,6 +778,12 @@ def run_intake():
             saved += 1
         except Exception:
             errors += 1
+    # Targeted cash-back sweep — catches Capital One redemptions the capped
+    # general poll above can miss in a busy inbox.
+    try:
+        cashback_saved += sweep_cashback()
+    except Exception:
+        errors += 1
     return {
         "fetched": seen,
         "saved": saved,

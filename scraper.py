@@ -129,7 +129,62 @@ def _ensure_logged_in(page):
     page.wait_for_timeout(1500)
 
 
-def _extract_row(r):
+def _stubhub_href_in(scope):
+    """Return a StubHub event URL found anywhere under `scope` (a row element
+    or the page), or None. Lysted's ⋮ menu exposes external-marketplace links
+    as plain anchors; we just read the href."""
+    try:
+        a = scope.query_selector('a[href*="stubhub.com"]')
+    except Exception:
+        return None
+    if not a:
+        return None
+    href = (a.get_attribute("href") or "").strip()
+    return href or None
+
+
+# Selectors for the per-row ⋮ ("External links") dropdown toggle. Lysted uses
+# BootstrapVue, whose dropdown menus are lazy-rendered — the StubHub anchor
+# isn't in the DOM until the menu opens. These are best-effort; the discovery
+# probe (lysted_probe/probe_stubhub_link.py) is the source of truth if Lysted's
+# markup shifts. Everything is wrapped so a miss just yields no link (the event
+# then shows up in the dashboard's "skipped" list rather than breaking a scrape).
+_DROPDOWN_TOGGLE_SELECTORS = (
+    "td:last-child button.dropdown-toggle",
+    "button.dropdown-toggle",
+    'button[aria-haspopup="menu"]',
+)
+
+
+def _row_stubhub_url(r, page=None):
+    # Cheapest path: anchor already present in the row's DOM (no extra work).
+    url = _stubhub_href_in(r)
+    if url or page is None:
+        return url
+    # Fallback: open the row's ⋮ menu, read the revealed anchor, close it.
+    toggle = None
+    for sel in _DROPDOWN_TOGGLE_SELECTORS:
+        toggle = r.query_selector(sel)
+        if toggle:
+            break
+    if not toggle:
+        return None
+    try:
+        toggle.click()
+        page.wait_for_timeout(200)
+        # Menu may render inside the row or be appended to <body>.
+        url = _stubhub_href_in(r) or _stubhub_href_in(page)
+    except Exception:
+        url = None
+    finally:
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+    return url
+
+
+def _extract_row(r, page=None):
     event_name = _text(r, "span.smart-title")
     if not event_name:
         return None
@@ -183,6 +238,7 @@ def _extract_row(r):
         "tickets_count": tickets_count,
         "total_cost": total_cost,
         "total_list": total_list,
+        "stubhub_url": _row_stubhub_url(r, page),
     }
 
 
@@ -209,7 +265,7 @@ def _scrape_inventory(page):
         page.wait_for_selector("table.b-table tbody tr", timeout=10000)
         page.wait_for_timeout(800)
         for r in page.query_selector_all("table.b-table tbody tr"):
-            row = _extract_row(r)
+            row = _extract_row(r, page)
             if row and row["id"] not in seen:
                 seen.add(row["id"])
                 out.append(row)

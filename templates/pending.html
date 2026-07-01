@@ -104,6 +104,12 @@
   .inbox-card .ic-foot button.reject { color: var(--red); border-color: var(--red); }
   .inbox-card .ic-foot button.reject:hover { background: rgba(248,81,73,0.1); }
   .inbox-empty { color: var(--muted); padding: 18px 14px; text-align: center; font-size: 11px; font-style: italic; border: 1px dashed var(--line); margin-bottom: 14px; }
+  .provider.status-awaiting_approval { border-color: var(--accent); color: var(--accent); }
+  .provider.status-creating { border-color: var(--amber); color: var(--amber); }
+  .provider.status-error { border-color: var(--red); color: var(--red); }
+  .provider.status-no_match { border-color: var(--orange); color: var(--orange); }
+  .vg-card .ic-subject .other-match { font-size: 11px; margin-left: 8px; }
+  .vg-card .ic-foot button.confirm:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -147,6 +153,11 @@
     <span id="poll-status" style="margin-left:14px;font-size:10px;letter-spacing:1px;color:var(--muted);"></span>
   </h2>
   <div id="inbox-container"></div>
+
+  <h2>Viagogo Matches
+    <span style="margin-left:14px;font-size:10px;letter-spacing:1px;color:var(--muted);">Kupat purchases auto-matched + priced at 5x USD — review before a draft listing is created</span>
+  </h2>
+  <div id="viagogo-container"></div>
 
   <h2>Pending Inventory
     <button id="add-pending" style="margin-left:14px;font-size:11px;letter-spacing:1px;">+ Add Pending</button>
@@ -266,9 +277,10 @@ let _attCurrentTicket = null;
 
 async function load() {
   setupEventAutocomplete();
-  const [invR, intakeR] = await Promise.all([
+  const [invR, intakeR, vgR] = await Promise.all([
     fetch("/api/inventory-all"),
     fetch("/api/pending-intake"),
+    fetch("/api/viagogo-push"),
   ]);
   if (!invR.ok) { console.error("failed to load inventory"); return; }
   const d = await invR.json();
@@ -279,6 +291,10 @@ async function load() {
   if (intakeR.ok) {
     const ind = await intakeR.json();
     renderInbox(ind.rows || [], ind.last_intake || {});
+  }
+  if (vgR.ok) {
+    const vgd = await vgR.json();
+    renderViagogoPush(vgd.rows || []);
   }
   render();
 }
@@ -333,6 +349,93 @@ function renderInbox(rows, lastIntake) {
     `;
     container.appendChild(card);
   }
+}
+
+// --- viagogo draft-listing matches ---------------------------------------
+function renderViagogoPush(rows) {
+  const container = $("viagogo-container");
+  const active = rows.filter(r => !["created", "rejected"].includes(r.status));
+  if (!active.length) {
+    container.innerHTML = '<div class="inbox-empty">// no viagogo matches waiting on review</div>';
+    return;
+  }
+  container.innerHTML = "";
+  for (const r of active) {
+    const card = document.createElement("div");
+    card.className = "inbox-card vg-card";
+    card.dataset.id = r.id;
+    const candidates = r.candidates || [];
+    const noMatch = r.status === "no_match";
+    const when = r.created_at ? new Date(r.created_at).toLocaleString() : "";
+    const eventOptions = candidates.map(c => `<option value="${esc(c.event_id)}" ${c.event_id === r.chosen_event_id ? "selected" : ""}>${esc(c.event_name)} — ${esc(c.venue || "")} (${esc(c.date || "")})</option>`).join("");
+    card.innerHTML = `
+      <div class="ic-head">
+        <span class="provider status-${esc(r.status)}">${esc(r.status.replace(/_/g, " "))}</span>
+        <span class="from" title="${esc(r.venue || "")}">${esc(r.event_name || "")} — ${esc(r.venue || "")}</span>
+        <span class="when">${esc(when)}</span>
+        ${r.error ? `<span class="warn" title="${esc(r.error)}">${esc(r.error.slice(0, 60))}</span>` : ""}
+      </div>
+      <div class="ic-subject">
+        ${noMatch
+          ? "No viagogo event match found for this purchase — pick one below if it's listed, or reject."
+          : `Kupat: ₪${Number(r.cost_per_unit || 0).toFixed(2)}/ea × ${r.qty || 0} &nbsp;→&nbsp; viagogo price $${Number(r.website_price_usd || 0).toFixed(2)}/ea (5x, fx ${r.fx_rate ? Number(r.fx_rate).toFixed(4) : "?"})`}
+      </div>
+      <div class="ic-body" style="grid-template-columns: 110px 1fr 110px 1fr;">
+        <label>viagogo Event</label>
+        <select data-f="event_id" style="grid-column: span 3;">
+          <option value="">— select —</option>
+          ${eventOptions}
+        </select>
+        <label>Section *</label><input data-f="section" type="text" value="${esc(r.suggested_viagogo_section || "")}" placeholder="exact viagogo section name (kupat: ${esc(r.section || "?")})">
+        <label>Ticket Type</label>
+        <select data-f="ticket_type">
+          <option value="E-Tickets">E-Tickets</option>
+          <option value="Paper Tickets">Paper Tickets</option>
+        </select>
+        <label>Qty</label><input data-f="available_tickets" type="number" min="1" value="${r.qty ?? ""}">
+        <label>Website $/ea</label><input data-f="website_price" type="number" step="0.01" value="${r.website_price_usd ?? ""}">
+        <label>Face value $/ea</label><input data-f="face_value" type="number" step="0.01" value="${r.cost_usd_per_ticket ?? ""}">
+        <label>Row</label><input data-f="row" type="text" value="${esc(r.row_label || "")}">
+        <label>Seats (kupat)</label><input data-f="seats_display" type="text" value="${esc(r.seats || "")}" readonly style="opacity:0.6;">
+      </div>
+      <div class="ic-foot">
+        <button class="reject" data-act="vg-reject">Reject</button>
+        <button class="confirm" data-act="vg-approve" ${noMatch ? "disabled" : ""}>Approve → Create Draft Listing</button>
+      </div>
+    `;
+    container.appendChild(card);
+  }
+}
+
+async function approveViagogoPush(card) {
+  const id = card.dataset.id;
+  const f = {};
+  card.querySelectorAll("[data-f]").forEach(el => { f[el.dataset.f] = el.value; });
+  if (!f.event_id) { alert("Pick the matching viagogo event first"); return; }
+  if (!f.section || !f.section.trim()) { alert("Section is required — type the exact viagogo section name"); return; }
+  const body = {
+    id,
+    event_id: f.event_id,
+    section: f.section.trim(),
+    ticket_type: f.ticket_type || "E-Tickets",
+    available_tickets: parseInt(f.available_tickets || "0", 10),
+    website_price: parseFloat(f.website_price || "0"),
+    face_value: parseFloat(f.face_value || "0"),
+    row: (f.row || "").trim(),
+  };
+  if (!confirm(`Create a DRAFT (unpublished) viagogo listing — ${body.available_tickets} × $${body.website_price.toFixed(2)} in "${body.section}"?`)) return;
+  const res = await fetch("/api/viagogo-push/approve", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Approve failed: " + (e.error || res.status)); return; }
+  await load();
+  setTimeout(() => load(), 8000);
+}
+
+async function rejectViagogoPush(card) {
+  const id = card.dataset.id;
+  if (!confirm("Reject this viagogo match? No listing will be created.")) return;
+  const res = await fetch("/api/viagogo-push/reject", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id}) });
+  if (!res.ok) { alert("Reject failed"); return; }
+  await load();
 }
 
 function _readCardFields(card) {
@@ -796,6 +899,8 @@ document.addEventListener("click", async (e) => {
     const card = icBtn.closest(".inbox-card");
     if (icBtn.dataset.act === "confirm") await confirmIntake(card);
     else if (icBtn.dataset.act === "reject") await rejectIntake(card);
+    else if (icBtn.dataset.act === "vg-approve") await approveViagogoPush(card);
+    else if (icBtn.dataset.act === "vg-reject") await rejectViagogoPush(card);
     return;
   }
   const att = e.target.closest(".row-attach");

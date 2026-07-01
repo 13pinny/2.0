@@ -175,6 +175,7 @@
     <button id="relogin" title="Open the box's Chrome (Lysted / Viagogo / CrowdVolt tabs) in a noVNC window so you can re-sign-in — no SSH">noVNC Login</button>
     <button id="chrome-restart" title="After re-signing in, bounce the scraper's Chrome so it picks up the fresh session">Restart Chrome</button>
     <button id="add-pending" title="Add a ticket I have but haven't listed yet">+ Pending</button>
+    <button id="open-stubhub" title="Open the exact StubHub page for every visible event, 20 tabs at a time. Allow pop-ups for this site once.">Open StubHub ×20</button>
     <input type="search" id="q-search" placeholder="search // event venue section" style="flex:1; min-width:200px;">
     <select id="q-source"><option value="all">SRC: ALL</option><option value="lysted">LYSTED</option><option value="viagogo">VIAGOGO</option><option value="jerujam">JERUJAM</option></select>
     <select id="q-sort">
@@ -326,6 +327,7 @@ const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&a
 let _rows = [];
 let _salesByEvent = new Map();
 let _expanded = new Set();
+let _visibleGroups = [];
 
 function _eventKey(row) {
   // Prefer the backend's fuzzy-grouped key (handles "Wit"/"With" etc.).
@@ -473,6 +475,13 @@ function render() {
     }
   }
   document.getElementById("empty").style.display = sorted.length ? "none" : "block";
+
+  // Snapshot what's on screen (filtered + sorted, in display order) so the
+  // "Open StubHub ×20" button opens exactly these events. Filters changing
+  // re-renders and resets any in-progress batch run.
+  _visibleGroups = sorted;
+  const shBtn = document.getElementById("open-stubhub");
+  if (shBtn) { shBtn.textContent = "Open StubHub ×20"; shBtn.dataset.mode = ""; }
 }
 
 async function load() {
@@ -563,6 +572,63 @@ for (const id of ["q-search", "q-source", "q-sort", "q-range"]) {
   document.getElementById(id).addEventListener("input", render);
   document.getElementById(id).addEventListener("change", render);
 }
+
+// --- bulk "Open on StubHub" (exact event pages, 20 tabs per click) ---
+// Each click opens one batch so every window.open() fires inside a real user
+// gesture (browsers block bulk pop-ups otherwise). Events without an exact
+// StubHub link captured from Lysted are skipped and reported, not opened.
+const SH_BATCH = 20;
+let _shQueue = [];
+let _shSkipped = [];
+let _shIdx = 0;
+
+function _startStubhubRun() {
+  _shQueue = [];
+  _shSkipped = [];
+  _shIdx = 0;
+  for (const g of _visibleGroups) {
+    const r = (g.rows || []).find(x => x.stubhub_url);
+    if (r) _shQueue.push({ name: g.event_name, url: r.stubhub_url });
+    else _shSkipped.push(g.event_name);
+  }
+  if (!_shQueue.length) {
+    showToast(`// no StubHub links for the ${_visibleGroups.length} visible event(s) — run a scrape first`);
+    if (_shSkipped.length) console.log("[StubHub] no exact link for:\n" + _shSkipped.map(n => " • " + n).join("\n"));
+    return;
+  }
+  _openNextStubhubBatch();
+}
+
+function _openNextStubhubBatch() {
+  const btn = document.getElementById("open-stubhub");
+  const slice = _shQueue.slice(_shIdx, _shIdx + SH_BATCH);
+  let blocked = 0;
+  for (const item of slice) {
+    if (!window.open(item.url, "_blank", "noopener")) blocked++;
+  }
+  _shIdx += slice.length;
+  if (blocked) showToast(`// ${blocked} tab(s) blocked — allow pop-ups for this site, then click again`);
+
+  const remaining = _shQueue.length - _shIdx;
+  if (remaining > 0) {
+    btn.textContent = `Open next 20 (${remaining} left)`;
+    btn.dataset.mode = "continue";
+  } else {
+    btn.textContent = "Open StubHub ×20";
+    btn.dataset.mode = "";
+    const parts = [`opened ${_shQueue.length} StubHub tab(s)`];
+    if (_shSkipped.length) {
+      parts.push(`${_shSkipped.length} skipped (no link)`);
+      console.log("[StubHub] skipped — no exact link captured:\n" + _shSkipped.map(n => " • " + n).join("\n"));
+    }
+    showToast("// " + parts.join(" · "));
+  }
+}
+
+document.getElementById("open-stubhub").addEventListener("click", (e) => {
+  if (e.currentTarget.dataset.mode === "continue") _openNextStubhubBatch();
+  else _startStubhubRun();
+});
 
 // --- delete + undo ---
 const _undoStack = [];

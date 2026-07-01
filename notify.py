@@ -389,6 +389,64 @@ def send_todo_digest(due_today, overdue):
     return {"discord": discord_result, "email": email_result}
 
 
+def notify_viagogo_match(push_row):
+    """Notify that a Kupat purchase email has been matched (or not) to a
+    viagogo event and priced, and is waiting on /pending for the user to
+    approve before a draft listing gets created. Never creates anything
+    itself — this is a heads-up, not an action.
+
+    `push_row` is a viagogo_push DB row dict (db.viagogo_push_get /
+    viagogo_push_insert's return value).
+    """
+    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    gmail_user = os.environ.get("GMAIL_USER", "").strip()
+    gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
+
+    status = push_row.get("status") or ""
+    no_match = status == "no_match"
+    event_name = push_row.get("event_name") or "(unknown event)"
+    venue = push_row.get("venue") or ""
+    chosen_name = push_row.get("chosen_event_name") or ""
+    chosen_venue = push_row.get("chosen_venue") or ""
+    chosen_date = push_row.get("chosen_event_date") or ""
+    qty = push_row.get("qty")
+    cost_per_unit = push_row.get("cost_per_unit")
+    website_price = push_row.get("website_price_usd")
+    pending_url = "http://localhost:5000/pending"
+
+    title = "❓ Kupat ticket — no viagogo match found" if no_match else "🎟️ Kupat ticket matched on viagogo — needs approval"
+    desc_lines = [f"**{event_name}**" + (f" — {venue}" if venue else "")]
+    if not no_match and chosen_name:
+        desc_lines.append(f"Matched: **{chosen_name}**" + (f" — {chosen_venue}" if chosen_venue else "") + (f" ({chosen_date})" if chosen_date else ""))
+    if qty:
+        desc_lines.append(f"Qty: {qty}")
+    if cost_per_unit is not None:
+        desc_lines.append(f"Kupat price: ₪{cost_per_unit:,.2f}/ticket")
+    if website_price is not None:
+        desc_lines.append(f"Proposed viagogo price: ${website_price:,.2f}/ticket (5x)")
+    desc_lines.append("")
+    desc_lines.append("Review and approve on the Pending page before any listing is created.")
+
+    discord_result = "skipped (no DISCORD_WEBHOOK_URL)"
+    if discord_url:
+        embed = {
+            "title": title,
+            "description": "\n".join(desc_lines)[:4000],
+            "url": pending_url,
+            "color": 0xFAA61A if no_match else 0x5865F2,
+        }
+        discord_result = _post_discord(discord_url, {"embeds": [embed]})
+
+    email_result = "skipped (no GMAIL creds)"
+    if gmail_user and gmail_pwd and to_addr:
+        subject = f"[Kartis] {title} — {event_name}"[:200]
+        body = "\n".join(desc_lines) + f"\n\nOpen: {pending_url}\n"
+        email_result = _send_email(subject, body, gmail_user, gmail_pwd, to_addr)
+
+    return {"discord": discord_result, "email": email_result}
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()

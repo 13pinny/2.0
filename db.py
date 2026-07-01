@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS inventory (
     tickets_count INTEGER,
     total_cost REAL,
     total_list REAL,
+    stubhub_url TEXT,
     last_seen_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS lysted_purchases (
@@ -477,6 +478,51 @@ CREATE TABLE IF NOT EXISTS todo_suggestion_dismissals (
     dismissed_until TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+-- Kupat section name (Hebrew) -> viagogo section name, per venue. Not a
+-- literal translation (e.g. Caesarea's "יציע תחתון 1" lists as viagogo's
+-- "Middle Tier 1") so this is a taught lookup, not a hardcoded formula.
+CREATE TABLE IF NOT EXISTS viagogo_section_map (
+    venue TEXT NOT NULL,
+    kupat_section TEXT NOT NULL,
+    viagogo_section TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (venue, kupat_section)
+);
+-- One row per Kupat purchase-confirmation email we're trying to push into a
+-- draft viagogo listing. status lifecycle:
+--   searching -> awaiting_approval -> approved -> creating -> created
+--                                  -> rejected
+--                       (any stage) -> error
+--   no_match  (no candidate viagogo event found)
+CREATE TABLE IF NOT EXISTS viagogo_push (
+    id TEXT PRIMARY KEY,
+    intake_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'searching',
+    event_name TEXT,
+    venue TEXT,
+    event_date_iso TEXT,
+    section TEXT,
+    row_label TEXT,
+    seats TEXT,
+    qty INTEGER,
+    cost REAL,
+    cost_per_unit REAL,
+    candidates_json TEXT,
+    chosen_event_id TEXT,
+    chosen_event_name TEXT,
+    chosen_venue TEXT,
+    chosen_event_date TEXT,
+    viagogo_section TEXT,
+    fx_rate REAL,
+    cost_usd_per_ticket REAL,
+    website_price_usd REAL,
+    listing_id TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_viagogo_push_status ON viagogo_push(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_viagogo_push_intake ON viagogo_push(intake_id);
 """
 
 
@@ -497,6 +543,8 @@ def init():
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(inventory)").fetchall()}
         if "event_date_iso" not in cols:
             conn.execute("ALTER TABLE inventory ADD COLUMN event_date_iso TEXT")
+        if "stubhub_url" not in cols:
+            conn.execute("ALTER TABLE inventory ADD COLUMN stubhub_url TEXT")
         ls_cols = {row["name"] for row in conn.execute("PRAGMA table_info(lysted_sales)").fetchall()}
         if "cost" not in ls_cols:
             conn.execute("ALTER TABLE lysted_sales ADD COLUMN cost REAL")
@@ -660,11 +708,11 @@ def upsert_inventory(rows, now_iso):
                 INSERT INTO inventory (id, event_name, event_date, event_time,
                                        event_date_iso, venue,
                                        listings_count, tickets_count,
-                                       total_cost, total_list, last_seen_at)
+                                       total_cost, total_list, stubhub_url, last_seen_at)
                 VALUES (:id, :event_name, :event_date, :event_time,
                         :event_date_iso, :venue,
                         :listings_count, :tickets_count,
-                        :total_cost, :total_list, :last_seen_at)
+                        :total_cost, :total_list, :stubhub_url, :last_seen_at)
                 ON CONFLICT(id) DO UPDATE SET
                     event_name=excluded.event_name,
                     event_date=excluded.event_date,
@@ -675,9 +723,10 @@ def upsert_inventory(rows, now_iso):
                     tickets_count=excluded.tickets_count,
                     total_cost=excluded.total_cost,
                     total_list=excluded.total_list,
+                    stubhub_url=COALESCE(excluded.stubhub_url, inventory.stubhub_url),
                     last_seen_at=excluded.last_seen_at
                 """,
-                {**r, "last_seen_at": now_iso},
+                {**r, "stubhub_url": r.get("stubhub_url"), "last_seen_at": now_iso},
             )
 
 
@@ -1770,6 +1819,119 @@ def tm_recent_drops(watcher_id=None, limit=200):
                 "SELECT * FROM tm_drops ORDER BY detected_at DESC LIMIT ?", (limit,),
             ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------- viagogo section name mapping (taught, not literal) -------
+
+def viagogo_section_map_get(venue, kupat_section):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT viagogo_section FROM viagogo_section_map WHERE venue = ? AND kupat_section = ?",
+            (venue, kupat_section),
+        ).fetchone()
+    return row["viagogo_section"] if row else None
+
+
+def viagogo_section_map_set(venue, kupat_section, viagogo_section, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO viagogo_section_map (venue, kupat_section, viagogo_section, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(venue, kupat_section) DO UPDATE SET
+                   viagogo_section = excluded.viagogo_section,
+                   updated_at = excluded.updated_at""",
+            (venue, kupat_section, viagogo_section, now_iso),
+        )
+
+
+def viagogo_section_map_all():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM viagogo_section_map ORDER BY venue, kupat_section"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def viagogo_section_map_delete(venue, kupat_section):
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM viagogo_section_map WHERE venue = ? AND kupat_section = ?",
+            (venue, kupat_section),
+        )
+
+
+# ---------------- viagogo draft-listing push pipeline ----------------------
+# Kupat purchase-confirmation email -> matched viagogo event -> (user
+# approval) -> draft (unpublished) viagogo listing. See viagogo_listing.py.
+
+def viagogo_push_insert(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO viagogo_push (id, intake_id, status, event_name, venue,
+                event_date_iso, section, row_label, seats, qty, cost, cost_per_unit,
+                candidates_json, chosen_event_id, chosen_event_name, chosen_venue,
+                chosen_event_date, viagogo_section, fx_rate, cost_usd_per_ticket,
+                website_price_usd, listing_id, error, created_at, updated_at)
+            VALUES (:id, :intake_id, :status, :event_name, :venue,
+                :event_date_iso, :section, :row_label, :seats, :qty, :cost, :cost_per_unit,
+                :candidates_json, :chosen_event_id, :chosen_event_name, :chosen_venue,
+                :chosen_event_date, :viagogo_section, :fx_rate, :cost_usd_per_ticket,
+                :website_price_usd, :listing_id, :error, :created_at, :updated_at)
+            """,
+            {
+                "status": "searching",
+                "candidates_json": None, "chosen_event_id": None, "chosen_event_name": None,
+                "chosen_venue": None, "chosen_event_date": None, "viagogo_section": None,
+                "fx_rate": None, "cost_usd_per_ticket": None, "website_price_usd": None,
+                "listing_id": None, "error": None,
+                **row,
+                "created_at": now_iso, "updated_at": now_iso,
+            },
+        )
+
+
+def viagogo_push_get(id_):
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM viagogo_push WHERE id = ?", (id_,)).fetchone()
+    return dict(row) if row else None
+
+
+def viagogo_push_all(status=None):
+    with connect() as conn:
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM viagogo_push WHERE status = ? ORDER BY created_at DESC",
+                (status,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM viagogo_push ORDER BY created_at DESC"
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def viagogo_push_get_by_intake(intake_id):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM viagogo_push WHERE intake_id = ? ORDER BY created_at DESC LIMIT 1",
+            (intake_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def viagogo_push_update(id_, fields, now_iso):
+    if not fields:
+        return
+    fields = {**fields, "updated_at": now_iso}
+    sets = ", ".join(f"{k}=:{k}" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE viagogo_push SET {sets} WHERE id=:_id", {**fields, "_id": id_})
+
+
+def viagogo_push_delete(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM viagogo_push WHERE id = ?", (id_,))
 
 
 # ---------------- GA / festival sales snapshots ----------------------------

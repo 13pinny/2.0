@@ -51,7 +51,9 @@ _ORDER_RX = re.compile(r"rewards\s*order\s*number\s*[:\s]*([A-Z0-9][A-Z0-9-]+)",
 # a "<Word> Credit Card" mention in the body.
 _DISPLAY_CARD_RX = re.compile(r"capital\s*one\s*\|\s*([A-Za-z0-9 ]+?)\s*<", re.I)
 _DISPLAY_CARD_PLAIN_RX = re.compile(r"capital\s*one\s*\|\s*([A-Za-z0-9 ]+)$", re.I)
-_BODY_CARD_RX = re.compile(r"([A-Za-z][A-Za-z0-9]*)\s+Credit\s+Card", re.I)
+# Card line in the body, e.g. "Savor Credit Card...3011" or
+# "Spark Cash Plus card...3134" — capture the card name before "[Credit ]Card...####".
+_BODY_CARD_RX = re.compile(r"([A-Z][A-Za-z0-9 ]+?)\s+(?:[Cc]redit\s+)?[Cc]ard\s*(?:\.{2,}|…)\s*\d")
 
 
 def is_capitalone_cashback(from_addr, subject, body):
