@@ -28,6 +28,9 @@
   button.confirm:disabled { opacity: 0.4; cursor: not-allowed; }
   button.reject { border-color: var(--red); color: var(--red); }
   button.reject:hover { background: #1f0d0d; }
+  button.publish { border-color: var(--orange); color: var(--orange); }
+  button.publish:hover { background: #2a1505; }
+  button.publish:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .inbox-empty { color: var(--muted); font-size: 12px; padding: 18px 0; letter-spacing: 1px; }
 
@@ -39,6 +42,7 @@
   .inbox-card .ic-head .provider.status-no_match { border-color: var(--red); color: var(--red); }
   .inbox-card .ic-head .provider.status-error { border-color: var(--red); color: var(--red); }
   .inbox-card .ic-head .provider.status-created { border-color: var(--green); color: var(--green); }
+  .inbox-card .ic-head .provider.status-listed { border-color: var(--green); color: var(--green); }
   .inbox-card .ic-head .when { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
   .inbox-card .ic-head .warn { font-size: 10px; color: var(--amber); letter-spacing: 1px; border: 1px solid var(--amber); padding: 1px 6px; }
   .inbox-card .ic-subject { padding: 8px 14px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
@@ -119,12 +123,12 @@ function renderCards(rows) {
   const container = $("vg-container");
   const doneContainer = $("vg-done");
 
-  // Completed section (created / rejected)
-  const done = rows.filter(r => ["created", "rejected"].includes(r.status));
+  // Completed section (created / listed / rejected)
+  const done = rows.filter(r => ["created", "listed", "rejected"].includes(r.status));
   $("h-done").style.display = done.length ? "" : "none";
   doneContainer.innerHTML = done.map(r => {
     const when = r.updated_at ? new Date(r.updated_at).toLocaleString() : "";
-    const isCreated = r.status === "created";
+    const isCreated = r.status === "created" || r.status === "listed";
     return `<div style="border:1px solid var(--line);margin-bottom:6px;padding:10px 14px;display:flex;gap:14px;align-items:center;opacity:0.6;font-size:12px;">
       <span style="font-size:10px;padding:1px 6px;border:1px solid ${isCreated ? "var(--green)" : "var(--red)"};color:${isCreated ? "var(--green)" : "var(--red)"};letter-spacing:1.5px;text-transform:uppercase;">${esc(r.status)}</span>
       <span style="flex:1;">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
@@ -134,7 +138,7 @@ function renderCards(rows) {
     </div>`;
   }).join("");
 
-  const active = rows.filter(r => !["created", "rejected"].includes(r.status));
+  const active = rows.filter(r => !["created", "listed", "rejected"].includes(r.status));
   if (!active.length) {
     container.innerHTML = '<div class="inbox-empty">// no viagogo matches waiting on review</div>';
     return;
@@ -188,14 +192,16 @@ function renderCards(rows) {
           <option value="Paper Tickets">Paper Tickets</option>
         </select>
         <label>Qty</label><input data-f="available_tickets" type="number" min="1" value="${r.qty ?? ""}">
-        <label>Website $/ea</label><input data-f="website_price" type="number" step="0.01" value="${r.website_price_usd ?? ""}">
+        <label title="What buyers pay on viagogo — per ticket. Edit to set your price.">Viagogo $/ea</label><input data-f="website_price" type="number" step="0.01" value="${r.website_price_usd ?? ""}">
+        <label title="Your take-home per ticket after viagogo's 10% cut">Proceeds $/ea</label><input data-f="proceeds" type="number" step="0.01" readonly title="Auto = viagogo price − 10%" value="${r.website_price_usd != null ? (r.website_price_usd * 0.9).toFixed(2) : ""}" style="color:var(--green);opacity:0.85;">
         <label>Face value $/ea</label><input data-f="face_value" type="number" step="0.01" value="${r.cost_usd_per_ticket ?? ""}">
         <label>Row</label><input data-f="row" type="text" value="${esc(r.row_label || "")}">
         <label>Seats (kupat)</label><input type="text" value="${esc(r.seats || "")}" readonly style="opacity:0.6;">
       </div>
       <div class="ic-foot">
         <button class="reject" data-act="vg-reject">Reject</button>
-        <button class="confirm" data-act="vg-approve" ${noMatch ? "disabled" : ""}>Approve → Create Draft Listing</button>
+        <button class="confirm" data-act="vg-approve-draft" ${noMatch ? "disabled" : ""}>Approve → Draft</button>
+        <button class="publish" data-act="vg-approve-live" ${noMatch ? "disabled" : ""}>Approve &amp; List Live</button>
       </div>
     `;
     container.appendChild(card);
@@ -205,6 +211,16 @@ function renderCards(rows) {
     const ticketSel = card.querySelector("select[data-f='ticket_type']");
     eventSel.addEventListener("change", () => loadSections(card, eventSel.value, ticketSel.value));
     ticketSel.addEventListener("change", () => loadSections(card, eventSel.value, ticketSel.value));
+
+    // Keep proceeds (per-ticket take-home = viagogo price − 10%) in sync live
+    const priceInput = card.querySelector("input[data-f='website_price']");
+    const proceedsInput = card.querySelector("input[data-f='proceeds']");
+    if (priceInput && proceedsInput) {
+      priceInput.addEventListener("input", () => {
+        const p = parseFloat(priceInput.value || "0");
+        proceedsInput.value = p > 0 ? (p * 0.9).toFixed(2) : "";
+      });
+    }
 
     // Auto-load sections for the pre-chosen event
     if (r.chosen_event_id) loadSections(card, r.chosen_event_id, "E-Tickets");
@@ -275,23 +291,28 @@ async function loadSections(card, eventId, ticketType) {
   }
 }
 
-async function approveCard(card) {
+async function approveCard(card, publish) {
   const id = card.dataset.id;
   const f = {};
   card.querySelectorAll("[data-f]").forEach(el => { f[el.dataset.f] = el.value; });
   if (!f.event_id) { alert("Pick the matching viagogo event first"); return; }
-  if (!f.section || !f.section.trim()) { alert("Section is required — type the exact viagogo section name"); return; }
+  if (!f.section || !f.section.trim()) { alert("Section is required — pick a viagogo section"); return; }
+  const price = parseFloat(f.website_price || "0");
+  const proceeds = parseFloat(f.proceeds || "0") || +(price * 0.9).toFixed(2);
   const body = {
     id,
     event_id: f.event_id,
     section: f.section.trim(),
     ticket_type: f.ticket_type || "E-Tickets",
     available_tickets: parseInt(f.available_tickets || "0", 10),
-    website_price: parseFloat(f.website_price || "0"),
+    website_price: price,
+    proceeds: proceeds,
     face_value: parseFloat(f.face_value || "0"),
     row: (f.row || "").trim(),
+    publish: !!publish,
   };
-  if (!confirm(`Create a DRAFT (unpublished) viagogo listing — ${body.available_tickets} × $${body.website_price.toFixed(2)} in "${body.section}"?`)) return;
+  const kind = publish ? "LIVE listing — buyers can purchase immediately" : "DRAFT (unpublished) listing";
+  if (!confirm(`Create a ${kind} — ${body.available_tickets} × $${price.toFixed(2)}/ea (you net $${proceeds.toFixed(2)}/ea) in "${body.section}"?`)) return;
   const res = await fetch("/api/viagogo-push/approve", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
   if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Approve failed: " + (e.error || res.status)); return; }
   await load();
@@ -328,7 +349,8 @@ document.addEventListener("click", async (e) => {
   if (!btn) return;
   e.stopPropagation();
   const card = btn.closest(".inbox-card");
-  if (btn.dataset.act === "vg-approve") await approveCard(card);
+  if (btn.dataset.act === "vg-approve-draft") await approveCard(card, false);
+  else if (btn.dataset.act === "vg-approve-live") await approveCard(card, true);
   else if (btn.dataset.act === "vg-reject") await rejectCard(card);
   else if (btn.dataset.act === "vg-teach") await teachName(card);
 });

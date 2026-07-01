@@ -1951,7 +1951,7 @@ def api_pending_intake_reject():
 def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
                           available_tickets, website_price, face_value, row,
                           seat_from, seat_to, venue_for_map, kupat_section,
-                          ticket_url=None):
+                          ticket_url=None, publish=False, proceeds=None):
     now = lambda: datetime.now(timezone.utc).isoformat()
     db.viagogo_push_update(push_id, {"status": "creating"}, now())
     try:
@@ -1965,9 +1965,9 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         viagogo_listing.create_draft_listing(
             event_id=event_id, search_query=search_query, ticket_type=ticket_type,
             section=section, available_tickets=available_tickets,
-            website_price=website_price, face_value=face_value,
+            website_price=website_price, face_value=face_value, proceeds=proceeds,
             row=row, seat_from=seat_from, seat_to=seat_to,
-            ticket_pdfs=ticket_pdfs,
+            ticket_pdfs=ticket_pdfs, publish=publish,
         )
         if venue_for_map and kupat_section and section:
             db.viagogo_section_map_set(venue_for_map, kupat_section, section, now())
@@ -1977,7 +1977,7 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         english_event = push_row.get("chosen_event_name") or ""
         if hebrew_event and english_event and hebrew_event != english_event:
             db.kupat_name_map_set(hebrew_event, english_event, now())
-        db.viagogo_push_update(push_id, {"status": "created", "viagogo_section": section}, now())
+        db.viagogo_push_update(push_id, {"status": "listed" if publish else "created", "viagogo_section": section}, now())
     except Exception as e:
         db.viagogo_push_update(push_id, {"status": "error", "error": f"{type(e).__name__}: {e}"}, now())
         traceback.print_exc()
@@ -2063,6 +2063,12 @@ def api_viagogo_push_approve():
         face_value = 0
     if face_value <= 0:
         return jsonify({"error": "face_value must be > 0"}), 400
+    publish = bool(body.get("publish"))
+    try:
+        pr = body.get("proceeds")
+        proceeds = float(pr) if pr not in (None, "") else None
+    except (TypeError, ValueError):
+        proceeds = None
     row = (body.get("row") or push.get("row_label") or "").strip() or None
     seat_from = (body.get("seat_from") or "").strip() or None
     seat_to = (body.get("seat_to") or "").strip() or None
@@ -2079,7 +2085,7 @@ def api_viagogo_push_approve():
         target=_run_viagogo_approve,
         args=(push_id, event_id, search_query, ticket_type, section, available_tickets,
               website_price, face_value, row, seat_from, seat_to, venue_for_map, kupat_section,
-              ticket_url),
+              ticket_url, publish, proceeds),
         daemon=True,
     ).start()
     return jsonify({"ok": True, "status": "creating"})

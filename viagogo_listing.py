@@ -13,9 +13,10 @@ Raw JS DOM manipulation (setting .value + dispatching synthetic events) was
 tried during discovery and did not reliably trigger the app's own filter/
 validation bindings — Playwright's fill()/click() (real input events) does.
 
-create_draft_listing() ALWAYS forces the Publish toggle off before saving —
-the form defaults it on, and an accidental live listing is the one mistake
-this module must never make.
+create_draft_listing() defaults to forcing the Publish toggle OFF before
+saving (draft) — the form defaults it on, and an accidental live listing is
+the one mistake this module must never make. Pass publish=True to explicitly
+go live; the toggle state is then asserted rather than assumed.
 """
 import re
 import traceback
@@ -247,7 +248,7 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
                           available_tickets, website_price, face_value,
                           currency="USD", proceeds=None, row=None,
                           seat_from=None, seat_to=None, max_display_quantity=None,
-                          ticket_pdfs=None):
+                          ticket_pdfs=None, publish=False):
     """Creates a viagogo listing in DRAFT (unpublished) state and saves it.
 
     event_id      — numeric viagogo event id from a prior search_event() call.
@@ -296,17 +297,23 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
             if max_display_quantity is not None:
                 page.fill('input[name="Listing.MaxDisplayQuantity"]', str(max_display_quantity))
 
-            # Hard safety: force draft/unpublished regardless of the form's
-            # default-on toggle, every single time, no exceptions. The real
-            # checkbox is visually hidden behind a styled toggle (zero-size,
-            # so Playwright can't click it directly) — click its <label>
-            # instead and verify state on the checkbox itself.
+            # Drive the Publish toggle to the requested state and ASSERT it —
+            # never assume. The real checkbox is visually hidden behind a
+            # styled toggle (zero-size, so Playwright can't click it directly)
+            # — click its <label> instead and verify state on the checkbox.
+            # Default (publish=False) forces draft/unpublished, the safe path.
             publish_checkbox = page.locator("#IsPublishToViagogo")
             publish_toggle = page.locator('label[for="IsPublishToViagogo"]')
-            if publish_checkbox.is_checked():
-                publish_toggle.click()
-            if publish_checkbox.is_checked():
-                raise ViagogoListingError("failed to uncheck Publish toggle — refusing to save")
+            if publish:
+                if not publish_checkbox.is_checked():
+                    publish_toggle.click()
+                if not publish_checkbox.is_checked():
+                    raise ViagogoListingError("failed to enable Publish toggle — refusing to save")
+            else:
+                if publish_checkbox.is_checked():
+                    publish_toggle.click()
+                if publish_checkbox.is_checked():
+                    raise ViagogoListingError("failed to uncheck Publish toggle — refusing to save")
 
             page.click("#btnSaveDetails")
             # Save doesn't commit the listing by itself — viagogo inserts a
@@ -334,7 +341,7 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
                 "website_price": website_price,
                 "proceeds": resolved_proceeds,
                 "face_value": face_value,
-                "published": False,
+                "published": bool(publish),
             }
         finally:
             try:
