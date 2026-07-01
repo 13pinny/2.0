@@ -349,8 +349,17 @@ def _push_kupat_to_viagogo(intake_id, fields):
         "cost_per_unit": cost_per_unit,
     }
 
+    # Kupat emails are in Hebrew; viagogo's event picker uses English names.
+    # Look up a saved translation before searching; fall back to the Hebrew
+    # string (which usually returns nothing) if no mapping exists yet.
+    search_term = (
+        db.kupat_name_map_get(event_name)
+        or db.kupat_name_map_get(venue)
+        or event_name
+        or venue
+    )
     try:
-        candidates = viagogo_listing.search_event(event_name or venue, limit=8)
+        candidates = viagogo_listing.search_event(search_term, limit=8)
     except Exception as e:
         base_row["status"] = "error"
         base_row["error"] = f"{type(e).__name__}: {e}"
@@ -391,6 +400,59 @@ def _push_kupat_to_viagogo(intake_id, fields):
     push = db.viagogo_push_get(push_id)
     _notify_viagogo_push(push)
     return push
+
+
+def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None):
+    """Re-run the viagogo event search for an existing push row (e.g. after
+    the user teaches a Hebrew→English name mapping) and update it in place."""
+    if now_iso is None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+    event_name = fields.get("event_name") or ""
+    venue = fields.get("venue") or ""
+    cost_per_unit = fields.get("cost_per_unit")
+    search_term = (
+        db.kupat_name_map_get(event_name)
+        or db.kupat_name_map_get(venue)
+        or event_name
+        or venue
+    )
+    try:
+        candidates = viagogo_listing.search_event(search_term, limit=8)
+    except Exception as e:
+        db.viagogo_push_update(push_id, {
+            "status": "error",
+            "error": f"{type(e).__name__}: {e}",
+            "candidates_json": "[]",
+        }, now_iso)
+        return
+
+    if not candidates:
+        db.viagogo_push_update(push_id, {
+            "status": "no_match",
+            "candidates_json": "[]",
+        }, now_iso)
+        return
+
+    chosen = _rank_viagogo_candidates(candidates, fields.get("event_date_iso"))
+    try:
+        fx_rate = fx.ils_to_usd_rate()
+        cost_usd = fx.ils_to_usd(cost_per_unit) if cost_per_unit is not None else None
+        website_price = round(cost_usd * 5, 2) if cost_usd is not None else None
+    except Exception:
+        fx_rate = cost_usd = website_price = None
+
+    db.viagogo_push_update(push_id, {
+        "status": "awaiting_approval",
+        "candidates_json": json.dumps(candidates, ensure_ascii=False),
+        "chosen_event_id": chosen.get("event_id"),
+        "chosen_event_name": chosen.get("event_name"),
+        "chosen_venue": chosen.get("venue"),
+        "chosen_event_date": chosen.get("date"),
+        "fx_rate": fx_rate,
+        "cost_usd_per_ticket": cost_usd,
+        "website_price_usd": website_price,
+        "error": None,
+    }, now_iso)
 
 
 def _notify_viagogo_push(push):

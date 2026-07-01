@@ -1957,6 +1957,12 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         )
         if venue_for_map and kupat_section and section:
             db.viagogo_section_map_set(venue_for_map, kupat_section, section, now())
+        # Teach Hebrew→English name mapping so future emails auto-match.
+        push_row = db.viagogo_push_get(push_id) or {}
+        hebrew_event = push_row.get("event_name") or ""
+        english_event = push_row.get("chosen_event_name") or ""
+        if hebrew_event and english_event and hebrew_event != english_event:
+            db.kupat_name_map_set(hebrew_event, english_event, now())
         db.viagogo_push_update(push_id, {"status": "created", "viagogo_section": section}, now())
     except Exception as e:
         db.viagogo_push_update(push_id, {"status": "error", "error": f"{type(e).__name__}: {e}"}, now())
@@ -2048,6 +2054,37 @@ def api_viagogo_push_reject():
     if not push_id:
         return jsonify({"error": "id required"}), 400
     db.viagogo_push_update(push_id, {"status": "rejected"}, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True})
+
+
+@app.route("/api/kupat-name-map", methods=["POST"])
+def api_kupat_name_map():
+    """Teach a Hebrew→English name mapping and optionally re-run the search
+    for an existing no_match push row. Body: {hebrew, english, push_id?}."""
+    from flask import request
+    import threading
+    body = request.get_json(silent=True) or {}
+    hebrew = (body.get("hebrew") or "").strip()
+    english = (body.get("english") or "").strip()
+    if not hebrew or not english:
+        return jsonify({"error": "hebrew and english required"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.kupat_name_map_set(hebrew, english, now_iso)
+
+    push_id = (body.get("push_id") or "").strip()
+    if push_id:
+        push = db.viagogo_push_get(push_id)
+        if push and push.get("status") in ("no_match", "error"):
+            # Re-run the search in background with the new mapping.
+            def _retry(pid, fields, now):
+                import mail_intake as _mi
+                _mi._push_kupat_to_viagogo_update(pid, fields, now)
+            fields = {k: push.get(k) for k in
+                      ("event_name", "venue", "event_date_iso", "section",
+                       "row_label", "seats", "qty", "cost", "cost_per_unit")}
+            threading.Thread(
+                target=_retry, args=(push_id, fields, now_iso), daemon=True
+            ).start()
     return jsonify({"ok": True})
 
 

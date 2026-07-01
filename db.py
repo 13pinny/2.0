@@ -488,6 +488,14 @@ CREATE TABLE IF NOT EXISTS viagogo_section_map (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (venue, kupat_section)
 );
+-- Hebrew Kupat artist/venue name → English viagogo search term.
+-- Looked up before every search_event() call so Hebrew-named events match.
+-- Auto-populated on approve; user can add rows via the /pending UI.
+CREATE TABLE IF NOT EXISTS kupat_name_map (
+    hebrew_name TEXT PRIMARY KEY,
+    english_name TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 -- One row per Kupat purchase-confirmation email we're trying to push into a
 -- draft viagogo listing. status lifecycle:
 --   searching -> awaiting_approval -> approved -> creating -> created
@@ -1842,6 +1850,36 @@ def viagogo_section_map_set(venue, kupat_section, viagogo_section, now_iso):
                    updated_at = excluded.updated_at""",
             (venue, kupat_section, viagogo_section, now_iso),
         )
+
+
+def kupat_name_map_get(hebrew_name):
+    """Return the English search term for a Hebrew Kupat artist/venue name, or None."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT english_name FROM kupat_name_map WHERE hebrew_name = ?",
+            (hebrew_name,),
+        ).fetchone()
+    return row["english_name"] if row else None
+
+
+def kupat_name_map_set(hebrew_name, english_name, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO kupat_name_map (hebrew_name, english_name, updated_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(hebrew_name) DO UPDATE SET
+                   english_name = excluded.english_name,
+                   updated_at = excluded.updated_at""",
+            (hebrew_name, english_name, now_iso),
+        )
+
+
+def kupat_name_map_all():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT hebrew_name, english_name, updated_at FROM kupat_name_map ORDER BY hebrew_name"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def viagogo_section_map_all():

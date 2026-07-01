@@ -377,10 +377,17 @@ function renderViagogoPush(rows) {
       </div>
       <div class="ic-subject">
         ${noMatch
-          ? "No viagogo event match found for this purchase — pick one below if it's listed, or reject."
+          ? `No viagogo match — searched <em>${esc(r.event_name || r.venue || "?")}</em>. Teach the English name below to retry.`
           : `Kupat: ₪${Number(r.cost_per_unit || 0).toFixed(2)}/ea × ${r.qty || 0} &nbsp;→&nbsp; viagogo price $${Number(r.website_price_usd || 0).toFixed(2)}/ea (5x, fx ${r.fx_rate ? Number(r.fx_rate).toFixed(4) : "?"})`}
       </div>
       <div class="ic-body" style="grid-template-columns: 110px 1fr 110px 1fr;">
+        ${noMatch ? `
+        <label>Hebrew name</label><input type="text" value="${esc(r.event_name || "")}" readonly style="opacity:0.6;" title="Kupat event name (Hebrew)">
+        <label>English name *</label><input data-f="teach_english" type="text" placeholder="e.g. Eden Ben Zaken" style="grid-column: span 1;">
+        <div style="grid-column: span 4; text-align: right; margin: -4px 0 4px;">
+          <button class="confirm" data-act="vg-teach" style="padding: 4px 12px; font-size: 12px;">Teach &amp; Re-search</button>
+        </div>
+        ` : ""}
         <label>viagogo Event</label>
         <select data-f="event_id" style="grid-column: span 3;">
           <option value="">— select —</option>
@@ -436,6 +443,24 @@ async function rejectViagogoPush(card) {
   const res = await fetch("/api/viagogo-push/reject", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id}) });
   if (!res.ok) { alert("Reject failed"); return; }
   await load();
+}
+
+async function teachViagogoPushName(card) {
+  const id = card.dataset.id;
+  const hebrew = (card.querySelector("input[value]")?.value || "").trim();
+  const english = (card.querySelector("input[data-f='teach_english']")?.value || "").trim();
+  if (!english) { alert("Type the English artist name first"); return; }
+  const btn = card.querySelector("[data-act='vg-teach']");
+  if (btn) btn.disabled = true;
+  const res = await fetch("/api/kupat-name-map", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({hebrew, english, push_id: id}),
+  });
+  if (!res.ok) { alert("Failed to save name mapping"); if (btn) btn.disabled = false; return; }
+  // Re-search runs async on server; poll twice to catch it.
+  await load();
+  setTimeout(() => load(), 5000);
 }
 
 function _readCardFields(card) {
@@ -901,6 +926,7 @@ document.addEventListener("click", async (e) => {
     else if (icBtn.dataset.act === "reject") await rejectIntake(card);
     else if (icBtn.dataset.act === "vg-approve") await approveViagogoPush(card);
     else if (icBtn.dataset.act === "vg-reject") await rejectViagogoPush(card);
+    else if (icBtn.dataset.act === "vg-teach") await teachViagogoPushName(card);
     return;
   }
   const att = e.target.closest(".row-attach");
