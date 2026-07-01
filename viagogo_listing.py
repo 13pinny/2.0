@@ -240,8 +240,11 @@ def download_ticket_pdfs(ticket_url, qty=1):
             for _ in range(len(slides) + 3):
                 active = page.query_selector(".swiper-slide-active")
                 if active:
+                    # Key on DOM position, not text: both real-ticket slides
+                    # share the same leading order-number text, so a text key
+                    # collides and drops the 2nd ticket.
                     key = active.evaluate(
-                        "e => e.getAttribute('data-swiper-slide-index') || e.innerText.slice(0,40)"
+                        "e => String([...document.querySelectorAll('.swiper-slide')].indexOf(e))"
                     )
                     has_code = active.query_selector(".qr-code-box, canvas, .barcode")
                     if has_code and key not in seen:
