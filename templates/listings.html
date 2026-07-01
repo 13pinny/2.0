@@ -86,6 +86,11 @@
     <span style="margin-left:14px;font-size:10px;letter-spacing:1px;color:var(--muted);">Kupat purchases auto-matched + priced at 5× USD — review and approve to create a draft on viagogo</span>
   </h2>
   <div id="vg-container"></div>
+
+  <h2 id="h-done" style="display:none">Completed
+    <span style="margin-left:14px;font-size:10px;letter-spacing:1px;color:var(--muted);">approved or rejected — no action needed</span>
+  </h2>
+  <div id="vg-done"></div>
 </main>
 
 <script>
@@ -112,6 +117,23 @@ async function load() {
 
 function renderCards(rows) {
   const container = $("vg-container");
+  const doneContainer = $("vg-done");
+
+  // Completed section (created / rejected)
+  const done = rows.filter(r => ["created", "rejected"].includes(r.status));
+  $("h-done").style.display = done.length ? "" : "none";
+  doneContainer.innerHTML = done.map(r => {
+    const when = r.updated_at ? new Date(r.updated_at).toLocaleString() : "";
+    const isCreated = r.status === "created";
+    return `<div style="border:1px solid var(--line);margin-bottom:6px;padding:10px 14px;display:flex;gap:14px;align-items:center;opacity:0.6;font-size:12px;">
+      <span style="font-size:10px;padding:1px 6px;border:1px solid ${isCreated ? "var(--green)" : "var(--red)"};color:${isCreated ? "var(--green)" : "var(--red)"};letter-spacing:1.5px;text-transform:uppercase;">${esc(r.status)}</span>
+      <span style="flex:1;">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
+      <span style="color:var(--muted);">${esc(r.chosen_event_date || r.event_date_iso || "")}</span>
+      ${r.viagogo_section ? `<span style="color:var(--muted);">${esc(r.viagogo_section)}</span>` : ""}
+      <span style="color:var(--muted);font-size:10px;">${esc(when)}</span>
+    </div>`;
+  }).join("");
+
   const active = rows.filter(r => !["created", "rejected"].includes(r.status));
   if (!active.length) {
     container.innerHTML = '<div class="inbox-empty">// no viagogo matches waiting on review</div>';
@@ -272,10 +294,22 @@ document.addEventListener("click", async (e) => {
 });
 
 $("poll-now").addEventListener("click", async () => {
+  const btn = $("poll-now");
+  btn.disabled = true;
   $("poll-status").textContent = "polling...";
-  const res = await fetch("/api/pending-intake/poll", {method: "POST"});
-  if (!res.ok) { $("poll-status").textContent = "poll failed"; return; }
-  setTimeout(() => load(), 1500);
+  try {
+    const res = await fetch("/api/pending-intake/poll", {method: "POST"});
+    if (res.status === 429) {
+      $("poll-status").textContent = "already running — try again in a moment";
+    } else if (!res.ok) {
+      $("poll-status").textContent = "poll failed (" + res.status + ")";
+    } else {
+      $("poll-status").textContent = "polled — checking for new emails...";
+      setTimeout(() => load(), 1500);
+    }
+  } finally {
+    setTimeout(() => { btn.disabled = false; }, 3000);
+  }
 });
 
 load();
