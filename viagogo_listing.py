@@ -131,6 +131,45 @@ def _fill_row(page, row_value):
         pass
 
 
+def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
+    """Return the list of section names available for *event_id* on viagogo.
+
+    Navigates to the New Listing modal, picks the event row and ticket-type
+    tile, reads the Listing.Section <select> options, then closes the page.
+    Takes ~10 s (drives the live browser). Results should be cached by the
+    caller — nothing is written.
+    """
+    with sync_playwright() as p:
+        page = _open_listings_page(p)
+        try:
+            _open_new_listing_modal(page)
+            rows = _search_rows(page, search_query)
+            match = next((r for r in rows if r["event_id"] == str(event_id)), None)
+            if not match:
+                raise ViagogoListingError(
+                    f"event {event_id} not found re-searching '{search_query}'"
+                )
+            match["_row"].click()
+            page.wait_for_timeout(400)
+            tile = page.locator(".js-select.tile", has_text=ticket_type).first
+            tile.click()
+            page.wait_for_selector('select[name="Listing.Section"]', timeout=MODAL_TIMEOUT_MS)
+            options = page.query_selector_all('select[name="Listing.Section"] option')
+            sections = []
+            for o in options:
+                val = (o.get_attribute("value") or "").strip()
+                text = (o.inner_text() or "").strip()
+                label = val or text
+                if label:
+                    sections.append(label)
+            return sections
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+
 def create_draft_listing(event_id, search_query, ticket_type, section,
                           available_tickets, website_price, face_value,
                           currency="USD", proceeds=None, row=None,

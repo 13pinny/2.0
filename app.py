@@ -1992,6 +1992,29 @@ def api_viagogo_push():
     return jsonify({"rows": rows})
 
 
+# Simple in-process cache: (event_id, ticket_type) -> list[str]
+_sections_cache: dict = {}
+
+
+@app.route("/api/viagogo-sections")
+def api_viagogo_sections():
+    from flask import request
+    event_id = (request.args.get("event_id") or "").strip()
+    search_query = (request.args.get("search_query") or "").strip()
+    ticket_type = (request.args.get("ticket_type") or "E-Tickets").strip()
+    if not event_id or not search_query:
+        return jsonify({"error": "event_id and search_query required"}), 400
+    cache_key = (event_id, ticket_type)
+    if cache_key in _sections_cache:
+        return jsonify({"sections": _sections_cache[cache_key], "cached": True})
+    try:
+        sections = viagogo_listing.fetch_sections(event_id, search_query, ticket_type)
+        _sections_cache[cache_key] = sections
+        return jsonify({"sections": sections})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/viagogo-push/approve", methods=["POST"])
 def api_viagogo_push_approve():
     from flask import request
