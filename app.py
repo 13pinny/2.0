@@ -1950,15 +1950,24 @@ def api_pending_intake_reject():
 
 def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
                           available_tickets, website_price, face_value, row,
-                          seat_from, seat_to, venue_for_map, kupat_section):
+                          seat_from, seat_to, venue_for_map, kupat_section,
+                          ticket_url=None):
     now = lambda: datetime.now(timezone.utc).isoformat()
     db.viagogo_push_update(push_id, {"status": "creating"}, now())
     try:
+        ticket_pdfs = None
+        if ticket_url:
+            try:
+                _qty = (db.viagogo_push_get(push_id) or {}).get("qty") or 1
+                ticket_pdfs = viagogo_listing.download_ticket_pdfs(ticket_url, qty=int(_qty))
+            except Exception:
+                traceback.print_exc()
         viagogo_listing.create_draft_listing(
             event_id=event_id, search_query=search_query, ticket_type=ticket_type,
             section=section, available_tickets=available_tickets,
             website_price=website_price, face_value=face_value,
             row=row, seat_from=seat_from, seat_to=seat_to,
+            ticket_pdfs=ticket_pdfs,
         )
         if venue_for_map and kupat_section and section:
             db.viagogo_section_map_set(venue_for_map, kupat_section, section, now())
@@ -2027,6 +2036,7 @@ def api_viagogo_push_approve():
         return jsonify({"error": "not found"}), 404
     if push["status"] not in ("awaiting_approval", "error"):
         return jsonify({"error": f"cannot approve from status '{push['status']}'"}), 400
+    ticket_url = (push.get("ticket_url") or "").strip() or None
     event_id = (body.get("event_id") or push.get("chosen_event_id") or "").strip()
     if not event_id:
         return jsonify({"error": "event_id required (no matched event)"}), 400
@@ -2068,7 +2078,8 @@ def api_viagogo_push_approve():
     threading.Thread(
         target=_run_viagogo_approve,
         args=(push_id, event_id, search_query, ticket_type, section, available_tickets,
-              website_price, face_value, row, seat_from, seat_to, venue_for_map, kupat_section),
+              website_price, face_value, row, seat_from, seat_to, venue_for_map, kupat_section,
+              ticket_url),
         daemon=True,
     ).start()
     return jsonify({"ok": True, "status": "creating"})
@@ -2109,7 +2120,8 @@ def api_kupat_name_map():
                 _mi._push_kupat_to_viagogo_update(pid, fields, now)
             fields = {k: push.get(k) for k in
                       ("event_name", "venue", "event_date_iso", "section",
-                       "row_label", "seats", "qty", "cost", "cost_per_unit")}
+                       "row_label", "seats", "qty", "cost", "cost_per_unit",
+                       "ticket_url")}
             threading.Thread(
                 target=_retry, args=(push_id, fields, now_iso), daemon=True
             ).start()

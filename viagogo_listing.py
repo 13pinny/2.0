@@ -18,6 +18,7 @@ the form defaults it on, and an accidental live listing is the one mistake
 this module must never make.
 """
 import re
+import traceback
 
 from patchright.sync_api import sync_playwright
 
@@ -170,10 +171,83 @@ def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
                 pass
 
 
+def download_ticket_pdfs(ticket_url, qty=1):
+    """Render each Kupat e-ticket page to PDF bytes using headless Chromium.
+
+    The Kupat ticket viewer is a public link (no login required), so this
+    uses a fresh headless Chromium rather than the CDP session. Returns a
+    list of PDF bytes, one entry per ticket rendered (up to qty).
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(ticket_url, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
+            pdfs = []
+            for i in range(qty):
+                pdf_bytes = page.pdf(
+                    print_background=True,
+                    format="A4",
+                    margin={"top": "10mm", "bottom": "10mm",
+                            "left": "10mm", "right": "10mm"},
+                )
+                pdfs.append(pdf_bytes)
+                if i < qty - 1:
+                    nxt = page.locator(
+                        "button:has-text('הבא'), a:has-text('הבא'), "
+                        "button:has-text('Next'), a:has-text('Next'), "
+                        "[class*='next-ticket'], [aria-label*='next']"
+                    ).first
+                    if nxt.count() and nxt.is_visible():
+                        nxt.click()
+                        page.wait_for_timeout(1500)
+                    else:
+                        break
+            return pdfs
+        finally:
+            browser.close()
+
+
+def _upload_ticket_pdfs(page, ticket_pdfs):
+    """Navigate to LISTINGS_URL and upload ticket PDFs via 'Upload Now'.
+
+    Non-fatal: raises ViagogoListingError so the caller can decide whether
+    to propagate or swallow. Cleans up temp files regardless.
+    """
+    import tempfile, os, shutil
+    tmp_dir = tempfile.mkdtemp(prefix="kartis_tickets_")
+    try:
+        paths = []
+        for i, data in enumerate(ticket_pdfs):
+            p_ = os.path.join(tmp_dir, f"ticket_{i + 1}.pdf")
+            with open(p_, "wb") as fh:
+                fh.write(data)
+            paths.append(p_)
+
+        page.goto(LISTINGS_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+        page.wait_for_timeout(1500)
+
+        upload = page.locator(
+            "text='Upload Now', a:has-text('Upload Now'), "
+            "button:has-text('Upload Now'), a:has-text('Upload'), "
+            "[title*='Upload']"
+        ).first
+        if not upload.count():
+            raise ViagogoListingError("Upload Now button not found on listings page")
+
+        with page.expect_file_chooser(timeout=10000) as fc:
+            upload.click()
+        fc.value.set_files(paths)
+        page.wait_for_timeout(3000)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def create_draft_listing(event_id, search_query, ticket_type, section,
                           available_tickets, website_price, face_value,
                           currency="USD", proceeds=None, row=None,
-                          seat_from=None, seat_to=None, max_display_quantity=None):
+                          seat_from=None, seat_to=None, max_display_quantity=None,
+                          ticket_pdfs=None):
     """Creates a viagogo listing in DRAFT (unpublished) state and saves it.
 
     event_id      — numeric viagogo event id from a prior search_event() call.
@@ -244,6 +318,13 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
             page.wait_for_selector("#modal a.js-ok", timeout=MODAL_TIMEOUT_MS)
             page.click("#modal a.js-ok")
             page.wait_for_timeout(2000)
+
+            if ticket_pdfs:
+                try:
+                    _upload_ticket_pdfs(page, ticket_pdfs)
+                except Exception:
+                    traceback.print_exc()
+                    # Non-fatal — draft listing already saved
 
             return {
                 "event_id": str(event_id),

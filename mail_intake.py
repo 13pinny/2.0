@@ -168,6 +168,23 @@ def _email_body_text(msg):
     return "\n".join(chunks).strip()
 
 
+def _email_html_links(msg):
+    """Return all href URLs found in the email's HTML part."""
+    for part in msg.walk():
+        if part.get_content_type() != "text/html":
+            continue
+        if "attachment" in (part.get("Content-Disposition") or "").lower():
+            continue
+        try:
+            raw = part.get_payload(decode=True).decode(
+                part.get_content_charset() or "utf-8", errors="replace"
+            )
+        except Exception:
+            continue
+        return re.findall(r'href=["\']([^"\']+)["\']', raw, re.IGNORECASE)
+    return []
+
+
 def _extract_attachments(msg):
     """Returns list of (filename, mimetype, bytes). Skips inline images."""
     out = []
@@ -256,7 +273,7 @@ def _extract_qty(text):
     return None
 
 
-def _parse_kupat(subject, body):
+def _parse_kupat(subject, body, links=None):
     """Kupat (קופת תל אביב) order confirmation. The body has a fixed
     multi-line layout right under the order-id line."""
     out = {"warnings": []}
@@ -299,6 +316,12 @@ def _parse_kupat(subject, body):
         out["section"] = m.group(1).strip()
         out["row_label"] = m.group(2).strip()
         out["seats"] = m.group(3).strip()
+    if links:
+        for _url in links:
+            _low = _url.lower()
+            if "kupat" in _low and any(k in _low for k in ("ticket", "/my-", "order", "print")):
+                out["ticket_url"] = _url
+                break
     return out
 
 
@@ -347,6 +370,7 @@ def _push_kupat_to_viagogo(intake_id, fields):
         "qty": fields.get("qty"),
         "cost": fields.get("cost"),
         "cost_per_unit": cost_per_unit,
+        "ticket_url": fields.get("ticket_url"),
     }
 
     # Kupat emails are in Hebrew; viagogo's event picker uses English names.
@@ -525,14 +549,14 @@ def _parse_ticketmaster_il(subject, body):
     return out
 
 
-def extract_fields(provider, subject, sender, body, attachments):
+def extract_fields(provider, subject, sender, body, attachments, links=None):
     """Dispatch to per-provider extractors, then fall back to generic
     regex search for any field still missing. Returned dict includes a
     `warnings` list with parser quibbles (e.g. cost_not_found)."""
     text = (subject or "") + "\n" + (body or "")
 
     if provider == "kupat":
-        out = _parse_kupat(subject, body)
+        out = _parse_kupat(subject, body, links=links)
     elif provider == "tickchak":
         out = _parse_tickchak(subject, sender, body)
     elif provider in ("ticketmaster_il",):
@@ -580,6 +604,7 @@ def extract_fields(provider, subject, sender, body, attachments):
         "qty": out.get("qty"),
         "cost": out.get("cost"),
         "cost_per_unit": out.get("cost_per_unit"),
+        "ticket_url": out.get("ticket_url"),
         "warnings": warnings,
     }
 
@@ -804,7 +829,8 @@ def run_intake():
             if _is_blocked_sender(parsed["from"]):
                 skipped_provider += 1
                 continue
-            fields = extract_fields(provider, parsed["subject"], parsed["from"], parsed["body"], parsed["attachments"])
+            links = _email_html_links(message_from_bytes(raw))
+            fields = extract_fields(provider, parsed["subject"], parsed["from"], parsed["body"], parsed["attachments"], links=links)
             intake_id = "intake-" + uuid.uuid4().hex[:12]
             row = {
                 "id": intake_id,
@@ -824,6 +850,7 @@ def run_intake():
                 "cost_per_unit": fields.get("cost_per_unit"),
                 "raw_text": (parsed["body"] or "")[:8000],
                 "parse_warnings": ",".join(fields.get("warnings") or []),
+                "ticket_url": (fields or {}).get("ticket_url"),
                 "status": "new",
             }
             db.insert_pending_intake(row, datetime.now(timezone.utc).isoformat())
