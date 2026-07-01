@@ -146,6 +146,7 @@ function renderCards(rows) {
     card.dataset.id = r.id;
     card.dataset.searchQuery = r.chosen_event_name || r.event_name || r.venue || "";
     card.dataset.suggestedSection = r.suggested_viagogo_section || "";
+    card.dataset.kupatSection = r.section || "";
     const candidates = r.candidates || [];
     const noMatch = r.status === "no_match";
     const when = r.created_at ? new Date(r.created_at).toLocaleString() : "";
@@ -173,18 +174,18 @@ function renderCards(rows) {
         </div>
         ` : ""}
         <label>viagogo Event</label>
-        <select data-f="event_id" style="grid-column: span 3;">
+        <select data-f="event_id" style="grid-column: 2 / -1;">
           <option value="">— select —</option>
           ${eventOptions}
         </select>
-        <label>Ticket Type</label>
-        <select data-f="ticket_type">
+        <label>Section *</label>
+        <select data-f="section" style="grid-column: 2 / -1;">
+          <option value="">— pick event to load sections —</option>
+        </select>
+        <div data-hint="section" style="grid-column: 2 / -1; font-size: 10px; letter-spacing: 0.5px; margin-top: -2px; min-height: 12px;"></div>
+        <label>Ticket Type</label><select data-f="ticket_type">
           <option value="E-Tickets">E-Tickets</option>
           <option value="Paper Tickets">Paper Tickets</option>
-        </select>
-        <label>Section *</label>
-        <select data-f="section" style="grid-column: span 3;">
-          <option value="">— pick event to load sections —</option>
         </select>
         <label>Qty</label><input data-f="available_tickets" type="number" min="1" value="${r.qty ?? ""}">
         <label>Website $/ea</label><input data-f="website_price" type="number" step="0.01" value="${r.website_price_usd ?? ""}">
@@ -210,11 +211,37 @@ function renderCards(rows) {
   }
 }
 
+// Pick the program's best guess for the viagogo section, given the live
+// section list, any learned mapping, and the raw Kupat section text.
+// Returns {value, source} — source drives the verify hint below.
+function guessSection(sections, suggested, kupatSection) {
+  // 1. A previously learned venue+section mapping is authoritative.
+  if (suggested && sections.includes(suggested)) return {value: suggested, source: "learned"};
+  const k = String(kupatSection || "").trim();
+  // 2. A number carried over from the Kupat section (e.g. "אולם 3" → "…3").
+  const nums = k.match(/\d+/g) || [];
+  for (const n of nums) {
+    const rx = new RegExp("(^|\\D)" + n + "(\\D|$)");
+    const hit = sections.find(s => rx.test(s));
+    if (hit) return {value: hit, source: "guess"};
+  }
+  // 3. Case-insensitive substring match either direction.
+  const kl = k.toLowerCase();
+  if (kl) {
+    const hit = sections.find(s => { const sl = s.toLowerCase(); return sl.includes(kl) || kl.includes(sl); });
+    if (hit) return {value: hit, source: "guess"};
+  }
+  return {value: "", source: "none"};
+}
+
 async function loadSections(card, eventId, ticketType) {
   const searchQuery = card.dataset.searchQuery || "";
   const sel = card.querySelector("select[data-f='section']");
   if (!sel || !eventId || !searchQuery) return;
   const suggested = card.dataset.suggestedSection || "";
+  const kupatSection = card.dataset.kupatSection || "";
+  const hint = card.querySelector("[data-hint='section']");
+  if (hint) hint.textContent = "";
   sel.innerHTML = '<option value="">loading sections...</option>';
   sel.disabled = true;
   try {
@@ -226,9 +253,22 @@ async function loadSections(card, eventId, ticketType) {
       sel.disabled = false;
       return;
     }
+    const g = guessSection(d.sections, suggested, kupatSection);
     sel.innerHTML = '<option value="">— select section —</option>' +
-      d.sections.map(s => `<option value="${esc(s)}" ${s === suggested ? "selected" : ""}>${esc(s)}</option>`).join("");
+      d.sections.map(s => `<option value="${esc(s)}" ${s === g.value ? "selected" : ""}>${esc(s)}</option>`).join("");
     sel.disabled = false;
+    if (hint) {
+      if (g.source === "learned") {
+        hint.style.color = "var(--green)";
+        hint.textContent = "✓ auto-selected from a saved mapping — change if wrong";
+      } else if (g.source === "guess") {
+        hint.style.color = "var(--amber)";
+        hint.textContent = `⚠ best guess from Kupat "${kupatSection}" — verify before approving`;
+      } else {
+        hint.style.color = "var(--muted)";
+        hint.textContent = kupatSection ? `couldn't guess from Kupat "${kupatSection}" — pick manually` : "";
+      }
+    }
   } catch (e) {
     sel.innerHTML = '<option value="">network error</option>';
     sel.disabled = false;
