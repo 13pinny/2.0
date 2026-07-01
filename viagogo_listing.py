@@ -262,6 +262,31 @@ def download_ticket_pdfs(ticket_url, qty=1):
             browser.close()
 
 
+def _drag_element(page, source, target):
+    """Manual mouse drag (down / step-move / up) from source to target.
+
+    viagogo's e-ticket slots are jQuery-UI droppables, which track real
+    mouse events rather than HTML5 drag-and-drop — so Playwright's drag_to
+    (DnD events) doesn't register. Intermediate moves are required to pass
+    the drag threshold and to hover the droppable before releasing.
+    """
+    sb = source.bounding_box()
+    tb = target.bounding_box()
+    if not sb or not tb:
+        return
+    sx, sy = sb["x"] + sb["width"] / 2, sb["y"] + sb["height"] / 2
+    tx, ty = tb["x"] + tb["width"] / 2, tb["y"] + tb["height"] / 2
+    source.scroll_into_view_if_needed()
+    page.mouse.move(sx, sy)
+    page.mouse.down()
+    page.wait_for_timeout(150)
+    page.mouse.move(sx + 12, sy + 8, steps=5)   # break the drag threshold
+    page.mouse.move(tx, ty, steps=15)           # travel to the slot
+    page.mouse.move(tx, ty, steps=5)            # settle over the droppable
+    page.wait_for_timeout(150)
+    page.mouse.up()
+
+
 def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section):
     """Attach ticket PDFs to a just-created listing via its E-Tickets flow.
 
@@ -347,6 +372,26 @@ def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section):
             if not confirms:
                 break
             confirms[-1].click()
+            page.wait_for_timeout(1500)
+
+        # Uploaded files land in a pool as .js-ticketThumb draggables; each
+        # seat slot (.js-incDropTarget, jQuery-UI droppable showing "Drag
+        # Ticket N Here" until filled) must be assigned by dragging a pooled
+        # thumb onto it — Continue stays disabled until every slot is filled.
+        # jQuery-UI listens to real mouse events, so a plain drag_to won't do;
+        # we down/move-in-steps/up. Re-query each pass because the DOM
+        # re-renders (thumb leaves the pool, slot fills) after each drop.
+        for _ in range(len(paths)):
+            slot = next(
+                (s for s in page.query_selector_all(".js-incDropTarget")
+                 if (lambda h: h and "Drag Ticket" in (h.inner_text() or ""))(
+                     s.query_selector(".js-eticketHelpText"))),
+                None,
+            )
+            thumb = page.query_selector(".js-ticketThumb")
+            if slot is None or thumb is None:
+                break
+            _drag_element(page, thumb, slot)
             page.wait_for_timeout(1500)
 
         save = page.locator(".js-save").first
