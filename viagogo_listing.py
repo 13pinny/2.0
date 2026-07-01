@@ -310,12 +310,15 @@ def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section):
 
         # Pick the 'Upload Now' link in the row matching our section (a fresh
         # listing is the one still showing Upload Now rather than View).
+        # Normalize whitespace both sides — the stored section can carry
+        # doubled/odd spacing that won't substring-match the rendered row.
+        sec_norm = re.sub(r"\s+", " ", section or "").strip()
         upload_link = None
         for h in page.query_selector_all(".js-upload-etickets"):
             rowtext = h.evaluate(
                 "e => { let n=e; for (let i=0;i<5&&n.parentElement;i++) n=n.parentElement; return n.innerText; }"
             )
-            if section and section in rowtext:
+            if sec_norm and sec_norm in re.sub(r"\s+", " ", rowtext):
                 upload_link = h
                 break
         if upload_link is None:
