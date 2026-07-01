@@ -371,7 +371,7 @@ function renderViagogoPush(rows) {
     card.innerHTML = `
       <div class="ic-head">
         <span class="provider status-${esc(r.status)}">${esc(r.status.replace(/_/g, " "))}</span>
-        <span class="from" title="${esc(r.venue || "")}">${esc(r.event_name || "")} — ${esc(r.venue || "")}</span>
+        <span class="from" title="${esc(r.chosen_venue || r.venue || "")}">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
         <span class="when">${esc(when)}</span>
         ${r.error ? `<span class="warn" title="${esc(r.error)}">${esc(r.error.slice(0, 60))}</span>` : ""}
       </div>
