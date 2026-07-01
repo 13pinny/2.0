@@ -278,12 +278,15 @@ def _drag_element(page, source, target):
     tx, ty = tb["x"] + tb["width"] / 2, tb["y"] + tb["height"] / 2
     source.scroll_into_view_if_needed()
     page.mouse.move(sx, sy)
+    page.wait_for_timeout(150)
     page.mouse.down()
-    page.wait_for_timeout(150)
-    page.mouse.move(sx + 12, sy + 8, steps=5)   # break the drag threshold
-    page.mouse.move(tx, ty, steps=15)           # travel to the slot
-    page.mouse.move(tx, ty, steps=5)            # settle over the droppable
-    page.wait_for_timeout(150)
+    page.wait_for_timeout(200)
+    page.mouse.move(sx + 10, sy + 6, steps=6)              # break the drag threshold
+    page.mouse.move((sx + tx) / 2, (sy + ty) / 2, steps=10)  # travel halfway
+    page.mouse.move(tx, ty, steps=10)                     # onto the slot
+    page.mouse.move(tx + 3, ty + 3, steps=3)             # jiggle so jQuery-UI 'over' fires
+    page.mouse.move(tx, ty, steps=3)
+    page.wait_for_timeout(300)
     page.mouse.up()
 
 
@@ -381,17 +384,25 @@ def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section):
         # jQuery-UI listens to real mouse events, so a plain drag_to won't do;
         # we down/move-in-steps/up. Re-query each pass because the DOM
         # re-renders (thumb leaves the pool, slot fills) after each drop.
-        for _ in range(len(paths)):
-            slot = next(
-                (s for s in page.query_selector_all(".js-incDropTarget")
-                 if (lambda h: h and "Drag Ticket" in (h.inner_text() or ""))(
-                     s.query_selector(".js-eticketHelpText"))),
-                None,
-            )
-            thumb = page.query_selector(".js-ticketThumb")
-            if slot is None or thumb is None:
+        def _empty_slots():
+            out = []
+            for s in page.query_selector_all(".js-incDropTarget"):
+                h = s.query_selector(".js-eticketHelpText")
+                if h and "Drag Ticket" in (h.inner_text() or ""):
+                    out.append(s)
+            return out
+
+        # Retry-driven: synthetic jQuery-UI drags don't always land, so keep
+        # dragging the first pooled thumb onto the first still-empty slot
+        # until none remain (or we run out of attempts / thumbs).
+        for _ in range(len(paths) * 3 + 2):
+            empty = _empty_slots()
+            if not empty:
                 break
-            _drag_element(page, thumb, slot)
+            thumb = page.query_selector(".js-ticketThumb")
+            if thumb is None:
+                break
+            _drag_element(page, thumb, empty[0])
             page.wait_for_timeout(1500)
 
         save = page.locator(".js-save").first
