@@ -62,7 +62,15 @@ def _search_rows(page, query):
     search_box.click()
     search_box.fill("")
     page.keyboard.type(query, delay=40)
-    page.wait_for_timeout(700)  # debounce — the picker filters async
+    # The picker filters async. Wait for at least one row to render (up to
+    # 5s — a laggy page can take well over the old flat 700ms) rather than
+    # sleeping a fixed amount and reading an empty, still-filtering list.
+    # Don't fail hard if the query legitimately has no matches.
+    try:
+        page.wait_for_selector("#modal tr.pointer", timeout=5000)
+    except Exception:
+        pass
+    page.wait_for_timeout(300)  # brief settle after the first row appears
     rows = page.query_selector_all("#modal tr.pointer")
     out = []
     for r in rows:
@@ -133,6 +141,37 @@ def _fill_row(page, row_value):
         pass
 
 
+def _click_event_row(page, event_id, match_row=None):
+    """Open an event's ticket-type step by clicking its picker row.
+
+    Uses a FRESH locator keyed on the event id rather than the ElementHandle
+    captured during the initial search: the picker re-renders as its async
+    filter settles, which detaches the old handle — and clicking a detached
+    handle hangs until the full timeout instead of failing fast (the "stall
+    that a page refresh fixes"). A Playwright locator re-resolves the element
+    at click time and auto-waits for it to be actionable. Falls back to the
+    captured handle only if the locator can't find the row.
+    """
+    row = page.locator(f'#modal tr.pointer[data-eventlink$="{event_id}"]').first
+    try:
+        row.wait_for(state="visible", timeout=MODAL_TIMEOUT_MS)
+        row.scroll_into_view_if_needed()
+        row.click()
+        return
+    except Exception:
+        if match_row is None:
+            raise
+    match_row.click()
+
+
+def _select_ticket_type_tile(page, ticket_type):
+    """Click the ticket-type tile, auto-waiting for it to be actionable
+    (replaces a fixed post-click sleep that was too short on a laggy page)."""
+    tile = page.locator(".js-select.tile", has_text=ticket_type).first
+    tile.wait_for(state="visible", timeout=MODAL_TIMEOUT_MS)
+    tile.click()
+
+
 def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
     """Return the list of section names available for *event_id* on viagogo.
 
@@ -151,10 +190,8 @@ def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
                 raise ViagogoListingError(
                     f"event {event_id} not found re-searching '{search_query}'"
                 )
-            match["_row"].click()
-            page.wait_for_timeout(400)
-            tile = page.locator(".js-select.tile", has_text=ticket_type).first
-            tile.click()
+            _click_event_row(page, event_id, match.get("_row"))
+            _select_ticket_type_tile(page, ticket_type)
             page.wait_for_selector('select[name="Listing.Section"]', timeout=MODAL_TIMEOUT_MS)
             options = page.query_selector_all('select[name="Listing.Section"] option')
             sections = []
@@ -274,11 +311,8 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
                     f"event {event_id} not found re-searching '{search_query}' "
                     f"(picker returned {[r['event_id'] for r in rows]})"
                 )
-            match["_row"].click()
-            page.wait_for_timeout(400)
-
-            tile = page.locator(".js-select.tile", has_text=ticket_type).first
-            tile.click()
+            _click_event_row(page, event_id, match.get("_row"))
+            _select_ticket_type_tile(page, ticket_type)
             page.wait_for_selector('input[name="Listing.AvailableTickets"]', timeout=MODAL_TIMEOUT_MS)
 
             page.fill('input[name="Listing.AvailableTickets"]', str(available_tickets))

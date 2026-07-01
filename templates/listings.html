@@ -186,7 +186,10 @@ function renderCards(rows) {
         <select data-f="section" style="grid-column: 2 / -1;">
           <option value="">— pick event to load sections —</option>
         </select>
-        <div data-hint="section" style="grid-column: 2 / -1; font-size: 10px; letter-spacing: 0.5px; margin-top: -2px; min-height: 12px;"></div>
+        <div style="grid-column: 2 / -1; display: flex; align-items: center; gap: 10px; margin-top: -2px; min-height: 14px;">
+          <span data-hint="section" style="font-size: 10px; letter-spacing: 0.5px;"></span>
+          <button type="button" data-act="reload-sections" style="background: none; border: none; color: var(--accent); cursor: pointer; font-size: 10px; letter-spacing: 0.5px; text-transform: none; padding: 0;">↻ reload sections</button>
+        </div>
         <label>Ticket Type</label><select data-f="ticket_type">
           <option value="E-Tickets">E-Tickets</option>
           <option value="Paper Tickets">Paper Tickets</option>
@@ -221,6 +224,11 @@ function renderCards(rows) {
         proceedsInput.value = p > 0 ? (p * 0.9).toFixed(2) : "";
       });
     }
+
+    // Manual re-fetch for when viagogo's picker is laggy — beats refreshing
+    // the whole page just to retry the section load.
+    const reloadSecBtn = card.querySelector("[data-act='reload-sections']");
+    if (reloadSecBtn) reloadSecBtn.addEventListener("click", () => loadSections(card, eventSel.value, ticketSel.value));
 
     // Auto-load sections for the pre-chosen event
     if (r.chosen_event_id) loadSections(card, r.chosen_event_id, "E-Tickets");
@@ -260,13 +268,18 @@ async function loadSections(card, eventId, ticketType) {
   if (hint) hint.textContent = "";
   sel.innerHTML = '<option value="">loading sections...</option>';
   sel.disabled = true;
+  // Guard against a stalled backend (viagogo picker lag) leaving the dropdown
+  // stuck on "loading..." — abort after 60s and point at the reload button.
+  const ctrl = new AbortController();
+  const killer = setTimeout(() => ctrl.abort(), 60000);
   try {
     const params = new URLSearchParams({event_id: eventId, search_query: searchQuery, ticket_type: ticketType || "E-Tickets"});
-    const res = await fetch("/api/viagogo-sections?" + params);
+    const res = await fetch("/api/viagogo-sections?" + params, {signal: ctrl.signal});
     const d = await res.json();
     if (!res.ok || !d.sections || !d.sections.length) {
       sel.innerHTML = `<option value="">${esc(d.error || "no sections found")}</option>`;
       sel.disabled = false;
+      if (hint) { hint.style.color = "var(--amber)"; hint.textContent = "couldn't load — click ↻ reload sections"; }
       return;
     }
     const g = guessSection(d.sections, suggested, kupatSection);
@@ -286,8 +299,12 @@ async function loadSections(card, eventId, ticketType) {
       }
     }
   } catch (e) {
-    sel.innerHTML = '<option value="">network error</option>';
+    const stalled = e && e.name === "AbortError";
+    sel.innerHTML = `<option value="">${stalled ? "timed out" : "network error"} — click ↻ reload</option>`;
     sel.disabled = false;
+    if (hint) { hint.style.color = "var(--red)"; hint.textContent = (stalled ? "section load stalled" : "network error") + " — click ↻ reload sections"; }
+  } finally {
+    clearTimeout(killer);
   }
 }
 
