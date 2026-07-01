@@ -1826,6 +1826,11 @@ def pending_page():
     return render_template("pending.html")
 
 
+@app.route("/listings")
+def listings_page():
+    return render_template("listings.html")
+
+
 @app.route("/api/pending-intake")
 def api_pending_intake():
     rows = db.all_pending_intake(status="new")
