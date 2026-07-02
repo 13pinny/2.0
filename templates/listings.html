@@ -164,6 +164,9 @@ function renderCards(rows) {
         <span class="when">${esc(when)}</span>
         ${r.error ? `<span class="warn" title="${esc(r.error)}">${esc(r.error.slice(0, 80))}</span>` : ""}
       </div>
+      <div class="ic-subject" style="direction: rtl; text-align: right; color: var(--text);" title="What the Kupat email/ticket says — confirm the viagogo section against this">
+        🎫 ${esc(r.event_name || "?")}${r.venue ? ` — ${esc(r.venue)}` : ""} &nbsp;·&nbsp; אזור: <b style="color: var(--amber);">${esc(r.section || "— לא צוין —")}</b>${r.row_label ? ` &nbsp;·&nbsp; שורה: ${esc(r.row_label)}` : ""}${r.seats ? ` &nbsp;·&nbsp; כיסאות: ${esc(r.seats)}` : ""}
+      </div>
       <div class="ic-subject">
         ${noMatch
           ? `No viagogo match — searched <em>${esc(r.event_name || r.venue || "?")}</em>. Teach the English name below to retry.`
@@ -289,13 +292,17 @@ async function loadSections(card, eventId, ticketType) {
     if (hint) {
       if (g.source === "learned") {
         hint.style.color = "var(--green)";
-        hint.textContent = "✓ auto-selected from a saved mapping — change if wrong";
+        hint.textContent = kupatSection
+          ? `✓ saved mapping for ticket "${kupatSection}" — change if wrong`
+          : "✓ auto-selected from a saved mapping — change if wrong";
       } else if (g.source === "guess") {
         hint.style.color = "var(--amber)";
-        hint.textContent = `⚠ best guess from Kupat "${kupatSection}" — verify before approving`;
+        hint.textContent = `⚠ best guess — ticket says "${kupatSection}", verify before approving`;
       } else {
-        hint.style.color = "var(--muted)";
-        hint.textContent = kupatSection ? `couldn't guess from Kupat "${kupatSection}" — pick manually` : "";
+        hint.style.color = "var(--amber)";
+        hint.textContent = kupatSection
+          ? `ticket says "${kupatSection}" — couldn't match it, pick manually`
+          : "no section on the Kupat email (GA/standing?) — pick manually";
       }
     }
   } catch (e) {
