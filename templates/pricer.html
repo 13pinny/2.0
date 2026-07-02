@@ -102,7 +102,7 @@
 </div>
 
 <div class="bar boxed">
-  <label title="Global kill switch — nothing runs while this is off"><input type="checkbox" id="p-master"> master</label>
+  <button id="p-master" title="Global kill switch — nothing runs while this is off" style="font-weight:700; letter-spacing:1px; min-width:130px;">PRICER: …</button>
   <label title="Log + notify what would change, without touching viagogo"><input type="checkbox" id="p-dryrun"> dry run</label>
   <label title="How far below the cheapest competitor to price, in USD">undercut $<input type="number" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
   <button id="p-run">Run pricer now</button>
@@ -116,7 +116,8 @@
 <table>
   <thead><tr>
     <th>EVENT</th><th>DATE</th><th>SECTION</th>
-    <th class="num">AVAIL</th><th class="num">PRICE</th><th class="num">PROCEEDS</th>
+    <th class="num">AVAIL</th><th class="num" title="What you paid per ticket (face value)">COST /EA</th>
+    <th class="num">PRICE</th><th class="num">PROCEEDS</th>
     <th title="Auto-pricer on/off — set a floor first">AUTO</th>
     <th class="num" title="Never price below this (USD)">FLOOR</th>
     <th>STATE</th><th class="num" title="Last price the pricer set">LAST SET</th>
@@ -143,10 +144,18 @@ const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&a
 let _rows = [];      // /api/viagogo rows (already merged with pricer config)
 let _byId = {};      // listing_id -> row, for the activity table
 
+function _isPast(iso) {
+  if (!iso) return false;                    // unknown date — keep it visible
+  const d = new Date(iso);
+  const today = new Date(); today.setHours(0,0,0,0);
+  return d < today;
+}
+
 function renderListings() {
   const search = (document.getElementById("p-search").value || "").toLowerCase();
   const onlyAuto = document.getElementById("p-onlyauto").checked;
   const rows = _rows.filter(r => {
+    if (_isPast(r.event_date_iso)) return false;   // past events can't sell
     if (onlyAuto && !r.pricer_enabled && !r.pricer_paused) return false;
     // pricing only matters for listings with tickets to sell
     if (!(r.available > 0) && !r.pricer_enabled && !r.pricer_paused) return false;
@@ -170,6 +179,7 @@ function renderListings() {
       <td>${esc(r.event_date)}</td>
       <td>${esc((r.section||"").split("\n")[0])}</td>
       <td class="num">${r.available ?? ""}</td>
+      <td class="num" style="color:var(--amber);">${money(r.face_value)}</td>
       <td class="num">${money(r.price)}</td>
       <td class="num">${money(r.proceeds)}</td>
       <td><input type="checkbox" class="p-auto" data-id="${esc(r.id)}" ${r.pricer_enabled ? "checked" : ""}></td>
@@ -242,10 +252,13 @@ async function loadAll() {
     _rows = vdata.rows || [];
     _byId = Object.fromEntries(_rows.map(r => [String(r.id), r]));
 
+    _masterOn = !!s.master_enabled;
     const master = document.getElementById("p-master");
+    master.textContent = _masterOn ? "PRICER: ON" : "PRICER: OFF";
+    master.style.color = _masterOn ? "var(--green)" : "var(--red)";
+    master.style.borderColor = _masterOn ? "var(--green)" : "var(--red)";
     const dryrun = document.getElementById("p-dryrun");
     const undercut = document.getElementById("p-undercut");
-    if (document.activeElement !== master) master.checked = !!s.master_enabled;
     if (document.activeElement !== dryrun) dryrun.checked = !!s.dry_run;
     if (document.activeElement !== undercut) undercut.value = s.undercut;
     document.getElementById("drywarn").style.display = (s.master_enabled && s.dry_run) ? "block" : "none";
@@ -278,8 +291,9 @@ async function loadAll() {
   }
 }
 
-document.getElementById("p-master").addEventListener("change", async (e) => {
-  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ master_enabled: e.target.checked }) });
+let _masterOn = false;
+document.getElementById("p-master").addEventListener("click", async () => {
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ master_enabled: !_masterOn }) });
   loadAll();
 });
 document.getElementById("p-dryrun").addEventListener("change", async (e) => {
