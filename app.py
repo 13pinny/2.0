@@ -1326,6 +1326,11 @@ def dashboard():
     return render_template("dashboard.html")
 
 
+@app.route("/pricer")
+def pricer_page():
+    return render_template("pricer.html")
+
+
 @app.route("/sales")
 def sales_page():
     return render_template("sales.html")

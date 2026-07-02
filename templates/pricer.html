@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Pricer</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --bg-3: #11161d;
+    --line: #21262d;
+    --line-2: #2a3038;
+    --text: #c9d1d9;
+    --muted: #6e7681;
+    --accent: #58a6ff;
+    --green: #56d364;
+    --red: #f85149;
+    --amber: #d29922;
+    --orange: #f97316;
+    --purple: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 24px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  .bar.boxed { border: 1px solid var(--line); padding: 10px 12px; }
+  .bar label { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #1f262e; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line-2); color: var(--muted); border-radius: 1px; letter-spacing: 1px; text-transform: uppercase; white-space: nowrap; }
+  .status.active { color: var(--green); border-color: var(--green); }
+  .status.paused { color: var(--amber); border-color: var(--amber); }
+  .status.dry { color: var(--purple); border-color: var(--purple); }
+  .empty { color: var(--muted); padding: 28px; text-align: center; font-size: 12px; }
+  .act-lower { color: var(--green); }
+  .act-dry { color: var(--purple); }
+  .act-pause { color: var(--amber); }
+  .act-err { color: var(--red); }
+  .act-skip { color: var(--muted); }
+  .warn { background: #2a2314; border: 1px solid var(--amber); color: var(--amber); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>// PRICER</h1>
+    <span class="meta" id="p-status">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/credits">CREDITS</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/pricer" class="active">PRICER</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/festival">FESTIVAL</a>
+    <a href="/ga">GA</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+  </nav>
+</header>
+<main>
+<div id="errbox" class="err" style="display:none"></div>
+<div id="drywarn" class="warn" style="display:none">// DRY RUN is on — the pricer logs and pings what it <b>would</b> do, but never touches viagogo. Untick it below to go live.</div>
+
+<div class="stats">
+  <div class="stat"><div class="label">Auto Listings</div><div class="value" id="s-enabled">0</div></div>
+  <div class="stat amber"><div class="label">Paused</div><div class="value" id="s-paused">0</div></div>
+  <div class="stat green"><div class="label">Changed Last Tick</div><div class="value" id="s-changed">0</div></div>
+  <div class="stat"><div class="label">Skipped Last Tick</div><div class="value" id="s-skipped">0</div></div>
+  <div class="stat red"><div class="label">Errors Last Tick</div><div class="value" id="s-errors">0</div></div>
+</div>
+
+<div class="bar boxed">
+  <label title="Global kill switch — nothing runs while this is off"><input type="checkbox" id="p-master"> master</label>
+  <label title="Log + notify what would change, without touching viagogo"><input type="checkbox" id="p-dryrun"> dry run</label>
+  <label title="How far below the cheapest competitor to price, in USD">undercut $<input type="number" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
+  <button id="p-run">Run pricer now</button>
+</div>
+
+<h2>// LISTINGS</h2>
+<div class="bar">
+  <input type="search" id="p-search" placeholder="search // event venue section" style="flex:1; min-width:200px;">
+  <label><input type="checkbox" id="p-onlyauto"> auto-priced only</label>
+</div>
+<table>
+  <thead><tr>
+    <th>EVENT</th><th>DATE</th><th>SECTION</th>
+    <th class="num">AVAIL</th><th class="num">PRICE</th><th class="num">PROCEEDS</th>
+    <th title="Auto-pricer on/off — set a floor first">AUTO</th>
+    <th class="num" title="Never price below this (USD)">FLOOR</th>
+    <th>STATE</th><th class="num" title="Last price the pricer set">LAST SET</th>
+  </tr></thead>
+  <tbody id="ptbody"></tbody>
+</table>
+<div id="pempty" class="empty" style="display:none">// no viagogo listings with tickets available</div>
+
+<h2>// ACTIVITY</h2>
+<table>
+  <thead><tr>
+    <th>WHEN</th><th>EVENT</th><th>SECTION</th><th>ACTION</th>
+    <th class="num">OLD</th><th class="num">NEW</th><th class="num">COMPETITOR</th><th>DETAIL</th>
+  </tr></thead>
+  <tbody id="plogbody"></tbody>
+</table>
+<div id="plogempty" class="empty" style="display:none">// no pricer activity yet</div>
+</main>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+let _rows = [];      // /api/viagogo rows (already merged with pricer config)
+let _byId = {};      // listing_id -> row, for the activity table
+
+function renderListings() {
+  const search = (document.getElementById("p-search").value || "").toLowerCase();
+  const onlyAuto = document.getElementById("p-onlyauto").checked;
+  const rows = _rows.filter(r => {
+    if (onlyAuto && !r.pricer_enabled && !r.pricer_paused) return false;
+    // pricing only matters for listings with tickets to sell
+    if (!(r.available > 0) && !r.pricer_enabled && !r.pricer_paused) return false;
+    if (search && !((r.event_name||"") + " " + (r.venue||"") + " " + (r.section||"")).toLowerCase().includes(search)) return false;
+    return true;
+  }).sort((a,b) => ((a.event_date_iso||"zzz").localeCompare(b.event_date_iso||"zzz")));
+  const tbody = document.getElementById("ptbody");
+  tbody.innerHTML = "";
+  for (const r of rows) {
+    let chip;
+    if (r.pricer_paused) {
+      chip = `<span class="status paused">paused${r.pricer_paused_reason === "manual_change" ? ": manual" : ""}</span> <a href="#" class="p-resume" data-id="${esc(r.id)}" style="color:var(--accent); font-size:10px;">resume</a>`;
+    } else if (r.pricer_enabled) {
+      chip = `<span class="status active">active</span>`;
+    } else {
+      chip = `<span class="status">off</span>`;
+    }
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(r.event_name)}<div style="color:var(--muted); font-size:10px;">${esc(r.venue)}</div></td>
+      <td>${esc(r.event_date)}</td>
+      <td>${esc((r.section||"").split("\n")[0])}</td>
+      <td class="num">${r.available ?? ""}</td>
+      <td class="num">${money(r.price)}</td>
+      <td class="num">${money(r.proceeds)}</td>
+      <td><input type="checkbox" class="p-auto" data-id="${esc(r.id)}" ${r.pricer_enabled ? "checked" : ""}></td>
+      <td class="num"><input type="number" class="p-floor" data-id="${esc(r.id)}" step="0.01" min="0" value="${r.pricer_floor ?? ""}" placeholder="—" style="width:74px; padding:3px 6px;"></td>
+      <td>${chip}</td>
+      <td class="num">${r.pricer_last_set_price != null ? money(r.pricer_last_set_price) : "—"}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("pempty").style.display = rows.length ? "none" : "block";
+
+  tbody.querySelectorAll(".p-auto").forEach(cb => cb.addEventListener("change", async (e) => {
+    const id = e.target.dataset.id;
+    const floorInput = tbody.querySelector(`.p-floor[data-id="${CSS.escape(id)}"]`);
+    const floor = parseFloat(floorInput?.value);
+    if (e.target.checked && (!floor || floor <= 0)) {
+      alert("Set a floor price (USD) before enabling auto-pricing on a listing.");
+      e.target.checked = false;
+      return;
+    }
+    const body = { listing_id: id, enabled: e.target.checked };
+    if (floor > 0) body.floor_price = floor;
+    const res = await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+    if (!res.ok) { alert((await res.json()).error || "failed"); e.target.checked = !e.target.checked; return; }
+    loadAll();
+  }));
+  tbody.querySelectorAll(".p-floor").forEach(inp => inp.addEventListener("change", async (e) => {
+    const floor = parseFloat(e.target.value);
+    if (!floor || floor <= 0) return;
+    await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ listing_id: e.target.dataset.id, floor_price: floor }) });
+  }));
+  tbody.querySelectorAll(".p-resume").forEach(a => a.addEventListener("click", async (e) => {
+    e.preventDefault();
+    await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ listing_id: e.target.dataset.id, resume: true }) });
+    loadAll();
+  }));
+}
+
+function renderLog(log) {
+  const tbody = document.getElementById("plogbody");
+  tbody.innerHTML = "";
+  const cls = (a) => a === "lower" || a === "floor_clamp" ? "act-lower"
+    : a === "dry_run" ? "act-dry"
+    : a === "pause_manual" ? "act-pause"
+    : a === "error" || a === "fetch_failed" ? "act-err" : "act-skip";
+  for (const e of log) {
+    const row = _byId[e.listing_id] || {};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="white-space:nowrap;">${e.created_at ? new Date(e.created_at).toLocaleString() : ""}</td>
+      <td>${esc(row.event_name || e.event_id || e.listing_id)}</td>
+      <td>${esc((e.section||"").split("\n")[0])}</td>
+      <td class="${cls(e.action)}">${esc(e.action)}${e.dry_run ? ' <span class="status dry">dry</span>' : ""}</td>
+      <td class="num">${e.old_price != null ? money(e.old_price) : "—"}</td>
+      <td class="num">${e.new_price != null ? money(e.new_price) : "—"}</td>
+      <td class="num">${e.competitor_price != null ? money(e.competitor_price) : "—"}</td>
+      <td style="color:var(--muted);">${esc(e.detail || "")}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("plogempty").style.display = log.length ? "none" : "block";
+}
+
+async function loadAll() {
+  const err = document.getElementById("errbox");
+  try {
+    const [vres, sres] = await Promise.all([fetch("/api/viagogo"), fetch("/api/pricer/status")]);
+    const vdata = await vres.json();
+    const s = await sres.json();
+    _rows = vdata.rows || [];
+    _byId = Object.fromEntries(_rows.map(r => [String(r.id), r]));
+
+    const master = document.getElementById("p-master");
+    const dryrun = document.getElementById("p-dryrun");
+    const undercut = document.getElementById("p-undercut");
+    if (document.activeElement !== master) master.checked = !!s.master_enabled;
+    if (document.activeElement !== dryrun) dryrun.checked = !!s.dry_run;
+    if (document.activeElement !== undercut) undercut.value = s.undercut;
+    document.getElementById("drywarn").style.display = (s.master_enabled && s.dry_run) ? "block" : "none";
+
+    const cfgs = Object.values(s.configs || {});
+    document.getElementById("s-enabled").textContent = cfgs.filter(c => c.enabled && !c.paused).length;
+    document.getElementById("s-paused").textContent = cfgs.filter(c => c.paused).length;
+    const L = s.last || {};
+    document.getElementById("s-changed").textContent = L.changed ?? 0;
+    document.getElementById("s-skipped").textContent = L.skipped ?? 0;
+    document.getElementById("s-errors").textContent = L.errors ?? 0;
+
+    const bits = [];
+    if (!s.master_enabled) bits.push("MASTER OFF");
+    if (L.running) bits.push("running...");
+    else if (L.at) bits.push("last_tick=" + new Date(L.at).toLocaleString());
+    else bits.push("not_run_yet");
+    if (L.dry_run != null && L.at) bits.push(L.dry_run ? "dry_run" : "LIVE");
+    bits.push(`every ${s.interval_minutes}m`);
+    document.getElementById("p-status").textContent = bits.join(" // ");
+
+    if (L.error) { err.style.display = "block"; err.textContent = "// pricer error: " + L.error; }
+    else err.style.display = "none";
+
+    renderListings();
+    renderLog(s.log || []);
+  } catch (e) {
+    err.style.display = "block";
+    err.textContent = "// failed to load: " + e;
+  }
+}
+
+document.getElementById("p-master").addEventListener("change", async (e) => {
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ master_enabled: e.target.checked }) });
+  loadAll();
+});
+document.getElementById("p-dryrun").addEventListener("change", async (e) => {
+  if (!e.target.checked && !confirm("Turn OFF dry run? The pricer will start making real price changes on viagogo.")) {
+    e.target.checked = true;
+    return;
+  }
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ dry_run: e.target.checked }) });
+  loadAll();
+});
+document.getElementById("p-undercut").addEventListener("change", async (e) => {
+  const u = parseFloat(e.target.value);
+  if (!u || u <= 0) return;
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ undercut: u }) });
+});
+document.getElementById("p-run").addEventListener("click", async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "running...";
+  await fetch("/api/pricer/run-now", { method: "POST" });
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Run pricer now"; loadAll(); }, 6000);
+});
+for (const id of ["p-search", "p-onlyauto"]) {
+  document.getElementById(id).addEventListener("input", renderListings);
+  document.getElementById(id).addEventListener("change", renderListings);
+}
+loadAll();
+setInterval(loadAll, 15000);
+</script>
+</body>
+</html>
