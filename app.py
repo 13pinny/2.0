@@ -32,6 +32,7 @@ import tickchak_pdf
 import ticketmaster
 import todos as todos_mod
 import viagogo_listing
+import viagogo_pricer
 
 # Drop-checker sources keyed by the value stored in tm_watchers.source.
 # Each module exposes parse_url, perf_url, fetch_selectable_seats,
@@ -93,6 +94,14 @@ _pacha_lock = threading.Lock()
 
 _last_tm = {"at": None, "checked": 0, "drops": 0, "errors": 0, "running": False}
 _tm_lock = threading.Lock()
+
+# Viagogo auto-pricer — full-dashboard mode only (needs the CDP Chrome).
+# watcher_only.py must never grow this job.
+_last_pricer = {"at": None, "changed": 0, "paused": 0, "skipped": 0,
+                "errors": 0, "eligible": 0, "dry_run": None, "error": None,
+                "running": False}
+_pricer_lock = threading.Lock()
+PRICER_INTERVAL_MINUTES = int(os.getenv("KARTIS_PRICER_INTERVAL_MINUTES") or 15)
 TM_CHECK_INTERVAL_SECONDS = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
 # Drop-checking can be disabled here when the watcher runs on another machine
 # (e.g. the VPS), so the dashboard still serves inventory/sales without
@@ -270,6 +279,28 @@ def run_scraper():
     finally:
         _last_run["running"] = False
         _run_lock.release()
+
+
+def run_pricer():
+    if not _pricer_lock.acquire(blocking=False):
+        return
+    _last_pricer["running"] = True
+    try:
+        counters = viagogo_pricer.run_pricer_tick()
+        _last_pricer.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=None,
+            **counters,
+        )
+    except Exception as e:
+        _last_pricer.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_pricer["running"] = False
+        _pricer_lock.release()
 
 
 def _enrich(rows):
@@ -1646,6 +1677,16 @@ def api_lysted_purchases():
 @app.route("/api/viagogo")
 def api_viagogo():
     rows = _enrich_viagogo(db.all_viagogo())
+    # Merge each row with its auto-pricer config so the dashboard renders
+    # the AUTO/FLOOR/STATE controls without a second fetch.
+    pricer_cfgs = db.pricer_config_all()
+    for r in rows:
+        cfg = pricer_cfgs.get(str(r.get("id"))) or {}
+        r["pricer_enabled"] = bool(cfg.get("enabled"))
+        r["pricer_floor"] = cfg.get("floor_price")
+        r["pricer_paused"] = bool(cfg.get("paused"))
+        r["pricer_paused_reason"] = cfg.get("paused_reason")
+        r["pricer_last_set_price"] = cfg.get("last_set_price")
     totals = {
         "listings": len(rows),
         "tickets_available": sum(r.get("available") or 0 for r in rows),
@@ -4410,6 +4451,98 @@ def api_watchers_check_now():
     return jsonify({"started": True})
 
 
+# --- Viagogo auto-pricer API ----------------------------------------------
+
+@app.route("/api/pricer/status")
+def api_pricer_status():
+    return jsonify({
+        "last": _last_pricer,
+        "master_enabled": viagogo_pricer.master_enabled(),
+        "dry_run": viagogo_pricer.dry_run_enabled(),
+        "undercut": viagogo_pricer.undercut_amount(),
+        "interval_minutes": PRICER_INTERVAL_MINUTES,
+        "configs": db.pricer_config_all(),
+        "log": db.pricer_log_recent(50),
+    })
+
+
+@app.route("/api/pricer/config", methods=["POST"])
+def api_pricer_config():
+    """Per-listing pricer config. Body: {listing_id, enabled?, floor_price?,
+    allow_raise?, resume?}. Enabling requires a floor > 0. resume clears a
+    manual-change pause and re-adopts the live price on the next tick."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    listing_id = str(body.get("listing_id") or "").strip()
+    if not listing_id:
+        return jsonify({"error": "listing_id required"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    fields = {}
+    if body.get("resume"):
+        fields.update(paused=0, paused_reason=None, paused_at=None,
+                      last_set_price=None, last_set_at=None)
+    if "floor_price" in body:
+        try:
+            floor = float(body["floor_price"]) if body["floor_price"] not in (None, "") else None
+        except (TypeError, ValueError):
+            return jsonify({"error": "floor_price must be a number"}), 400
+        fields["floor_price"] = floor
+    if "allow_raise" in body:
+        fields["allow_raise"] = 1 if body.get("allow_raise") else 0
+    if "enabled" in body:
+        enabled = 1 if body.get("enabled") else 0
+        if enabled:
+            existing = db.pricer_config_get(listing_id) or {}
+            floor = fields.get("floor_price", existing.get("floor_price"))
+            if not floor or floor <= 0:
+                return jsonify({"error": "a floor price > 0 is required to enable"}), 400
+            # (re)enabling always adopts the current live price as baseline
+            fields.update(last_set_price=None, last_set_at=None,
+                          paused=0, paused_reason=None, paused_at=None)
+        fields["enabled"] = enabled
+    if not fields:
+        return jsonify({"error": "nothing to update"}), 400
+    db.pricer_config_set(listing_id, fields, now_iso)
+    return jsonify({"ok": True, "config": db.pricer_config_get(listing_id)})
+
+
+@app.route("/api/pricer/settings", methods=["POST"])
+def api_pricer_settings():
+    """Global pricer settings. Body: {master_enabled?, dry_run?, undercut?}."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    out = {}
+    if "master_enabled" in body:
+        v = "true" if body.get("master_enabled") else "false"
+        db.setting_set("pricer_master_enabled", v, now_iso)
+        out["master_enabled"] = v
+    if "dry_run" in body:
+        v = "true" if body.get("dry_run") else "false"
+        db.setting_set("pricer_dry_run", v, now_iso)
+        out["dry_run"] = v
+    if "undercut" in body:
+        try:
+            u = float(body["undercut"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "undercut must be a number"}), 400
+        if not (0 < u <= 50):
+            return jsonify({"error": "undercut must be between 0 and 50"}), 400
+        db.setting_set("pricer_undercut", f"{u:.2f}", now_iso)
+        out["undercut"] = u
+    if not out:
+        return jsonify({"error": "nothing to update"}), 400
+    return jsonify({"ok": True, **out})
+
+
+@app.route("/api/pricer/run-now", methods=["POST"])
+def api_pricer_run_now():
+    if _last_pricer["running"]:
+        return jsonify({"error": "pricer already running"}), 429
+    threading.Thread(target=run_pricer, daemon=True).start()
+    return jsonify({"started": True})
+
+
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
@@ -4424,6 +4557,12 @@ scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
 # every N minutes.
 scheduler.add_job(run_sales_sync, "interval", minutes=FESTIVAL_SYNC_MINUTES,
                   id="sales_sync", next_run_time=datetime.now())
+# Auto-pricer: offset from the top of the hour (start_date pushes the first
+# run out) so its browser use doesn't collide with the hourly scrape. Cheap
+# no-op while pricer_master_enabled is off.
+scheduler.add_job(run_pricer, "interval", minutes=PRICER_INTERVAL_MINUTES,
+                  id="pricer",
+                  start_date=datetime.now() + timedelta(minutes=7))
 
 # One-shot: archive any pre-existing inventory_overrides rows whose status
 # value was already typed as "not sold" (or a variant). Idempotent so

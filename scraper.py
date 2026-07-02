@@ -810,6 +810,58 @@ VIAGOGO_EXTRACT_JS = r"""
 """
 
 
+def _extract_viagogo_rows(page):
+    """Expand every event on an already-rendered /Listings page and return
+    the normalized listing rows. Shared by the hourly scrape and the
+    auto-pricer's live read (viagogo_pricer.read_live_listings) so there is
+    exactly one implementation of the row extraction."""
+    # Expand every collapsed event so its listings render into the DOM.
+    for _ in range(20):
+        collapsed = page.query_selector_all("tr.eventRow:not(.expanded) td.js-expand")
+        if not collapsed:
+            break
+        for arrow in collapsed:
+            try:
+                arrow.click()
+            except Exception:
+                pass
+        page.wait_for_timeout(600)
+
+    out = []
+    for evt in page.query_selector_all("tr.eventRow"):
+        try:
+            data = evt.evaluate(VIAGOGO_EXTRACT_JS)
+        except Exception as e:
+            print(f"[kartis] viagogo row extract failed: {e}")
+            continue
+        event_name = data.get("event_name")
+        event_date = data.get("event_date")
+        venue = data.get("venue")
+        event_id = data.get("event_id")
+        event_date_iso = _parse_viagogo_date(event_date)
+        for L in data.get("listings") or []:
+            listing_id = L.get("listing_id")
+            if not listing_id:
+                continue
+            out.append({
+                "id": listing_id,
+                "event_id": event_id,
+                "event_name": event_name,
+                "event_date": event_date,
+                "event_date_iso": event_date_iso,
+                "venue": venue,
+                "section": L.get("section"),
+                "ticket_type": L.get("ticket_type"),
+                "visibility": L.get("visibility"),
+                "face_value": _parse_money(L.get("face_value")),
+                "price": _parse_money(L.get("price")),
+                "proceeds": _parse_money(L.get("proceeds")),
+                "available": _parse_int(L.get("available")),
+                "sold": _parse_int(L.get("sold")),
+            })
+    return out
+
+
 def _scrape_viagogo(context):
     page = context.new_page()
     try:
@@ -825,53 +877,9 @@ def _scrape_viagogo(context):
             return []
         page.wait_for_timeout(1500)
 
-        # Expand every collapsed event so its listings render into the DOM.
-        for _ in range(20):
-            collapsed = page.query_selector_all("tr.eventRow:not(.expanded) td.js-expand")
-            if not collapsed:
-                break
-            for arrow in collapsed:
-                try:
-                    arrow.click()
-                except Exception:
-                    pass
-            page.wait_for_timeout(600)
-
+        rows = _extract_viagogo_rows(page)
         _save_debug(page, "viagogo")
-
-        out = []
-        for evt in page.query_selector_all("tr.eventRow"):
-            try:
-                data = evt.evaluate(VIAGOGO_EXTRACT_JS)
-            except Exception as e:
-                print(f"[kartis] viagogo row extract failed: {e}")
-                continue
-            event_name = data.get("event_name")
-            event_date = data.get("event_date")
-            venue = data.get("venue")
-            event_id = data.get("event_id")
-            event_date_iso = _parse_viagogo_date(event_date)
-            for L in data.get("listings") or []:
-                listing_id = L.get("listing_id")
-                if not listing_id:
-                    continue
-                out.append({
-                    "id": listing_id,
-                    "event_id": event_id,
-                    "event_name": event_name,
-                    "event_date": event_date,
-                    "event_date_iso": event_date_iso,
-                    "venue": venue,
-                    "section": L.get("section"),
-                    "ticket_type": L.get("ticket_type"),
-                    "visibility": L.get("visibility"),
-                    "face_value": _parse_money(L.get("face_value")),
-                    "price": _parse_money(L.get("price")),
-                    "proceeds": _parse_money(L.get("proceeds")),
-                    "available": _parse_int(L.get("available")),
-                    "sold": _parse_int(L.get("sold")),
-                })
-        return out
+        return rows
     finally:
         try:
             page.close()

@@ -28,6 +28,9 @@ All commands assume the venv at `.venv\Scripts\`. On Windows use `.venv\Scripts\
 | Smoke-test Discord + Gmail | `.venv\Scripts\python notify.py` (expects `{'discord': 'ok (204)', 'email': 'ok'}`) |
 | Probe a single drop endpoint directly | `.venv\Scripts\python ticketmaster.py EVENT/PERF` (also `kupat.py`, `tickchak.py`) |
 | Extract Pacha NY ticket first-pages from Gmail | `.venv\Scripts\python pacha_tickets.py` (add `--dry-run`, `--days N`, `--folder`) |
+| Extract tickchak /n/ ticket links from Gmail | `.venv\Scripts\python tickchak_tickets.py` (add `--url URL`, `--dry-run`, `--debug`) |
+| Probe a public viagogo event's competitor listings | `.venv\Scripts\python scripts\probe_viagogo_public.py <event_id or "artist name">` |
+| Probe/exercise the viagogo listing price edit | `.venv\Scripts\python scripts\probe_viagogo_edit_price.py <listing_id> [new_price]` |
 
 There is no test suite, no linter, and no build step — the project ships as plain Python scripts.
 
@@ -57,6 +60,10 @@ Notification gating order (both implementations): per-watcher `paused` skips ent
 ### Lysted / Viagogo / CrowdVolt scraping (full mode only)
 
 `scraper.py` uses `patchright.sync_api` to `connect_over_cdp("http://localhost:9222")` against the Chrome window launched by `login.py`. **There is no login automation by design** — Cloudflare blocks headless browsers, so a human signs in once and the scraper inherits the session. Chrome's user profile is stored in `./user_data/` (gitignored). If Chrome is closed, all scraping fails until `login.py` runs again.
+
+### Viagogo auto-pricer (full mode only)
+
+`viagogo_pricer.py` keeps opted-in listings just under the cheapest competitor for the same event + section (default undercut $0.04, setting `pricer_undercut`). Runs every 15 min from `app.py`'s scheduler (`run_pricer`; `KARTIS_PRICER_INTERVAL_MINUTES`) — **never add it to watcher_only.py** (needs the CDP Chrome). Controls live on the /sources dashboard (per-listing AUTO + FLOOR, master + dry-run toggles); config/audit in `viagogo_pricer_config` / `viagogo_pricer_log` (the scrape mirror `viagogo_listings` stays pure). All prices USD. Key empirical facts (public URL discovery via homepage search → groupedsearch JSON, the `index-data` script blob on event pages, buyer-currency `rawPrice` + per-event fx calibration from our own listing, price writes via the row's edit modal — the raw SaveListing form-replay fails validation) are documented in the module docstring — read it before touching pricing or edit logic. Safety: master kill switch + dry-run default ON, per-listing floors, lower-only (raise is double-flagged off), manual price changes on inv.viagogo pause that listing until resumed from the dashboard.
 
 ### Flask + APScheduler
 

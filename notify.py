@@ -447,6 +447,80 @@ def notify_viagogo_match(push_row):
     return {"discord": discord_result, "email": email_result}
 
 
+def notify_pricer_change(info):
+    """Auto-pricer changed (or, dry-run, would change) a listing's price.
+    Discord-only — these fire up to every 15 minutes and email would be
+    noise. `info`: event_name, section, listing_id, old_price, new_price,
+    competitor_price, floor, dry_run."""
+    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    dry = info.get("dry_run")
+    title = ("🧪 [DRY RUN] Auto-pricer would reprice" if dry
+             else "💸 Auto-pricer changed a listing price")
+    lines = [
+        f"**{info.get('event_name') or '(unknown event)'}** — "
+        f"{(info.get('section') or '').splitlines()[0]}",
+        f"${info.get('old_price'):,.2f} → **${info.get('new_price'):,.2f}**",
+    ]
+    if info.get("competitor_price") is not None:
+        lines.append(f"Cheapest competitor: ${info['competitor_price']:,.2f}")
+    if info.get("floor") is not None:
+        lines.append(f"Floor: ${info['floor']:,.2f}")
+    embed = {
+        "title": title,
+        "description": "\n".join(lines)[:4000],
+        "url": "http://localhost:5000/sources",
+        "color": 0xFAA61A if dry else 0x56D364,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
+def notify_pricer_paused(info):
+    """Auto-pricer paused a listing because its price on inv.viagogo differs
+    from the last price the pricer set (i.e. a manual change). Discord +
+    email — the pricer stays off for this listing until the user resumes it
+    from the dashboard, so this one shouldn't be missed. `info`: event_name,
+    section, listing_id, expected, seen."""
+    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    gmail_user = os.environ.get("GMAIL_USER", "").strip()
+    gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
+
+    title = "⏸️ Auto-pricer paused — manual price change detected"
+    lines = [
+        f"**{info.get('event_name') or '(unknown event)'}** — "
+        f"{(info.get('section') or '').splitlines()[0]}",
+        f"Pricer last set: ${info.get('expected'):,.2f}",
+        f"inv.viagogo now shows: ${info.get('seen'):,.2f}",
+        "",
+        "Auto-pricing is paused for this listing. Resume it from the "
+        "dashboard when ready.",
+    ]
+    body = "\n".join(lines)
+
+    discord_result = "skipped (no DISCORD_WEBHOOK_URL)"
+    if discord_url:
+        embed = {
+            "title": title,
+            "description": body[:4000],
+            "url": "http://localhost:5000/sources",
+            "color": 0xFAA61A,
+        }
+        discord_result = _post_discord(discord_url, {"embeds": [embed]})
+
+    email_result = "skipped (no GMAIL creds)"
+    if gmail_user and gmail_pwd and to_addr:
+        subject = f"[Kartis] {title} — {info.get('event_name') or ''}"[:200]
+        email_result = _send_email(
+            subject, body + "\n\nOpen: http://localhost:5000/sources\n",
+            gmail_user, gmail_pwd, to_addr,
+        )
+
+    return {"discord": discord_result, "email": email_result}
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()

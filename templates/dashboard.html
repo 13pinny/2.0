@@ -129,13 +129,21 @@
   <div class="stat amber"><div class="label">Avail Cost</div><div class="value" id="v-cost">$0</div></div>
   <div class="stat green"><div class="label">Sold Cost</div><div class="value" id="v-scost">$0</div></div>
 </div>
+<div class="bar" id="pricer-bar" style="border:1px solid var(--line); padding:8px 10px; gap:14px;">
+  <span style="font-size:10px; letter-spacing:2px; color:var(--muted); text-transform:uppercase;">Auto-Pricer</span>
+  <label style="font-size:12px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="p-master"> master</label>
+  <label style="font-size:12px; display:flex; align-items:center; gap:5px;" title="Log + notify what would change, without touching viagogo"><input type="checkbox" id="p-dryrun"> dry run</label>
+  <label style="font-size:12px; display:flex; align-items:center; gap:5px;" title="How far below the cheapest competitor to price, in USD">undercut $<input type="number" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
+  <button id="p-run">Run pricer now</button>
+  <span class="meta" id="p-status" style="font-size:11px; color:var(--muted);">—</span>
+</div>
 <div class="bar">
   <input type="search" id="v-search" placeholder="search // event venue section" style="flex:1; min-width:200px;">
   <select id="v-sort"><option value="date-asc">DATE ↑</option><option value="date-desc">DATE ↓</option><option value="name">NAME</option></select>
   <select id="v-range"><option value="all">ALL DATES</option><option value="7">NEXT 7</option><option value="14">NEXT 14</option><option value="month">THIS MONTH</option></select>
 </div>
 <table>
-  <thead><tr><th>EVENT</th><th>DATE</th><th>VENUE</th><th>SECTION</th><th>TYPE</th><th class="num">FACE</th><th class="num">AVAIL</th><th class="num">COST</th><th class="num">PRICE</th><th class="num">PROCEEDS</th><th class="num">SOLD</th></tr></thead>
+  <thead><tr><th>EVENT</th><th>DATE</th><th>VENUE</th><th>SECTION</th><th>TYPE</th><th class="num">FACE</th><th class="num">AVAIL</th><th class="num">COST</th><th class="num">PRICE</th><th class="num">PROCEEDS</th><th class="num">SOLD</th><th title="Auto-pricer on/off — needs a floor first">AUTO</th><th class="num" title="Never price below this (USD)">FLOOR</th><th>PRICER</th></tr></thead>
   <tbody id="vtbody"></tbody>
 </table>
 <div id="vempty" class="empty" style="display:none">// no Viagogo data yet</div>
@@ -279,6 +287,14 @@ function renderViagogo() {
   tbody.innerHTML = "";
   for (const r of rows) {
     const tr = document.createElement("tr");
+    let chip;
+    if (r.pricer_paused) {
+      chip = `<span class="status" style="color:var(--amber); border-color:var(--amber);">paused${r.pricer_paused_reason === "manual_change" ? ": manual" : ""}</span> <a href="#" class="p-resume" data-id="${esc(r.id)}" style="color:var(--accent); font-size:10px;">resume</a>`;
+    } else if (r.pricer_enabled) {
+      chip = `<span class="status active">active${r.pricer_last_set_price != null ? " @ " + money(r.pricer_last_set_price) : ""}</span>`;
+    } else {
+      chip = `<span class="status">off</span>`;
+    }
     tr.innerHTML = `
       <td>${esc(r.event_name)}</td>
       <td>${esc(r.event_date)}</td>
@@ -291,11 +307,79 @@ function renderViagogo() {
       <td class="num">${money(r.price)}</td>
       <td class="num">${money(r.proceeds)}</td>
       <td class="num">${r.sold ?? ""}</td>
+      <td><input type="checkbox" class="p-auto" data-id="${esc(r.id)}" ${r.pricer_enabled ? "checked" : ""}></td>
+      <td class="num"><input type="number" class="p-floor" data-id="${esc(r.id)}" step="0.01" min="0" value="${r.pricer_floor ?? ""}" placeholder="—" style="width:74px; padding:3px 6px;"></td>
+      <td>${chip}</td>
     `;
     tbody.appendChild(tr);
   }
   document.getElementById("vempty").style.display = rows.length ? "none" : "block";
+
+  tbody.querySelectorAll(".p-auto").forEach(cb => cb.addEventListener("change", async (e) => {
+    const id = e.target.dataset.id;
+    const floorInput = tbody.querySelector(`.p-floor[data-id="${CSS.escape(id)}"]`);
+    const floor = parseFloat(floorInput?.value);
+    if (e.target.checked && (!floor || floor <= 0)) {
+      alert("Set a floor price (USD) before enabling auto-pricing on a listing.");
+      e.target.checked = false;
+      return;
+    }
+    const body = { listing_id: id, enabled: e.target.checked };
+    if (floor > 0) body.floor_price = floor;
+    const res = await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+    if (!res.ok) { alert((await res.json()).error || "failed"); e.target.checked = !e.target.checked; return; }
+    loadViagogo();
+  }));
+  tbody.querySelectorAll(".p-floor").forEach(inp => inp.addEventListener("change", async (e) => {
+    const floor = parseFloat(e.target.value);
+    if (!floor || floor <= 0) return;
+    await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ listing_id: e.target.dataset.id, floor_price: floor }) });
+  }));
+  tbody.querySelectorAll(".p-resume").forEach(a => a.addEventListener("click", async (e) => {
+    e.preventDefault();
+    await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ listing_id: e.target.dataset.id, resume: true }) });
+    loadViagogo();
+  }));
 }
+
+async function loadPricerStatus() {
+  const res = await fetch("/api/pricer/status");
+  const d = await res.json();
+  const master = document.getElementById("p-master");
+  const dryrun = document.getElementById("p-dryrun");
+  const undercut = document.getElementById("p-undercut");
+  if (document.activeElement !== master) master.checked = !!d.master_enabled;
+  if (document.activeElement !== dryrun) dryrun.checked = !!d.dry_run;
+  if (document.activeElement !== undercut) undercut.value = d.undercut;
+  const L = d.last || {};
+  const bits = [];
+  if (L.running) bits.push("running...");
+  else if (L.at) bits.push("last=" + new Date(L.at).toLocaleTimeString());
+  else bits.push("not run yet");
+  if (L.at) bits.push(`changed=${L.changed} skipped=${L.skipped} paused=${L.paused} errors=${L.errors}` + (L.dry_run ? " [DRY RUN]" : ""));
+  if (L.error) bits.push("ERR: " + L.error);
+  bits.push(`every ${d.interval_minutes}m`);
+  document.getElementById("p-status").textContent = bits.join(" // ");
+}
+
+document.getElementById("p-master").addEventListener("change", async (e) => {
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ master_enabled: e.target.checked }) });
+  loadPricerStatus();
+});
+document.getElementById("p-dryrun").addEventListener("change", async (e) => {
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ dry_run: e.target.checked }) });
+  loadPricerStatus();
+});
+document.getElementById("p-undercut").addEventListener("change", async (e) => {
+  const u = parseFloat(e.target.value);
+  if (!u || u <= 0) return;
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ undercut: u }) });
+});
+document.getElementById("p-run").addEventListener("click", async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "running...";
+  await fetch("/api/pricer/run-now", { method: "POST" });
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Run pricer now"; loadPricerStatus(); loadViagogo(); }, 5000);
+});
 
 async function loadViagogo() {
   const res = await fetch("/api/viagogo");
@@ -310,7 +394,7 @@ async function loadViagogo() {
   renderViagogo();
 }
 
-function loadAll() { load(); loadLystedPurchases(); loadViagogo(); }
+function loadAll() { load(); loadLystedPurchases(); loadViagogo(); loadPricerStatus(); }
 for (const id of ["lp-filter", "lp-search", "lp-sort", "lp-range"]) {
   document.getElementById(id).addEventListener("input", renderLystedPurchases);
   document.getElementById(id).addEventListener("change", renderLystedPurchases);

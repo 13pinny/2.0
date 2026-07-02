@@ -56,6 +56,33 @@ CREATE TABLE IF NOT EXISTS viagogo_listings (
     sold INTEGER,
     last_seen_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS viagogo_pricer_config (
+    listing_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    floor_price REAL,
+    allow_raise INTEGER NOT NULL DEFAULT 0,
+    paused INTEGER NOT NULL DEFAULT 0,
+    paused_reason TEXT,
+    paused_at TEXT,
+    last_set_price REAL,
+    last_set_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS viagogo_pricer_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id TEXT NOT NULL,
+    event_id TEXT,
+    section TEXT,
+    old_price REAL,
+    new_price REAL,
+    competitor_price REAL,
+    action TEXT NOT NULL,
+    detail TEXT,
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pricer_log_listing
+    ON viagogo_pricer_log(listing_id, created_at);
 CREATE TABLE IF NOT EXISTS inventory_hidden (
     source TEXT NOT NULL,
     source_id TEXT NOT NULL,
@@ -715,6 +742,93 @@ def all_viagogo():
             "SELECT * FROM viagogo_listings "
             "ORDER BY event_date_iso IS NULL, event_date_iso, event_name, section"
         ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- Viagogo auto-pricer -------------------------------------------------
+# Config + audit tables live apart from viagogo_listings so the scrape
+# mirror stays a pure rewrite target. listing_id is an FK by convention to
+# viagogo_listings.id.
+
+def pricer_config_get(listing_id):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM viagogo_pricer_config WHERE listing_id = ?",
+            (str(listing_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def pricer_config_all():
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM viagogo_pricer_config").fetchall()
+    return {r["listing_id"]: dict(r) for r in rows}
+
+
+_PRICER_CONFIG_FIELDS = (
+    "enabled", "floor_price", "allow_raise", "paused", "paused_reason",
+    "paused_at", "last_set_price", "last_set_at",
+)
+
+
+def pricer_config_set(listing_id, fields, now_iso):
+    """Upsert a partial field dict for one listing's pricer config."""
+    fields = {k: v for k, v in fields.items() if k in _PRICER_CONFIG_FIELDS}
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT listing_id FROM viagogo_pricer_config WHERE listing_id = ?",
+            (str(listing_id),),
+        ).fetchone()
+        if existing:
+            sets = ", ".join(f"{k} = :{k}" for k in fields)
+            conn.execute(
+                f"UPDATE viagogo_pricer_config SET {sets}, updated_at = :updated_at "
+                "WHERE listing_id = :listing_id",
+                {**fields, "updated_at": now_iso, "listing_id": str(listing_id)},
+            )
+        else:
+            cols = ["listing_id", *fields.keys(), "updated_at"]
+            conn.execute(
+                f"INSERT INTO viagogo_pricer_config ({', '.join(cols)}) "
+                f"VALUES ({', '.join(':' + c for c in cols)})",
+                {**fields, "listing_id": str(listing_id), "updated_at": now_iso},
+            )
+
+
+def pricer_log_add(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO viagogo_pricer_log (listing_id, event_id, section,
+                                            old_price, new_price, competitor_price,
+                                            action, detail, dry_run, created_at)
+            VALUES (:listing_id, :event_id, :section,
+                    :old_price, :new_price, :competitor_price,
+                    :action, :detail, :dry_run, :created_at)
+            """,
+            {
+                "event_id": None, "section": None, "old_price": None,
+                "new_price": None, "competitor_price": None, "detail": None,
+                "dry_run": 0,
+                **row,
+                "created_at": now_iso,
+            },
+        )
+
+
+def pricer_log_recent(limit=100, listing_id=None):
+    with connect() as conn:
+        if listing_id:
+            rows = conn.execute(
+                "SELECT * FROM viagogo_pricer_log WHERE listing_id = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (str(listing_id), limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM viagogo_pricer_log ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
     return [dict(r) for r in rows]
 
 
