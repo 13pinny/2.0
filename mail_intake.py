@@ -360,6 +360,40 @@ def _rank_viagogo_candidates(candidates, event_date_iso):
     return candidates[0]
 
 
+def _resolve_search_term(event_name, venue):
+    """Translate a Hebrew Kupat event/venue into the English term to search
+    viagogo with, using the learned kupat_name_map.
+
+    Kupat event names often carry a suffix the map key won't include —
+    "חנן בן ארי - הינדיקים" (opening act), "… - מופע נוסף", etc. So beyond an
+    exact lookup we (a) try each fragment split on common separators, and
+    (b) check whether any known map key is a substring of the event name.
+    Falls back to the raw Hebrew (which usually returns nothing) so the push
+    lands as no_match and the user can teach the mapping.
+    """
+    for key in (event_name, venue):
+        hit = db.kupat_name_map_get(key) if key else None
+        if hit:
+            return hit
+    for raw in (event_name, venue):
+        if not raw:
+            continue
+        for frag in re.split(r"\s*[-–—|,/]\s*", raw):
+            frag = frag.strip()
+            if frag:
+                hit = db.kupat_name_map_get(frag)
+                if hit:
+                    return hit
+    try:
+        for m in (db.kupat_name_map_all() or []):
+            heb = m.get("hebrew_name") or ""
+            if heb and (heb in event_name or (venue and heb in venue)):
+                return m.get("english_name") or event_name or venue
+    except Exception:
+        pass
+    return event_name or venue
+
+
 def _push_kupat_to_viagogo(intake_id, fields):
     """Kupat-only: search viagogo for a matching event, price it at 5x the
     USD-converted Kupat per-ticket cost, and stage a viagogo_push row for
@@ -392,14 +426,10 @@ def _push_kupat_to_viagogo(intake_id, fields):
     }
 
     # Kupat emails are in Hebrew; viagogo's event picker uses English names.
-    # Look up a saved translation before searching; fall back to the Hebrew
-    # string (which usually returns nothing) if no mapping exists yet.
-    search_term = (
-        db.kupat_name_map_get(event_name)
-        or db.kupat_name_map_get(venue)
-        or event_name
-        or venue
-    )
+    # Resolve via the learned name map (tolerating suffixed event names),
+    # falling back to the Hebrew string (usually no match) so the user can
+    # teach it.
+    search_term = _resolve_search_term(event_name, venue)
     try:
         candidates = viagogo_listing.search_event(search_term, limit=8)
     except Exception as e:
@@ -452,12 +482,7 @@ def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None):
     event_name = fields.get("event_name") or ""
     venue = fields.get("venue") or ""
     cost_per_unit = fields.get("cost_per_unit")
-    search_term = (
-        db.kupat_name_map_get(event_name)
-        or db.kupat_name_map_get(venue)
-        or event_name
-        or venue
-    )
+    search_term = _resolve_search_term(event_name, venue)
     try:
         candidates = viagogo_listing.search_event(search_term, limit=8)
     except Exception as e:
