@@ -1977,7 +1977,10 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         english_event = push_row.get("chosen_event_name") or ""
         if hebrew_event and english_event and hebrew_event != english_event:
             db.kupat_name_map_set(hebrew_event, english_event, now())
-        db.viagogo_push_update(push_id, {"status": "listed" if publish else "created", "viagogo_section": section}, now())
+        # Clear any error left by a previous failed attempt — status alone
+        # flips, so stale error text would otherwise stick to a success row.
+        db.viagogo_push_update(push_id, {"status": "listed" if publish else "created",
+                                         "viagogo_section": section, "error": None}, now())
     except Exception as e:
         db.viagogo_push_update(push_id, {"status": "error", "error": f"{type(e).__name__}: {e}"}, now())
         traceback.print_exc()

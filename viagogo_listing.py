@@ -164,11 +164,22 @@ def _click_event_row(page, event_id, match_row=None):
     match_row.click()
 
 
-def _select_ticket_type_tile(page, ticket_type):
-    """Click the ticket-type tile, auto-waiting for it to be actionable
-    (replaces a fixed post-click sleep that was too short on a laggy page)."""
+def _select_ticket_type_tile(page, ticket_type, event_id=None, match_row=None):
+    """Click the ticket-type tile, auto-waiting for it to be actionable.
+
+    When Chrome is under load (e.g. the hourly scrape driving the same
+    browser), the event-row click can silently not register, so the tiles
+    never render. If the tile doesn't appear and we know the row, re-click
+    it once and wait again (longer) before giving up.
+    """
     tile = page.locator(".js-select.tile", has_text=ticket_type).first
-    tile.wait_for(state="visible", timeout=MODAL_TIMEOUT_MS)
+    try:
+        tile.wait_for(state="visible", timeout=MODAL_TIMEOUT_MS)
+    except Exception:
+        if event_id is None:
+            raise
+        _click_event_row(page, event_id, match_row)
+        tile.wait_for(state="visible", timeout=2 * MODAL_TIMEOUT_MS)
     tile.click()
 
 
@@ -191,7 +202,7 @@ def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
                     f"event {event_id} not found re-searching '{search_query}'"
                 )
             _click_event_row(page, event_id, match.get("_row"))
-            _select_ticket_type_tile(page, ticket_type)
+            _select_ticket_type_tile(page, ticket_type, event_id, match.get("_row"))
             page.wait_for_selector('select[name="Listing.Section"]', timeout=MODAL_TIMEOUT_MS)
             options = page.query_selector_all('select[name="Listing.Section"] option')
             sections = []
@@ -431,7 +442,7 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
                     f"(picker returned {[r['event_id'] for r in rows]})"
                 )
             _click_event_row(page, event_id, match.get("_row"))
-            _select_ticket_type_tile(page, ticket_type)
+            _select_ticket_type_tile(page, ticket_type, event_id, match.get("_row"))
             page.wait_for_selector('input[name="Listing.AvailableTickets"]', timeout=MODAL_TIMEOUT_MS)
 
             page.fill('input[name="Listing.AvailableTickets"]', str(available_tickets))
