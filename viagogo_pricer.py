@@ -47,12 +47,19 @@ scripts/probe_viagogo_edit_price.py):
   We still read the Details form first for the CanEditPrice guard.
 
 Pricing rules (user requirements):
-  * target = cheapest competitor (USD) - undercut (setting pricer_undercut,
-    default $0.04 ≈ keeps the ILS display clearly below after fx rounding)
+  * target = cheapest COMPETITOR (USD, own listings excluded by id) minus
+    the undercut (setting pricer_undercut, default $0.04 ≈ keeps the
+    buyer-currency display clearly below after fx rounding)
+  * this applies even when we are already the section's cheapest: if our
+    lead over the next competitor is thinner than the undercut we TIGHTEN
+    down to competitor - undercut (seen live on Ishay Ribo/Amir Dadon:
+    16 GA listings with a competitor exactly 1 buyer-cent above ours).
+    A comfortable lead computes a raise target and is skipped silently
+    while raising is off.
   * never below the per-listing floor; floor is mandatory to enable
   * lower-only for now; raise needs BOTH pricer_allow_raise_global and the
     listing's allow_raise flag (architecture in place, off at launch)
-  * if the cheapest listing in the section is OURS: do nothing
+  * no competitors visible in the section: do nothing (skip_alone)
   * manual price change on inv.viagogo (live price != last_set_price)
     pauses the listing + notifies; resume from the dashboard re-adopts
   * dry-run mode (pricer_dry_run, default ON) logs/notifies without writing
@@ -238,7 +245,9 @@ def grid_section_prices(index_data, our_listing_ids):
     """Digest a grid into per-section price info.
 
     Returns (sections, meta) where sections maps normalized section name ->
-    {"cheapest_raw": float, "cheapest_is_ours": bool, "cheapest_listing_id": str,
+    {"cheapest_raw": float (overall), "cheapest_is_ours": bool,
+     "cheapest_competitor_raw": float|None (cheapest NON-ours; the pricing
+     anchor — None means we're alone in the section),
      "our_raw": float|None (cheapest of OUR listings in that section)}
     and meta carries fx-calibration inputs and coverage counts.
     """
@@ -258,11 +267,13 @@ def grid_section_prices(index_data, our_listing_ids):
             our_items.append(it)
         cur = sections.setdefault(sec, {
             "cheapest_raw": None, "cheapest_is_ours": False,
-            "cheapest_listing_id": None, "our_raw": None,
+            "cheapest_competitor_raw": None, "our_raw": None,
         })
         if cur["cheapest_raw"] is None or raw < cur["cheapest_raw"]:
-            cur.update(cheapest_raw=raw, cheapest_is_ours=is_ours,
-                       cheapest_listing_id=lid)
+            cur.update(cheapest_raw=raw, cheapest_is_ours=is_ours)
+        if not is_ours and (cur["cheapest_competitor_raw"] is None
+                            or raw < cur["cheapest_competitor_raw"]):
+            cur["cheapest_competitor_raw"] = raw
         if is_ours and (cur["our_raw"] is None or raw < cur["our_raw"]):
             cur["our_raw"] = raw
     meta = {
@@ -556,16 +567,21 @@ def run_pricer_tick(dry_run=None):
                                             "(no visible listings)"})
                         counters["skipped"] += len(group)
                         continue
-                    if info["cheapest_is_ours"]:
+                    if info["cheapest_competitor_raw"] is None:
+                        # every visible listing in the section is ours
                         for lid, cfg, row in group:
                             _log({"listing_id": lid, "event_id": event_id,
                                   "section": row.get("section"),
-                                  "competitor_price": round(info["cheapest_raw"] / fx, 2),
-                                  "action": "skip_ours_cheapest"})
+                                  "action": "skip_alone",
+                                  "detail": "no competitors in section"})
                         counters["skipped"] += len(group)
                         continue
 
-                    competitor_usd = info["cheapest_raw"] / fx
+                    # Anchor on the cheapest NON-ours listing. If we already
+                    # lead but by less than the undercut, this tightens our
+                    # price to a clear lead; a comfortable lead computes a
+                    # raise target, which stays skipped while raising is off.
+                    competitor_usd = info["cheapest_competitor_raw"] / fx
                     for lid, cfg, row in group:
                         if counters["changed"] >= MAX_CHANGES_PER_TICK:
                             break
@@ -581,8 +597,9 @@ def run_pricer_tick(dry_run=None):
                             "competitor_price": round(competitor_usd, 2),
                         }
                         if target is None:
-                            if action != "noop":
-                                _log({**base, "action": action})
+                            # noop and skip_raise recur every tick for
+                            # healthy listings — count them but don't write
+                            # a log row each time
                             counters["skipped"] += 1
                             continue
                         if dry_run:
