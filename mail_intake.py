@@ -325,6 +325,18 @@ def _parse_kupat(subject, body, links=None):
         out["section"] = m.group(1).strip()
         out["row_label"] = m.group(2).strip()
         out["seats"] = m.group(3).strip()
+    else:
+        # GA tickets have no row/seats so the seated pattern above never
+        # matches. Try a bare "אזור: <section>" line first; failing that, a
+        # standalone "עמידה" (standing) anywhere in the body — that's how
+        # GA appears on Kupat tickets (e.g. Hanan Ben Ari, Expo Tel Aviv),
+        # and capturing it lets viagogo_section_map translate it (עמידה →
+        # Standing) so the /listings dropdown pre-selects correctly.
+        m = re.search(r"אזור:\s*([^\n,]+)", body or "")
+        if m:
+            out["section"] = m.group(1).strip()
+        elif re.search(r"(?:^|\s)עמידה(?:\s|$)", body or ""):
+            out["section"] = "עמידה"
     if links:
         for _url in links:
             _low = _url.lower()
