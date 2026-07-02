@@ -4465,6 +4465,8 @@ def api_pricer_status():
         "master_enabled": viagogo_pricer.master_enabled(),
         "dry_run": viagogo_pricer.dry_run_enabled(),
         "undercut": viagogo_pricer.undercut_amount(),
+        "max_drop_pct": viagogo_pricer.max_drop_pct(),
+        "drop_window_hours": viagogo_pricer.drop_window_hours(),
         "interval_minutes": PRICER_INTERVAL_MINUTES,
         "configs": db.pricer_config_all(),
         "log": db.pricer_log_recent(50),
@@ -4535,6 +4537,15 @@ def api_pricer_settings():
             return jsonify({"error": "undercut must be between 0 and 50"}), 400
         db.setting_set("pricer_undercut", f"{u:.2f}", now_iso)
         out["undercut"] = u
+    if "max_drop_pct" in body:
+        try:
+            pct = float(body["max_drop_pct"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "max_drop_pct must be a number"}), 400
+        if not (1 <= pct <= 90):
+            return jsonify({"error": "max_drop_pct must be between 1 and 90"}), 400
+        db.setting_set("pricer_max_drop_pct", f"{pct:g}", now_iso)
+        out["max_drop_pct"] = pct
     if not out:
         return jsonify({"error": "nothing to update"}), 400
     return jsonify({"ok": True, **out})

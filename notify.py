@@ -471,7 +471,7 @@ def notify_pricer_change(info):
     embed = {
         "title": title,
         "description": "\n".join(lines)[:4000],
-        "url": "http://localhost:5000/sources",
+        "url": "https://kartis.homes/pricer",
         "color": 0xFAA61A if dry else 0x56D364,
     }
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
@@ -505,7 +505,7 @@ def notify_pricer_paused(info):
         embed = {
             "title": title,
             "description": body[:4000],
-            "url": "http://localhost:5000/sources",
+            "url": "https://kartis.homes/pricer",
             "color": 0xFAA61A,
         }
         discord_result = _post_discord(discord_url, {"embeds": [embed]})
@@ -514,11 +514,38 @@ def notify_pricer_paused(info):
     if gmail_user and gmail_pwd and to_addr:
         subject = f"[Kartis] {title} — {info.get('event_name') or ''}"[:200]
         email_result = _send_email(
-            subject, body + "\n\nOpen: http://localhost:5000/sources\n",
+            subject, body + "\n\nOpen: https://kartis.homes/pricer\n",
             gmail_user, gmail_pwd, to_addr,
         )
 
     return {"discord": discord_result, "email": email_result}
+
+
+def notify_pricer_rate_limited(info):
+    """Auto-pricer hit the sliding-window drop cap on a listing (e.g. 15% in
+    12h) and stopped lowering. Sent once per episode (not every tick).
+    `info`: event_name, section, listing_id, current, wanted, baseline,
+    pct, hours."""
+    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+    lines = [
+        f"**{info.get('event_name') or '(unknown event)'}** — "
+        f"{(info.get('section') or '').splitlines()[0]}",
+        f"Already down {info.get('pct'):g}% from ${info.get('baseline'):,.2f} "
+        f"in the last {info.get('hours'):g}h — holding at ${info.get('current'):,.2f}.",
+        f"Competitors would call for ${info.get('wanted'):,.2f}.",
+        "",
+        "Auto-lowering resumes as the window slides; take over manually "
+        "from the Pricer page if you want to chase the market down.",
+    ]
+    embed = {
+        "title": "🛑 Auto-pricer drop cap reached",
+        "description": "\n".join(lines)[:4000],
+        "url": "https://kartis.homes/pricer",
+        "color": 0xF85149,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
 if __name__ == "__main__":

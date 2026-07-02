@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Pricer" />
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230d1117'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='%2356d364' font-family='monospace'%3E%24%3C/text%3E%3C/svg%3E" />
 <title>Kartis — Pricer</title>
 <style>
   :root {
@@ -62,6 +67,16 @@
   .act-err { color: var(--red); }
   .act-skip { color: var(--muted); }
   .warn { background: #2a2314; border: 1px solid var(--amber); color: var(--amber); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tablewrap table { min-width: 760px; }
+  @media (max-width: 700px) {
+    header { padding: 12px 14px; }
+    main { padding: 12px 14px 60px; }
+    header .nav a { margin-left: 10px; font-size: 11px; }
+    input[type="checkbox"] { width: 18px; height: 18px; }
+    .bar.boxed { gap: 10px; }
+    button { padding: 10px 12px; }
+  }
 </style>
 </head>
 <body>
@@ -105,6 +120,7 @@
   <button id="p-master" title="Global kill switch — nothing runs while this is off" style="font-weight:700; letter-spacing:1px; min-width:130px;">PRICER: …</button>
   <label title="Log + notify what would change, without touching viagogo"><input type="checkbox" id="p-dryrun"> dry run</label>
   <label title="How far below the cheapest competitor to price, in USD">undercut $<input type="number" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
+  <label title="Hard brake: never drop a listing more than this inside the sliding window — it holds and pings you instead">max drop <input type="number" id="p-maxdrop" step="1" min="1" max="90" style="width:58px; padding:4px 6px;">%<span id="p-dropwin" style="color:var(--muted);">/12h</span></label>
   <button id="p-run">Run pricer now</button>
 </div>
 
@@ -113,6 +129,7 @@
   <input type="search" id="p-search" placeholder="search // event venue section" style="flex:1; min-width:200px;">
   <label><input type="checkbox" id="p-onlyauto"> auto-priced only</label>
 </div>
+<div class="tablewrap">
 <table>
   <thead><tr>
     <th>EVENT</th><th>DATE</th><th>SECTION</th>
@@ -124,9 +141,11 @@
   </tr></thead>
   <tbody id="ptbody"></tbody>
 </table>
+</div>
 <div id="pempty" class="empty" style="display:none">// no viagogo listings with tickets available</div>
 
 <h2>// ACTIVITY</h2>
+<div class="tablewrap">
 <table>
   <thead><tr>
     <th>WHEN</th><th>EVENT</th><th>SECTION</th><th>ACTION</th>
@@ -134,6 +153,7 @@
   </tr></thead>
   <tbody id="plogbody"></tbody>
 </table>
+</div>
 <div id="plogempty" class="empty" style="display:none">// no pricer activity yet</div>
 </main>
 
@@ -259,8 +279,11 @@ async function loadAll() {
     master.style.borderColor = _masterOn ? "var(--green)" : "var(--red)";
     const dryrun = document.getElementById("p-dryrun");
     const undercut = document.getElementById("p-undercut");
+    const maxdrop = document.getElementById("p-maxdrop");
     if (document.activeElement !== dryrun) dryrun.checked = !!s.dry_run;
     if (document.activeElement !== undercut) undercut.value = s.undercut;
+    if (document.activeElement !== maxdrop) maxdrop.value = s.max_drop_pct;
+    document.getElementById("p-dropwin").textContent = "/" + (s.drop_window_hours ?? 12) + "h";
     document.getElementById("drywarn").style.display = (s.master_enabled && s.dry_run) ? "block" : "none";
 
     const cfgs = Object.values(s.configs || {});
@@ -308,6 +331,11 @@ document.getElementById("p-undercut").addEventListener("change", async (e) => {
   const u = parseFloat(e.target.value);
   if (!u || u <= 0) return;
   await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ undercut: u }) });
+});
+document.getElementById("p-maxdrop").addEventListener("change", async (e) => {
+  const pct = parseFloat(e.target.value);
+  if (!pct || pct < 1 || pct > 90) return;
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ max_drop_pct: pct }) });
 });
 document.getElementById("p-run").addEventListener("click", async (e) => {
   const btn = e.currentTarget; btn.disabled = true; btn.textContent = "running...";

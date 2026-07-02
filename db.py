@@ -816,6 +816,21 @@ def pricer_log_add(row, now_iso):
         )
 
 
+def pricer_writes_since(listing_id, since_iso):
+    """Real (non-dry-run) price writes for one listing since `since_iso`,
+    oldest first — the 15%-per-12h drop guard reconstructs the window
+    baseline from these."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT old_price, new_price, created_at FROM viagogo_pricer_log "
+            "WHERE listing_id = ? AND dry_run = 0 "
+            "AND action IN ('lower', 'floor_clamp', 'rate_clamp', 'raise') "
+            "AND created_at >= ? ORDER BY id",
+            (str(listing_id), since_iso),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def pricer_log_recent(limit=100, listing_id=None):
     with connect() as conn:
         if listing_id:

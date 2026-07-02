@@ -57,6 +57,12 @@ Pricing rules (user requirements):
     A comfortable lead computes a raise target and is skipped silently
     while raising is off.
   * never below the per-listing floor; floor is mandatory to enable
+  * sliding-window drop cap: at most pricer_max_drop_pct (default 15%)
+    below the listing's price at the start of the last
+    pricer_drop_window_hours (default 12h). Partial room clamps the write
+    (action rate_clamp); no room skips it (rate_limited) and notifies once
+    so the user can take over from /pricer. Capacity returns as old drops
+    age out of the window.
   * lower-only for now; raise needs BOTH pricer_allow_raise_global and the
     listing's allow_raise flag (architecture in place, off at launch)
   * no competitors visible in the section: do nothing (skip_alone)
@@ -67,7 +73,7 @@ Pricing rules (user requirements):
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from patchright.sync_api import sync_playwright
 
@@ -128,6 +134,40 @@ def dry_run_enabled():
 
 def allow_raise_global():
     return db.setting_get_bool("pricer_allow_raise_global", False)
+
+
+def max_drop_pct():
+    """Hard brake: max total decrease per listing inside the drop window."""
+    try:
+        return float(db.setting_get("pricer_max_drop_pct") or 15.0)
+    except (TypeError, ValueError):
+        return 15.0
+
+
+def drop_window_hours():
+    try:
+        return float(db.setting_get("pricer_drop_window_hours") or 12.0)
+    except (TypeError, ValueError):
+        return 12.0
+
+
+def drop_guard(listing_id, current_price):
+    """Return (min_allowed_price, baseline) for the sliding-window drop cap.
+
+    baseline = the listing's price at the start of the window (old_price of
+    the first real write inside it; current price if the pricer hasn't
+    written in the window). min_allowed = baseline * (1 - max_drop_pct%).
+    The window slides, so capacity comes back as old drops age out.
+    """
+    since = (datetime.now(timezone.utc)
+             - timedelta(hours=drop_window_hours())).isoformat()
+    writes = db.pricer_writes_since(str(listing_id), since)
+    baseline = None
+    if writes and writes[0].get("old_price"):
+        baseline = writes[0]["old_price"]
+    if not baseline:
+        baseline = current_price
+    return baseline * (1.0 - max_drop_pct() / 100.0), baseline
 
 
 # --- live inventory read -------------------------------------------------
@@ -602,6 +642,37 @@ def run_pricer_tick(dry_run=None):
                             # a log row each time
                             counters["skipped"] += 1
                             continue
+                        if target < row["price"]:
+                            # sliding-window drop cap (default 15% per 12h)
+                            min_allowed, baseline = drop_guard(lid, row["price"])
+                            if target < min_allowed - PRICE_EPSILON:
+                                clamped = round(min_allowed, 2)
+                                if clamped >= row["price"] - PRICE_EPSILON:
+                                    # no room left to move this window
+                                    prev = db.pricer_log_recent(1, lid)
+                                    _log({**base, "new_price": target,
+                                          "action": "rate_limited",
+                                          "detail": f"drop cap {max_drop_pct():g}%/"
+                                                    f"{drop_window_hours():g}h hit "
+                                                    f"(baseline ${baseline:.2f})"})
+                                    if not (prev and prev[0]["action"] == "rate_limited"):
+                                        try:
+                                            notify.notify_pricer_rate_limited({
+                                                "event_name": row.get("event_name"),
+                                                "section": row.get("section"),
+                                                "listing_id": lid,
+                                                "current": row["price"],
+                                                "wanted": target,
+                                                "baseline": baseline,
+                                                "pct": max_drop_pct(),
+                                                "hours": drop_window_hours(),
+                                            })
+                                        except Exception as e:
+                                            print(f"[pricer] rate-limit notify failed: {e}")
+                                    counters["skipped"] += 1
+                                    continue
+                                target = clamped
+                                action = "rate_clamp"
                         if dry_run:
                             _log({**base, "new_price": target,
                                   "action": "dry_run", "dry_run": 1,
