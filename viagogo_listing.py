@@ -19,15 +19,35 @@ the one mistake this module must never make. Pass publish=True to explicitly
 go live; the toggle state is then asserted rather than assumed.
 """
 import re
+import threading
 import traceback
+from contextlib import contextmanager
 
 from patchright.sync_api import sync_playwright
 
 import scraper
 
+HOME_URL = "https://inv.viagogo.com/"
 LISTINGS_URL = "https://inv.viagogo.com/Listings"
 NAV_TIMEOUT_MS = 30000
 MODAL_TIMEOUT_MS = 15000
+
+# One modal flow at a time: every function here drives the same CDP Chrome,
+# and a section-fetch racing an approve (or two approves) trips over the
+# shared #modal state. Threads queue here instead of failing flaky.
+_BROWSER_LOCK = threading.Lock()
+
+
+@contextmanager
+def _exclusive_browser(timeout=180):
+    if not _BROWSER_LOCK.acquire(timeout=timeout):
+        raise ViagogoListingError(
+            "timed out waiting for another viagogo browser operation to finish"
+        )
+    try:
+        yield
+    finally:
+        _BROWSER_LOCK.release()
 
 # Empirically confirmed from two real listings on this account (Caesarea
 # Orchestra: $232 -> $208.80 proceeds; Middle Tier 1: $200 -> $180 proceeds) —
@@ -41,10 +61,26 @@ class ViagogoListingError(RuntimeError):
 
 
 def _open_listings_page(p):
+    """Fresh, warmed-up Listings page.
+
+    The inv.viagogo.com SPA goes stale: deep-loading /Listings on a session
+    that's been sitting often never renders its data. The manual remedy is
+    always "close the tab, open inv.viagogo.com, then click through to
+    Listings" — so replicate it: land on the root first, then navigate to
+    Listings, verify the page chrome actually rendered (the New Listing
+    button), and reload once if it didn't.
+    """
     browser = scraper._connect_over_cdp(p, scraper.CDP_URL_VIAGOGO)
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     page = context.new_page()
+    page.goto(HOME_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+    page.wait_for_timeout(800)
     page.goto(LISTINGS_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+    try:
+        page.wait_for_selector('text="New Listing"', timeout=MODAL_TIMEOUT_MS)
+    except Exception:
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector('text="New Listing"', timeout=MODAL_TIMEOUT_MS)
     return page
 
 
@@ -107,7 +143,7 @@ def search_event(query, limit=10):
     city, weekday, date, time}. Read-only — opens its own page, never
     creates or modifies anything, and closes the page before returning.
     """
-    with sync_playwright() as p:
+    with _exclusive_browser(), sync_playwright() as p:
         page = _open_listings_page(p)
         try:
             _open_new_listing_modal(page)
@@ -191,7 +227,7 @@ def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
     Takes ~10 s (drives the live browser). Results should be cached by the
     caller — nothing is written.
     """
-    with sync_playwright() as p:
+    with _exclusive_browser(), sync_playwright() as p:
         page = _open_listings_page(p)
         try:
             _open_new_listing_modal(page)
@@ -430,7 +466,7 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
     Caller is responsible for getting explicit user approval before calling
     this — this function actually saves the listing (as a draft).
     """
-    with sync_playwright() as p:
+    with _exclusive_browser(), sync_playwright() as p:
         page = _open_listings_page(p)
         try:
             _open_new_listing_modal(page)
