@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Pricer" />
@@ -69,13 +69,49 @@
   .warn { background: #2a2314; border: 1px solid var(--amber); color: var(--amber); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
   .tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .tablewrap table { min-width: 760px; }
+  .only-mobile { display: none; }
+
+  /* ---- phone layout (iPhone 14 = 390pt wide) ---- */
   @media (max-width: 700px) {
-    header { padding: 12px 14px; }
-    main { padding: 12px 14px 60px; }
-    header .nav a { margin-left: 10px; font-size: 11px; }
-    input[type="checkbox"] { width: 18px; height: 18px; }
-    .bar.boxed { gap: 10px; }
-    button { padding: 10px 12px; }
+    header { display: block; padding: 10px 14px 8px;
+             padding-top: calc(10px + env(safe-area-inset-top)); }
+    header .left { justify-content: space-between; display: flex; }
+    header .nav { display: flex; overflow-x: auto; white-space: nowrap;
+                  margin-top: 8px; padding-bottom: 2px;
+                  -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    header .nav::-webkit-scrollbar { display: none; }
+    header .nav a { margin-left: 0; margin-right: 16px; font-size: 12px; padding: 6px 0; }
+    main { padding: 12px 12px calc(40px + env(safe-area-inset-bottom)); }
+    .stats { grid-template-columns: repeat(3, 1fr); }
+    .stat { padding: 8px 10px; }
+    .stat .value { font-size: 17px; }
+    .stat .label { font-size: 9px; letter-spacing: 1px; }
+    /* iOS zooms into inputs under 16px — keep them at 16 on phones */
+    input, select, button { font-size: 16px; }
+    input[type="checkbox"] { width: 22px; height: 22px; }
+    button { padding: 12px 14px; }
+    .bar.boxed { gap: 12px; }
+    #p-run { width: 100%; }
+
+    /* tables become stacked cards */
+    .tablewrap { overflow-x: visible; }
+    .tablewrap table { min-width: 0; width: 100%; }
+    .tablewrap thead { display: none; }
+    .tablewrap tr { display: grid; grid-template-columns: repeat(3, 1fr);
+                    gap: 8px 12px; padding: 12px 10px;
+                    border-bottom: 1px solid var(--line-2); }
+    .tablewrap td { display: block; padding: 0; border: none; text-align: left; }
+    .tablewrap td.num { text-align: left; }
+    .tablewrap td::before { content: attr(data-label); display: block;
+                            font-size: 9px; color: var(--muted);
+                            letter-spacing: 1px; text-transform: uppercase;
+                            margin-bottom: 2px; }
+    .tablewrap td:not([data-label])::before { content: none; }
+    .tablewrap td.c-wide { grid-column: 1 / -1; }
+    .tablewrap td:empty { display: none; }
+    .only-desktop { display: none !important; }
+    .only-mobile { display: inline; }
+    .p-floor { width: 100% !important; }
   }
 </style>
 </head>
@@ -119,8 +155,8 @@
 <div class="bar boxed">
   <button id="p-master" title="Global kill switch — nothing runs while this is off" style="font-weight:700; letter-spacing:1px; min-width:130px;">PRICER: …</button>
   <label title="Log + notify what would change, without touching viagogo"><input type="checkbox" id="p-dryrun"> dry run</label>
-  <label title="How far below the cheapest competitor to price, in USD">undercut $<input type="number" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
-  <label title="Hard brake: never drop a listing more than this inside the sliding window — it holds and pings you instead">max drop <input type="number" id="p-maxdrop" step="1" min="1" max="90" style="width:58px; padding:4px 6px;">%<span id="p-dropwin" style="color:var(--muted);">/12h</span></label>
+  <label title="How far below the cheapest competitor to price, in USD">undercut $<input type="number" inputmode="decimal" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
+  <label title="Hard brake: never drop a listing more than this inside the sliding window — it holds and pings you instead">max drop <input type="number" inputmode="numeric" id="p-maxdrop" step="1" min="1" max="90" style="width:58px; padding:4px 6px;">%<span id="p-dropwin" style="color:var(--muted);">/12h</span></label>
   <button id="p-run">Run pricer now</button>
 </div>
 
@@ -148,7 +184,7 @@
 <div class="tablewrap">
 <table>
   <thead><tr>
-    <th>WHEN</th><th>EVENT</th><th>SECTION</th><th>ACTION</th>
+    <th>EVENT / WHEN</th><th>SECTION</th><th>ACTION</th>
     <th class="num">OLD</th><th class="num">NEW</th><th class="num">COMPETITOR</th><th>DETAIL</th>
   </tr></thead>
   <tbody id="plogbody"></tbody>
@@ -195,17 +231,17 @@ function renderListings() {
     }
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${esc(r.event_name)}<div style="color:var(--muted); font-size:10px;">${esc(r.venue)}</div></td>
-      <td>${esc(r.event_date)}</td>
-      <td>${esc((r.section||"").split("\n")[0])}</td>
-      <td class="num">${r.available ?? ""}</td>
-      <td class="num" style="color:var(--amber);">${money(r.face_value)}</td>
-      <td class="num">${money(r.price)}</td>
-      <td class="num">${money(r.proceeds)}</td>
-      <td><input type="checkbox" class="p-auto" data-id="${esc(r.id)}" ${r.pricer_enabled ? "checked" : ""}></td>
-      <td class="num"><input type="number" class="p-floor" data-id="${esc(r.id)}" step="0.01" min="0" value="${r.pricer_floor ?? ""}" placeholder="—" style="width:74px; padding:3px 6px;"></td>
-      <td>${chip}</td>
-      <td class="num">${r.pricer_last_set_price != null ? money(r.pricer_last_set_price) : "—"}</td>
+      <td class="c-wide">${esc(r.event_name)}<div style="color:var(--muted); font-size:10px;">${esc(r.venue)}<span class="only-mobile"> · ${esc(r.event_date)}</span></div></td>
+      <td class="only-desktop">${esc(r.event_date)}</td>
+      <td data-label="section">${esc((r.section||"").split("\n")[0])}</td>
+      <td class="num" data-label="avail">${r.available ?? ""}</td>
+      <td class="num" data-label="cost /ea" style="color:var(--amber);">${money(r.face_value)}</td>
+      <td class="num" data-label="price">${money(r.price)}</td>
+      <td class="num" data-label="proceeds">${money(r.proceeds)}</td>
+      <td data-label="auto"><input type="checkbox" class="p-auto" data-id="${esc(r.id)}" ${r.pricer_enabled ? "checked" : ""}></td>
+      <td class="num" data-label="floor $"><input type="number" inputmode="decimal" class="p-floor" data-id="${esc(r.id)}" step="0.01" min="0" value="${r.pricer_floor ?? ""}" placeholder="—" style="width:74px; padding:3px 6px;"></td>
+      <td data-label="state">${chip}</td>
+      <td class="num" data-label="last set">${r.pricer_last_set_price != null ? money(r.pricer_last_set_price) : "—"}</td>
     `;
     tbody.appendChild(tr);
   }
@@ -249,14 +285,13 @@ function renderLog(log) {
     const row = _byId[e.listing_id] || {};
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td style="white-space:nowrap;">${e.created_at ? new Date(e.created_at).toLocaleString() : ""}</td>
-      <td>${esc(row.event_name || e.event_id || e.listing_id)}</td>
-      <td>${esc((e.section||"").split("\n")[0])}</td>
-      <td class="${cls(e.action)}">${esc(e.action)}${e.dry_run ? ' <span class="status dry">dry</span>' : ""}</td>
-      <td class="num">${e.old_price != null ? money(e.old_price) : "—"}</td>
-      <td class="num">${e.new_price != null ? money(e.new_price) : "—"}</td>
-      <td class="num">${e.competitor_price != null ? money(e.competitor_price) : "—"}</td>
-      <td style="color:var(--muted);">${esc(e.detail || "")}</td>
+      <td class="c-wide"><b>${esc(row.event_name || e.event_id || e.listing_id)}</b><div style="color:var(--muted); font-size:10px;">${e.created_at ? new Date(e.created_at).toLocaleString() : ""}<span class="only-mobile"> · ${esc((e.section||"").split("\n")[0])}</span></div></td>
+      <td class="only-desktop">${esc((e.section||"").split("\n")[0])}</td>
+      <td data-label="action" class="${cls(e.action)}">${esc(e.action)}${e.dry_run ? ' <span class="status dry">dry</span>' : ""}</td>
+      <td class="num" data-label="old">${e.old_price != null ? money(e.old_price) : "—"}</td>
+      <td class="num" data-label="new">${e.new_price != null ? money(e.new_price) : "—"}</td>
+      <td class="num" data-label="competitor">${e.competitor_price != null ? money(e.competitor_price) : "—"}</td>
+      <td class="c-wide" data-label="detail" style="color:var(--muted);">${esc(e.detail || "")}</td>
     `;
     tbody.appendChild(tr);
   }
