@@ -157,6 +157,7 @@
   <label title="Log + notify what would change, without touching viagogo"><input type="checkbox" id="p-dryrun"> dry run</label>
   <label title="How far below the cheapest competitor to price, in USD">undercut $<input type="number" inputmode="decimal" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
   <label title="Hard brake: never drop a listing more than this inside the sliding window — it holds and pings you instead">max drop <input type="number" inputmode="numeric" id="p-maxdrop" step="1" min="1" max="90" style="width:58px; padding:4px 6px;">%<span id="p-dropwin" style="color:var(--muted);">/12h</span></label>
+  <label title="Don't chase listings that only have 1 ticket — a lone single isn't real competition"><input type="checkbox" id="p-nosingles"> ignore 1-ticket rivals</label>
   <button id="p-run">Run pricer now</button>
 </div>
 
@@ -319,6 +320,8 @@ async function loadAll() {
     if (document.activeElement !== undercut) undercut.value = s.undercut;
     if (document.activeElement !== maxdrop) maxdrop.value = s.max_drop_pct;
     document.getElementById("p-dropwin").textContent = "/" + (s.drop_window_hours ?? 12) + "h";
+    const nosingles = document.getElementById("p-nosingles");
+    if (document.activeElement !== nosingles) nosingles.checked = !!s.ignore_singles;
     document.getElementById("drywarn").style.display = (s.master_enabled && s.dry_run) ? "block" : "none";
 
     const cfgs = Object.values(s.configs || {});
@@ -371,6 +374,10 @@ document.getElementById("p-maxdrop").addEventListener("change", async (e) => {
   const pct = parseFloat(e.target.value);
   if (!pct || pct < 1 || pct > 90) return;
   await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ max_drop_pct: pct }) });
+});
+document.getElementById("p-nosingles").addEventListener("change", async (e) => {
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ ignore_singles: e.target.checked }) });
+  loadAll();
 });
 document.getElementById("p-run").addEventListener("click", async (e) => {
   const btn = e.currentTarget; btn.disabled = true; btn.textContent = "running...";

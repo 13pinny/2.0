@@ -4467,6 +4467,7 @@ def api_pricer_status():
         "undercut": viagogo_pricer.undercut_amount(),
         "max_drop_pct": viagogo_pricer.max_drop_pct(),
         "drop_window_hours": viagogo_pricer.drop_window_hours(),
+        "ignore_singles": viagogo_pricer.ignore_single_competitors(),
         "interval_minutes": PRICER_INTERVAL_MINUTES,
         "configs": db.pricer_config_all(),
         "log": db.pricer_log_recent(50),
@@ -4537,6 +4538,10 @@ def api_pricer_settings():
             return jsonify({"error": "undercut must be between 0 and 50"}), 400
         db.setting_set("pricer_undercut", f"{u:.2f}", now_iso)
         out["undercut"] = u
+    if "ignore_singles" in body:
+        v = "true" if body.get("ignore_singles") else "false"
+        db.setting_set("pricer_ignore_singles", v, now_iso)
+        out["ignore_singles"] = v
     if "max_drop_pct" in body:
         try:
             pct = float(body["max_drop_pct"])

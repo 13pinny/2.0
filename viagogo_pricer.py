@@ -66,6 +66,9 @@ Pricing rules (user requirements):
   * lower-only for now; raise needs BOTH pricer_allow_raise_global and the
     listing's allow_raise flag (architecture in place, off at launch)
   * no competitors visible in the section: do nothing (skip_alone)
+  * single-ticket listings don't count as competitors while
+    pricer_ignore_singles is on (default ON) — a lone single undercutting
+    us isn't real competition for a multi-ticket listing
   * manual price change on inv.viagogo (live price != last_set_price)
     pauses the listing + notifies; resume from the dashboard re-adopts
   * dry-run mode (pricer_dry_run, default ON) logs/notifies without writing
@@ -134,6 +137,13 @@ def dry_run_enabled():
 
 def allow_raise_global():
     return db.setting_get_bool("pricer_allow_raise_global", False)
+
+
+def ignore_single_competitors():
+    """When on (default), listings with only 1 ticket available don't count
+    as competitors — a lone single undercutting us isn't real competition
+    for a multi-ticket listing, and chasing it just burns margin."""
+    return db.setting_get_bool("pricer_ignore_singles", True)
 
 
 def max_drop_pct():
@@ -281,7 +291,7 @@ def fetch_event_grid(context, public_url):
             pass
 
 
-def grid_section_prices(index_data, our_listing_ids):
+def grid_section_prices(index_data, our_listing_ids, min_competitor_qty=1):
     """Digest a grid into per-section price info.
 
     Returns (sections, meta) where sections maps normalized section name ->
@@ -290,6 +300,11 @@ def grid_section_prices(index_data, our_listing_ids):
      anchor — None means we're alone in the section),
      "our_raw": float|None (cheapest of OUR listings in that section)}
     and meta carries fx-calibration inputs and coverage counts.
+
+    min_competitor_qty filters the competitor anchor: with 2, a listing
+    holding a single ticket (grid availableTickets == 1) doesn't count as
+    competition. Unknown quantities are kept (safer to compete than to
+    ignore a real rival).
     """
     grid = (index_data or {}).get("grid") or {}
     items = grid.get("items") or []
@@ -311,8 +326,10 @@ def grid_section_prices(index_data, our_listing_ids):
         })
         if cur["cheapest_raw"] is None or raw < cur["cheapest_raw"]:
             cur.update(cheapest_raw=raw, cheapest_is_ours=is_ours)
-        if not is_ours and (cur["cheapest_competitor_raw"] is None
-                            or raw < cur["cheapest_competitor_raw"]):
+        qty = it.get("availableTickets")
+        big_enough = qty is None or qty >= min_competitor_qty
+        if not is_ours and big_enough and (cur["cheapest_competitor_raw"] is None
+                                           or raw < cur["cheapest_competitor_raw"]):
             cur["cheapest_competitor_raw"] = raw
         if is_ours and (cur["our_raw"] is None or raw < cur["our_raw"]):
             cur["our_raw"] = raw
@@ -574,7 +591,9 @@ def run_pricer_tick(dry_run=None):
                     counters["skipped"] += len(members)
                     continue
 
-                sections, meta = grid_section_prices(index_data, our_ids_event)
+                min_qty = 2 if ignore_single_competitors() else 1
+                sections, meta = grid_section_prices(index_data, our_ids_event,
+                                                     min_competitor_qty=min_qty)
                 if meta["filtered"] and meta["page_size"] and \
                         meta["filtered"] > meta["page_size"]:
                     print(f"[pricer] event {event_id}: grid shows "
