@@ -406,6 +406,21 @@ def _resolve_search_term(event_name, venue):
     return event_name or venue
 
 
+_HEBREW_RX = re.compile("[\u0590-\u05FF]")
+
+
+def _search_viagogo(search_term):
+    """search_event, but with a guard: viagogo's picker can't actually match
+    Hebrew — when fed a Hebrew query it returns its default/popular event
+    list, which once "matched" פאר טסי to a World Cup game. If the resolved
+    term is still Hebrew (no name mapping taught yet), report no candidates
+    so the push lands as no_match and the user gets the teach flow instead
+    of a bogus awaiting_approval."""
+    if _HEBREW_RX.search(search_term or ""):
+        return []
+    return viagogo_listing.search_event(search_term, limit=8)
+
+
 def _push_kupat_to_viagogo(intake_id, fields):
     """Kupat-only: search viagogo for a matching event, price it at 5x the
     USD-converted Kupat per-ticket cost, and stage a viagogo_push row for
@@ -443,7 +458,7 @@ def _push_kupat_to_viagogo(intake_id, fields):
     # teach it.
     search_term = _resolve_search_term(event_name, venue)
     try:
-        candidates = viagogo_listing.search_event(search_term, limit=8)
+        candidates = _search_viagogo(search_term)
     except Exception as e:
         base_row["status"] = "error"
         base_row["error"] = f"{type(e).__name__}: {e}"
@@ -496,7 +511,7 @@ def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None):
     cost_per_unit = fields.get("cost_per_unit")
     search_term = _resolve_search_term(event_name, venue)
     try:
-        candidates = viagogo_listing.search_event(search_term, limit=8)
+        candidates = _search_viagogo(search_term)
     except Exception as e:
         db.viagogo_push_update(push_id, {
             "status": "error",
