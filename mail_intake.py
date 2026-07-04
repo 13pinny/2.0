@@ -316,27 +316,27 @@ def _parse_kupat(subject, body, links=None):
             out["cost"] = float(m.group(1).replace(",", ""))
         except ValueError:
             pass
-    # Section / row / seats: "אזור: GOLDEN ישיבה 1 , שורה: 6, כיסאות: 9 - 10"
-    m = re.search(
-        r"אזור:\s*([^,]+?)\s*,\s*שורה:\s*([^\s,]+)\s*,?\s*כיסא(?:ות)?:\s*([^\n]+)",
-        body or "",
-    )
+    # Section / row / seats. The layout varies per email: Eden's came on one
+    # line ("אזור: GOLDEN ישיבה 1 , שורה: 6, כיסאות: 9 - 10"), Pe'er Tasi's
+    # split each field onto its own line with literal &nbsp; entities between
+    # them — a combined single-line regex silently dropped שורה/כיסאות there.
+    # So parse each field independently on an entity-normalized body.
+    seat_body = re.sub(r"&nbsp;|\xa0", " ", body or "")
+    m = re.search(r"אזור:\s*([^\n,]+)", seat_body)
     if m:
         out["section"] = m.group(1).strip()
-        out["row_label"] = m.group(2).strip()
-        out["seats"] = m.group(3).strip()
-    else:
-        # GA tickets have no row/seats so the seated pattern above never
-        # matches. Try a bare "אזור: <section>" line first; failing that, a
-        # standalone "עמידה" (standing) anywhere in the body — that's how
-        # GA appears on Kupat tickets (e.g. Hanan Ben Ari, Expo Tel Aviv),
-        # and capturing it lets viagogo_section_map translate it (עמידה →
+    elif re.search(r"(?:^|\s)עמידה(?:\s|$)", seat_body):
+        # GA tickets have no אזור line; a standalone עמידה (standing) is how
+        # GA appears on Kupat tickets (e.g. Hanan Ben Ari, Expo Tel Aviv).
+        # Capturing it lets viagogo_section_map translate it (עמידה →
         # Standing) so the /listings dropdown pre-selects correctly.
-        m = re.search(r"אזור:\s*([^\n,]+)", body or "")
-        if m:
-            out["section"] = m.group(1).strip()
-        elif re.search(r"(?:^|\s)עמידה(?:\s|$)", body or ""):
-            out["section"] = "עמידה"
+        out["section"] = "עמידה"
+    m = re.search(r"שורה:\s*([^\s,]+)", seat_body)
+    if m:
+        out["row_label"] = m.group(1).strip()
+    m = re.search(r"כיסא(?:ות)?:\s*(\d+(?:\s*[-–]\s*\d+)?)", seat_body)
+    if m:
+        out["seats"] = re.sub(r"\s*([-–])\s*", r" \1 ", m.group(1).strip())
     if links:
         for _url in links:
             _low = _url.lower()
