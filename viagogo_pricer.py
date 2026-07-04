@@ -1,5 +1,13 @@
 """Viagogo auto-pricer: keep our listings just under the cheapest competitor.
 
+PRIMARY competitor source (confirmed 2026-07-04, scripts/
+probe_viagogo_compare.py): the magnifier icon on each /Listings event row
+POSTs /Listings/MarketDataV3 {eventId} and returns every listing on the
+event as HTML — section/row/quantity/price in OUR account currency (USD),
+our own rows marked <tr class="owned"> with the listing id. One session
+POST: no public page, no URL discovery, no fx. Everything below about the
+public event page is the FALLBACK path only.
+
 Empirical facts (confirmed 2026-07-02 against Hanan Ben Ari 30 Jul, event
 161441108, listing 13216838386 — scripts/probe_viagogo_public.py and
 scripts/probe_viagogo_edit_price.py):
@@ -87,6 +95,7 @@ import viagogo_listing
 from viagogo_listing import PROCEEDS_RATE, _exclusive_browser
 
 DETAILS_URL = "https://inv.viagogo.com/Listings/Details"
+MARKET_DATA_URL = "https://inv.viagogo.com/Listings/MarketDataV3"
 PUBLIC_HOME = "https://www.viagogo.com/"
 
 UNDERCUT_DEFAULT = 0.04
@@ -191,7 +200,80 @@ def read_live_listings(page):
     return scraper._extract_viagogo_rows(page)
 
 
-# --- public event page ---------------------------------------------------
+# --- inv market data (primary competitor source) --------------------------
+# The magnifier icon on each /Listings event row POSTs
+# /Listings/MarketDataV3 {eventId, latestServerStamp:0} and gets back an
+# HTML modal with EVERY listing on the event: section / row / quantity /
+# price+proceeds — all in OUR account currency (USD), with our own rows
+# marked <tr data-id="<listing_id>" class="owned">. One session POST, no
+# public page, no fx. (Probe: scripts/probe_viagogo_compare.py,
+# confirmed live 2026-07-04 on event 161491868 — 15 rows, ours owned.)
+
+MARKET_ROW_RE = re.compile(r'<tr data-id="(\d*)"[^>]*class="([^"]*)"[^>]*>(.*?)</tr>',
+                           re.S)
+MARKET_TD_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
+
+
+def _strip_tags(html):
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html or "")).strip()
+
+
+def _parse_market_html(html):
+    """MarketDataV3 modal HTML -> [{listing_id, section, row, qty, price,
+    is_ours}]. td layout: spacer, section, row, quantity, price, proceeds,
+    venue area, notes."""
+    out = []
+    for m in MARKET_ROW_RE.finditer(html):
+        lid, cls, body = m.groups()
+        tds = MARKET_TD_RE.findall(body)
+        if len(tds) < 6:
+            continue
+        price_txt = _strip_tags(tds[4])
+        pm = re.search(r"[\d,]+(?:\.\d+)?", price_txt.replace(",", ""))
+        price = float(pm.group(0)) if pm else None
+        qty_txt = _strip_tags(tds[3])
+        qty = int(qty_txt) if qty_txt.isdigit() else None
+        out.append({
+            "listing_id": lid or None,
+            "section": _strip_tags(tds[1]),
+            "row": _strip_tags(tds[2]),
+            "qty": qty,
+            "price": price,
+            "is_ours": "owned" in cls,
+        })
+    return out
+
+
+def fetch_market_listings(page, event_id):
+    """All listings for an event straight from the inv session. Returns
+    parsed rows, or None on failure (caller falls back to the public page)."""
+    resp = page.request.post(MARKET_DATA_URL, form={"eventId": str(event_id)})
+    if not resp.ok:
+        return None
+    rows = _parse_market_html(resp.text())
+    return rows or None
+
+
+def market_section_prices(market_rows, min_competitor_qty=1):
+    """Per-section competitor anchor from MarketDataV3 rows. Returns
+    {norm_section: {"cheapest_competitor_usd": float|None}} — None means the
+    section has listings but no qualifying competitor (all ours / all
+    singles when min_competitor_qty=2)."""
+    sections = {}
+    for r in market_rows:
+        sec = _norm_section(r["section"])
+        cur = sections.setdefault(sec, {"cheapest_competitor_usd": None})
+        if r["is_ours"] or r["price"] is None:
+            continue
+        if r["qty"] is not None and r["qty"] < min_competitor_qty:
+            continue
+        if (cur["cheapest_competitor_usd"] is None
+                or r["price"] < cur["cheapest_competitor_usd"]):
+            cur["cheapest_competitor_usd"] = r["price"]
+    return sections
+
+
+# --- public event page (fallback competitor source) ------------------------
 
 def _load_url_cache():
     try:
@@ -476,6 +558,34 @@ def set_listing_price(page, listing_id, new_price):
     return stuck
 
 
+def _public_sections_fallback(context, event_id, event_name, our_ids_event,
+                              live_by_id, min_qty):
+    """Legacy competitor source (public event page + fx calibration),
+    normalized to the market_section_prices shape. Only used when
+    MarketDataV3 fails. Returns {sec: {"cheapest_competitor_usd": ...}} or
+    None when the whole path fails."""
+    try:
+        public_url = discover_public_url(context, event_id, event_name)
+        if not public_url:
+            return None
+        index_data = fetch_event_grid(context, public_url)
+        if not index_data:
+            return None
+        raw_sections, meta = grid_section_prices(index_data, our_ids_event,
+                                                 min_competitor_qty=min_qty)
+        fx, _ = derive_fx(meta, live_by_id)
+        if not fx:
+            return None
+        return {
+            sec: {"cheapest_competitor_usd": (info["cheapest_competitor_raw"] / fx
+                                              if info["cheapest_competitor_raw"] else None)}
+            for sec, info in raw_sections.items()
+        }
+    except Exception as e:
+        print(f"[pricer] public fallback failed for {event_id}: {e}")
+        return None
+
+
 # --- the tick -------------------------------------------------------------
 
 def _log(entry):
@@ -563,50 +673,31 @@ def run_pricer_tick(dry_run=None):
                 event_name = members[0][2].get("event_name") or ""
                 our_ids_event = [str(r["id"]) for r in live
                                  if str(r.get("event_id")) == event_id]
-                try:
-                    public_url = discover_public_url(context, event_id, event_name)
-                except Exception as e:
-                    public_url = None
-                    print(f"[pricer] url discovery failed for {event_id}: {e}")
-                if not public_url:
-                    for lid, cfg, row in members:
-                        _log({"listing_id": lid, "event_id": event_id,
-                              "section": row.get("section"),
-                              "action": "fetch_failed",
-                              "detail": "no public event URL"})
-                    counters["skipped"] += len(members)
-                    continue
-
-                try:
-                    index_data = fetch_event_grid(context, public_url)
-                except Exception as e:
-                    index_data = None
-                    print(f"[pricer] grid fetch failed for {event_id}: {e}")
-                if not index_data:
-                    for lid, cfg, row in members:
-                        _log({"listing_id": lid, "event_id": event_id,
-                              "section": row.get("section"),
-                              "action": "fetch_failed",
-                              "detail": f"no grid data at {public_url}"})
-                    counters["skipped"] += len(members)
-                    continue
-
                 min_qty = 2 if ignore_single_competitors() else 1
-                sections, meta = grid_section_prices(index_data, our_ids_event,
-                                                     min_competitor_qty=min_qty)
-                if meta["filtered"] and meta["page_size"] and \
-                        meta["filtered"] > meta["page_size"]:
-                    print(f"[pricer] event {event_id}: grid shows "
-                          f"{meta['page_size']} of {meta['filtered']} listings "
-                          "— cheapest sort first, coverage partial")
 
-                fx, fx_source = derive_fx(meta, live_by_id)
-                if not fx:
+                # Primary source: MarketDataV3 on the inv session — USD,
+                # own rows marked, one POST. Public event page only as a
+                # fallback if viagogo ever breaks/denies the endpoint.
+                sections = None
+                source = "market"
+                try:
+                    market = fetch_market_listings(page, event_id)
+                except Exception as e:
+                    market = None
+                    print(f"[pricer] MarketDataV3 failed for {event_id}: {e}")
+                if market:
+                    sections = market_section_prices(market, min_competitor_qty=min_qty)
+                else:
+                    source = "public"
+                    sections = _public_sections_fallback(
+                        context, event_id, event_name, our_ids_event,
+                        live_by_id, min_qty)
+                if sections is None:
                     for lid, cfg, row in members:
                         _log({"listing_id": lid, "event_id": event_id,
                               "section": row.get("section"),
                               "action": "fetch_failed",
-                              "detail": "no fx calibration available"})
+                              "detail": "market data and public page both failed"})
                     counters["skipped"] += len(members)
                     continue
 
@@ -622,17 +713,17 @@ def run_pricer_tick(dry_run=None):
                             _log({"listing_id": lid, "event_id": event_id,
                                   "section": row.get("section"),
                                   "action": "skip_alone",
-                                  "detail": "section not in public grid "
-                                            "(no visible listings)"})
+                                  "detail": "section not in market data"})
                         counters["skipped"] += len(group)
                         continue
-                    if info["cheapest_competitor_raw"] is None:
-                        # every visible listing in the section is ours
+                    if info["cheapest_competitor_usd"] is None:
+                        # every qualifying listing in the section is ours
+                        # (or only singles while they're ignored)
                         for lid, cfg, row in group:
                             _log({"listing_id": lid, "event_id": event_id,
                                   "section": row.get("section"),
                                   "action": "skip_alone",
-                                  "detail": "no competitors in section"})
+                                  "detail": "no qualifying competitors in section"})
                         counters["skipped"] += len(group)
                         continue
 
@@ -640,7 +731,7 @@ def run_pricer_tick(dry_run=None):
                     # lead but by less than the undercut, this tightens our
                     # price to a clear lead; a comfortable lead computes a
                     # raise target, which stays skipped while raising is off.
-                    competitor_usd = info["cheapest_competitor_raw"] / fx
+                    competitor_usd = info["cheapest_competitor_usd"]
                     for lid, cfg, row in group:
                         if counters["changed"] >= MAX_CHANGES_PER_TICK:
                             break
@@ -695,7 +786,7 @@ def run_pricer_tick(dry_run=None):
                         if dry_run:
                             _log({**base, "new_price": target,
                                   "action": "dry_run", "dry_run": 1,
-                                  "detail": f"would {action} (fx {fx:.4f} {fx_source})"})
+                                  "detail": f"would {action} (src {source})"})
                             try:
                                 notify.notify_pricer_change({
                                     "event_name": row.get("event_name"),
@@ -724,7 +815,7 @@ def run_pricer_tick(dry_run=None):
                             "last_set_price": stuck, "last_set_at": _now_iso(),
                         }, _now_iso())
                         _log({**base, "new_price": stuck, "action": action,
-                              "detail": f"fx {fx:.4f} {fx_source}"})
+                              "detail": f"src {source}"})
                         try:
                             notify.notify_pricer_change({
                                 "event_name": row.get("event_name"),
