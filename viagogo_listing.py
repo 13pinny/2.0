@@ -256,16 +256,57 @@ def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
                 pass
 
 
-def download_ticket_pdfs(ticket_url, qty=1):
-    """Render each Kupat e-ticket to its own PDF using headless Chromium.
+def download_ticket_pdfs_for(ticket_url, qty=1):
+    """Route a ticket-viewer URL to the right per-site renderer.
 
-    The Kupat viewer is a public link (no login), so this uses a fresh
-    headless Chromium rather than the CDP session. The tickets live in a
-    Swiper carousel: the first slide is an intro ("N tickets — swipe to
-    scan", no barcode) and each remaining slide is one real ticket with a
-    QR/barcode. page.pdf() only renders the *active* slide, so we advance
-    the carousel and PDF each slide that actually carries a barcode, up to
-    `qty`. Returns a list of PDF bytes (one per ticket).
+    - app.tickchak.co.il/n/…  → tickchak card carousel (tickchak_tickets.py)
+    - anything else (Kupat share links incl. SendGrid-wrapped, and
+      ticketmaster.co.il/t/…) → the Swiper walker below; both sites render
+      their e-tickets in a Swiper carousel on a public tokenized link.
+    """
+    low = (ticket_url or "").lower()
+    if "tickchak.co.il/n/" in low:
+        import tickchak_tickets  # lazy: pulls in PyMuPDF
+        cards = tickchak_tickets.scrape_ticket_url(ticket_url)
+        pdfs = [c["pdf_bytes"] for c in cards]
+        return pdfs[:qty] if qty else pdfs
+    return download_ticket_pdfs(ticket_url, qty=qty)
+
+
+def _advance_carousel(page):
+    """Advance a Swiper carousel one slide; True if it advanced.
+
+    Kupat renders clickable .swiper-button-next arrows; TM IL's viewer has
+    the same Swiper DOM but no clickable next button (that's why the walker
+    used to stop after one TM ticket) — fall back to driving the Swiper
+    instance directly via its JS API.
+    """
+    nxt = page.query_selector(".swiper-button-next")
+    if nxt and nxt.is_visible() and "swiper-button-disabled" not in (nxt.get_attribute("class") or ""):
+        nxt.click()
+        return True
+    return bool(page.evaluate(
+        """() => {
+          for (const el of document.querySelectorAll('.swiper, .swiper-container')) {
+            const sw = el.swiper;
+            if (!sw) continue;
+            if (sw.isEnd && !(sw.params && sw.params.loop)) return false;
+            sw.slideNext();
+            return true;
+          }
+          return false;
+        }"""
+    ))
+
+
+def download_ticket_pdfs(ticket_url, qty=1):
+    """Render each e-ticket in a Swiper-carousel viewer to its own PDF using
+    headless Chromium (public tokenized links — no login; used for Kupat and
+    Ticketmaster IL). Kupat's first slide is an intro ("N tickets — swipe to
+    scan", no barcode); TM IL's first slide is already ticket 1. page.pdf()
+    only renders the *active* slide, so we advance the carousel and PDF each
+    slide that actually carries a barcode, up to `qty`. Returns a list of
+    PDF bytes (one per ticket).
     """
     _margin = {"top": "8mm", "bottom": "8mm", "left": "8mm", "right": "8mm"}
     with sync_playwright() as p:
@@ -299,10 +340,8 @@ def download_ticket_pdfs(ticket_url, qty=1):
                         pdfs.append(page.pdf(print_background=True, format="A4", margin=_margin))
                         if len(pdfs) >= qty:
                             break
-                nxt = page.query_selector(".swiper-button-next")
-                if not nxt or "swiper-button-disabled" in (nxt.get_attribute("class") or ""):
+                if not _advance_carousel(page):
                     break
-                nxt.click()
                 page.wait_for_timeout(1200)
             return pdfs
         finally:

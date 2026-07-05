@@ -177,21 +177,26 @@ def _email_body_text(msg):
     return "\n".join(chunks).strip()
 
 
-def _email_html_links(msg):
-    """Return all href URLs found in the email's HTML part."""
+def _email_html(msg):
+    """Return the email's raw HTML part (or "" if none)."""
     for part in msg.walk():
         if part.get_content_type() != "text/html":
             continue
         if "attachment" in (part.get("Content-Disposition") or "").lower():
             continue
         try:
-            raw = part.get_payload(decode=True).decode(
+            return part.get_payload(decode=True).decode(
                 part.get_content_charset() or "utf-8", errors="replace"
             )
         except Exception:
             continue
-        return re.findall(r'href=["\']([^"\']+)["\']', raw, re.IGNORECASE)
-    return []
+    return ""
+
+
+def _email_html_links(msg):
+    """Return all href URLs found in the email's HTML part."""
+    html = _email_html(msg)
+    return re.findall(r'href=["\']([^"\']+)["\']', html, re.IGNORECASE) if html else []
 
 
 def _extract_attachments(msg):
@@ -422,9 +427,12 @@ def _search_viagogo(search_term):
 
 
 def _push_kupat_to_viagogo(intake_id, fields):
-    """Kupat-only: search viagogo for a matching event, price it at 5x the
-    USD-converted Kupat per-ticket cost, and stage a viagogo_push row for
-    the user to approve on /pending. Never creates a listing itself.
+    """Search viagogo for a matching event, price it at 5x the USD-converted
+    per-ticket cost, and stage a viagogo_push row for the user to approve on
+    /listings. Never creates a listing itself. Despite the name it serves all
+    Israeli providers (kupat, tickchak, ticketmaster_il) — tickchak emails
+    carry no pricing, so those stage with an empty price for the user to
+    fill in on the card before approving.
 
     Best-effort by design — the caller wraps this in its own try/except so
     a viagogo/FX hiccup never affects normal intake recording.
@@ -432,7 +440,7 @@ def _push_kupat_to_viagogo(intake_id, fields):
     event_name = fields.get("event_name") or ""
     venue = fields.get("venue") or ""
     cost_per_unit = fields.get("cost_per_unit")
-    if not event_name or cost_per_unit is None:
+    if not event_name:
         return None
 
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -478,7 +486,7 @@ def _push_kupat_to_viagogo(intake_id, fields):
     chosen = _rank_viagogo_candidates(candidates, fields.get("event_date_iso"))
     try:
         fx_rate = fx.ils_to_usd_rate()
-        cost_usd = fx.ils_to_usd(cost_per_unit)
+        cost_usd = fx.ils_to_usd(cost_per_unit) if cost_per_unit is not None else None
         website_price = round(cost_usd * 5, 2) if cost_usd is not None else None
     except Exception:
         fx_rate = None
@@ -558,7 +566,7 @@ def _notify_viagogo_push(push):
         pass
 
 
-def _parse_tickchak(subject, sender, body):
+def _parse_tickchak(subject, sender, body, links=None):
     """Tickchak registration confirmation (Hebrew). The body doesn't show
     qty or cost, so the user fills those manually. The event name lives in
     the sender display-name (e.g. 'בליבנו רק שיר אחד קיים <info@tickchak.co.il>'),
@@ -576,50 +584,109 @@ def _parse_tickchak(subject, sender, body):
     m = re.search(r"\n([^\n]+)\n\s*\n\s*שלום\s", body or "")
     if m:
         out["venue"] = m.group(1).strip()
+    # Ticket viewer link: https://app.tickchak.co.il/n/<token> — a carousel
+    # of all the order's ticket cards (see tickchak_tickets.py). May live in
+    # the same email or arrive separately; grab it when present.
+    for _url in (links or []):
+        if re.search(r"app\.tickchak\.co\.il/n/", _url, re.I):
+            out["ticket_url"] = _url
+            break
+    else:
+        m = re.search(r"https://app\.tickchak\.co\.il/n/[A-Za-z0-9_\-]+", body or "")
+        if m:
+            out["ticket_url"] = m.group(0)
     return out
 
 
-def _parse_ticketmaster_il(subject, body):
-    """Ticketmaster Israel 'Transaction Summary' (mostly Hebrew)."""
+_TMIL_TD_RE = re.compile(r"<td\b[^>]*>(.*?)</td>", re.S | re.I)
+
+
+def _strip_cell_html(s):
+    """HTML table cell -> plain text; <br> becomes a newline so multi-line
+    cells (event name / datetime / venue) stay splittable."""
+    s = re.sub(r"<br\s*/?>", "\n", s or "", flags=re.I)
+    s = re.sub(r"<[^>]+>", " ", s)
+    s = re.sub(r"&nbsp;|\xa0", " ", s)
+    return "\n".join(" ".join(line.split()) for line in s.splitlines()).strip()
+
+
+def _parse_ticketmaster_il(subject, body, html=None, links=None):
+    """Ticketmaster Israel 'Transaction Summary'.
+
+    The reliable source is the HTML transaction table (header row אירוע /
+    אזור / שורה / מושב(ים) / סוג / כמות / מחיר / סה״כ, then one data row
+    whose first cell is name<br>datetime<br>venue). The old stripped-text
+    regexes remain as fallback for pathological bodies.
+    """
     out = {"warnings": []}
-    # Event name: first bold-wrapped line under the *סיכום העסקה* header.
-    # Body has '*סיכום העסקה*' then a column header line, then '*<event>*'.
-    m = re.search(r"\*סיכום\s*העסקה\*[\s\S]*?\*([^\*\n]+)\*", body or "")
-    if m:
-        out["event_name"] = m.group(1).strip()
-    # Date: '2026-05-06 20:30:00.0' style
-    m = re.search(r"(\d{4})-(\d{2})-(\d{2})\s+\d{1,2}:\d{2}", body or "")
-    if m:
-        out["event_date_iso"] = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-    # Total: '*סה״כ* *498.00*' (uses the Hebrew geresh ״)
-    m = re.search(r"\*סה[״\"]?כ\*\s*\*([\d,.]+)\*", body or "")
-    if m:
-        try:
-            out["cost"] = float(m.group(1).replace(",", ""))
-        except ValueError:
-            pass
-    # The detail line is space-delimited in TM's export; numbers at the
-    # right are: qty, price-per-unit, total. Extract those, then strip them
-    # off the front to recover venue/section/row/seats text.
-    m = re.search(
-        r"^([^\n]+?)\s+(?:[^\s\d]+\s+)?(\d+)\s+([\d.]+)\s+([\d.]+)\s*$",
-        body or "",
-        re.MULTILINE,
-    )
-    if m:
-        try:
-            out["qty"] = int(m.group(2))
-        except ValueError:
-            pass
-        if "cost_per_unit" not in out:
+
+    # --- primary: HTML table ------------------------------------------------
+    hidx = (html or "").find(">אירוע<")
+    if hidx >= 0:
+        tr_end = html.find("</tr>", hidx)
+        tr2_start = html.find("<tr", tr_end) if tr_end > 0 else -1
+        tr2_end = html.find("</tr>", tr2_start) if tr2_start > 0 else -1
+        if tr2_end > 0:
+            cells = [_strip_cell_html(c) for c in _TMIL_TD_RE.findall(html[tr2_start:tr2_end])]
+            if len(cells) >= 8:
+                first = [l for l in cells[0].split("\n") if l.strip()]
+                if first:
+                    out["event_name"] = first[0]
+                for line in first[1:]:
+                    m = re.match(r"(\d{4})-(\d{2})-(\d{2})\s", line)
+                    if m:
+                        out["event_date_iso"] = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+                    else:
+                        out.setdefault("venue", line)
+                if cells[1]:
+                    out["section"] = cells[1]
+                if cells[2]:
+                    out["row_label"] = cells[2]
+                m = re.match(r"(\d+)\s*[-–]\s*(\d+)", cells[3] or "")
+                if m:
+                    a, b = sorted((int(m.group(1)), int(m.group(2))))
+                    out["seats"] = f"{a} - {b}"
+                elif cells[3]:
+                    out["seats"] = cells[3]
+                try:
+                    out["qty"] = int(cells[5])
+                except (ValueError, IndexError):
+                    pass
+                try:
+                    out["cost_per_unit"] = float(cells[6].replace(",", ""))
+                except (ValueError, IndexError):
+                    pass
+                try:
+                    out["cost"] = float(cells[7].replace(",", ""))
+                except (ValueError, IndexError):
+                    pass
+
+    # --- fallbacks: stripped-text regexes ------------------------------------
+    if not out.get("event_name"):
+        m = re.search(r"\*סיכום\s*העסקה\*[\s\S]*?\*([^\*\n]+)\*", body or "")
+        if m:
+            out["event_name"] = m.group(1).strip()
+    if not out.get("event_date_iso"):
+        m = re.search(r"(\d{4})-(\d{2})-(\d{2})\s+\d{1,2}:\d{2}", body or "")
+        if m:
+            out["event_date_iso"] = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    if out.get("cost") is None:
+        m = re.search(r"\*סה[״\"]?כ\*\s*\*([\d,.]+)\*", body or "")
+        if m:
             try:
-                out["cost_per_unit"] = float(m.group(3))
+                out["cost"] = float(m.group(1).replace(",", ""))
             except ValueError:
                 pass
+
+    # e-ticket viewer link: https://www.ticketmaster.co.il/t/<token>/<ref>/<lang>
+    for _url in (links or []):
+        if re.search(r"ticketmaster\.co\.il/t/", _url, re.I):
+            out["ticket_url"] = _url
+            break
     return out
 
 
-def extract_fields(provider, subject, sender, body, attachments, links=None):
+def extract_fields(provider, subject, sender, body, attachments, links=None, html=None):
     """Dispatch to per-provider extractors, then fall back to generic
     regex search for any field still missing. Returned dict includes a
     `warnings` list with parser quibbles (e.g. cost_not_found)."""
@@ -628,9 +695,9 @@ def extract_fields(provider, subject, sender, body, attachments, links=None):
     if provider == "kupat":
         out = _parse_kupat(subject, body, links=links)
     elif provider == "tickchak":
-        out = _parse_tickchak(subject, sender, body)
+        out = _parse_tickchak(subject, sender, body, links=links)
     elif provider in ("ticketmaster_il",):
-        out = _parse_ticketmaster_il(subject, body)
+        out = _parse_ticketmaster_il(subject, body, html=html, links=links)
     else:
         out = {"warnings": []}
 
@@ -899,8 +966,10 @@ def run_intake():
             if _is_blocked_sender(parsed["from"]):
                 skipped_provider += 1
                 continue
-            links = _email_html_links(message_from_bytes(raw))
-            fields = extract_fields(provider, parsed["subject"], parsed["from"], parsed["body"], parsed["attachments"], links=links)
+            _msg = message_from_bytes(raw)
+            html = _email_html(_msg)
+            links = re.findall(r'href=["\']([^"\']+)["\']', html, re.IGNORECASE) if html else []
+            fields = extract_fields(provider, parsed["subject"], parsed["from"], parsed["body"], parsed["attachments"], links=links, html=html)
             intake_id = "intake-" + uuid.uuid4().hex[:12]
             row = {
                 "id": intake_id,
@@ -924,7 +993,7 @@ def run_intake():
                 "status": "new",
             }
             db.insert_pending_intake(row, datetime.now(timezone.utc).isoformat())
-            if provider == "kupat":
+            if provider in ("kupat", "tickchak", "ticketmaster_il"):
                 try:
                     _push_kupat_to_viagogo(intake_id, fields)
                 except Exception:

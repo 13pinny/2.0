@@ -2004,8 +2004,9 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         ticket_pdfs = None
         if ticket_url:
             try:
-                _qty = (db.viagogo_push_get(push_id) or {}).get("qty") or 1
-                ticket_pdfs = viagogo_listing.download_ticket_pdfs(ticket_url, qty=int(_qty))
+                _qty = ((db.viagogo_push_get(push_id) or {}).get("qty")
+                        or available_tickets or 1)
+                ticket_pdfs = viagogo_listing.download_ticket_pdfs_for(ticket_url, qty=int(_qty))
             except Exception:
                 traceback.print_exc()
         viagogo_listing.create_draft_listing(

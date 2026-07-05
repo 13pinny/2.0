@@ -171,7 +171,9 @@ function renderCards(rows) {
       <div class="ic-subject">
         ${noMatch
           ? `No viagogo match — searched <em>${esc(r.event_name || r.venue || "?")}</em>. Teach the English name below to retry.`
-          : `Kupat: &#8362;${Number(r.cost_per_unit || 0).toFixed(2)}/ea &times; ${r.qty || 0} &nbsp;&rarr;&nbsp; viagogo $${Number(r.website_price_usd || 0).toFixed(2)}/ea (5&times;, fx ${r.fx_rate ? Number(r.fx_rate).toFixed(4) : "?"})`}
+          : r.cost_per_unit == null
+            ? `<span style="color: var(--amber);">No price in the email — enter Viagogo $/ea and Face value below before approving.</span>`
+            : `Paid: &#8362;${Number(r.cost_per_unit).toFixed(2)}/ea &times; ${r.qty || 0} &nbsp;&rarr;&nbsp; viagogo $${Number(r.website_price_usd || 0).toFixed(2)}/ea (5&times;, fx ${r.fx_rate ? Number(r.fx_rate).toFixed(4) : "?"})`}
       </div>
       <div class="ic-body">
         ${noMatch ? `
