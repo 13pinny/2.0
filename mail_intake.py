@@ -443,6 +443,14 @@ def _push_kupat_to_viagogo(intake_id, fields):
     if not event_name:
         return None
 
+    # Tickchak emails don't state a quantity, but the order's ticket viewer
+    # does ("N/M כרטיסים") — resolve it so the card's Qty is pre-filled.
+    if fields.get("qty") is None and "tickchak" in (fields.get("ticket_url") or "").lower():
+        try:
+            fields["qty"] = viagogo_listing.tickchak_order_qty(fields["ticket_url"])
+        except Exception:
+            pass
+
     now_iso = datetime.now(timezone.utc).isoformat()
     push_id = "vgp-" + uuid.uuid4().hex[:12]
     base_row = {
@@ -584,17 +592,24 @@ def _parse_tickchak(subject, sender, body, links=None):
     m = re.search(r"\n([^\n]+)\n\s*\n\s*שלום\s", body or "")
     if m:
         out["venue"] = m.group(1).strip()
-    # Ticket viewer link: https://app.tickchak.co.il/n/<token> — a carousel
-    # of all the order's ticket cards (see tickchak_tickets.py). May live in
-    # the same email or arrive separately; grab it when present.
+    # Ticket viewer link. Direct /n/ links are rare in the confirmation —
+    # what it actually carries is a static.tickchak.co.il/all/emailLink URL
+    # whose rendered page's 'הציגו כרטיס' button chains (via tic.li) into
+    # the /n/ viewer; viagogo_listing._resolve_tickchak_viewer follows that
+    # hop at download time. Prefer a direct /n/ link when present.
     for _url in (links or []):
         if re.search(r"app\.tickchak\.co\.il/n/", _url, re.I):
             out["ticket_url"] = _url
             break
     else:
-        m = re.search(r"https://app\.tickchak\.co\.il/n/[A-Za-z0-9_\-]+", body or "")
-        if m:
-            out["ticket_url"] = m.group(0)
+        for _url in (links or []):
+            if re.search(r"static\.tickchak\.co\.il/all/emailLink", _url, re.I):
+                out["ticket_url"] = _url
+                break
+        else:
+            m = re.search(r"https://app\.tickchak\.co\.il/n/[A-Za-z0-9_\-]+", body or "")
+            if m:
+                out["ticket_url"] = m.group(0)
     return out
 
 

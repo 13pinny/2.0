@@ -259,18 +259,105 @@ def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
 def download_ticket_pdfs_for(ticket_url, qty=1):
     """Route a ticket-viewer URL to the right per-site renderer.
 
-    - app.tickchak.co.il/n/…  → tickchak card carousel (tickchak_tickets.py)
+    - tickchak (either the confirmation email's static emailLink URL or the
+      /n/ viewer URL) → official print PDF split per page, with the
+      screenshot carousel as fallback.
     - anything else (Kupat share links incl. SendGrid-wrapped, and
       ticketmaster.co.il/t/…) → the Swiper walker below; both sites render
       their e-tickets in a Swiper carousel on a public tokenized link.
     """
     low = (ticket_url or "").lower()
-    if "tickchak.co.il/n/" in low:
-        import tickchak_tickets  # lazy: pulls in PyMuPDF
-        cards = tickchak_tickets.scrape_ticket_url(ticket_url)
-        pdfs = [c["pdf_bytes"] for c in cards]
-        return pdfs[:qty] if qty else pdfs
+    if "tickchak.co.il" in low:
+        try:
+            return download_tickchak_pdfs(ticket_url, qty=qty)
+        except Exception:
+            traceback.print_exc()
+            if "/n/" in low:
+                import tickchak_tickets  # lazy: pulls in PyMuPDF
+                cards = tickchak_tickets.scrape_ticket_url(ticket_url)
+                pdfs = [c["pdf_bytes"] for c in cards]
+                return pdfs[:qty] if qty else pdfs
+            raise
     return download_ticket_pdfs(ticket_url, qty=qty)
+
+
+def _resolve_tickchak_viewer(page):
+    """The confirmation email links to a static rendered-email page whose
+    'הציגו כרטיס' button chains (via tic.li) into the real /n/ ticket
+    viewer. If we're not on /n/ yet, follow it."""
+    if "/n/" in page.url:
+        return
+    href = page.evaluate(
+        """() => {
+          const a = [...document.querySelectorAll('a')].find(e => (e.innerText || '').includes('הציגו כרטיס'));
+          return a ? a.href : null;
+        }"""
+    )
+    if not href:
+        raise ViagogoListingError("tickchak: show-ticket link not found on email page")
+    page.goto(href, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
+    page.wait_for_timeout(2500)
+
+
+def download_tickchak_pdfs(ticket_url, qty=None):
+    """Official per-ticket PDFs for a tickchak order.
+
+    The /n/ viewer's הדפסה button downloads one PDF with a page per ticket
+    (probed live 2026-07-05: 8-ticket order → 8-page PDF with ticket numbers
+    and order details) — split it into single-page PDFs with PyMuPDF.
+    """
+    import os
+    import tempfile
+
+    import fitz
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            ctx = browser.new_context(
+                viewport={"width": 390, "height": 844}, locale="he-IL")
+            page = ctx.new_page()
+            page.goto(ticket_url, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
+            page.wait_for_timeout(2500)
+            _resolve_tickchak_viewer(page)
+            btn = page.locator("text=הדפסה").first
+            btn.wait_for(state="visible", timeout=MODAL_TIMEOUT_MS)
+            with page.expect_download(timeout=20000) as dl:
+                btn.click()
+            tmp = tempfile.mktemp(suffix=".pdf")
+            dl.value.save_as(tmp)
+            try:
+                doc = fitz.open(tmp)
+                pdfs = []
+                for i in range(len(doc)):
+                    nd = fitz.open()
+                    nd.insert_pdf(doc, from_page=i, to_page=i)
+                    pdfs.append(nd.tobytes())
+                    nd.close()
+                doc.close()
+            finally:
+                os.unlink(tmp)
+            return pdfs[:qty] if qty else pdfs
+        finally:
+            browser.close()
+
+
+def tickchak_order_qty(ticket_url):
+    """Ticket count of a tickchak order, read from the /n/ viewer's
+    'N/M כרטיסים' counters. Returns None if it can't be determined."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            ctx = browser.new_context(
+                viewport={"width": 390, "height": 844}, locale="he-IL")
+            page = ctx.new_page()
+            page.goto(ticket_url, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
+            page.wait_for_timeout(2500)
+            _resolve_tickchak_viewer(page)
+            m = re.findall(r"\d+\s*/\s*(\d+)\s*כרטיס", page.inner_text("body"))
+            return int(m[0]) if m else None
+        finally:
+            browser.close()
 
 
 def _dismiss_overlays(page):
