@@ -2158,6 +2158,20 @@ def sales_snapshot_asof(source, event_code, perf_code, ts_iso):
     return dict(r) if r else None
 
 
+def sales_snapshot_series(source, event_code, perf_code, since_iso):
+    """Ascending [(captured_at_iso, available), …] since since_iso — used to
+    sum availability decreases (real sales) over a window while ignoring
+    increases (ticket releases/refunds)."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT captured_at, available FROM tickchak_sales_snapshots "
+            "WHERE source=? AND event_code=? AND perf_code=? AND captured_at>=? "
+            "AND available IS NOT NULL ORDER BY captured_at ASC",
+            (source, str(event_code), str(perf_code), since_iso),
+        ).fetchall()
+    return [(r["captured_at"], r["available"]) for r in rows]
+
+
 def sales_snapshot_prune(cutoff_iso):
     """Drop snapshots older than cutoff_iso (we only need ~7 days of history)."""
     with connect() as conn:

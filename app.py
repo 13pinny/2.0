@@ -3838,20 +3838,32 @@ def run_sales_sync():
         _sales_sync_lock.release()
 
 
-def _sales_windows(source, ec, pc, now, cur_available):
-    """Per-window {sold, partial} from `available` deltas. Falls back to the
-    earliest snapshot (flagged partial) until history covers the window."""
-    earliest = db.sales_snapshot_earliest(source, ec, pc)
+def _sales_windows(series, now):
+    """Per-window {sold, partial}. `sold` is the SUM of availability
+    decreases inside the window — not the net change — so ticket
+    releases/refunds (availability going back UP) don't cancel out real
+    sales into a misleading zero. `series` is an ascending
+    [(captured_at_iso, available), …] list (last ~7 days). A window with no
+    baseline older than its start is flagged partial (history too short)."""
+    earliest_t = datetime.fromisoformat(series[0][0]) if series else None
     windows = {}
     for key, secs in FESTIVAL_WINDOWS:
-        base = db.sales_snapshot_asof(source, ec, pc, (now - timedelta(seconds=secs)).isoformat()) or earliest
-        if base is not None and cur_available is not None and base.get("available") is not None:
-            base_age = (now - datetime.fromisoformat(base["captured_at"])).total_seconds()
-            windows[key] = {"sold": max(0, base["available"] - cur_available),
-                            "partial": base_age < secs * 0.9}
-        else:
+        start = now - timedelta(seconds=secs)
+        base = None
+        after = []
+        for t_iso, a in series:
+            t = datetime.fromisoformat(t_iso)
+            if t <= start:
+                base = (t, a)          # latest reading at/before the window start
+            else:
+                after.append((t, a))
+        seq = ([base] if base else []) + after
+        if len(seq) < 2:
             windows[key] = {"sold": None, "partial": True}
-    return windows, earliest
+            continue
+        sold = sum(max(0, seq[i - 1][1] - seq[i][1]) for i in range(1, len(seq)))
+        windows[key] = {"sold": sold, "partial": base is None}
+    return windows, earliest_t
 
 
 def _sales_totals(shows):
@@ -3886,9 +3898,9 @@ def _counted_shows(source_name, flag_key, status_key):
         ec, pc = w["event_code"], w["perf_code"]
         total = meta.get("totalSeats")
         avail = meta.get("availSeats")
-        latest = db.sales_snapshot_latest(source_name, ec, pc)
-        cur_avail = avail if avail is not None else (latest or {}).get("available")
-        windows, earliest = _sales_windows(source_name, ec, pc, now, cur_avail)
+        series = db.sales_snapshot_series(source_name, ec, pc, (now - timedelta(days=7)).isoformat())
+        cur_avail = avail if avail is not None else (series[-1][1] if series else None)
+        windows, earliest_t = _sales_windows(series, now)
         sold = max(0, total - cur_avail) if (total is not None and cur_avail is not None) else None
         shows.append({
             "event_code": ec, "perf_code": pc, "label": w.get("label"),
@@ -3896,7 +3908,7 @@ def _counted_shows(source_name, flag_key, status_key):
             "status": meta.get(status_key),
             "total": total, "available": cur_avail, "sold": sold,
             "festival_types": lbls.get("blocks") or {},
-            "windows": windows, "tracking_since": (earliest or {}).get("captured_at"),
+            "windows": windows, "tracking_since": earliest_t.isoformat() if earliest_t else None,
             # Watcher controls (manage from the page itself).
             "id": w["id"],
             "notify_channels": w.get("notify_channels") or "",
