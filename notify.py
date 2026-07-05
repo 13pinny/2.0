@@ -477,6 +477,54 @@ def notify_pricer_change(info):
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
+def notify_pacha_event(kind, ev, old=None):
+    """Pacha NYC event-monitor ping. Discord-only — fires up to every 10
+    minutes and speed matters more than a paper trail. `kind` is one of
+    'new' (event just appeared on pacha-nyc.com/events), 'onsale'
+    (waitlist/hidden-GA event became buyable), 'price_up' (headline GA
+    price climbed a release). `ev` is a normalized dict from
+    pacha_events.fetch_events(); `old` is the previously stored DB row
+    (used by price_up for the old price)."""
+    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    name = ev.get("name") or "(unknown event)"
+    ga = ev.get("ga_price")
+    vip = ev.get("vip_price")
+    lines = [f"**{ev.get('date_text') or ev.get('start_date') or ''}**"]
+
+    if kind == "onsale":
+        title = f"🎟️ Pacha NYC: {name} is now ON SALE"
+        color = 0x56D364
+        if ga:
+            lines.append(f"GA from **${ga:,.0f}**")
+    elif kind == "price_up":
+        old_price = (old or {}).get("ga_price")
+        title = f"📈 Pacha NYC: {name} GA ${old_price:,.0f} → ${ga:,.0f}"
+        color = 0xFAA61A
+        lines.append("Selling through — price climbs with each release.")
+    else:
+        title = f"🪩 New Pacha NYC event — {name}"
+        color = 0xE91E63
+        if ga:
+            lines.append(f"GA from **${ga:,.0f}**")
+        if vip:
+            lines.append(f"VIP from ${vip:,.0f}")
+        if ev.get("iswaitlist"):
+            lines.append("⏳ Waitlist only for now — not yet buyable.")
+
+    if ev.get("buy_url"):
+        lines.append(f"[Buy tickets]({ev['buy_url']})")
+    embed = {
+        "title": title[:250],
+        "description": "\n".join(lines)[:4000],
+        "url": ev.get("page_url") or "https://pacha-nyc.com/events",
+        "color": color,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
 def notify_pricer_paused(info):
     """Auto-pricer paused a listing because its price on inv.viagogo differs
     from the last price the pricer set (i.e. a manual change). Discord +

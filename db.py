@@ -471,6 +471,22 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT,
     updated_at TEXT NOT NULL
 );
+-- Pacha NYC new-event monitor (pacha_events.py + app.py run_pacha_events).
+-- One row per event ever seen on pacha-nyc.com/events; rows persist after
+-- the event drops off the page (history) and simply stop being diffed.
+CREATE TABLE IF NOT EXISTS pacha_seen_events (
+    event_id     TEXT PRIMARY KEY,
+    name         TEXT,
+    slug         TEXT,
+    date_text    TEXT,
+    start_date   TEXT,
+    on_sale      INTEGER,
+    ga_price     REAL,
+    ga_sold_out  INTEGER,
+    buy_url      TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -1941,6 +1957,40 @@ def all_settings():
     with connect() as conn:
         rows = conn.execute("SELECT key, value, updated_at FROM app_settings").fetchall()
     return {r["key"]: r["value"] for r in rows}
+
+
+def pacha_all_seen():
+    """Every pacha event ever seen, keyed by event_id."""
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM pacha_seen_events").fetchall()
+    return {r["event_id"]: dict(r) for r in rows}
+
+
+def pacha_upsert_seen(ev, now_iso):
+    """Insert or refresh one normalized event dict from pacha_events.fetch_events().
+    first_seen_at is preserved on update."""
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO pacha_seen_events (event_id, name, slug, date_text,
+                   start_date, on_sale, ga_price, ga_sold_out, buy_url,
+                   first_seen_at, last_seen_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(event_id) DO UPDATE SET
+                   name = excluded.name, slug = excluded.slug,
+                   date_text = excluded.date_text, start_date = excluded.start_date,
+                   on_sale = excluded.on_sale, ga_price = excluded.ga_price,
+                   ga_sold_out = excluded.ga_sold_out, buy_url = excluded.buy_url,
+                   last_seen_at = excluded.last_seen_at""",
+            (ev["event_id"], ev.get("name"), ev.get("slug"), ev.get("date_text"),
+             ev.get("start_date"), 1 if ev.get("on_sale") else 0, ev.get("ga_price"),
+             1 if ev.get("ga_sold_out") else 0, ev.get("buy_url"), now_iso, now_iso),
+        )
+
+
+def pacha_seen_count():
+    with connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM pacha_seen_events").fetchone()
+    return row["n"]
 
 
 def tm_record_drop(watcher_id, added_count, removed_count, seats_json, notify_result, now_iso, notify_count=None):

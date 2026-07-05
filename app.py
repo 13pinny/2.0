@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -25,6 +26,7 @@ import kupat_pdf
 import mail_intake
 import matcher
 import notify
+import pacha_events
 import pacha_tickets
 import scraper
 import tickchak
@@ -117,6 +119,21 @@ _last_todo_remind = {"at": None, "sent_count": 0, "due_today": 0, "overdue": 0,
                      "muted": False, "result": None}
 _todo_remind_lock = threading.Lock()
 
+# Pacha NYC new-event monitor — polls pacha-nyc.com/events and pings Discord
+# on new events / waitlist→on-sale flips / GA price climbs. Pure HTTP (no
+# Chrome), so it could run anywhere — but only ONE machine may have it
+# enabled or Discord gets double pings. Prod = the VPS; a locally-run
+# dashboard sets KARTIS_PACHA_MONITOR_ENABLED=0 (same idea as TM_CHECK_ENABLED).
+_last_pacha_events = {"at": None, "events": 0, "new": 0, "onsale": 0,
+                      "price_up": 0, "notified": 0, "baseline": False,
+                      "error": None, "running": False}
+_pacha_events_lock = threading.Lock()
+PACHA_MONITOR_INTERVAL_MINUTES = int(os.getenv("KARTIS_PACHA_MONITOR_INTERVAL_MINUTES") or 10)
+PACHA_MONITOR_ENABLED = (os.getenv("KARTIS_PACHA_MONITOR_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+# One tick can't spam more pings than this — a parser anomaly that makes
+# every event look "new" should hit the cap, not flood the channel.
+PACHA_MAX_PINGS_PER_TICK = 12
+
 
 def run_mail_intake():
     if not _intake_lock.acquire(blocking=False):
@@ -138,6 +155,75 @@ def run_mail_intake():
     finally:
         _last_intake["running"] = False
         _intake_lock.release()
+
+
+def run_pacha_events():
+    """One tick of the Pacha NYC new-event monitor. Fetch the current event
+    list, diff against pacha_seen_events, ping Discord for: brand-new
+    events, waitlist→on-sale flips, and GA price climbs (both prices > 0).
+
+    Gating mirrors the drop checker: the very first tick ever (empty seen
+    table) is a baseline — store everything, ping nothing. master_paused
+    skips the tick entirely; master_muted keeps state current but skips the
+    Discord sends."""
+    if not _pacha_events_lock.acquire(blocking=False):
+        return
+    _last_pacha_events["running"] = True
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if db.setting_get_bool("master_paused", default=False):
+            _last_pacha_events.update(at=now_iso, error=None)
+            return
+
+        events = pacha_events.fetch_events()
+        seen = db.pacha_all_seen()
+        baseline = not seen
+        muted = db.setting_get_bool("master_muted", default=False)
+
+        pings = []  # (kind, ev, old_row)
+        if not baseline:
+            for ev in events:
+                old = seen.get(ev["event_id"])
+                if old is None:
+                    pings.append(("new", ev, None))
+                    continue
+                if not old["on_sale"] and ev["on_sale"]:
+                    pings.append(("onsale", ev, old))
+                old_ga, new_ga = old["ga_price"], ev["ga_price"]
+                if old_ga and new_ga and new_ga > old_ga:
+                    pings.append(("price_up", ev, old))
+
+        notified = 0
+        if not muted:
+            for kind, ev, old in pings[:PACHA_MAX_PINGS_PER_TICK]:
+                res = notify.notify_pacha_event(kind, ev, old)
+                print(f"[pacha] {kind}: {ev['name']} ({ev.get('date_text')}) -> {res}")
+                notified += 1
+                time.sleep(0.5)
+            if len(pings) > PACHA_MAX_PINGS_PER_TICK:
+                print(f"[pacha] ping cap hit — {len(pings) - PACHA_MAX_PINGS_PER_TICK} suppressed")
+
+        for ev in events:
+            db.pacha_upsert_seen(ev, now_iso)
+
+        _last_pacha_events.update(
+            at=now_iso, error=None, events=len(events), baseline=baseline,
+            new=sum(1 for k, _, _ in pings if k == "new"),
+            onsale=sum(1 for k, _, _ in pings if k == "onsale"),
+            price_up=sum(1 for k, _, _ in pings if k == "price_up"),
+            notified=notified,
+        )
+        if baseline:
+            print(f"[pacha] baseline stored: {len(events)} events, no pings")
+    except Exception as e:
+        _last_pacha_events.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_pacha_events["running"] = False
+        _pacha_events_lock.release()
 
 
 def run_todo_remind():
@@ -4577,6 +4663,27 @@ def api_pricer_run_now():
     return jsonify({"started": True})
 
 
+@app.route("/api/pacha-events/status")
+def api_pacha_events_status():
+    return jsonify({
+        **_last_pacha_events,
+        "enabled": PACHA_MONITOR_ENABLED,
+        "interval_minutes": PACHA_MONITOR_INTERVAL_MINUTES,
+        "seen_total": db.pacha_seen_count(),
+    })
+
+
+@app.route("/api/pacha-events/run-now", methods=["POST"])
+def api_pacha_events_run_now():
+    """Manual tick — runs synchronously so the response carries the diff
+    summary (also the E2E test hook). Works even when the scheduled job is
+    disabled on this machine."""
+    if _last_pacha_events["running"]:
+        return jsonify({"error": "pacha monitor already running"}), 429
+    run_pacha_events()
+    return jsonify(dict(_last_pacha_events))
+
+
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
@@ -4585,6 +4692,13 @@ if TM_CHECK_ENABLED:
 else:
     print("[tm_check] disabled via TM_CHECK_ENABLED=0 — drop-checking runs elsewhere (e.g. the VPS watcher)")
 scheduler.add_job(run_mail_intake, "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
+if PACHA_MONITOR_ENABLED:
+    # First tick shortly after boot (baseline on a fresh DB), then every N min.
+    scheduler.add_job(run_pacha_events, "interval",
+                      minutes=PACHA_MONITOR_INTERVAL_MINUTES, id="pacha_events",
+                      start_date=datetime.now() + timedelta(minutes=2))
+else:
+    print("[pacha] disabled via KARTIS_PACHA_MONITOR_ENABLED=0 — the monitor runs elsewhere (e.g. the VPS)")
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
 # Festival/GA sales snapshots — fire one immediately (next_run_time) so the
 # Festival / GA Tracker pages have a baseline right after a restart, then
