@@ -273,6 +273,28 @@ def download_ticket_pdfs_for(ticket_url, qty=1):
     return download_ticket_pdfs(ticket_url, qty=qty)
 
 
+def _dismiss_overlays(page):
+    """Best-effort: clear cookie/consent overlays before printing tickets —
+    TM IL's banner covers the bottom of every printed page otherwise.
+    Decline non-essential where a reject button exists; then hide any
+    remaining cookie/consent fixed elements outright."""
+    try:
+        btn = page.locator('button:has-text("Reject All"), button:has-text("Decline")').first
+        if btn.count() and btn.is_visible():
+            btn.click()
+            page.wait_for_timeout(500)
+    except Exception:
+        pass
+    try:
+        page.evaluate(
+            """() => document.querySelectorAll(
+                 '[class*="cookie" i], [id*="cookie" i], [class*="consent" i], [id*="consent" i]'
+               ).forEach(e => { e.style.display = 'none'; })"""
+        )
+    except Exception:
+        pass
+
+
 def _pdf_slides_isolated(page, want, seen, margin):
     """Fallback for carousels that can't be advanced (TM IL's Angular viewer
     locks the next button and hides the Swiper JS API): every slide is
@@ -348,6 +370,7 @@ def download_ticket_pdfs(ticket_url, qty=1):
             page = browser.new_page()
             page.goto(ticket_url, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
             page.wait_for_timeout(2500)
+            _dismiss_overlays(page)
 
             slides = page.query_selector_all(".swiper-slide")
             if not slides:
@@ -375,7 +398,11 @@ def download_ticket_pdfs(ticket_url, qty=1):
                             break
                 if not _advance_carousel(page):
                     if len(pdfs) < qty:
-                        pdfs.extend(_pdf_slides_isolated(page, qty - len(pdfs), seen, _margin))
+                        # Locked pre-rendered carousel (TM IL): the walk
+                        # capture shows ALL cards side by side — a buyer
+                        # would see the other seats' barcodes. Discard and
+                        # re-capture every slide isolated.
+                        pdfs = _pdf_slides_isolated(page, qty, set(), _margin)
                     break
                 page.wait_for_timeout(1200)
             return pdfs
