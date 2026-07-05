@@ -273,6 +273,39 @@ def download_ticket_pdfs_for(ticket_url, qty=1):
     return download_ticket_pdfs(ticket_url, qty=qty)
 
 
+def _pdf_slides_isolated(page, want, seen, margin):
+    """Fallback for carousels that can't be advanced (TM IL's Angular viewer
+    locks the next button and hides the Swiper JS API): every slide is
+    already rendered, so PDF each barcode-bearing slide by hiding all its
+    siblings (and neutralizing the wrapper transform), then restore."""
+    out = []
+    idxs = page.evaluate(
+        """() => [...document.querySelectorAll('.swiper-slide')]
+              .map((s, i) => s.querySelector('.qr-code-box, canvas, .barcode') ? i : -1)
+              .filter(i => i >= 0)"""
+    )
+    for i in idxs:
+        if str(i) in seen or len(out) >= want:
+            continue
+        page.evaluate(
+            """(i) => {
+              const w = document.querySelector('.swiper-wrapper');
+              if (w) w.style.transform = 'none';
+              document.querySelectorAll('.swiper-slide').forEach((s, j) => {
+                s.style.display = (j === i) ? '' : 'none';
+              });
+            }""",
+            i,
+        )
+        page.wait_for_timeout(300)
+        out.append(page.pdf(print_background=True, format="A4", margin=margin))
+        seen.add(str(i))
+    page.evaluate(
+        "() => document.querySelectorAll('.swiper-slide').forEach(s => { s.style.display = ''; })"
+    )
+    return out
+
+
 def _advance_carousel(page):
     """Advance a Swiper carousel one slide; True if it advanced.
 
@@ -341,6 +374,8 @@ def download_ticket_pdfs(ticket_url, qty=1):
                         if len(pdfs) >= qty:
                             break
                 if not _advance_carousel(page):
+                    if len(pdfs) < qty:
+                        pdfs.extend(_pdf_slides_isolated(page, qty - len(pdfs), seen, _margin))
                     break
                 page.wait_for_timeout(1200)
             return pdfs
