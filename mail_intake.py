@@ -443,11 +443,17 @@ def _push_kupat_to_viagogo(intake_id, fields):
     if not event_name:
         return None
 
-    # Tickchak emails don't state a quantity, but the order's ticket viewer
-    # does ("N/M כרטיסים") — resolve it so the card's Qty is pre-filled.
-    if fields.get("qty") is None and "tickchak" in (fields.get("ticket_url") or "").lower():
+    # Tickchak emails state neither quantity nor price, but the order's
+    # official print PDF has both (plus seating) — resolve them so the card
+    # comes pre-filled like Kupat's.
+    if "tickchak" in (fields.get("ticket_url") or "").lower() and (
+            fields.get("qty") is None or cost_per_unit is None):
         try:
-            fields["qty"] = viagogo_listing.tickchak_order_qty(fields["ticket_url"])
+            det = viagogo_listing.tickchak_order_details(fields["ticket_url"])
+            for k in ("qty", "cost_per_unit", "cost", "section", "row_label", "seats"):
+                if not fields.get(k) and det.get(k):
+                    fields[k] = det[k]
+            cost_per_unit = fields.get("cost_per_unit")
         except Exception:
             pass
 

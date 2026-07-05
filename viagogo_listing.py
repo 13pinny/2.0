@@ -342,22 +342,48 @@ def download_tickchak_pdfs(ticket_url, qty=None):
             browser.close()
 
 
-def tickchak_order_qty(ticket_url):
-    """Ticket count of a tickchak order, read from the /n/ viewer's
-    'N/M כרטיסים' counters. Returns None if it can't be determined."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        try:
-            ctx = browser.new_context(
-                viewport={"width": 390, "height": 844}, locale="he-IL")
-            page = ctx.new_page()
-            page.goto(ticket_url, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
-            page.wait_for_timeout(2500)
-            _resolve_tickchak_viewer(page)
-            m = re.findall(r"\d+\s*/\s*(\d+)\s*כרטיס", page.inner_text("body"))
-            return int(m[0]) if m else None
-        finally:
-            browser.close()
+def tickchak_order_details(ticket_url):
+    """Order facts parsed from the official print PDF (one page/ticket):
+    qty (page count), per-ticket price (מחיר הכרטיס — the emails carry no
+    pricing, but the tickets do), total cost, and seating. Open-seating
+    orders read "ישיבה לא מסומן" and get no section; seated orders are
+    parsed best-effort with the same אזור/שורה/כיסא patterns as Kupat."""
+    import fitz
+
+    pdfs = download_tickchak_pdfs(ticket_url)
+    out = {"qty": len(pdfs) or None, "cost_per_unit": None, "cost": None,
+           "section": "", "row_label": "", "seats": "", "seating_text": ""}
+    if not pdfs:
+        return out
+    prices = []
+    for i, data in enumerate(pdfs):
+        doc = fitz.open(stream=data, filetype="pdf")
+        txt = doc[0].get_text()
+        doc.close()
+        m = re.search(r"מחיר הכרטיס\s*\n?\s*([\d,.]+)", txt)
+        if m:
+            try:
+                prices.append(float(m.group(1).replace(",", "")))
+            except ValueError:
+                pass
+        if i == 0:
+            m = re.search(r"פרטי הכרטיס\s*\n(.*?)\n\s*מידע נוסף", txt, re.S)
+            if m:
+                out["seating_text"] = " ".join(m.group(1).split())
+            if "לא מסומן" not in out["seating_text"]:
+                m = re.search(r"אזור[:\s]+([^\n,]+)", txt)
+                if m:
+                    out["section"] = m.group(1).strip()
+                m = re.search(r"שורה[:\s]+([^\s,]+)", txt)
+                if m:
+                    out["row_label"] = m.group(1).strip()
+                m = re.search(r"(?:כיסא(?:ות)?|מושב(?:ים)?)[:\s]+(\d+(?:\s*[-–]\s*\d+)?)", txt)
+                if m:
+                    out["seats"] = re.sub(r"\s*([-–])\s*", r" \1 ", m.group(1).strip())
+    if prices:
+        out["cost_per_unit"] = prices[0]
+        out["cost"] = round(sum(prices), 2)
+    return out
 
 
 def _dismiss_overlays(page):
