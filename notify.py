@@ -60,6 +60,7 @@ def _festival_status_line(seat):
         "soldout": "❌ Sold out",
         "lasttickets": "⚠️ Last tickets remaining",
         "available": "🎟️ Available",
+        "closed": "⛔ Sales closed",
     }.get(st, "🎟️ Available")
     if qty is not None and st != "soldout":
         base += f" — {qty} tickets left"

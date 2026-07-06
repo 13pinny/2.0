@@ -3690,7 +3690,13 @@ def _check_one_watcher(w, now_iso):
         return 0, None
 
     if added:
-        probe_block = next((s.get("block") or s.get("b") for s in added if s.get("block") or s.get("b")), None)
+        # Prefer a real seat for the label probe — status pseudo-seats carry a
+        # synthetic block label that would force a labels refetch every flip.
+        probe_block = next(
+            (s.get("block") or s.get("b") for s in added
+             if (s.get("block") or s.get("b")) and not (s.get("festival") or s.get("ga"))),
+            None,
+        )
         if event_level:
             probe_perf = next((s.get("_perf") for s in added if s.get("_perf")), None)
             try:
@@ -3720,9 +3726,10 @@ def _check_one_watcher(w, now_iso):
         # "keep notifying" requirement for event-level watchers.
         status_flipped = event_level and was_empty and len(seats) > 0
         headline = f"🎟️ {w['event_code']} — tickets just opened" if status_flipped and matched else None
-        # Festival/hub + kupat-GA watchers carry a status flag per tick (the
-        # seat key encodes it), so any transition shows up as an `added`
-        # seat — phrase the ping for the new status.
+        # Festival/hub + kupat-GA watchers — and TM event-level per-perf
+        # status seats — carry a status flag per tick (the seat key encodes
+        # it), so any transition shows up as an `added` seat — phrase the
+        # ping for the new status.
         _fest = next((s for s in added if s.get("festival") or s.get("ga")), None)
         if _fest:
             _nm = label or w["event_code"]
@@ -3730,6 +3737,7 @@ def _check_one_watcher(w, now_iso):
                 "soldout": f"❌ Sold out — {_nm}",
                 "lasttickets": f"⚠️ Last tickets — {_nm}",
                 "available": f"🎟️ Available again — {_nm}",
+                "closed": f"⛔ Sales closed — {_nm}",
             }.get(_fest.get("status"), headline)
 
         if enabled and matched:

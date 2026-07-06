@@ -14,10 +14,12 @@ We diff the set of (block, row, seat_num) tuples between consecutive checks
 and treat anything in `new - old` as a fresh drop.
 """
 import re
+import time
 import urllib.request
 import urllib.error
 import json
 import gzip
+from datetime import datetime
 from urllib.parse import urlparse
 
 
@@ -215,29 +217,99 @@ def list_performances(event_code):
     return data
 
 
+# How long after showtime a perf is still worth polling. Late drops matter
+# right up to (and a bit past) doors; after this the perf is over.
+PAST_PERF_GRACE_MS = 6 * 3600 * 1000
+
+
+def _perf_date_text(p):
+    """Short venue-local date like '26.01 20:45' from performanceDate epoch-ms,
+    or '' when unavailable. Stable per perf, so it's safe inside a seat key."""
+    ms = p.get("performanceDate")
+    if not ms:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.fromtimestamp(int(ms) / 1000, ZoneInfo("Asia/Jerusalem")).strftime("%d.%m %H:%M")
+    except Exception:
+        return ""
+
+
+def _perf_status_seat(p):
+    """Status-encoded pseudo-seat for one performance (festival/GA pattern:
+    the status is part of the seat key, so any soldout↔selling transition
+    surfaces as an `added` seat and pings through the normal diff — no
+    changes to the tick loop needed).
+
+    `festival=True` opts the seat into the status-headline path in both
+    tick implementations and the one-line rendering in notify.py.
+    """
+    perf_code = str(p.get("performanceCode") or "")
+    raw = str(p.get("status") or "")
+    if p.get("active"):
+        status = "available"
+    elif "soldout" in raw.lower():
+        status = "soldout"
+    else:
+        status = "closed"  # listed but not selling: presale gap, paused, etc.
+    date_text = _perf_date_text(p)
+    perf_name = f"Perf {perf_code}" + (f" · {date_text}" if date_text else "")
+    label = {
+        "available": f"{perf_name} — on sale",
+        "soldout": f"{perf_name} — sold out",
+        "closed": f"{perf_name} — sales closed",
+    }[status]
+    return {
+        "block": label,
+        "row": "STATUS",
+        "seat": perf_code,
+        "festival": True,
+        "status": status,
+        "raw_status": raw,
+        "_perf": perf_code,
+    }
+
+
 def fetch_event_seats(event_code):
-    """Aggregate selectable seats across every active performance of an event.
+    """Aggregate selectable seats across every performance of an event.
 
     Returns (seats, per_perf_errors). Each seat dict is stamped with
     `_perf=<perf_code>` so the event-level dedup key (`event_seat_key`) can
     keep seats from different perfs distinct.
 
-    Perfs that the API marks `active=false` (sold out / not yet selling) are
-    skipped entirely — they have no seats to fetch and skipping saves an
-    HTTP call per perf per tick.
+    Every non-past perf is polled — INCLUDING perfs the cached perf list
+    marks `active=false`. That flag lags reality (it comes from the
+    `bxcached` endpoint) and the ISM seat API keeps answering for
+    "sold out" perfs; skipping them made the watcher blind to exactly the
+    drops it exists to catch (a sold-out MKS26 perf served 191 selectable
+    seats while `active` still said false).
+
+    Each perf also contributes a status pseudo-seat (`_perf_status_seat`)
+    so the page-level soldout↔selling flip pings even when the underlying
+    seat set doesn't change. Perfs past showtime (plus a grace window) are
+    dropped entirely.
 
     Raises TicketmasterError if the perf list itself can't be fetched, or
-    if every active perf errored out. Partial per-perf failures land in
-    `per_perf_errors` so the caller can log them without failing the watcher.
+    if every polled perf errored out (so a transient outage can't wipe the
+    stored seat state and re-ping everything on recovery). Partial per-perf
+    failures land in `per_perf_errors` so the caller can log them without
+    failing the watcher.
     """
     perfs = list_performances(event_code)  # raises on failure
     seats = []
     per_perf_errors = {}
     attempted = 0
+    now_ms = time.time() * 1000
     for p in perfs:
         perf_code = str(p.get("performanceCode") or "")
-        if not perf_code or not p.get("active"):
+        if not perf_code:
             continue
+        try:
+            if p.get("performanceDate") and float(p["performanceDate"]) < now_ms - PAST_PERF_GRACE_MS:
+                continue
+        except (TypeError, ValueError):
+            pass
+        seats.append(_perf_status_seat(p))
         attempted += 1
         try:
             ps = fetch_selectable_seats(event_code, perf_code)
@@ -248,7 +320,7 @@ def fetch_event_seats(event_code):
             per_perf_errors[perf_code] = f"{type(e).__name__}: {e}"
     if attempted and len(per_perf_errors) == attempted:
         raise TicketmasterError(
-            f"all {attempted} active perf(s) failed for {event_code}: {per_perf_errors}"
+            f"all {attempted} perf(s) failed for {event_code}: {per_perf_errors}"
         )
     return seats, per_perf_errors
 

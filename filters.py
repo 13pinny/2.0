@@ -170,6 +170,13 @@ def apply(added_seats, all_current, filters_raw, labels=None):
     out = []
     size_map = _build_group_size_map(all_current) if min_group > 1 else None
     for s in added_seats:
+        # Status-encoded pseudo-seats (tickchak festival, kupat GA, TM
+        # per-perf status) are meta notifications, not physical seats —
+        # seat-shaped filters (adjacency, section, price) don't apply, and
+        # min_group_size would silently swallow every status flip.
+        if s.get("festival") or s.get("ga"):
+            out.append(s)
+            continue
         if not _passes_section(s, excluded):
             continue
         if not _passes_price(s, labels, min_price, max_price):

@@ -1911,6 +1911,11 @@ def tm_replace_seat_state(watcher_id, seats):
     """Atomically replace the watcher's known seat set. Seats must be in the
     normalized shape with `block`, `row`, `seat` keys (each source module
     produces this shape from its raw API response).
+
+    Event-level ticketmaster seats carry `_perf`; it must be part of the
+    stored key to match `ticketmaster.event_seat_key`, which the tick loops
+    diff against — without it no stored key ever matches and every seat
+    re-reports as "added" on every tick.
     """
     with connect() as conn:
         conn.execute("DELETE FROM tm_seat_state WHERE watcher_id = ?", (watcher_id,))
@@ -1920,6 +1925,8 @@ def tm_replace_seat_state(watcher_id, seats):
             row = str(s.get("row") or s.get("r") or "")
             num = str(s.get("seat") if s.get("seat") is not None else (s.get("l") if s.get("l") is not None else ""))
             key = f"{block}|{row}|{num}"
+            if s.get("_perf"):
+                key = f"{s['_perf']}|{key}"
             if key in seen:
                 continue
             seen.add(key)
