@@ -29,6 +29,7 @@ All commands assume the venv at `.venv\Scripts\`. On Windows use `.venv\Scripts\
 | Probe a single drop endpoint directly | `.venv\Scripts\python ticketmaster.py EVENT/PERF` (also `kupat.py`, `tickchak.py`) |
 | Extract Pacha NY ticket first-pages from Gmail | `.venv\Scripts\python pacha_tickets.py` (add `--dry-run`, `--days N`, `--folder`) |
 | Probe the Pacha NYC events listing (the new-event monitor's fetcher) | `.venv\Scripts\python pacha_events.py` (add `--json`) |
+| Probe the kupat / TM-IL event listings (the IL new-event monitor's fetchers) | `.venv\Scripts\python kupat_events.py` / `.venv\Scripts\python tm_events.py` (add `--json`; tm also `--onsale`) |
 | Extract tickchak /n/ ticket links from Gmail | `.venv\Scripts\python tickchak_tickets.py` (add `--url URL`, `--dry-run`, `--debug`) |
 | Probe a public viagogo event's competitor listings | `.venv\Scripts\python scripts\probe_viagogo_public.py <event_id or "artist name">` |
 | Probe/exercise the viagogo listing price edit | `.venv\Scripts\python scripts\probe_viagogo_edit_price.py <listing_id> [new_price]` |
@@ -73,6 +74,7 @@ Notification gating order (both implementations): per-watcher `paused` skips ent
 - `tm_check` — every `TM_CHECK_INTERVAL_SECONDS` (default 60) drop check
 - `mail_intake` — every `KARTIS_INTAKE_INTERVAL_MINUTES` (default 10) Gmail poll for purchase-confirmation emails
 - `pacha_events` — every `KARTIS_PACHA_MONITOR_INTERVAL_MINUTES` (default 10) poll of pacha-nyc.com/events (`pacha_events.py`, pure HTTP); Discord-pings new events, waitlist→on-sale flips, and GA price climbs; state in `pacha_seen_events`. Runs on the VPS — exactly one machine may enable it (`KARTIS_PACHA_MONITOR_ENABLED=0` on the PC) or Discord double-pings. Manual tick: `POST /api/pacha-events/run-now`; status: `GET /api/pacha-events/status`.
+- `il_events` — every `KARTIS_IL_EVENTS_INTERVAL_MINUTES` (default 10) poll of the kupat.co.il and ticketmaster.co.il event listings (`kupat_events.py` / `tm_events.py`, pure HTTP); Discord-pings new events and, for TM, listed→on-sale flips (kupat has no pre-sale listing state); state in `site_seen_events`. Kupat's feed is `tickets.kupat.co.il/api/features` (the whole catalog; unlike the seats endpoints it answers plain urllib). TM's feeds are the homepage `getAllTopEvent`/`getSpotLightData` wbtxapi endpoints; sale status is resolved lazily per event from the perf-list status strings (**not** the `active` flag, which lags — see `tm_events._SALE_OPENED_STATUSES`; sold-out counts as "sale opened" so this monitor never overlaps the drop checker's soldout→selling pings). Same single-machine rule as pacha (`KARTIS_IL_EVENTS_ENABLED=0` on the PC). Manual tick: `POST /api/il-events/run-now`; status: `GET /api/il-events/status`.
 - `backup` — daily 03:00 sqlite copy to `KARTIS_BACKUP_DIR`
 
 Each runner uses a threading lock as a poor-man's mutex so the scheduler can't stack overlapping runs. State dicts (`_last_run`, `_last_backup`, `_last_jerujam`, etc.) at the top of `app.py` back the `/api/*/status` endpoints. `app.run` uses `use_reloader=False` because the scheduler would double-fire under the reloader.

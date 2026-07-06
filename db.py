@@ -487,6 +487,24 @@ CREATE TABLE IF NOT EXISTS pacha_seen_events (
     first_seen_at TEXT NOT NULL,
     last_seen_at  TEXT NOT NULL
 );
+-- Israeli-sites new-event monitor (kupat_events.py / tm_events.py +
+-- app.py run_il_events). One row per (source, event) ever seen on the
+-- site's listing feed; rows persist after the event drops off the feed
+-- (history) and simply stop being diffed. on_sale records whether the
+-- sale had opened when last seen — the 0→1 transition is the ping.
+CREATE TABLE IF NOT EXISTS site_seen_events (
+    source        TEXT NOT NULL,
+    event_key     TEXT NOT NULL,
+    name          TEXT,
+    venue         TEXT,
+    date_text     TEXT,
+    first_date_ms INTEGER,
+    on_sale       INTEGER,
+    url           TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL,
+    PRIMARY KEY (source, event_key)
+);
 CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -1998,6 +2016,45 @@ def pacha_seen_count():
     with connect() as conn:
         row = conn.execute("SELECT COUNT(*) AS n FROM pacha_seen_events").fetchone()
     return row["n"]
+
+
+def site_events_all_seen(source):
+    """Every event ever seen on one site's listing feed, keyed by event_key."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM site_seen_events WHERE source = ?", (source,)
+        ).fetchall()
+    return {r["event_key"]: dict(r) for r in rows}
+
+
+def site_events_upsert_seen(source, ev, now_iso):
+    """Insert or refresh one normalized event dict from kupat_events /
+    tm_events fetch_events(). first_seen_at is preserved on update."""
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO site_seen_events (source, event_key, name, venue,
+                   date_text, first_date_ms, on_sale, url,
+                   first_seen_at, last_seen_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source, event_key) DO UPDATE SET
+                   name = excluded.name, venue = excluded.venue,
+                   date_text = excluded.date_text,
+                   first_date_ms = excluded.first_date_ms,
+                   on_sale = excluded.on_sale, url = excluded.url,
+                   last_seen_at = excluded.last_seen_at""",
+            (source, ev["event_key"], ev.get("name"), ev.get("venue"),
+             ev.get("date_text"), ev.get("first_date_ms"),
+             1 if ev.get("on_sale") else 0, ev.get("url"), now_iso, now_iso),
+        )
+
+
+def site_events_seen_counts():
+    """{source: rows} for every source that ever stored a row."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT source, COUNT(*) AS n FROM site_seen_events GROUP BY source"
+        ).fetchall()
+    return {r["source"]: r["n"] for r in rows}
 
 
 def tm_record_drop(watcher_id, added_count, removed_count, seats_json, notify_result, now_iso, notify_count=None):

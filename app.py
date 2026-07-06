@@ -22,6 +22,7 @@ import filters as watcher_filters
 import import_jerujam
 import kupat
 import kupat_credits
+import kupat_events
 import kupat_pdf
 import mail_intake
 import matcher
@@ -32,6 +33,7 @@ import scraper
 import tickchak
 import tickchak_pdf
 import ticketmaster
+import tm_events
 import todos as todos_mod
 import viagogo_listing
 import viagogo_pricer
@@ -134,6 +136,20 @@ PACHA_MONITOR_ENABLED = (os.getenv("KARTIS_PACHA_MONITOR_ENABLED") or "1").strip
 # every event look "new" should hit the cap, not flood the channel.
 PACHA_MAX_PINGS_PER_TICK = 12
 
+# Israeli-sites new-event monitor — polls the kupat.co.il and
+# ticketmaster.co.il listing feeds (kupat_events.py / tm_events.py, pure
+# HTTP) and pings Discord on new events and, for TM, listed→on-sale flips.
+# Same single-machine rule as the Pacha monitor: prod = the VPS; a locally
+# run dashboard sets KARTIS_IL_EVENTS_ENABLED=0 or Discord double-pings.
+IL_EVENT_SOURCES = {"kupat": kupat_events, "tm": tm_events}
+_last_il_events = {"at": None, "events": {}, "new": 0, "onsale": 0,
+                   "notified": 0, "baseline": [], "errors": {},
+                   "error": None, "running": False}
+_il_events_lock = threading.Lock()
+IL_EVENTS_INTERVAL_MINUTES = int(os.getenv("KARTIS_IL_EVENTS_INTERVAL_MINUTES") or 10)
+IL_EVENTS_ENABLED = (os.getenv("KARTIS_IL_EVENTS_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+IL_EVENTS_MAX_PINGS_PER_TICK = 12
+
 
 def run_mail_intake():
     if not _intake_lock.acquire(blocking=False):
@@ -224,6 +240,101 @@ def run_pacha_events():
     finally:
         _last_pacha_events["running"] = False
         _pacha_events_lock.release()
+
+
+def run_il_events():
+    """One tick of the Israeli-sites new-event monitor. For each source in
+    IL_EVENT_SOURCES: fetch the current listing, diff against
+    site_seen_events, ping Discord for brand-new events and (TM only)
+    listed→on-sale flips. Sources fail independently — a kupat outage
+    doesn't skip the TM diff.
+
+    TM's listing feeds don't say whether sales are open, so on_sale arrives
+    as None and is resolved lazily via tm_events.check_on_sale — but only
+    for events not already stored as on-sale, so steady-state ticks cost a
+    couple of extra requests at most (the first tick resolves everything
+    once for the baseline). If the resolver errors, the stored value is
+    kept (or True for a brand-new event, so a bad first read can't fire a
+    spurious on-sale ping later).
+
+    Gating mirrors the Pacha monitor: first tick ever per source is a
+    baseline — store everything, ping nothing. master_paused skips the tick
+    entirely; master_muted keeps state current but skips the Discord sends."""
+    if not _il_events_lock.acquire(blocking=False):
+        return
+    _last_il_events["running"] = True
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if db.setting_get_bool("master_paused", default=False):
+            _last_il_events.update(at=now_iso, error=None)
+            return
+
+        muted = db.setting_get_bool("master_muted", default=False)
+        counts, baselines, errors = {}, [], {}
+        pings = []  # (kind, ev, old_row)
+
+        for source, mod in IL_EVENT_SOURCES.items():
+            try:
+                events = mod.fetch_events()
+            except Exception as e:
+                errors[source] = f"{type(e).__name__}: {e}"
+                continue
+            seen = db.site_events_all_seen(source)
+            baseline = not seen
+            if baseline:
+                baselines.append(source)
+            counts[source] = len(events)
+
+            for ev in events:
+                old = seen.get(ev["event_key"])
+                if ev.get("on_sale") is None:
+                    if old is not None and old["on_sale"]:
+                        ev["on_sale"] = True  # sale opened before; no re-check
+                    else:
+                        try:
+                            ev["on_sale"] = mod.check_on_sale(ev)
+                        except Exception as e:
+                            print(f"[il-events] {source} check_on_sale({ev['event_key']}) failed: {e}")
+                            ev["on_sale"] = True if old is None else bool(old["on_sale"])
+                if baseline:
+                    continue
+                if old is None:
+                    pings.append(("new", ev, None))
+                elif not old["on_sale"] and ev["on_sale"]:
+                    pings.append(("onsale", ev, old))
+
+            for ev in events:
+                db.site_events_upsert_seen(source, ev, now_iso)
+            if baseline:
+                print(f"[il-events] {source} baseline stored: {len(events)} events, no pings")
+
+        notified = 0
+        if not muted:
+            for kind, ev, old in pings[:IL_EVENTS_MAX_PINGS_PER_TICK]:
+                res = notify.notify_site_event(kind, ev, old)
+                print(f"[il-events] {ev['source']} {kind}: {ev['name']} ({ev.get('date_text')}) -> {res}")
+                notified += 1
+                time.sleep(0.5)
+            if len(pings) > IL_EVENTS_MAX_PINGS_PER_TICK:
+                print(f"[il-events] ping cap hit — {len(pings) - IL_EVENTS_MAX_PINGS_PER_TICK} suppressed")
+
+        _last_il_events.update(
+            at=now_iso, events=counts, baseline=baselines, errors=errors,
+            error=("; ".join(f"{s}: {e}" for s, e in errors.items())
+                   if len(errors) == len(IL_EVENT_SOURCES) else None),
+            new=sum(1 for k, _, _ in pings if k == "new"),
+            onsale=sum(1 for k, _, _ in pings if k == "onsale"),
+            notified=notified,
+        )
+    except Exception as e:
+        _last_il_events.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_il_events["running"] = False
+        _il_events_lock.release()
 
 
 def run_todo_remind():
@@ -4692,6 +4803,27 @@ def api_pacha_events_run_now():
     return jsonify(dict(_last_pacha_events))
 
 
+@app.route("/api/il-events/status")
+def api_il_events_status():
+    return jsonify({
+        **_last_il_events,
+        "enabled": IL_EVENTS_ENABLED,
+        "interval_minutes": IL_EVENTS_INTERVAL_MINUTES,
+        "seen_total": db.site_events_seen_counts(),
+    })
+
+
+@app.route("/api/il-events/run-now", methods=["POST"])
+def api_il_events_run_now():
+    """Manual tick — runs synchronously so the response carries the diff
+    summary (also the E2E test hook). Works even when the scheduled job is
+    disabled on this machine."""
+    if _last_il_events["running"]:
+        return jsonify({"error": "il-events monitor already running"}), 429
+    run_il_events()
+    return jsonify(dict(_last_il_events))
+
+
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
@@ -4707,6 +4839,13 @@ if PACHA_MONITOR_ENABLED:
                       start_date=datetime.now() + timedelta(minutes=2))
 else:
     print("[pacha] disabled via KARTIS_PACHA_MONITOR_ENABLED=0 — the monitor runs elsewhere (e.g. the VPS)")
+if IL_EVENTS_ENABLED:
+    # Offset from the pacha job so the two monitors' first ticks don't stack.
+    scheduler.add_job(run_il_events, "interval",
+                      minutes=IL_EVENTS_INTERVAL_MINUTES, id="il_events",
+                      start_date=datetime.now() + timedelta(minutes=4))
+else:
+    print("[il-events] disabled via KARTIS_IL_EVENTS_ENABLED=0 — the monitor runs elsewhere (e.g. the VPS)")
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
 # Festival/GA sales snapshots — fire one immediately (next_run_time) so the
 # Festival / GA Tracker pages have a baseline right after a restart, then

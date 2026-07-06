@@ -526,6 +526,48 @@ def notify_pacha_event(kind, ev, old=None):
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
+_SITE_EVENT_LABELS = {"kupat": "Kupat", "tm": "Ticketmaster IL"}
+
+
+def notify_site_event(kind, ev, old=None):
+    """Israeli-sites event-monitor ping (kupat.co.il / ticketmaster.co.il).
+    Discord-only — fires up to every 10 minutes and speed matters more than
+    a paper trail. `kind` is 'new' (event just appeared on the site's
+    listing feed) or 'onsale' (a listed-but-not-selling event's sale
+    opened; TM only — kupat has no pre-sale listing state). `ev` is a
+    normalized dict from kupat_events/tm_events fetch_events(); `old` is
+    the previously stored DB row (unused, kept for parity with
+    notify_pacha_event)."""
+    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    label = _SITE_EVENT_LABELS.get(ev.get("source"), ev.get("source") or "?")
+    name = ev.get("name") or "(unknown event)"
+    lines = []
+    if ev.get("date_text"):
+        lines.append(f"**{ev['date_text']}**")
+    if ev.get("venue"):
+        lines.append(ev["venue"])
+
+    if kind == "onsale":
+        title = f"🎟️ {label}: {name} is now ON SALE"
+        color = 0x56D364
+    else:
+        title = f"🎫 New {label} event — {name}"
+        color = 0xE91E63
+        if ev.get("on_sale") is False:
+            lines.append("⏳ Not on sale yet — listed only.")
+
+    embed = {
+        "title": title[:250],
+        "description": "\n".join(lines)[:4000],
+        "url": ev.get("url") or "",
+        "color": color,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
 def notify_pricer_paused(info):
     """Auto-pricer paused a listing because its price on inv.viagogo differs
     from the last price the pricer set (i.e. a manual change). Discord +
