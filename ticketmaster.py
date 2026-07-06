@@ -235,18 +235,24 @@ def _perf_date_text(p):
         return ""
 
 
-def _perf_status_seat(p):
+def _perf_status_seat(p, on_sale):
     """Status-encoded pseudo-seat for one performance (festival/GA pattern:
     the status is part of the seat key, so any soldout↔selling transition
     surfaces as an `added` seat and pings through the normal diff — no
     changes to the tick loop needed).
+
+    `on_sale` is the authoritative buyability gate (salesOptions>0 from
+    getPerformanceDetail — see `fetch_event_seats`). NOT the perf list's
+    `active` flag, which comes from a cached endpoint and lags. The perf
+    list's `status` string only disambiguates *why* a not-on-sale perf is
+    closed (genuine sell-out vs presale gap / paused).
 
     `festival=True` opts the seat into the status-headline path in both
     tick implementations and the one-line rendering in notify.py.
     """
     perf_code = str(p.get("performanceCode") or "")
     raw = str(p.get("status") or "")
-    if p.get("active"):
+    if on_sale:
         status = "available"
     elif "soldout" in raw.lower():
         status = "soldout"
@@ -277,17 +283,25 @@ def fetch_event_seats(event_code):
     `_perf=<perf_code>` so the event-level dedup key (`event_seat_key`) can
     keep seats from different perfs distinct.
 
-    Every non-past perf is polled — INCLUDING perfs the cached perf list
-    marks `active=false`. That flag lags reality (it comes from the
-    `bxcached` endpoint) and the ISM seat API keeps answering for
-    "sold out" perfs; skipping them made the watcher blind to exactly the
-    drops it exists to catch (a sold-out MKS26 perf served 191 selectable
-    seats while `active` still said false).
+    Buyability gate — the subtle part. `getAllSelectableSeats` returns
+    seats flagged AVAILABLE even for a performance whose sale is CLOSED:
+    they're just unsold physical seats, not purchasable inventory (MKS26
+    served 191 "AVAILABLE" seats while both dates were sold out and the
+    event page redirected to the homepage). So seat *count* is NOT a
+    reliable drop signal. The authoritative gate is `salesOptions` from
+    getPerformanceDetail (>0 ⇒ at least one sales channel open) — the same
+    flag the SPA checks before it lets you into the seat map. We also
+    prefer it over the perf list's `active` flag, which is served from a
+    cached endpoint and lags — exactly the lag that made the watcher miss
+    real drops.
 
-    Each perf also contributes a status pseudo-seat (`_perf_status_seat`)
-    so the page-level soldout↔selling flip pings even when the underlying
-    seat set doesn't change. Perfs past showtime (plus a grace window) are
-    dropped entirely.
+    For each non-past perf we therefore read salesOptions first:
+      - always emit a status pseudo-seat (`_perf_status_seat`) so a
+        soldout→on-sale page flip pings even when no individual seat moves;
+      - only when on-sale do we fetch and include the seat-level rows, so
+        the watcher records buyable drops and not phantom closed-sale seats.
+
+    Perfs past showtime (plus a grace window) are dropped entirely.
 
     Raises TicketmasterError if the perf list itself can't be fetched, or
     if every polled perf errored out (so a transient outage can't wipe the
@@ -309,15 +323,23 @@ def fetch_event_seats(event_code):
                 continue
         except (TypeError, ValueError):
             pass
-        seats.append(_perf_status_seat(p))
         attempted += 1
+        try:
+            detail = fetch_performance_detail(event_code, perf_code)
+            on_sale = bool(detail.get("salesOptions"))  # >0 ⇒ a channel is open
+        except Exception as e:
+            per_perf_errors[perf_code] = f"detail: {type(e).__name__}: {e}"
+            on_sale = False
+        seats.append(_perf_status_seat(p, on_sale))
+        if not on_sale:
+            continue
         try:
             ps = fetch_selectable_seats(event_code, perf_code)
             for s in ps:
                 s["_perf"] = perf_code
             seats.extend(ps)
         except Exception as e:
-            per_perf_errors[perf_code] = f"{type(e).__name__}: {e}"
+            per_perf_errors[perf_code] = f"seats: {type(e).__name__}: {e}"
     if attempted and len(per_perf_errors) == attempted:
         raise TicketmasterError(
             f"all {attempted} perf(s) failed for {event_code}: {per_perf_errors}"
