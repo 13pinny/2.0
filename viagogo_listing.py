@@ -474,9 +474,10 @@ def validate_ticket_pdfs(pdfs):
     import fitz
 
     det = cv2.QRCodeDetector()
+    payloads = []
     for i, data in enumerate(pdfs):
         doc = fitz.open(stream=data, filetype="pdf")
-        ok = False
+        payload = None
         for pg in doc:
             for dpi in (200, 300):
                 pix = pg.get_pixmap(dpi=dpi)
@@ -486,15 +487,22 @@ def validate_ticket_pdfs(pdfs):
                     arr = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY if pix.n == 3 else cv2.COLOR_RGBA2GRAY)
                 txt, _, _ = det.detectAndDecode(arr)
                 if txt:
-                    ok = True
+                    payload = txt
                     break
-            if ok:
+            if payload:
                 break
         doc.close()
-        if not ok:
+        if not payload:
             raise ViagogoListingError(
                 f"ticket {i + 1}/{len(pdfs)} has no decodable QR — refusing to use it"
             )
+        payloads.append(payload)
+    # Each buyer must get a DIFFERENT ticket — duplicate payloads mean the
+    # capture shot the same slide twice.
+    if len(set(payloads)) != len(payloads):
+        raise ViagogoListingError(
+            "duplicate QR payloads across ticket PDFs — same ticket captured twice"
+        )
     return pdfs
 
 
