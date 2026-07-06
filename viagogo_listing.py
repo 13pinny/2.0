@@ -269,16 +269,26 @@ def download_ticket_pdfs_for(ticket_url, qty=1):
     low = (ticket_url or "").lower()
     if "tickchak.co.il" in low:
         try:
-            return download_tickchak_pdfs(ticket_url, qty=qty)
+            pdfs = download_tickchak_pdfs(ticket_url, qty=qty)
         except Exception:
             traceback.print_exc()
-            if "/n/" in low:
-                import tickchak_tickets  # lazy: pulls in PyMuPDF
-                cards = tickchak_tickets.scrape_ticket_url(ticket_url)
-                pdfs = [c["pdf_bytes"] for c in cards]
-                return pdfs[:qty] if qty else pdfs
-            raise
-    return download_ticket_pdfs(ticket_url, qty=qty)
+            if "/n/" not in low:
+                raise
+            import tickchak_tickets  # lazy: pulls in PyMuPDF
+            cards = tickchak_tickets.scrape_ticket_url(ticket_url)
+            pdfs = [c["pdf_bytes"] for c in cards]
+            pdfs = pdfs[:qty] if qty else pdfs
+    else:
+        pdfs = download_ticket_pdfs(ticket_url, qty=qty)
+    if not pdfs:
+        raise ViagogoListingError(f"no ticket PDFs captured from {ticket_url[:80]}")
+    if qty and len(pdfs) < qty:
+        raise ViagogoListingError(
+            f"only {len(pdfs)}/{qty} ticket PDFs captured — refusing partial upload"
+        )
+    # Hard gate: no PDF leaves here without a decodable QR (see the
+    # 2026-07-04 blank-upload incident in validate_ticket_pdfs).
+    return validate_ticket_pdfs(pdfs)
 
 
 def _resolve_tickchak_viewer(page):
@@ -408,37 +418,84 @@ def _dismiss_overlays(page):
         pass
 
 
-def _pdf_slides_isolated(page, want, seen, margin):
+def _png_to_pdf(png_bytes):
+    """Wrap a PNG screenshot as a single-page PDF sized to the image."""
+    import fitz
+
+    img = fitz.open(stream=png_bytes, filetype="png")
+    rect = img[0].rect
+    img.close()
+    doc = fitz.open()
+    pg = doc.new_page(width=rect.width, height=rect.height)
+    pg.insert_image(rect, stream=png_bytes)
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def _shoot_slides_direct(page, want, seen):
     """Fallback for carousels that can't be advanced (TM IL's Angular viewer
     locks the next button and hides the Swiper JS API): every slide is
-    already rendered, so PDF each barcode-bearing slide by hiding all its
-    siblings (and neutralizing the wrapper transform), then restore."""
+    already rendered side by side, so element-screenshot each barcode-bearing
+    slide directly. One card per capture — never the whole page."""
     out = []
-    idxs = page.evaluate(
-        """() => [...document.querySelectorAll('.swiper-slide')]
-              .map((s, i) => s.querySelector('.qr-code-box, canvas, .barcode') ? i : -1)
-              .filter(i => i >= 0)"""
-    )
-    for i in idxs:
+    slides = page.query_selector_all(".swiper-slide")
+    for i, s in enumerate(slides):
         if str(i) in seen or len(out) >= want:
             continue
-        page.evaluate(
-            """(i) => {
-              const w = document.querySelector('.swiper-wrapper');
-              if (w) w.style.transform = 'none';
-              document.querySelectorAll('.swiper-slide').forEach((s, j) => {
-                s.style.display = (j === i) ? '' : 'none';
-              });
-            }""",
-            i,
-        )
-        page.wait_for_timeout(300)
-        out.append(page.pdf(print_background=True, format="A4", margin=margin))
+        if not s.query_selector(".qr-code-box, canvas, .barcode"):
+            continue
+        sl = page.locator(".swiper-slide").nth(i)
+        try:
+            sl.scroll_into_view_if_needed()
+        except Exception:
+            pass
+        out.append(_png_to_pdf(sl.screenshot(timeout=15000)))
         seen.add(str(i))
-    page.evaluate(
-        "() => document.querySelectorAll('.swiper-slide').forEach(s => { s.style.display = ''; })"
-    )
     return out
+
+
+def validate_ticket_pdfs(pdfs):
+    """Refuse to pass along any ticket PDF without a machine-decodable QR.
+
+    Guards against the 2026-07-04 incident: a capture taken mid-swipe
+    printed only the page background — two blank maroon pages were uploaded
+    to a live listing and a buyer would have been turned away at the gate.
+    Renders each page and runs OpenCV's QR detector; raises
+    ViagogoListingError naming the bad ticket. If opencv isn't installed the
+    check is skipped with a loud log line rather than blocking the pipeline.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        print("[kartis] WARNING: opencv missing — ticket QR validation SKIPPED")
+        return pdfs
+    import fitz
+
+    det = cv2.QRCodeDetector()
+    for i, data in enumerate(pdfs):
+        doc = fitz.open(stream=data, filetype="pdf")
+        ok = False
+        for pg in doc:
+            for dpi in (200, 300):
+                pix = pg.get_pixmap(dpi=dpi)
+                arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                    pix.height, pix.width, pix.n)
+                if pix.n >= 3:
+                    arr = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY if pix.n == 3 else cv2.COLOR_RGBA2GRAY)
+                txt, _, _ = det.detectAndDecode(arr)
+                if txt:
+                    ok = True
+                    break
+            if ok:
+                break
+        doc.close()
+        if not ok:
+            raise ViagogoListingError(
+                f"ticket {i + 1}/{len(pdfs)} has no decodable QR — refusing to use it"
+            )
+    return pdfs
 
 
 def _advance_carousel(page):
@@ -476,48 +533,58 @@ def download_ticket_pdfs(ticket_url, qty=1):
     slide that actually carries a barcode, up to `qty`. Returns a list of
     PDF bytes (one per ticket).
     """
-    _margin = {"top": "8mm", "bottom": "8mm", "left": "8mm", "right": "8mm"}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
-            page = browser.new_page()
+            # device_scale_factor=2: screenshots are the deliverable now, so
+            # render crisp enough that the QR scans from a phone screen.
+            ctx = browser.new_context(device_scale_factor=2)
+            page = ctx.new_page()
             page.goto(ticket_url, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
             page.wait_for_timeout(2500)
             _dismiss_overlays(page)
 
             slides = page.query_selector_all(".swiper-slide")
             if not slides:
-                # Not the expected carousel — best effort: one full-page PDF.
-                return [page.pdf(print_background=True, format="A4", margin=_margin)]
+                raise ViagogoListingError(
+                    f"no ticket carousel found at {page.url[:100]}"
+                )
 
             pdfs = []
             seen = set()
             # Walk the carousel a bounded number of steps (loop mode never
-            # disables next), PDF-ing each distinct barcode-bearing slide.
+            # disables next). Each ticket is captured as an ELEMENT screenshot
+            # of its slide — Playwright waits for the element to stop moving
+            # first, which kills the mid-swipe race that once produced blank
+            # full-page prints (2026-07-04 incident), and the output is the
+            # ticket card alone rather than an A4 page of background.
             for _ in range(len(slides) + 3):
-                active = page.query_selector(".swiper-slide-active")
-                if active:
-                    # Key on DOM position, not text: both real-ticket slides
-                    # share the same leading order-number text, so a text key
-                    # collides and drops the 2nd ticket.
-                    key = active.evaluate(
-                        "e => String([...document.querySelectorAll('.swiper-slide')].indexOf(e))"
-                    )
-                    has_code = active.query_selector(".qr-code-box, canvas, .barcode")
-                    if has_code and key not in seen:
-                        seen.add(key)
-                        pdfs.append(page.pdf(print_background=True, format="A4", margin=_margin))
-                        if len(pdfs) >= qty:
-                            break
+                active = page.locator(".swiper-slide-active").first
+                has_code = False
+                try:
+                    active.locator(".qr-code-box, canvas, .barcode").first.wait_for(
+                        state="visible", timeout=8000)
+                    has_code = True
+                except Exception:
+                    pass
+                # Key on DOM position, not text: both real-ticket slides
+                # share the same leading order-number text, so a text key
+                # collides and drops the 2nd ticket.
+                key = active.evaluate(
+                    "e => String([...document.querySelectorAll('.swiper-slide')].indexOf(e))"
+                )
+                if has_code and key not in seen:
+                    seen.add(key)
+                    pdfs.append(_png_to_pdf(active.screenshot(timeout=15000)))
+                    if len(pdfs) >= qty:
+                        break
                 if not _advance_carousel(page):
                     if len(pdfs) < qty:
-                        # Locked pre-rendered carousel (TM IL): the walk
-                        # capture shows ALL cards side by side — a buyer
-                        # would see the other seats' barcodes. Discard and
-                        # re-capture every slide isolated.
-                        pdfs = _pdf_slides_isolated(page, qty, set(), _margin)
+                        # Locked pre-rendered carousel (TM IL): slides can't
+                        # be activated, so shoot each one directly.
+                        pdfs.extend(_shoot_slides_direct(page, qty - len(pdfs), seen))
                     break
-                page.wait_for_timeout(1200)
+                page.wait_for_timeout(800)
             return pdfs
         finally:
             browser.close()
@@ -740,12 +807,18 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
             page.click("#modal a.js-ok")
             page.wait_for_timeout(2000)
 
+            tickets_uploaded = False
+            ticket_upload_error = None
             if ticket_pdfs:
                 try:
                     _upload_ticket_pdfs(page, ticket_pdfs, event_id, section)
-                except Exception:
+                    tickets_uploaded = True
+                except Exception as e:
+                    # Non-fatal — the listing already exists — but the caller
+                    # must surface it: a listing without tickets is a seller
+                    # default waiting to happen.
+                    ticket_upload_error = f"{type(e).__name__}: {e}"
                     traceback.print_exc()
-                    # Non-fatal — draft listing already saved
 
             return {
                 "event_id": str(event_id),
@@ -756,6 +829,8 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
                 "proceeds": resolved_proceeds,
                 "face_value": face_value,
                 "published": bool(publish),
+                "tickets_uploaded": tickets_uploaded,
+                "ticket_upload_error": ticket_upload_error,
             }
         finally:
             try:

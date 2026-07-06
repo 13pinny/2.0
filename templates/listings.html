@@ -135,6 +135,7 @@ function renderCards(rows) {
       <span style="flex:1;">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
       <span style="color:var(--muted);">${esc(r.chosen_event_date || r.event_date_iso || "")}</span>
       ${r.viagogo_section ? `<span style="color:var(--muted);">${esc(r.viagogo_section)}</span>` : ""}
+      ${r.error ? `<span style="color:var(--red);border:1px solid var(--red);padding:1px 6px;font-size:10px;" title="${esc(r.error)}">⚠ ${esc(r.error.slice(0, 60))}</span>` : ""}
       <span style="color:var(--muted);font-size:10px;">${esc(when)}</span>
     </div>`;
   }).join("");

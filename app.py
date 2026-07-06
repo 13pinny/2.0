@@ -2199,20 +2199,27 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
     db.viagogo_push_update(push_id, {"status": "creating"}, now())
     try:
         ticket_pdfs = None
+        ticket_problem = None
         if ticket_url:
             try:
                 _qty = ((db.viagogo_push_get(push_id) or {}).get("qty")
                         or available_tickets or 1)
                 ticket_pdfs = viagogo_listing.download_ticket_pdfs_for(ticket_url, qty=int(_qty))
-            except Exception:
+            except Exception as e:
+                # Never upload questionable tickets; list without them and
+                # say so loudly on the card.
+                ticket_problem = f"ticket download/validation failed: {type(e).__name__}: {e}"
                 traceback.print_exc()
-        viagogo_listing.create_draft_listing(
+        result = viagogo_listing.create_draft_listing(
             event_id=event_id, search_query=search_query, ticket_type=ticket_type,
             section=section, available_tickets=available_tickets,
             website_price=website_price, face_value=face_value, proceeds=proceeds,
             row=row, seat_from=seat_from, seat_to=seat_to,
             ticket_pdfs=ticket_pdfs, publish=publish,
         )
+        if ticket_pdfs and not result.get("tickets_uploaded"):
+            ticket_problem = (f"ticket upload failed: "
+                              f"{result.get('ticket_upload_error') or 'unknown'}")
         if venue_for_map and kupat_section and section:
             db.viagogo_section_map_set(venue_for_map, kupat_section, section, now())
         # Teach Hebrew→English name mapping so future emails auto-match.
@@ -2221,10 +2228,15 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         english_event = push_row.get("chosen_event_name") or ""
         if hebrew_event and english_event and hebrew_event != english_event:
             db.kupat_name_map_set(hebrew_event, english_event, now())
-        # Clear any error left by a previous failed attempt — status alone
-        # flips, so stale error text would otherwise stick to a success row.
-        db.viagogo_push_update(push_id, {"status": "listed" if publish else "created",
-                                         "viagogo_section": section, "error": None}, now())
+        # Success clears stale error text from earlier failed attempts; a
+        # ticket problem replaces it so the card shows the listing exists
+        # but NEEDS TICKETS before a sale can be fulfilled.
+        db.viagogo_push_update(push_id, {
+            "status": "listed" if publish else "created",
+            "viagogo_section": section,
+            "error": (f"NO TICKETS ATTACHED — {ticket_problem}"[:500]
+                      if ticket_problem else None),
+        }, now())
     except Exception as e:
         db.viagogo_push_update(push_id, {"status": "error", "error": f"{type(e).__name__}: {e}"}, now())
         traceback.print_exc()
