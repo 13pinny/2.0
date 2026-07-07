@@ -556,7 +556,7 @@ def notify_pacha_event(kind, ev, old=None):
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
-_SITE_EVENT_LABELS = {"kupat": "Kupat", "tm": "Ticketmaster IL"}
+_SITE_EVENT_LABELS = {"kupat": "Kupat", "tm": "Ticketmaster IL", "zappa": "Zappa"}
 
 
 def notify_site_event(kind, ev, old=None):
