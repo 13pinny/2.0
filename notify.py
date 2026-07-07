@@ -1,13 +1,24 @@
 """Discord + Gmail notifications for the Ticketmaster drop checker.
 
 Reads credentials from the environment:
-  DISCORD_WEBHOOK_URL  — full webhook URL from a Discord server's integrations page
+  DISCORD_WEBHOOK_URL  — main/fallback webhook from a Discord server's
+                         integrations page. Every category lands here unless
+                         it has its own webhook below.
+  DISCORD_WEBHOOK_DROPS / DISCORD_WEBHOOK_NEW_EVENTS / DISCORD_WEBHOOK_PRICER
+  / DISCORD_WEBHOOK_LISTINGS / DISCORD_WEBHOOK_TODOS
+                       — optional per-category webhooks (one Discord channel
+                         each). Unset categories fall back to
+                         DISCORD_WEBHOOK_URL, never to silence.
   GMAIL_USER           — Gmail address to send from
   GMAIL_APP_PASSWORD   — 16-char app password (NOT the regular Gmail password)
   NOTIFY_EMAIL_TO      — destination address (defaults to GMAIL_USER if unset)
 
 Both channels are best-effort: a failure on one does not stop the other. The
 caller gets a result dict it can persist to the drop-event log.
+
+CLI smoke test: `python notify.py` pings the main webhook + email, then one
+test ping per distinct per-category webhook so a channel-routing typo shows
+up here instead of on the first real alert.
 """
 import json
 import os
@@ -16,6 +27,25 @@ import ssl
 import urllib.request
 import urllib.error
 from email.message import EmailMessage
+
+
+# Discord channel routing: notification category → env var holding that
+# channel's webhook. _discord_webhook() falls back to DISCORD_WEBHOOK_URL
+# for any category without its own webhook.
+_WEBHOOK_ENV = {
+    "drops":      "DISCORD_WEBHOOK_DROPS",       # seat-drop alerts (notify_drop)
+    "new_events": "DISCORD_WEBHOOK_NEW_EVENTS",  # pacha + kupat + TM-IL monitors
+    "pricer":     "DISCORD_WEBHOOK_PRICER",      # auto-pricer changes/pauses/caps
+    "listings":   "DISCORD_WEBHOOK_LISTINGS",    # intake→viagogo push pipeline
+    "todos":      "DISCORD_WEBHOOK_TODOS",       # daily to-do digest
+}
+
+
+def _discord_webhook(category=None):
+    """Webhook URL for a notification category ('' when nothing is set)."""
+    var = _WEBHOOK_ENV.get(category)
+    url = os.environ.get(var, "").strip() if var else ""
+    return url or os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
 
 def _seat_block(seat):
@@ -190,7 +220,7 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
         subject. Used by event-level watchers to flag a sold-out → available
         transition (e.g. "🎟️ MSP03 — tickets just opened").
     """
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    discord_url = _discord_webhook("drops")
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
     to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
@@ -286,7 +316,7 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
 def send_test(label="Kartis test"):
     """One-off test notification — used by the dashboard 'Test notify' button
     to confirm both channels are wired up before relying on them."""
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    discord_url = _discord_webhook()
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
     to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
@@ -318,7 +348,7 @@ def send_todo_digest(due_today, overdue):
     (from db.todo_due_open). Returns the same shape as notify_drop so the
     caller can log the result.
     """
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    discord_url = _discord_webhook("todos")
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
     to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
@@ -399,7 +429,7 @@ def notify_viagogo_match(push_row):
     `push_row` is a viagogo_push DB row dict (db.viagogo_push_get /
     viagogo_push_insert's return value).
     """
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    discord_url = _discord_webhook("listings")
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
     to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
@@ -453,7 +483,7 @@ def notify_pricer_change(info):
     Discord-only — these fire up to every 15 minutes and email would be
     noise. `info`: event_name, section, listing_id, old_price, new_price,
     competitor_price, floor, dry_run."""
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    discord_url = _discord_webhook("pricer")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
 
@@ -486,7 +516,7 @@ def notify_pacha_event(kind, ev, old=None):
     price climbed a release). `ev` is a normalized dict from
     pacha_events.fetch_events(); `old` is the previously stored DB row
     (used by price_up for the old price)."""
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    discord_url = _discord_webhook("new_events")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
 
@@ -538,7 +568,7 @@ def notify_site_event(kind, ev, old=None):
     normalized dict from kupat_events/tm_events fetch_events(); `old` is
     the previously stored DB row (unused, kept for parity with
     notify_pacha_event)."""
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    discord_url = _discord_webhook("new_events")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
 
@@ -574,7 +604,7 @@ def notify_pricer_paused(info):
     email — the pricer stays off for this listing until the user resumes it
     from the dashboard, so this one shouldn't be missed. `info`: event_name,
     section, listing_id, expected, seen."""
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    discord_url = _discord_webhook("pricer")
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
     to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
@@ -617,7 +647,7 @@ def notify_pricer_rate_limited(info):
     12h) and stopped lowering. Sent once per episode (not every tick).
     `info`: event_name, section, listing_id, current, wanted, baseline,
     pct, hours."""
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    discord_url = _discord_webhook("pricer")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
     lines = [
@@ -643,3 +673,23 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     print(send_test("CLI smoke test"))
+    # One test ping per *distinct* per-category webhook so a channel-routing
+    # typo shows up here, not on the first real alert.
+    _by_url = {}
+    for _cat, _var in _WEBHOOK_ENV.items():
+        _url = os.environ.get(_var, "").strip()
+        if _url:
+            _by_url.setdefault(_url, []).append(_cat)
+    _main_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not _by_url:
+        print("no per-category webhooks configured — everything goes to the main channel")
+    for _url, _cats in _by_url.items():
+        if _url == _main_url:
+            print(f"{'+'.join(_cats)}: same as main webhook")
+            continue
+        _res = _post_discord(_url, {"embeds": [{
+            "title": f"🟢 Kartis channel test — {', '.join(_cats)}",
+            "description": "This channel receives: **" + ", ".join(_cats) + "**",
+            "color": 0x5865F2,
+        }]})
+        print(f"{'+'.join(_cats)}: {_res}")
