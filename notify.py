@@ -29,6 +29,11 @@ import urllib.error
 from email.message import EmailMessage
 
 
+# Public base URL for links inside notifications (Discord embeds, emails).
+# The app serves on :5000/:8000 locally but is reached at kartis.homes.
+BASE_URL = (os.environ.get("KARTIS_BASE_URL") or "https://kartis.homes").rstrip("/")
+
+
 # Discord channel routing: notification category → env var holding that
 # channel's webhook. _discord_webhook() falls back to DISCORD_WEBHOOK_URL
 # for any category without its own webhook.
@@ -390,7 +395,7 @@ def send_todo_digest(due_today, overdue):
         embed = {
             "title": f"📋 {n_over + n_today} to-do reminder{'s' if (n_over + n_today) != 1 else ''}",
             "description": "\n".join(desc_lines)[:4000] or "(empty)",
-            "url": "http://localhost:5000/todos",
+            "url": BASE_URL + "/todos",
             "color": 0xF97316 if n_over else 0x58A6FF,
         }
         discord_result = _post_discord(discord_url, {"embeds": [embed]})
@@ -408,7 +413,7 @@ def send_todo_digest(due_today, overdue):
             for t in due_today:
                 body_lines.append(f"  • {_fmt_task(t)}")
             body_lines.append("")
-        body_lines.append("Open the to-do page: http://localhost:5000/todos")
+        body_lines.append(f"Open the to-do page: {BASE_URL}/todos")
         subj_bits = ["[Kartis] To-Do reminders"]
         if n_over:
             subj_bits.append(f"— {n_over} overdue")
@@ -422,7 +427,7 @@ def send_todo_digest(due_today, overdue):
 
 def notify_viagogo_match(push_row):
     """Notify that a Kupat purchase email has been matched (or not) to a
-    viagogo event and priced, and is waiting on /pending for the user to
+    viagogo event and priced, and is waiting on /listings for the user to
     approve before a draft listing gets created. Never creates anything
     itself — this is a heads-up, not an action.
 
@@ -444,7 +449,7 @@ def notify_viagogo_match(push_row):
     qty = push_row.get("qty")
     cost_per_unit = push_row.get("cost_per_unit")
     website_price = push_row.get("website_price_usd")
-    pending_url = "http://localhost:5000/pending"
+    pending_url = BASE_URL + "/listings"
 
     title = "❓ Kupat ticket — no viagogo match found" if no_match else "🎟️ Kupat ticket matched on viagogo — needs approval"
     desc_lines = [f"**{event_name}**" + (f" — {venue}" if venue else "")]
@@ -457,7 +462,7 @@ def notify_viagogo_match(push_row):
     if website_price is not None:
         desc_lines.append(f"Proposed viagogo price: ${website_price:,.2f}/ticket (5x)")
     desc_lines.append("")
-    desc_lines.append("Review and approve on the Pending page before any listing is created.")
+    desc_lines.append("Review and approve on the Listings page before any listing is created.")
 
     discord_result = "skipped (no DISCORD_WEBHOOK_URL)"
     if discord_url:
