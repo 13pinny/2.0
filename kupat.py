@@ -22,6 +22,24 @@ positions appear to be a serialization quirk of the kupat backend.
 No login, no captcha — these endpoints are anonymous (the Cloudflare
 Turnstile + vee-crm POSTs that show up in the SPA traffic guard the
 checkout flow, not the listing endpoints).
+
+Two more endpoints power the market sweep (market.py):
+
+  GET /api/presentations/?locationId=0&isHold=0
+      → EVERY presentation on the site in one ~1 MB response (581 rows as
+        of July 2026): featureId, featureName, venueName, venueCity,
+        dateTime, soldout, availRatio, minPrice, maxPrice. Omitting
+        featureIds is what makes it site-wide; availRatio is a 4-decimal
+        fraction, not a count.
+  GET /api/presentations/feature/{featureId}/{presentationId}?isHold=0
+      → the same presentation detail the booking page uses; carries the
+        exact `availSeats` integer.
+
+The CDN's bot filter only challenges *document* loads — once any kupat
+page is open in a real browser, plain fetch() calls issued from its JS
+context are answered normally (verified July 2026). BrowserSession
+exploits that: one page-load, then arbitrarily many cheap in-page API
+calls (parallel batches of ~10 run in ~2s).
 """
 import gzip
 import json
@@ -72,41 +90,65 @@ class KupatError(RuntimeError):
     pass
 
 
-def _browse_capture(feature_id, presentation_id, want):
-    """Single page-load that captures whichever of the SPA's XHRs you ask for.
+class BrowserSession:
+    """One headless Chromium shared across many kupat fetches.
 
-    `want` is a subset of {"seats", "presentation", "seatplan"}. Returns a
-    dict with whatever was captured before timeout. Closes the browser on
-    completion. We need this because hitting the kupat API with raw urllib
-    or even patchright's request context returns 403 — the API only accepts
-    requests that originate from the in-page fetch chain (likely a JS
-    challenge / TLS fingerprint check at the CDN). Going through a real
-    browser dodges all of that for the price of ~4 seconds per call.
+    Two access modes:
+      - capture(url, matchers): load a booking page and harvest matching
+        XHR responses — the only way to trigger the SPA's own call chain.
+      - api_get / api_get_many: in-page fetch() from a lazily-opened
+        anchor page (site root). The CDN bot filter only challenges
+        document loads, so these behave like a plain HTTP client once the
+        anchor is up. api_get_many runs batches via Promise.all.
+
+    Use as a context manager. The one-shot helpers below (_browse_capture)
+    wrap it so single-watcher callers keep their old cost profile.
     """
-    try:
-        from patchright.sync_api import sync_playwright
-    except ImportError as e:
-        raise KupatError(
-            "kupat watcher needs patchright + Chromium. Run "
-            "`.venv\\Scripts\\python -m patchright install chromium`."
-        ) from e
 
-    url = perf_url(feature_id, presentation_id)
-    captured = {}
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        ctx = browser.new_context(locale="he-IL")
-        page = ctx.new_page()
+    def __init__(self):
+        self._pw = None
+        self._browser = None
+        self._ctx = None
+        self._anchor = None
+
+    def __enter__(self):
+        try:
+            from patchright.sync_api import sync_playwright
+        except ImportError as e:
+            raise KupatError(
+                "kupat watcher needs patchright + Chromium. Run "
+                "`.venv\\Scripts\\python -m patchright install chromium`."
+            ) from e
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=True)
+        self._ctx = self._browser.new_context(locale="he-IL")
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        for close in (
+            lambda: self._browser and self._browser.close(),
+            lambda: self._pw and self._pw.stop(),
+        ):
+            try:
+                close()
+            except Exception:
+                pass
+        self._pw = self._browser = self._ctx = self._anchor = None
+        return False
+
+    def capture(self, url, matchers, wait=12):
+        """Load `url` in a fresh page and return {key: resp.json()} for every
+        response whose URL satisfies matchers[key] (a str predicate). Keys
+        that never matched are simply absent — callers decide severity."""
+        page = self._ctx.new_page()
+        captured = {}
 
         def on_response(resp):
             try:
                 u = resp.url
-                if "seats" in want and "/seats-status" in u and f"presentationId={presentation_id}" in u:
-                    captured["seats"] = (resp.json() or {}).get("seats") or []
-                elif "presentation" in want and f"/presentations/feature/{feature_id}/{presentation_id}" in u:
-                    captured["presentation"] = (resp.json() or {}).get("presentation") or {}
-                elif "seatplan" in want and "/seats/seatplan" in u:
-                    captured["seatplan"] = resp.json()
+                for key, pred in matchers.items():
+                    if key not in captured and pred(u):
+                        captured[key] = resp.json()
             except Exception:
                 pass
 
@@ -115,25 +157,136 @@ def _browse_capture(feature_id, presentation_id, want):
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
         except Exception as e:
             try:
-                browser.close()
+                page.close()
             except Exception:
                 pass
             raise KupatError(f"failed to load kupat booking page: {e}") from e
-
-        # Poll briefly until everything we want is present (or 12s elapses).
-        deadline = time.time() + 12
+        deadline = time.time() + wait
         while time.time() < deadline:
-            if all(k in captured for k in want):
+            if all(k in captured for k in matchers):
                 break
             page.wait_for_timeout(200)
+        try:
+            page.close()
+        except Exception:
+            pass
+        return captured
 
-        browser.close()
+    _JS_FETCH_MANY = """
+    async (urls) => Promise.all(urls.map(async (u) => {
+      try {
+        const r = await fetch(u, {headers: {"Accept": "application/json"}});
+        return {url: u, status: r.status, body: await r.text()};
+      } catch (e) { return {url: u, status: -1, body: String(e)}; }
+    }))
+    """
 
+    def _ensure_anchor(self):
+        if self._anchor is None or self._anchor.is_closed():
+            page = self._ctx.new_page()
+            try:
+                page.goto(SITE_BASE + "/", wait_until="domcontentloaded", timeout=30000)
+            except Exception as e:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                raise KupatError(f"failed to open kupat anchor page: {e}") from e
+            page.wait_for_timeout(1000)
+            self._anchor = page
+        return self._anchor
+
+    def api_get_many(self, paths, concurrency=10):
+        """In-page fetch of API `paths` (each starting with /api/). Returns
+        {path: parsed_json_or_None} — None for non-200 / non-JSON."""
+        page = self._ensure_anchor()
+        out = {}
+        for i in range(0, len(paths), concurrency):
+            chunk = paths[i:i + concurrency]
+            results = page.evaluate(self._JS_FETCH_MANY, [SITE_BASE + p for p in chunk])
+            for p, res in zip(chunk, results):
+                body = None
+                if res.get("status") == 200:
+                    try:
+                        body = json.loads(res.get("body") or "null")
+                    except Exception:
+                        body = None
+                out[p] = body
+        return out
+
+    def api_get(self, path):
+        return self.api_get_many([path])[path]
+
+
+def _browse_capture(feature_id, presentation_id, want):
+    """Single page-load that captures whichever of the SPA's XHRs you ask for.
+
+    `want` is a subset of {"seats", "presentation", "seatplan"}. Returns a
+    dict with whatever was captured before timeout, `_missing` listing any
+    keys that never arrived (soft-fail; caller decides whether to error).
+    Launches and closes its own browser — ~4s per call; batch callers
+    should hold a BrowserSession instead.
+    """
+    matchers = {}
+    if "seats" in want:
+        matchers["seats"] = (
+            lambda u: "/seats-status" in u and f"presentationId={presentation_id}" in u
+        )
+    if "presentation" in want:
+        matchers["presentation"] = (
+            lambda u: f"/presentations/feature/{feature_id}/{presentation_id}" in u
+        )
+    if "seatplan" in want:
+        matchers["seatplan"] = lambda u: "/seats/seatplan" in u
+
+    with BrowserSession() as session:
+        raw = session.capture(perf_url(feature_id, presentation_id), matchers)
+
+    captured = {}
+    if "seats" in raw:
+        captured["seats"] = (raw["seats"] or {}).get("seats") or []
+    if "presentation" in raw:
+        captured["presentation"] = (raw["presentation"] or {}).get("presentation") or {}
+    if "seatplan" in raw:
+        captured["seatplan"] = raw["seatplan"]
     missing = [k for k in want if k not in captured]
     if missing:
-        # Soft-fail: return whatever we got. Caller decides whether to error.
         captured["_missing"] = missing
     return captured
+
+
+# --- Market-sweep fetchers (used by market.py via a shared BrowserSession) --
+
+def fetch_all_presentations(session):
+    """Every presentation on the site in one in-page API call.
+
+    Returns the raw list of presentation dicts (featureId, featureName,
+    venueName, venueCity, dateTime "YYYY-MM-DD HH:MM", soldout, availRatio,
+    minPrice, maxPrice, id). ~1 MB response, 581 rows as of July 2026."""
+    body = session.api_get("/api/presentations/?locationId=0&isHold=0")
+    if not isinstance(body, dict):
+        raise KupatError("presentations catalog fetch failed")
+    return body.get("presentations") or []
+
+
+def fetch_presentation_details(session, pairs, concurrency=10):
+    """Exact availability for many presentations.
+
+    `pairs` is [(feature_id, presentation_id), ...]. Returns
+    {presentation_id(str): presentation_detail_dict} — entries whose fetch
+    failed are absent. Each detail carries availSeats, soldout, isGA."""
+    paths = [
+        f"/api/presentations/feature/{fid}/{pid}?isHold=0"
+        for fid, pid in pairs
+    ]
+    raw = session.api_get_many(paths, concurrency=concurrency)
+    out = {}
+    for (fid, pid), path in zip(pairs, paths):
+        body = raw.get(path)
+        pres = (body or {}).get("presentation") if isinstance(body, dict) else None
+        if pres:
+            out[str(pid)] = pres
+    return out
 
 
 def parse_url(url):

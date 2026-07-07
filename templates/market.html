@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — Market</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg-2: #161b22; --bg-3: #11161d; --line: #21262d; --line-2: #2a3038;
+    --text: #c9d1d9; --muted: #6e7681; --accent: #58a6ff; --green: #56d364;
+    --red: #f85149; --amber: #d29922; --orange: #f97316; --purple: #a78bfa; --cyan: #14b8a6;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.zero { color: var(--muted); }
+  .stat .partial { font-size: 9px; color: var(--amber); letter-spacing: 1px; margin-top: 3px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+  .chip { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--muted); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 4px 12px; border-radius: 14px; cursor: pointer; }
+  .chip.on { color: var(--accent); border-color: var(--accent); }
+  input[type=text] { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; }
+  input#q { width: 220px; }
+  input#addUrl { width: 320px; max-width: 60vw; }
+  button.act { background: var(--bg-2); border: 1px solid var(--accent); color: var(--accent); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 14px; border-radius: 6px; cursor: pointer; }
+  button.act:disabled { opacity: .5; cursor: wait; }
+  .manual-list { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .manual-list .x { color: var(--red); cursor: pointer; margin-left: 6px; text-decoration: none; }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); white-space: nowrap; cursor: pointer; user-select: none; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th .arrow { color: var(--accent); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tbody tr.hotrow td { background: rgba(86, 211, 100, 0.06); }
+  tbody tr.hotrow:hover td { background: rgba(86, 211, 100, 0.11); }
+  a.tm-link { color: var(--accent); text-decoration: none; }
+  a.tm-link:hover { text-decoration: underline; }
+  .when { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .src { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+  .src.kupat { color: var(--cyan); }
+  .src.ticketmaster { color: var(--accent); }
+  .src.tickchak { color: var(--purple); }
+  .src.zappa { color: var(--orange); }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; }
+  .badge.available { background: #16a34a; }
+  .badge.lasttickets { background: #d97706; }
+  .badge.soldout { background: #dc2626; }
+  .badge.closed { background: #555c66; }
+  .badge.unknown { background: #888; }
+  .pct { font-size: 10px; color: var(--muted); }
+  .vel { font-variant-numeric: tabular-nums; }
+  .vel.zero { color: var(--muted); }
+  .vel.hot { color: var(--green); font-weight: 600; }
+  .vel .star { color: var(--amber); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+  .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  .note { font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>// MARKET</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/credits">CREDITS</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/festival">FESTIVAL</a>
+    <a href="/ga">GA</a>
+    <a href="/market" class="active">MARKET</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+
+  <h2>Tickets sold (whole market)</h2>
+  <p class="sub" id="totalsSub">—</p>
+  <div class="stats" id="totals"></div>
+
+  <h2>Events</h2>
+  <div class="controls" id="chips"></div>
+  <div class="controls">
+    <input type="text" id="q" placeholder="filter by name / venue…" />
+    <input type="text" id="addUrl" placeholder="tickchak event or hub URL to track…" />
+    <button class="act" id="addBtn">Track</button>
+    <span class="note" id="addNote"></span>
+  </div>
+  <div class="manual-list" id="manualList"></div>
+  <div class="tablewrap">
+  <table>
+    <thead>
+      <tr id="head"></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+  <p class="sub" id="footnote"></p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const WIN_LABELS = { '1h':'Last hour', '6h':'Last 6 hours', '24h':'Last 24 hours', '3d':'Last 3 days', '7d':'Last 7 days' };
+const SRC_LABELS = { kupat:'Kupat', ticketmaster:'TM', tickchak:'Tickchak', zappa:'Zappa' };
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+const HOT_24H = 25;   // 24h-sold at/above this highlights the row
+
+let DATA = null;
+let srcFilter = 'all';
+let sortKey = 'w24h';
+let sortDir = -1;
+
+const COLS = [
+  { key:'name',  label:'Event' },
+  { key:'venue', label:'Venue' },
+  { key:'date',  label:'Date' },
+  { key:'src',   label:'Source' },
+  { key:'status',label:'Status' },
+  { key:'left',  label:'Left', num:true },
+  { key:'w1h',   label:'+1h', num:true },
+  { key:'w6h',   label:'+6h', num:true },
+  { key:'w24h',  label:'+24h', num:true },
+  { key:'w3d',   label:'+3d', num:true },
+  { key:'w7d',   label:'+7d', num:true },
+  { key:'price', label:'Min ₪', num:true },
+];
+
+function fmtAgo(iso){
+  if (!iso) return '';
+  const secs = (Date.now() - new Date(iso).getTime())/1000;
+  if (secs < 90) return 'just now';
+  if (secs < 5400) return Math.round(secs/60)+'m ago';
+  if (secs < 129600) return Math.round(secs/3600)+'h ago';
+  return Math.round(secs/86400)+'d ago';
+}
+
+function velCell(wv){
+  if (!wv || wv.sold == null) return '<td class="num vel zero">—</td>';
+  const cls = wv.sold > 0 ? 'vel hot' : 'vel zero';
+  const star = wv.partial ? '<span class="star" title="limited history — tracked for less than this window">*</span>' : '';
+  return `<td class="num ${cls}">${fmt(wv.sold)}${star}</td>`;
+}
+
+function sortVal(s, key){
+  const w = k => { const v = (s.windows||{})[k]; return v && v.sold != null ? v.sold : -1; };
+  switch(key){
+    case 'name': return (s.name||'').toLowerCase();
+    case 'venue': return (s.venue||'').toLowerCase();
+    case 'date': return s.first_date_ms || Infinity;
+    case 'src': return s.source;
+    case 'status': return s.status||'';
+    case 'left': return s.available == null ? -1 : s.available;
+    case 'w1h': return w('1h');
+    case 'w6h': return w('6h');
+    case 'w24h': return w('24h');
+    case 'w3d': return w('3d');
+    case 'w7d': return w('7d');
+    case 'price': return s.min_price == null ? Infinity : s.min_price;
+    default: return 0;
+  }
+}
+
+function renderHead(){
+  $('head').innerHTML = COLS.map(c => {
+    const arrow = sortKey === c.key ? `<span class="arrow">${sortDir < 0 ? '▼' : '▲'}</span>` : '';
+    return `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label} ${arrow}</th>`;
+  }).join('');
+  $('head').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.key;
+    if (sortKey === k) sortDir = -sortDir;
+    else { sortKey = k; sortDir = (k === 'name' || k === 'venue' || k === 'src' || k === 'date') ? 1 : -1; }
+    render();
+  });
+}
+
+function render(){
+  if (!DATA) return;
+  renderHead();
+  const q = ($('q').value || '').trim().toLowerCase();
+  let rows = (DATA.shows || []).filter(s => s.status !== 'past');
+  if (srcFilter !== 'all') rows = rows.filter(s => s.source === srcFilter);
+  if (q) rows = rows.filter(s => ((s.name||'') + ' ' + (s.venue||'')).toLowerCase().includes(q));
+  rows.sort((a,b) => {
+    const va = sortVal(a, sortKey), vb = sortVal(b, sortKey);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir;
+  });
+  if (!rows.length) {
+    $('rows').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">Nothing tracked yet — the first sweep populates this within the hour (or POST /api/market/run-now).</td></tr>`;
+    return;
+  }
+  $('rows').innerHTML = rows.map(s => {
+    const total = s.total, avail = s.available;
+    const pct = (total && avail != null) ? ((total - avail) / total * 100).toFixed(1) : null;
+    const leftCell = avail == null ? '—' :
+      (total != null ? `<div>${fmt(avail)} / ${fmt(total)}</div><div class="pct">${pct}% sold</div>` : fmt(avail));
+    const st = s.status || 'unknown';
+    const stLabel = st === 'lasttickets' ? 'Last tickets' : st === 'soldout' ? 'Sold out' : st.charAt(0).toUpperCase()+st.slice(1);
+    const w24 = (s.windows||{})['24h'];
+    const hot = w24 && w24.sold >= HOT_24H ? ' class="hotrow"' : '';
+    const name = s.name || s.event_code;
+    const err = s.last_error ? ` title="${escape(s.last_error)}"` : '';
+    return `<tr${hot}${err}>
+      <td><a class="tm-link" href="${escape(s.url||'#')}" target="_blank" rel="noopener">${escape(name)}</a></td>
+      <td class="when">${escape(s.venue||'')}</td>
+      <td class="when">${escape((s.date_text||'').slice(0,16))}</td>
+      <td><span class="src ${s.source}">${SRC_LABELS[s.source]||s.source}</span></td>
+      <td><span class="badge ${st}">${stLabel}</span></td>
+      <td class="num">${leftCell}</td>
+      ${velCell((s.windows||{})['1h'])}
+      ${velCell((s.windows||{})['6h'])}
+      ${velCell((s.windows||{})['24h'])}
+      ${velCell((s.windows||{})['3d'])}
+      ${velCell((s.windows||{})['7d'])}
+      <td class="num">${s.min_price != null ? '₪' + fmt(s.min_price) : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderChips(){
+  const counts = {};
+  (DATA.shows||[]).filter(s => s.status !== 'past').forEach(s => counts[s.source] = (counts[s.source]||0)+1);
+  const srcs = ['all', ...Object.keys(SRC_LABELS).filter(s => counts[s])];
+  $('chips').innerHTML = srcs.map(s =>
+    `<button class="chip ${srcFilter===s?'on':''}" data-src="${s}">${s==='all' ? 'All' : SRC_LABELS[s]}${s==='all' ? '' : ' · '+counts[s]}</button>`
+  ).join('');
+  $('chips').querySelectorAll('.chip').forEach(b => b.onclick = () => { srcFilter = b.dataset.src; renderChips(); render(); });
+}
+
+async function loadManual(){
+  try {
+    const r = await fetch('/api/market/manual', {cache:'no-store'});
+    const d = await r.json();
+    const entries = d.entries || [];
+    $('manualList').innerHTML = entries.length
+      ? 'Tracked tickchak: ' + entries.map(e =>
+          `${escape(e.code)} (${e.kind})<a class="x" href="#" data-id="${e.id}" title="stop tracking">✕</a>`
+        ).join(' · ')
+      : '';
+    $('manualList').querySelectorAll('.x').forEach(a => a.onclick = async ev => {
+      ev.preventDefault();
+      await fetch('/api/market/remove', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id: Number(a.dataset.id)})});
+      loadManual();
+    });
+  } catch (e) { /* non-fatal */ }
+}
+
+async function addManual(){
+  const url = ($('addUrl').value || '').trim();
+  if (!url) return;
+  $('addBtn').disabled = true;
+  $('addNote').textContent = 'adding…';
+  try {
+    const r = await fetch('/api/market/add', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+    const d = await r.json();
+    if (d.error) { $('addNote').textContent = d.error; }
+    else {
+      $('addNote').textContent = d.warning || `tracking ${d.added.code} (${d.added.kind})`;
+      $('addUrl').value = '';
+      await Promise.all([load(), loadManual()]);
+    }
+  } catch (e) {
+    $('addNote').textContent = 'failed: ' + e;
+  } finally {
+    $('addBtn').disabled = false;
+  }
+}
+
+async function load(){
+  let d;
+  try {
+    const r = await fetch('/api/market', {cache:'no-store'});
+    d = await r.json();
+  } catch (e) {
+    $('errbox').style.display = 'block';
+    $('errbox').textContent = 'Failed to load /api/market: ' + e;
+    return;
+  }
+  $('errbox').style.display = 'none';
+  DATA = d;
+  const wins = d.windows || ['1h','6h','24h','3d','7d'];
+
+  $('totals').innerHTML = wins.map(k => {
+    const t = (d.totals || {})[k] || {};
+    const zero = !t.sold ? ' zero' : '';
+    const partial = t.partial ? '<div class="partial">* limited history</div>' : '';
+    return `<div class="stat"><div class="label">${WIN_LABELS[k] || k}</div>` +
+           `<div class="value${zero}">${fmt(t.sold)}</div>${partial}</div>`;
+  }).join('');
+
+  const live = (d.shows||[]).filter(s => s.status !== 'past');
+  const sweep = d.last_sweep || {};
+  const sweepTxt = sweep.running ? 'sweep running…' : (sweep.at ? 'sweep ' + fmtAgo(sweep.at) : 'sweep pending');
+  const errTxt = Object.entries(sweep.errors||{}).map(([s,e]) => `${s}: ${e}`).join(' · ');
+  $('totalsSub').textContent = `${live.length} events/dates tracked · ${sweepTxt}` + (errTxt ? ` · ⚠ ${errTxt}` : '');
+  $('meta').textContent = `${live.length} tracked`;
+  const since = live.map(s=>s.tracking_since).filter(Boolean).sort()[0];
+  $('footnote').textContent = since
+    ? `* "limited history" = the window is longer than how long that event has been tracked. Oldest data: ${new Date(since).toLocaleString()}. Hourly sweep; watched events also get 10-min snapshots.`
+    : 'First sweep pending — velocity columns fill in as snapshots accrue.';
+
+  renderChips();
+  render();
+}
+
+$('q').addEventListener('input', render);
+$('addBtn').addEventListener('click', addManual);
+$('addUrl').addEventListener('keydown', e => { if (e.key === 'Enter') addManual(); });
+
+load();
+loadManual();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

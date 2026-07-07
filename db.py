@@ -505,6 +505,43 @@ CREATE TABLE IF NOT EXISTS site_seen_events (
     last_seen_at  TEXT NOT NULL,
     PRIMARY KEY (source, event_key)
 );
+-- Market-wide tracker (market.py + app.py run_market_sweep). One row per
+-- (source, event, performance) the hourly sweep has ever seen. Latest
+-- availability / min-price are denormalized here; the availability history
+-- that powers the sold-per-window columns lives in tickchak_sales_snapshots
+-- under the same (source, event_code, perf_code) key.
+CREATE TABLE IF NOT EXISTS market_events (
+    source        TEXT NOT NULL,          -- kupat | tm | tickchak | zappa
+    event_code    TEXT NOT NULL,
+    perf_code     TEXT NOT NULL DEFAULT '0',
+    name          TEXT,
+    venue         TEXT,
+    date_text     TEXT,
+    first_date_ms INTEGER,
+    url           TEXT,
+    status        TEXT,                   -- available|lasttickets|soldout|closed|past|unknown
+    capacity      INTEGER,                -- NULL where the site exposes no total
+    available     INTEGER,
+    min_price     REAL,                   -- cheapest currently-buyable tier, ILS
+    manual        INTEGER NOT NULL DEFAULT 0,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL,
+    last_error    TEXT,
+    PRIMARY KEY (source, event_code, perf_code)
+);
+-- Tickchak has no global catalog — the user pastes event/hub URLs on the
+-- /market page and the sweep expands hubs into their member events.
+CREATE TABLE IF NOT EXISTS market_manual (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source   TEXT NOT NULL DEFAULT 'tickchak',
+    kind     TEXT NOT NULL DEFAULT 'event',   -- 'event' | 'hub'
+    code     TEXT NOT NULL,                   -- event slug/id, or hub slug
+    label    TEXT,
+    added_at TEXT NOT NULL,
+    UNIQUE(source, kind, code)
+);
+CREATE INDEX IF NOT EXISTS idx_tcsnap_full
+    ON tickchak_sales_snapshots(source, event_code, perf_code, captured_at);
 CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -2057,6 +2094,77 @@ def site_events_seen_counts():
     return {r["source"]: r["n"] for r in rows}
 
 
+# ---------------- market tracker (market.py / /market page) ----------------
+
+def market_upsert(ev, now_iso):
+    """Insert or refresh one market entity dict from a market.py sweep
+    adapter. first_seen_at and manual are preserved on update."""
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO market_events (source, event_code, perf_code, name,
+                   venue, date_text, first_date_ms, url, status, capacity,
+                   available, min_price, manual, first_seen_at, last_seen_at,
+                   last_error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source, event_code, perf_code) DO UPDATE SET
+                   name = excluded.name, venue = excluded.venue,
+                   date_text = excluded.date_text,
+                   first_date_ms = excluded.first_date_ms,
+                   url = excluded.url, status = excluded.status,
+                   capacity = excluded.capacity,
+                   available = excluded.available,
+                   min_price = excluded.min_price,
+                   last_seen_at = excluded.last_seen_at,
+                   last_error = excluded.last_error""",
+            (ev["source"], str(ev["event_code"]), str(ev.get("perf_code") or "0"),
+             ev.get("name"), ev.get("venue"), ev.get("date_text"),
+             ev.get("first_date_ms"), ev.get("url"), ev.get("status"),
+             ev.get("capacity"), ev.get("available"), ev.get("min_price"),
+             1 if ev.get("manual") else 0, now_iso, now_iso,
+             ev.get("last_error")),
+        )
+
+
+def market_set_status(source, event_code, perf_code, status):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE market_events SET status = ? WHERE source = ? AND event_code = ? AND perf_code = ?",
+            (status, source, str(event_code), str(perf_code)),
+        )
+
+
+def market_all(include_past=False):
+    with connect() as conn:
+        q = "SELECT * FROM market_events"
+        if not include_past:
+            q += " WHERE status IS NULL OR status != 'past'"
+        rows = conn.execute(q).fetchall()
+    return [dict(r) for r in rows]
+
+
+def market_manual_all():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM market_manual ORDER BY added_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def market_manual_add(source, kind, code, label, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO market_manual (source, kind, code, label, added_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(source, kind, code) DO UPDATE SET label = excluded.label""",
+            (source, kind, str(code), label, now_iso),
+        )
+
+
+def market_manual_remove(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM market_manual WHERE id = ?", (id_,))
+
+
 def tm_record_drop(watcher_id, added_count, removed_count, seats_json, notify_result, now_iso, notify_count=None):
     with connect() as conn:
         conn.execute(
@@ -2284,6 +2392,26 @@ def sales_snapshot_series(source, event_code, perf_code, since_iso):
             (source, str(event_code), str(perf_code), since_iso),
         ).fetchall()
     return [(r["captured_at"], r["available"]) for r in rows]
+
+
+def sales_snapshot_series_bulk(since_iso):
+    """{(source, event_code, perf_code): ascending [(captured_at, available), …]}
+    for every key with snapshots since since_iso. One scan instead of one
+    point query per market row — the /api/market builder walks hundreds of
+    keys per page load."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT source, event_code, perf_code, captured_at, available "
+            "FROM tickchak_sales_snapshots "
+            "WHERE captured_at >= ? AND available IS NOT NULL "
+            "ORDER BY captured_at ASC",
+            (since_iso,),
+        ).fetchall()
+    out = {}
+    for r in rows:
+        key = (r["source"], r["event_code"], r["perf_code"])
+        out.setdefault(key, []).append((r["captured_at"], r["available"]))
+    return out
 
 
 def sales_snapshot_prune(cutoff_iso):
