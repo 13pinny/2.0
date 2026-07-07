@@ -25,6 +25,7 @@ import kupat_credits
 import kupat_events
 import kupat_pdf
 import mail_intake
+import market
 import matcher
 import notify
 import pacha_events
@@ -149,6 +150,18 @@ _il_events_lock = threading.Lock()
 IL_EVENTS_INTERVAL_MINUTES = int(os.getenv("KARTIS_IL_EVENTS_INTERVAL_MINUTES") or 10)
 IL_EVENTS_ENABLED = (os.getenv("KARTIS_IL_EVENTS_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 IL_EVENTS_MAX_PINGS_PER_TICK = 12
+
+# Market-wide tracker (/market) — hourly availability sweep of every event
+# on kupat + TM-IL (+ manually-added tickchak) via market.py. Needs
+# patchright Chromium for the kupat catalog, so it runs on the dashboard
+# machine; the usual single-machine rule applies (KARTIS_MARKET_ENABLED=0
+# elsewhere, or the snapshot series gets double-density from two boxes —
+# harmless for the math, wasteful for the sites).
+_last_market = {"at": None, "counts": {}, "errors": {}, "entities": 0,
+                "duration_s": None, "error": None, "running": False}
+_market_lock = threading.Lock()
+MARKET_INTERVAL_MINUTES = int(os.getenv("KARTIS_MARKET_INTERVAL_MINUTES") or 60)
+MARKET_ENABLED = (os.getenv("KARTIS_MARKET_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def run_mail_intake():
@@ -335,6 +348,33 @@ def run_il_events():
     finally:
         _last_il_events["running"] = False
         _il_events_lock.release()
+
+
+def run_market_sweep():
+    """One hourly tick of the market-wide tracker: market.run_sweep()
+    discovers + snapshots every trackable event (see market.py docstring).
+    No notifications here — discovery pings belong to the 10-min il_events
+    job; this job only feeds the /market page's availability history."""
+    if not _market_lock.acquire(blocking=False):
+        return
+    _last_market["running"] = True
+    try:
+        if db.setting_get_bool("master_paused", default=False):
+            _last_market.update(at=datetime.now(timezone.utc).isoformat(), error=None)
+            return
+        summary = market.run_sweep()
+        _last_market.update(error=None, **summary)
+        print(f"[market] sweep: {summary['entities']} entities in {summary['duration_s']}s "
+              f"counts={summary['counts']} errors={summary['errors'] or '—'}")
+    except Exception as e:
+        _last_market.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_market["running"] = False
+        _market_lock.release()
 
 
 def run_todo_remind():
@@ -2202,9 +2242,17 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         ticket_problem = None
         if ticket_url:
             try:
-                _qty = ((db.viagogo_push_get(push_id) or {}).get("qty")
-                        or available_tickets or 1)
-                ticket_pdfs = viagogo_listing.download_ticket_pdfs_for(ticket_url, qty=int(_qty))
+                _push = db.viagogo_push_get(push_id) or {}
+                _qty = _push.get("qty") or available_tickets or 1
+                # Seat-match the tickets out of the order: essential when one
+                # order was split into multiple listings (different sections/
+                # rows share one ticket link), a no-op identity check otherwise.
+                _seats = viagogo_listing.seats_range(_push.get("seats") or "")
+                ticket_pdfs = viagogo_listing.download_ticket_pdfs_for(
+                    ticket_url, qty=int(_qty),
+                    seats=_seats or None,
+                    row=(_push.get("row_label") or "").strip() or None,
+                )
             except Exception as e:
                 # Never upload questionable tickets; list without them and
                 # say so loudly on the card.
@@ -4167,6 +4215,95 @@ def api_ga():
     })
 
 
+@app.route("/market")
+def market_page():
+    return render_template("market.html")
+
+
+@app.route("/api/market")
+def api_market():
+    """Every tracked market row + its sold-per-window velocity. One bulk
+    snapshot scan feeds the same _sales_windows math the /ga and /festival
+    pages use; rows that also have a watcher simply ride a denser series."""
+    now = datetime.now(timezone.utc)
+    series_map = db.sales_snapshot_series_bulk((now - timedelta(days=7)).isoformat())
+    shows = []
+    for r in db.market_all():
+        series = series_map.get((r["source"], r["event_code"], r["perf_code"]), [])
+        windows, earliest_t = _sales_windows(series, now)
+        avail = r.get("available")
+        if avail is None and series:
+            avail = series[-1][1]
+        shows.append({
+            "source": r["source"], "event_code": r["event_code"],
+            "perf_code": r["perf_code"], "name": r.get("name"),
+            "venue": r.get("venue"), "date_text": r.get("date_text"),
+            "first_date_ms": r.get("first_date_ms"), "url": r.get("url"),
+            "status": r.get("status"), "total": r.get("capacity"),
+            "available": avail, "min_price": r.get("min_price"),
+            "manual": bool(r.get("manual")),
+            "windows": windows,
+            "tracking_since": earliest_t.isoformat() if earliest_t else None,
+            "last_seen_at": r.get("last_seen_at"),
+            "last_error": r.get("last_error"),
+        })
+    return jsonify({
+        "shows": shows, "totals": _sales_totals(shows),
+        "windows": [k for k, _ in FESTIVAL_WINDOWS],
+        "last_sweep": {k: v for k, v in _last_market.items()},
+        "now": now.isoformat(),
+    })
+
+
+@app.route("/api/market/add", methods=["POST"])
+def api_market_add():
+    """Manually track a tickchak event or hub. Body: {"url": ...}. Hub URLs
+    (home.tickchak.co.il/<slug>) expand to their member events every sweep;
+    event URLs track that one event. The new entry is swept inline so its
+    row appears immediately. Note tickchak.parse_url's caveat: numeric /e/
+    ids and slugs are distinct namespaces — paste the public URL you'd buy
+    from."""
+    from flask import request
+    url = ((request.get_json(silent=True) or {}).get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "url is required"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    m = re.search(r"home\.tickchak\.co\.il/([^/?#]+)", url)
+    if m:
+        kind, code = "hub", m.group(1)
+    else:
+        try:
+            code, _ = tickchak.parse_url(url)
+        except Exception as e:
+            return jsonify({"error": f"not a tickchak URL I understand: {e}"}), 400
+        kind = "event"
+    db.market_manual_add("tickchak", kind, code, url, now_iso)
+    try:
+        entities = market.sweep_one_manual(kind, code)
+    except Exception as e:
+        return jsonify({"added": {"kind": kind, "code": code},
+                        "warning": f"added, but first fetch failed: {e}"})
+    return jsonify({"added": {"kind": kind, "code": code},
+                    "entities": len(entities)})
+
+
+@app.route("/api/market/remove", methods=["POST"])
+def api_market_remove():
+    """Stop tracking a manual entry. Body: {"id": market_manual.id}. The
+    market_events rows it produced stay (history) but stop being refreshed."""
+    from flask import request
+    id_ = (request.get_json(silent=True) or {}).get("id")
+    if not id_:
+        return jsonify({"error": "id is required"}), 400
+    db.market_manual_remove(id_)
+    return jsonify({"removed": id_})
+
+
+@app.route("/api/market/manual")
+def api_market_manual():
+    return jsonify({"entries": db.market_manual_all()})
+
+
 @app.route("/tools")
 def tools_page():
     return render_template("tools.html")
@@ -4836,6 +4973,26 @@ def api_il_events_run_now():
     return jsonify(dict(_last_il_events))
 
 
+@app.route("/api/market/status")
+def api_market_status():
+    return jsonify({
+        **_last_market,
+        "enabled": MARKET_ENABLED,
+        "interval_minutes": MARKET_INTERVAL_MINUTES,
+    })
+
+
+@app.route("/api/market/run-now", methods=["POST"])
+def api_market_run_now():
+    """Manual sweep — synchronous (takes a few minutes: kupat's catalog
+    rides a headless browser). Works even when the scheduled job is
+    disabled on this machine."""
+    if _last_market["running"]:
+        return jsonify({"error": "market sweep already running"}), 429
+    run_market_sweep()
+    return jsonify(dict(_last_market))
+
+
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
@@ -4870,6 +5027,14 @@ scheduler.add_job(run_sales_sync, "interval", minutes=FESTIVAL_SYNC_MINUTES,
 scheduler.add_job(run_pricer, "interval", minutes=PRICER_INTERVAL_MINUTES,
                   id="pricer",
                   start_date=datetime.now() + timedelta(minutes=7))
+if MARKET_ENABLED:
+    # Market-wide availability sweep. Offset well clear of the hourly scrape
+    # (t+0) and the pricer (t+7) — this one also launches a Chromium.
+    scheduler.add_job(run_market_sweep, "interval", minutes=MARKET_INTERVAL_MINUTES,
+                      id="market_sweep",
+                      start_date=datetime.now() + timedelta(minutes=20))
+else:
+    print("[market] disabled via KARTIS_MARKET_ENABLED=0 — the sweep runs elsewhere")
 
 # One-shot: archive any pre-existing inventory_overrides rows whose status
 # value was already typed as "not sold" (or a variant). Idempotent so

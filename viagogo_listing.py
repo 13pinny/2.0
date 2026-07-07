@@ -256,7 +256,44 @@ def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
                 pass
 
 
-def download_ticket_pdfs_for(ticket_url, qty=1):
+def seats_range(seats_str):
+    """'117 - 118' → ['117', '118']; '57' → ['57']; '' → []."""
+    nums = re.findall(r"\d+", seats_str or "")
+    if len(nums) == 2:
+        a, b = sorted((int(nums[0]), int(nums[1])))
+        if b - a <= 60:
+            return [str(n) for n in range(a, b + 1)]
+    return nums
+
+
+def _select_by_seats(items, seats, row=None):
+    """Pick each listing's OWN tickets out of a whole-order capture.
+
+    A single order can hold several seat groups that become separate
+    listings — the ticket viewer link always shows every ticket in the
+    order, so each expected seat number must be matched (as a standalone
+    number, optionally requiring the row number too) against the ticket's
+    visible text. Any ambiguity or miss raises rather than guessing: wrong
+    tickets to a buyer is worse than no tickets.
+    `items` are {"pdf": bytes, "text": str} dicts."""
+    chosen, used = [], set()
+    row_rx = re.compile(r"(?<!\d)" + re.escape(str(row)) + r"(?!\d)") if row else None
+    for seat in seats:
+        rx = re.compile(r"(?<!\d)" + re.escape(str(seat)) + r"(?!\d)")
+        matches = [i for i, it in enumerate(items)
+                   if i not in used and rx.search(it["text"])
+                   and (row_rx is None or row_rx.search(it["text"]))]
+        if len(matches) != 1:
+            raise ViagogoListingError(
+                f"seat {seat}" + (f" row {row}" if row else "") +
+                f": {len(matches)} matching tickets in the order — cannot assign safely"
+            )
+        used.add(matches[0])
+        chosen.append(items[matches[0]]["pdf"])
+    return chosen
+
+
+def download_ticket_pdfs_for(ticket_url, qty=1, seats=None, row=None):
     """Route a ticket-viewer URL to the right per-site renderer.
 
     - tickchak (either the confirmation email's static emailLink URL or the
@@ -265,11 +302,16 @@ def download_ticket_pdfs_for(ticket_url, qty=1):
     - anything else (Kupat share links incl. SendGrid-wrapped, and
       ticketmaster.co.il/t/…) → the Swiper walker below; both sites render
       their e-tickets in a Swiper carousel on a public tokenized link.
+
+    `seats` (list of seat-number strings, optionally with `row`): select
+    exactly those tickets out of the order — required when one order was
+    split into multiple listings, harmless (an identity check) otherwise.
     """
     low = (ticket_url or "").lower()
+    seats = [s for s in (seats or []) if s][:qty] if qty else list(seats or [])
     if "tickchak.co.il" in low:
         try:
-            pdfs = download_tickchak_pdfs(ticket_url, qty=qty)
+            pdfs = download_tickchak_pdfs(ticket_url, qty=None if seats else qty)
         except Exception:
             traceback.print_exc()
             if "/n/" not in low:
@@ -277,9 +319,23 @@ def download_ticket_pdfs_for(ticket_url, qty=1):
             import tickchak_tickets  # lazy: pulls in PyMuPDF
             cards = tickchak_tickets.scrape_ticket_url(ticket_url)
             pdfs = [c["pdf_bytes"] for c in cards]
-            pdfs = pdfs[:qty] if qty else pdfs
+        if seats:
+            # The official print PDF has a text layer — match on it.
+            import fitz
+            items = []
+            for d in pdfs:
+                doc = fitz.open(stream=d, filetype="pdf")
+                items.append({"pdf": d, "text": " ".join(pg.get_text() for pg in doc)})
+                doc.close()
+            pdfs = _select_by_seats(items, seats, row)
+        elif qty:
+            pdfs = pdfs[:qty]
     else:
-        pdfs = download_ticket_pdfs(ticket_url, qty=qty)
+        if seats:
+            items = download_ticket_pdfs(ticket_url, qty=qty, with_text=True)
+            pdfs = _select_by_seats(items, seats, row)
+        else:
+            pdfs = download_ticket_pdfs(ticket_url, qty=qty)
     if not pdfs:
         raise ViagogoListingError(f"no ticket PDFs captured from {ticket_url[:80]}")
     if qty and len(pdfs) < qty:
@@ -433,7 +489,7 @@ def _png_to_pdf(png_bytes):
     return data
 
 
-def _shoot_slides_direct(page, want, seen):
+def _shoot_slides_direct(page, want, seen, with_text=False):
     """Fallback for carousels that can't be advanced (TM IL's Angular viewer
     locks the next button and hides the Swiper JS API): every slide is
     already rendered side by side, so element-screenshot each barcode-bearing
@@ -450,7 +506,8 @@ def _shoot_slides_direct(page, want, seen):
             sl.scroll_into_view_if_needed()
         except Exception:
             pass
-        out.append(_png_to_pdf(sl.screenshot(timeout=15000)))
+        pdf = _png_to_pdf(sl.screenshot(timeout=15000))
+        out.append({"pdf": pdf, "text": s.inner_text() or ""} if with_text else pdf)
         seen.add(str(i))
     return out
 
@@ -532,15 +589,20 @@ def _advance_carousel(page):
     ))
 
 
-def download_ticket_pdfs(ticket_url, qty=1):
+def download_ticket_pdfs(ticket_url, qty=1, with_text=False):
     """Render each e-ticket in a Swiper-carousel viewer to its own PDF using
     headless Chromium (public tokenized links — no login; used for Kupat and
     Ticketmaster IL). Kupat's first slide is an intro ("N tickets — swipe to
-    scan", no barcode); TM IL's first slide is already ticket 1. page.pdf()
-    only renders the *active* slide, so we advance the carousel and PDF each
-    slide that actually carries a barcode, up to `qty`. Returns a list of
-    PDF bytes (one per ticket).
+    scan", no barcode); TM IL's first slide is already ticket 1. We advance
+    the carousel and element-screenshot each slide that actually carries a
+    barcode, up to `qty`. Returns a list of PDF bytes (one per ticket).
+
+    with_text=True captures EVERY barcode slide in the order (qty ignored)
+    and returns [{"pdf": bytes, "text": slide innerText}] so the caller can
+    match tickets to seats (multi-listing orders).
     """
+    if with_text:
+        qty = 99
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
@@ -583,14 +645,17 @@ def download_ticket_pdfs(ticket_url, qty=1):
                 )
                 if has_code and key not in seen:
                     seen.add(key)
-                    pdfs.append(_png_to_pdf(active.screenshot(timeout=15000)))
+                    pdf = _png_to_pdf(active.screenshot(timeout=15000))
+                    pdfs.append({"pdf": pdf, "text": active.inner_text() or ""}
+                                if with_text else pdf)
                     if len(pdfs) >= qty:
                         break
                 if not _advance_carousel(page):
                     if len(pdfs) < qty:
                         # Locked pre-rendered carousel (TM IL): slides can't
                         # be activated, so shoot each one directly.
-                        pdfs.extend(_shoot_slides_direct(page, qty - len(pdfs), seen))
+                        pdfs.extend(_shoot_slides_direct(
+                            page, qty - len(pdfs), seen, with_text=with_text))
                     break
                 page.wait_for_timeout(800)
             return pdfs
