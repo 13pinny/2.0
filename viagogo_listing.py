@@ -772,7 +772,17 @@ def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section, row=None):
             + target_id + "&returnUrl=%2FListings",
             wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS,
         )
-        page.wait_for_selector("#js-preUploadInput, #js-activeUploadInput", timeout=MODAL_TIMEOUT_MS)
+        try:
+            page.wait_for_selector("#js-preUploadInput, #js-activeUploadInput",
+                                   timeout=MODAL_TIMEOUT_MS)
+        except Exception:
+            # The UploadETickets page renders EMPTY for a listing that
+            # already has tickets attached (probe-confirmed 2026-07-08) —
+            # far more likely than a genuine render failure.
+            raise ViagogoListingError(
+                f"upload form did not render for listing {target_id} — "
+                f"it probably already has tickets attached"
+            )
         file_input = (page.query_selector("#js-preUploadInput")
                       or page.query_selector("#js-activeUploadInput"))
         file_input.set_input_files(paths)  # the input is multiple — set all at once
