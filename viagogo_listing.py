@@ -512,25 +512,59 @@ def _shoot_slides_direct(page, want, seen, with_text=False):
     return out
 
 
+def _barcode_decoder():
+    """Best available barcode decoder as fn(np_image) -> payload|None.
+
+    zxing-cpp reads every format the Israeli sites use — QR (Kupat, TM IL)
+    AND Data Matrix (tickchak's official print PDFs; OpenCV's QR-only
+    detector rejected those as 'no decodable QR', incident 2026-07-07).
+    OpenCV stays as a QR-only fallback; None means no decoder installed.
+    """
+    try:
+        import zxingcpp
+
+        def _zx(arr):
+            if arr.ndim == 3 and arr.shape[2] == 4:
+                arr = arr[:, :, :3]
+            res = zxingcpp.read_barcodes(arr)
+            return res[0].text if res else None
+        return _zx
+    except ImportError:
+        pass
+    try:
+        import cv2
+
+        det = cv2.QRCodeDetector()
+
+        def _cv(arr):
+            if arr.ndim == 3:
+                arr = cv2.cvtColor(
+                    arr, cv2.COLOR_RGB2GRAY if arr.shape[2] == 3 else cv2.COLOR_RGBA2GRAY)
+            txt, _, _ = det.detectAndDecode(arr)
+            return txt or None
+        return _cv
+    except ImportError:
+        return None
+
+
 def validate_ticket_pdfs(pdfs):
-    """Refuse to pass along any ticket PDF without a machine-decodable QR.
+    """Refuse to pass along any ticket PDF without a machine-decodable
+    barcode (QR / Data Matrix / Aztec), and require distinct payloads.
 
     Guards against the 2026-07-04 incident: a capture taken mid-swipe
     printed only the page background — two blank maroon pages were uploaded
     to a live listing and a buyer would have been turned away at the gate.
-    Renders each page and runs OpenCV's QR detector; raises
-    ViagogoListingError naming the bad ticket. If opencv isn't installed the
-    check is skipped with a loud log line rather than blocking the pipeline.
+    Raises ViagogoListingError naming the bad ticket. If no decoder is
+    installed the check is skipped with a loud log line rather than
+    blocking the pipeline.
     """
-    try:
-        import cv2
-        import numpy as np
-    except ImportError:
-        print("[kartis] WARNING: opencv missing — ticket QR validation SKIPPED")
+    decode = _barcode_decoder()
+    if decode is None:
+        print("[kartis] WARNING: zxing-cpp/opencv missing — ticket barcode validation SKIPPED")
         return pdfs
     import fitz
+    import numpy as np
 
-    det = cv2.QRCodeDetector()
     payloads = []
     for i, data in enumerate(pdfs):
         doc = fitz.open(stream=data, filetype="pdf")
@@ -540,25 +574,22 @@ def validate_ticket_pdfs(pdfs):
                 pix = pg.get_pixmap(dpi=dpi)
                 arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
                     pix.height, pix.width, pix.n)
-                if pix.n >= 3:
-                    arr = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY if pix.n == 3 else cv2.COLOR_RGBA2GRAY)
-                txt, _, _ = det.detectAndDecode(arr)
-                if txt:
-                    payload = txt
+                payload = decode(arr)
+                if payload:
                     break
             if payload:
                 break
         doc.close()
         if not payload:
             raise ViagogoListingError(
-                f"ticket {i + 1}/{len(pdfs)} has no decodable QR — refusing to use it"
+                f"ticket {i + 1}/{len(pdfs)} has no decodable barcode — refusing to use it"
             )
         payloads.append(payload)
     # Each buyer must get a DIFFERENT ticket — duplicate payloads mean the
     # capture shot the same slide twice.
     if len(set(payloads)) != len(payloads):
         raise ViagogoListingError(
-            "duplicate QR payloads across ticket PDFs — same ticket captured twice"
+            "duplicate barcode payloads across ticket PDFs — same ticket captured twice"
         )
     return pdfs
 
@@ -683,54 +714,51 @@ def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section):
                 fh.write(data)
             paths.append(pth)
 
-        page.goto(LISTINGS_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-        page.wait_for_timeout(2500)
-
-        # Expand the event's listing card so its per-section E-Ticket rows
-        # (each with an 'Upload Now' link) render. The card shows the event
-        # id in a [<id>] span; climb to the clickable card ancestor.
-        try:
-            page.wait_for_selector(
-                f"xpath=//span[contains(text(),'{event_id}')]", timeout=MODAL_TIMEOUT_MS
-            )
-        except Exception:
-            pass
-        node = page.query_selector(f"xpath=//span[contains(text(),'{event_id}')]")
-        if node is None:
+        # Locate the listing row the same way the scraper does: expand EVERY
+        # event card (scraper._extract_viagogo_rows clicks all collapse
+        # arrows until none remain — the page renders lazily and a brand-new
+        # event can sit anywhere in it; the old climb-from-a-span approach
+        # missed it twice: Shlomo Artzi 2026-07-07, Ben Tzur 2026-07-08),
+        # then match on event_id + section + still-needs-tickets, and click
+        # that exact tr's Upload Now. Retry once with a reload.
+        sec_norm = re.sub(r"\s+", " ", section or "").strip().lower()
+        target_id = None
+        for attempt in range(2):
+            page.goto(LISTINGS_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+            try:
+                page.wait_for_selector("tr.eventRow", timeout=NAV_TIMEOUT_MS)
+            except Exception:
+                continue
+            rows = scraper._extract_viagogo_rows(page)
+            cand = [r for r in rows
+                    if str(r.get("event_id")) == str(event_id)
+                    and sec_norm in re.sub(r"\s+", " ", r.get("section") or "").lower()
+                    and "view e-tickets" not in (r.get("ticket_type") or "").lower()]
+            if cand:
+                # Newest listing = highest id (viagogo ids are sequential).
+                target_id = str(max(cand, key=lambda r: int(r["id"]))["id"])
+                break
+            print(f"[kartis] upload target not found (attempt {attempt + 1}): "
+                  f"event {event_id} section {sec_norm!r} among {len(rows)} rows")
+        if target_id is None:
             raise ViagogoListingError(
-                f"listing card for event {event_id} not found on Listings page"
+                f"no ticket-needing listing row for event {event_id} "
+                f"section '{section}' found on Listings page"
             )
-        card = node
-        for _ in range(6):
-            parent = card.query_selector("xpath=..")
-            if not parent:
-                break
-            card = parent
-            box = card.bounding_box()
-            if box and box.get("height", 0) > 60:
-                break
-        card.click()
-        page.wait_for_timeout(2500)
 
-        # Pick the 'Upload Now' link in the row matching our section (a fresh
-        # listing is the one still showing Upload Now rather than View).
-        # Normalize whitespace both sides — the stored section can carry
-        # doubled/odd spacing that won't substring-match the rendered row.
-        sec_norm = re.sub(r"\s+", " ", section or "").strip()
-        upload_link = None
-        for h in page.query_selector_all(".js-upload-etickets"):
-            rowtext = h.evaluate(
-                "e => { let n=e; for (let i=0;i<5&&n.parentElement;i++) n=n.parentElement; return n.innerText; }"
+        clicked = page.evaluate(
+            """(id) => {
+              const tr = document.querySelector('tr[data-id="' + id + '"]');
+              const a = tr && tr.querySelector('.js-upload-etickets');
+              if (!a) return false;
+              a.click(); return true;
+            }""",
+            target_id,
+        )
+        if not clicked:
+            raise ViagogoListingError(
+                f"listing {target_id} has no Upload Now link (already has tickets?)"
             )
-            if sec_norm and sec_norm in re.sub(r"\s+", " ", rowtext):
-                upload_link = h
-                break
-        if upload_link is None:
-            upload_link = page.query_selector(".js-upload-etickets")
-        if upload_link is None:
-            raise ViagogoListingError("no 'Upload Now' e-ticket link found for this listing")
-
-        upload_link.click()
         page.wait_for_selector("#js-preUploadInput, #js-activeUploadInput", timeout=MODAL_TIMEOUT_MS)
         file_input = (page.query_selector("#js-preUploadInput")
                       or page.query_selector("#js-activeUploadInput"))
