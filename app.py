@@ -1929,10 +1929,13 @@ def api_viagogo():
         r["pricer_paused"] = bool(cfg.get("paused"))
         r["pricer_paused_reason"] = cfg.get("paused_reason")
         r["pricer_last_set_price"] = cfg.get("last_set_price")
-        try:
-            r["pricer_compete_sections"] = json.loads(cfg.get("compete_sections") or "null")
-        except (TypeError, ValueError):
-            r["pricer_compete_sections"] = None
+        for src_key, out_key in (("compete_sections", "pricer_compete_sections"),
+                                 ("compete_include", "pricer_compete_include"),
+                                 ("compete_exclude", "pricer_compete_exclude")):
+            try:
+                r[out_key] = json.loads(cfg.get(src_key) or "null")
+            except (TypeError, ValueError):
+                r[out_key] = None
     totals = {
         "listings": len(rows),
         "tickets_available": sum(r.get("available") or 0 for r in rows),
@@ -4877,6 +4880,18 @@ def api_pricer_config():
                 return jsonify({"error": "compete_sections must be a list of section names"}), 400
             cleaned = sorted({viagogo_pricer._norm_section(s) for s in secs if s.strip()})
             fields["compete_sections"] = json.dumps(cleaned) if cleaned else None
+    for fp_key in ("compete_include", "compete_exclude"):
+        if fp_key in body:
+            fps = body.get(fp_key)
+            if fps in (None, []):
+                fields[fp_key] = None
+                continue
+            if not isinstance(fps, list) or not all(isinstance(f, dict) for f in fps):
+                return jsonify({"error": f"{fp_key} must be a list of {{s,r,q}} objects"}), 400
+            cleaned = [{"s": viagogo_pricer._norm_section(f.get("s")),
+                        "r": (f.get("r") or "").strip(),
+                        "q": f.get("q")} for f in fps]
+            fields[fp_key] = json.dumps(cleaned)
     if "enabled" in body:
         enabled = 1 if body.get("enabled") else 0
         if enabled:

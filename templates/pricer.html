@@ -268,7 +268,14 @@ function renderListings() {
     tr.innerHTML = `
       <td class="c-wide">${esc(r.event_name)}<div style="color:var(--muted); font-size:10px;">${esc(r.venue)}<span class="only-mobile"> · ${esc(r.event_date)}</span></div></td>
       <td class="only-desktop">${esc(r.event_date)}</td>
-      <td data-label="section"><span class="seclink" data-id="${esc(r.id)}" title="Open the market — see every listing on this event and pick sections to undercut">${esc((r.section||"").split("\n")[0])}</span>${(r.pricer_compete_sections||[]).length ? `<span class="vschip" title="Also undercutting: ${esc(r.pricer_compete_sections.join(", "))}">vs +${r.pricer_compete_sections.length}</span>` : ""}</td>
+      <td data-label="section"><span class="seclink" data-id="${esc(r.id)}" title="Open the market — see every listing on this event and pick who to undercut">${esc((r.section||"").split("\n")[0])}</span>${(() => {
+        const nSec = (r.pricer_compete_sections||[]).length, nInc = (r.pricer_compete_include||[]).length, nExc = (r.pricer_compete_exclude||[]).length;
+        const bits = [];
+        if (nSec) bits.push(`+${nSec} section${nSec > 1 ? "s" : ""}`);
+        if (nInc) bits.push(`+${nInc} pick${nInc > 1 ? "s" : ""}`);
+        if (nExc) bits.push(`−${nExc}`);
+        return bits.length ? `<span class="vschip" title="${esc((r.pricer_compete_sections||[]).join(", "))}">vs ${bits.join(" ")}</span>` : "";
+      })()}</td>
       <td class="num" data-label="avail">${r.available ?? ""}</td>
       <td class="num" data-label="cost /ea" style="color:var(--amber);">${money(r.face_value)}</td>
       <td class="num" data-label="price">${money(r.price)}</td>
@@ -370,32 +377,64 @@ function renderMarketPanel(row, data) {
   const ownFrom = ownGroup?.from ?? null;
   const wrap = document.getElementById("mp-sections");
   wrap.innerHTML = "";
+  const fpOf = (secKey, r) => JSON.stringify({ s: secKey, r: (r.row || "").trim().toLowerCase(), q: r.qty ?? null });
+  const includes = new Set((row.pricer_compete_include || []).map(f => JSON.stringify({ s: normSec(f.s), r: (f.r || "").trim().toLowerCase(), q: f.q ?? null })));
+  const excludes = new Set((row.pricer_compete_exclude || []).map(f => JSON.stringify({ s: normSec(f.s), r: (f.r || "").trim().toLowerCase(), q: f.q ?? null })));
   // price order, cheapest first — same read as the inv magnifier
   const sorted = [...groups.entries()].sort((a, b) => (a[1].from ?? 1e9) - (b[1].from ?? 1e9));
   for (const [key, g] of sorted) {
     const own = key === ownSec;
+    const sectionOn = own || chosen.has(key);
     const sameTier = !own && ownArea && (g.area || "").trim().toLowerCase() === ownArea;
     const pricier = !own && ownFrom != null && g.from != null && g.from > ownFrom;
     const badges =
-      (own ? ' <span style="color:var(--muted); font-weight:400; font-size:10px;">(yours — always on)</span>' : "")
+      (own ? ' <span style="color:var(--muted); font-weight:400; font-size:10px;">(your section)</span>' : "")
       + (sameTier ? ' <span class="tierchip same" title="viagogo groups this section in the same venue area as yours — same level">YOUR TIER</span>' : "")
       + (pricier ? ' <span class="tierchip up" title="Prices from above your section — likely better seats (closer to the stage)">↑ PRICIER</span>' : "");
     const div = document.createElement("div");
     div.className = "sec";
     div.innerHTML = `
       <label class="sec-head">
-        <input type="checkbox" class="mp-sec" data-sec="${esc(key)}" ${own || chosen.has(key) ? "checked" : ""} ${own ? "disabled" : ""}>
+        <input type="checkbox" class="mp-sec" data-sec="${esc(key)}" ${sectionOn ? "checked" : ""}>
         <span class="nm">${esc(g.name)}${badges}</span>
         <span class="cheap">${g.rows.length}× · from ${g.from != null ? money(g.from) : "—"}</span>
       </label>
-      ${g.rows.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)).map(r => `
-        <div class="mrow ${r.is_ours ? "owned" : ""}">
+      ${g.rows.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)).map(r => {
+        if (r.is_ours) return `
+        <div class="mrow owned">
           <span>${r.qty ?? "?"} ticket${r.qty === 1 ? "" : "s"}${r.row ? " · row " + esc(r.row) : ""}</span>
           <span>${r.price != null ? money(r.price) : "—"}</span>
-        </div>`).join("")}
+        </div>`;
+        const fp = fpOf(key, r);
+        const on = (sectionOn && !excludes.has(fp)) || includes.has(fp);
+        return `
+        <label class="mrow" style="cursor:pointer;">
+          <span><input type="checkbox" class="mp-row" data-sec="${esc(key)}" data-fp="${esc(fp)}" ${on ? "checked" : ""} style="width:16px;height:16px;margin-right:8px;vertical-align:-3px;">${r.qty ?? "?"} ticket${r.qty === 1 ? "" : "s"}${r.row ? " · row " + esc(r.row) : ""}</span>
+          <span>${r.price != null ? money(r.price) : "—"}</span>
+        </label>`;
+      }).join("")}
     `;
     wrap.appendChild(div);
   }
+  // section box = select-all for its rows; row boxes set the section box state
+  const syncSection = (secCb) => {
+    const rows = [...wrap.querySelectorAll(`.mp-row[data-sec="${CSS.escape(secCb.dataset.sec)}"]`)];
+    if (!rows.length) return;
+    const on = rows.filter(cb => cb.checked).length;
+    secCb.checked = on === rows.length;
+    secCb.indeterminate = on > 0 && on < rows.length;
+  };
+  wrap.querySelectorAll(".mp-sec").forEach(secCb => {
+    syncSection(secCb);
+    secCb.addEventListener("change", () => {
+      wrap.querySelectorAll(`.mp-row[data-sec="${CSS.escape(secCb.dataset.sec)}"]`)
+        .forEach(cb => { cb.checked = secCb.checked; });
+      secCb.indeterminate = false;
+    });
+  });
+  wrap.querySelectorAll(".mp-row").forEach(cb => cb.addEventListener("change", () => {
+    syncSection(wrap.querySelector(`.mp-sec[data-sec="${CSS.escape(cb.dataset.sec)}"]`));
+  }));
 }
 
 function closeMarketPanel() {
@@ -415,11 +454,28 @@ document.getElementById("mp-refresh").addEventListener("click", async (e) => {
 document.getElementById("mp-save").addEventListener("click", async () => {
   if (!_mpListing) return;
   const own = normSec(_mpListing.section);
-  const secs = [...document.querySelectorAll("#mpanel .mp-sec")]
-    .filter(cb => cb.checked && cb.dataset.sec !== own)
-    .map(cb => cb.dataset.sec);
+  // Derive the whole config from the row boxes: all-on section → dynamic
+  // section pick (future listings included); partial non-own section →
+  // individual includes; unticked rows in your own section → excludes.
+  const sections = [], include = [], exclude = [];
+  for (const secCb of document.querySelectorAll("#mpanel .mp-sec")) {
+    const key = secCb.dataset.sec;
+    const rows = [...document.querySelectorAll(`#mpanel .mp-row[data-sec="${CSS.escape(key)}"]`)];
+    const onRows = rows.filter(cb => cb.checked);
+    if (key === own) {
+      rows.filter(cb => !cb.checked).forEach(cb => exclude.push(JSON.parse(cb.dataset.fp)));
+      continue;
+    }
+    if (!rows.length) {                       // section with only our rows
+      if (secCb.checked) sections.push(key);
+      continue;
+    }
+    if (onRows.length === rows.length) sections.push(key);
+    else onRows.forEach(cb => include.push(JSON.parse(cb.dataset.fp)));
+  }
   const res = await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ listing_id: _mpListing.id, compete_sections: secs }) });
+    body: JSON.stringify({ listing_id: _mpListing.id, compete_sections: sections,
+                           compete_include: include, compete_exclude: exclude }) });
   if (!res.ok) { alert((await res.json()).error || "save failed"); return; }
   closeMarketPanel();
   loadAll();

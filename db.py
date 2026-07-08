@@ -698,6 +698,14 @@ def init():
         pc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(viagogo_pricer_config)").fetchall()}
         if "compete_sections" not in pc_cols:
             conn.execute("ALTER TABLE viagogo_pricer_config ADD COLUMN compete_sections TEXT")
+        # Per-listing picks: JSON arrays of {s: section, r: row, q: qty}
+        # fingerprints (competitor rows carry no id in MarketDataV3).
+        # include = individually ticked listings outside the selected
+        # sections; exclude = unticked listings inside them.
+        if "compete_include" not in pc_cols:
+            conn.execute("ALTER TABLE viagogo_pricer_config ADD COLUMN compete_include TEXT")
+        if "compete_exclude" not in pc_cols:
+            conn.execute("ALTER TABLE viagogo_pricer_config ADD COLUMN compete_exclude TEXT")
         # Sales snapshots grew multi-source (kupat GA alongside tickchak
         # festival): add source + perf_code and backfill the tickchak rows
         # (perf_code is always '0' for tickchak).
@@ -849,6 +857,7 @@ def pricer_config_all():
 _PRICER_CONFIG_FIELDS = (
     "enabled", "floor_price", "allow_raise", "paused", "paused_reason",
     "paused_at", "last_set_price", "last_set_at", "compete_sections",
+    "compete_include", "compete_exclude",
 )
 
 

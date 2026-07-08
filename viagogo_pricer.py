@@ -64,6 +64,13 @@ Pricing rules (user requirements):
     16 GA listings with a competitor exactly 1 buyer-cent above ours).
     A comfortable lead computes a raise target and is skipped silently
     while raising is off.
+  * the compete pool is per-listing (market panel on /pricer): own section
+    always + compete_sections (whole sections, future listings included)
+    + compete_include (individual rows, fingerprinted section+row+qty since
+    MarketDataV3 gives competitors no id; explicit picks bypass the singles
+    filter) - compete_exclude (unticked rows inside selected sections; an
+    include beats an exclude). Fingerprints break when a rival's qty
+    changes — stale picks silently drop until re-ticked in the panel.
   * never below the per-listing floor; floor is mandatory to enable
   * sliding-window drop cap: at most pricer_max_drop_pct (default 15%)
     below the listing's price at the start of the last
@@ -258,19 +265,57 @@ def fetch_market_listings(page, event_id):
     return rows or None
 
 
-def cheapest_competitor(market_rows, section_set, min_competitor_qty=1):
-    """Cheapest NON-ours price across the given set of normalized section
-    names (a listing's compete set). None = no qualifying competitor there.
-    Unknown quantities are kept; singles drop out at min_competitor_qty=2."""
+def _row_fp(r):
+    """Fingerprint for an anonymous competitor row (MarketDataV3 gives no
+    listing id for other sellers): section + row label + quantity. Survives
+    their price changes; a qty change (partial sale) breaks the match, so
+    stale picks silently drop out until re-ticked in the panel."""
+    return (
+        _norm_section(r.get("section")),
+        re.sub(r"\s+", " ", (r.get("row") or "")).strip().casefold(),
+        r.get("qty"),
+    )
+
+
+def _cfg_fps(cfg, key):
+    """Decode a compete_include/compete_exclude JSON field into a set of
+    fingerprints."""
+    raw = cfg.get(key)
+    if not raw:
+        return set()
+    try:
+        items = json.loads(raw)
+    except (TypeError, ValueError):
+        return set()
+    out = set()
+    for it in items:
+        if isinstance(it, dict):
+            out.add((
+                _norm_section(it.get("s")),
+                re.sub(r"\s+", " ", (it.get("r") or "")).strip().casefold(),
+                it.get("q"),
+            ))
+    return out
+
+
+def cheapest_competitor(market_rows, section_set, min_competitor_qty=1,
+                        include_fps=frozenset(), exclude_fps=frozenset()):
+    """Cheapest NON-ours price in a listing's compete pool:
+    rows in the selected sections (minus per-listing excludes, singles
+    filtered) plus individually included rows from anywhere (explicit picks
+    bypass the singles filter). None = no qualifying competitor."""
     best = None
     for r in market_rows:
         if r["is_ours"] or r["price"] is None:
             continue
-        if _norm_section(r["section"]) not in section_set:
-            continue
-        if r["qty"] is not None and r["qty"] < min_competitor_qty:
-            continue
-        if best is None or r["price"] < best:
+        fp = _row_fp(r)
+        in_pool = False
+        if _norm_section(r["section"]) in section_set and fp not in exclude_fps:
+            if r["qty"] is None or r["qty"] >= min_competitor_qty:
+                in_pool = True
+        if fp in include_fps:
+            in_pool = True
+        if in_pool and (best is None or r["price"] < best):
             best = r["price"]
     return best
 
@@ -770,10 +815,15 @@ def run_pricer_tick(dry_run=None):
                         break
                     section_set = listing_section_set(cfg, row)
                     if market:
+                        include_fps = _cfg_fps(cfg, "compete_include")
                         competitor_usd = cheapest_competitor(
-                            market, section_set, min_competitor_qty=min_qty)
-                        any_rows = any(_norm_section(r["section"]) in section_set
-                                       for r in market)
+                            market, section_set, min_competitor_qty=min_qty,
+                            include_fps=include_fps,
+                            exclude_fps=_cfg_fps(cfg, "compete_exclude"))
+                        any_rows = any(
+                            _norm_section(r["section"]) in section_set
+                            or _row_fp(r) in include_fps
+                            for r in market)
                     else:
                         cands = [sections[s]["cheapest_competitor_usd"]
                                  for s in section_set if s in sections]
