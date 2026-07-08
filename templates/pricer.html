@@ -80,6 +80,9 @@
   #mpanel .sec-head input { width: 18px; height: 18px; }
   #mpanel .sec-head .nm { font-weight: 700; flex: 1; }
   #mpanel .sec-head .cheap { color: var(--muted); font-size: 11px; }
+  .tierchip { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 9px; letter-spacing: 1px; border-radius: 1px; vertical-align: 1px; }
+  .tierchip.same { border: 1px solid var(--purple); color: var(--purple); }
+  .tierchip.up { border: 1px solid var(--amber); color: var(--amber); }
   #mpanel .mrow { display: flex; justify-content: space-between; padding: 4px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
   #mpanel .mrow.owned { color: var(--green); }
   #mpanel .mrow.owned::after { content: "YOURS"; font-size: 9px; letter-spacing: 1px; border: 1px solid var(--green); padding: 0 4px; margin-left: 8px; }
@@ -356,20 +359,34 @@ function renderMarketPanel(row, data) {
     if (!groups.has(key)) groups.set(key, { name: (r.section || "").trim(), rows: [] });
     groups.get(key).rows.push(r);
   }
+  for (const g of groups.values()) {
+    const prices = g.rows.filter(r => r.price != null).map(r => r.price);
+    g.from = prices.length ? Math.min(...prices) : null;
+    g.area = (g.rows.find(r => (r.venue_area || "").trim()) || {}).venue_area || "";
+  }
+  // your tier = viagogo's venue-area grouping for your own section
+  const ownGroup = groups.get(ownSec);
+  const ownArea = (ownGroup?.area || "").trim().toLowerCase();
+  const ownFrom = ownGroup?.from ?? null;
   const wrap = document.getElementById("mp-sections");
   wrap.innerHTML = "";
-  const sorted = [...groups.entries()].sort((a, b) => (a[0] === ownSec ? -1 : b[0] === ownSec ? 1 : a[1].name.localeCompare(b[1].name)));
+  // price order, cheapest first — same read as the inv magnifier
+  const sorted = [...groups.entries()].sort((a, b) => (a[1].from ?? 1e9) - (b[1].from ?? 1e9));
   for (const [key, g] of sorted) {
     const own = key === ownSec;
-    const prices = g.rows.filter(r => r.price != null).map(r => r.price);
-    const cheapest = prices.length ? Math.min(...prices) : null;
+    const sameTier = !own && ownArea && (g.area || "").trim().toLowerCase() === ownArea;
+    const pricier = !own && ownFrom != null && g.from != null && g.from > ownFrom;
+    const badges =
+      (own ? ' <span style="color:var(--muted); font-weight:400; font-size:10px;">(yours — always on)</span>' : "")
+      + (sameTier ? ' <span class="tierchip same" title="viagogo groups this section in the same venue area as yours — same level">YOUR TIER</span>' : "")
+      + (pricier ? ' <span class="tierchip up" title="Prices from above your section — likely better seats (closer to the stage)">↑ PRICIER</span>' : "");
     const div = document.createElement("div");
     div.className = "sec";
     div.innerHTML = `
       <label class="sec-head">
         <input type="checkbox" class="mp-sec" data-sec="${esc(key)}" ${own || chosen.has(key) ? "checked" : ""} ${own ? "disabled" : ""}>
-        <span class="nm">${esc(g.name)}${own ? ' <span style="color:var(--muted); font-weight:400; font-size:10px;">(yours — always on)</span>' : ""}</span>
-        <span class="cheap">${g.rows.length}× · from ${cheapest != null ? money(cheapest) : "—"}</span>
+        <span class="nm">${esc(g.name)}${badges}</span>
+        <span class="cheap">${g.rows.length}× · from ${g.from != null ? money(g.from) : "—"}</span>
       </label>
       ${g.rows.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)).map(r => `
         <div class="mrow ${r.is_ours ? "owned" : ""}">

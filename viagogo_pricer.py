@@ -220,8 +220,8 @@ def _strip_tags(html):
 
 def _parse_market_html(html):
     """MarketDataV3 modal HTML -> [{listing_id, section, row, qty, price,
-    is_ours}]. td layout: spacer, section, row, quantity, price, proceeds,
-    venue area, notes."""
+    venue_area, is_ours}]. td layout: spacer, section, row, quantity, price,
+    proceeds, venue area, notes."""
     out = []
     for m in MARKET_ROW_RE.finditer(html):
         lid, cls, body = m.groups()
@@ -239,6 +239,10 @@ def _parse_market_html(html):
             "row": _strip_tags(tds[2]),
             "qty": qty,
             "price": price,
+            # viagogo's own tier grouping (e.g. all VIP-x sections share a
+            # "VIP" venue area) — the market panel uses it to flag
+            # same-level sections
+            "venue_area": _strip_tags(tds[6]) if len(tds) > 6 else "",
             "is_ours": "owned" in cls,
         })
     return out
