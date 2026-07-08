@@ -393,14 +393,8 @@ def download_tickchak_pdfs(ticket_url, qty=None):
             tmp = tempfile.mktemp(suffix=".pdf")
             dl.value.save_as(tmp)
             try:
-                doc = fitz.open(tmp)
-                pdfs = []
-                for i in range(len(doc)):
-                    nd = fitz.open()
-                    nd.insert_pdf(doc, from_page=i, to_page=i)
-                    pdfs.append(nd.tobytes())
-                    nd.close()
-                doc.close()
+                with open(tmp, "rb") as fh:
+                    pdfs = _split_pdf_pages(fh.read())
             finally:
                 os.unlink(tmp)
             return pdfs[:qty] if qty else pdfs
@@ -472,6 +466,83 @@ def _dismiss_overlays(page):
         )
     except Exception:
         pass
+
+
+def _split_pdf_pages(data):
+    """Multi-page PDF bytes → list of single-page PDF bytes."""
+    import fitz
+
+    doc = fitz.open(stream=data, filetype="pdf")
+    out = []
+    for i in range(len(doc)):
+        nd = fitz.open()
+        nd.insert_pdf(doc, from_page=i, to_page=i)
+        out.append(nd.tobytes())
+        nd.close()
+    doc.close()
+    return out
+
+
+def _try_official_ticket_download(page):
+    """Prefer the venue's real ticket files over our screenshots whenever
+    the viewer offers a download control. TM IL's 'הורד את כל הכרטיסים'
+    downloads a ZIP of per-seat print-at-home PDFs (filenames carry
+    row_seat, e.g. ..._24_72.pdf — probed 2026-07-08 on Ben Tzur); a plain
+    PDF download is split per page. Kupat's viewer has no such control
+    (probed same day) — screenshots remain its path. Returns
+    [{"pdf": bytes, "text": filename + page text}] or None.
+    """
+    import io
+    import os
+    import tempfile
+    import zipfile
+
+    import fitz
+
+    btn = None
+    for sel in ('text=הורד את כל הכרטיסים', 'text=הורדת כל הכרטיסים',
+                'text=הורד כרטיסים'):
+        loc = page.locator(sel).first
+        try:
+            if loc.count() and loc.is_visible():
+                btn = loc
+                break
+        except Exception:
+            continue
+    if btn is None:
+        return None
+    try:
+        with page.expect_download(timeout=20000) as dl:
+            btn.click()
+        tmp = tempfile.mktemp()
+        dl.value.save_as(tmp)
+        with open(tmp, "rb") as fh:
+            data = fh.read()
+        os.unlink(tmp)
+    except Exception:
+        traceback.print_exc()
+        return None
+
+    def _with_text(pdf, prefix=""):
+        doc = fitz.open(stream=pdf, filetype="pdf")
+        text = prefix + " " + " ".join(pg.get_text() for pg in doc)
+        doc.close()
+        return {"pdf": pdf, "text": text}
+
+    items = []
+    try:
+        if data[:2] == b"PK":
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                for name in sorted(z.namelist()):
+                    if name.lower().endswith(".pdf"):
+                        items.append(_with_text(z.read(name), prefix=name))
+        elif data[:5] == b"%PDF-":
+            for pdf in _split_pdf_pages(data):
+                items.append(_with_text(pdf))
+    except Exception:
+        traceback.print_exc()
+        return None
+    return items or None
 
 
 def _png_to_pdf(png_bytes):
@@ -644,6 +715,15 @@ def download_ticket_pdfs(ticket_url, qty=1, with_text=False):
             page.goto(ticket_url, wait_until="networkidle", timeout=NAV_TIMEOUT_MS)
             page.wait_for_timeout(2500)
             _dismiss_overlays(page)
+
+            # Venue-issued ticket files beat screenshots every time — use
+            # them whenever the viewer offers a download (TM IL does).
+            official = _try_official_ticket_download(page)
+            if official and (with_text or not qty or len(official) >= qty):
+                if with_text:
+                    return official
+                pdfs = [it["pdf"] for it in official]
+                return pdfs[:qty] if qty else pdfs
 
             slides = page.query_selector_all(".swiper-slide")
             if not slides:
