@@ -221,6 +221,35 @@ def list_performances(event_code):
 # right up to (and a bit past) doors; after this the perf is over.
 PAST_PERF_GRACE_MS = 6 * 3600 * 1000
 
+# Perf-list `status` strings are the ONLY reliable buyability signal. The two
+# obvious alternatives are both dead:
+#   - `active` (same getPerformanceList payload) lags reality — a perf can be
+#     buyable with active=false (MKS26/002 was s18_low_availability, active
+#     false; tm_events.py ignores `active` for the same reason).
+#   - getPerformanceDetail.salesOptions returns 0 for EVERY event as of
+#     2026-07 (see CLAUDE.md / market.py), so it can't distinguish anything.
+# Statuses where tickets can actually be bought online right now. Kept in sync
+# with tm_events._SALE_OPENED_STATUSES, minus soldout/box-office/old-event
+# (which are "sale opened" for the new-event monitor but NOT buyable here).
+_ON_SALE_STATUSES = {"s01_onsale", "s18_low_availability"}
+# Sold out: the sale is open but nothing's left — the drop we watch for is the
+# transition OUT of this into an on-sale status.
+_SOLDOUT_STATUSES = {"s02_soldout"}
+# Everything else (s03_soon, s12_checkbacklater, s00_closed, s05_postponed,
+# s04_canceled, s14_other_channels, s06_boxoffice, s13_old_over, s16*, s17*,
+# unknown) = not on sale online → treated as "closed".
+
+
+def _perf_sale_state(p):
+    """Classify a performance from its perf-list `status` string:
+    returns one of 'available' (buyable online now), 'soldout', 'closed'."""
+    raw = str(p.get("status") or "")
+    if raw in _ON_SALE_STATUSES:
+        return "available"
+    if raw in _SOLDOUT_STATUSES:
+        return "soldout"
+    return "closed"
+
 
 def _perf_date_text(p):
     """Short venue-local date like '26.01 20:45' from performanceDate epoch-ms,
@@ -235,29 +264,22 @@ def _perf_date_text(p):
         return ""
 
 
-def _perf_status_seat(p, on_sale):
+def _perf_status_seat(p, state):
     """Status-encoded pseudo-seat for one performance (festival/GA pattern:
     the status is part of the seat key, so any soldout↔selling transition
     surfaces as an `added` seat and pings through the normal diff — no
     changes to the tick loop needed).
 
-    `on_sale` is the authoritative buyability gate (salesOptions>0 from
-    getPerformanceDetail — see `fetch_event_seats`). NOT the perf list's
-    `active` flag, which comes from a cached endpoint and lags. The perf
-    list's `status` string only disambiguates *why* a not-on-sale perf is
-    closed (genuine sell-out vs presale gap / paused).
+    `state` is the classification from `_perf_sale_state` — one of
+    'available', 'soldout', 'closed', derived from the perf-list `status`
+    string (the only reliable signal; see the notes on `_ON_SALE_STATUSES`).
 
     `festival=True` opts the seat into the status-headline path in both
     tick implementations and the one-line rendering in notify.py.
     """
     perf_code = str(p.get("performanceCode") or "")
     raw = str(p.get("status") or "")
-    if on_sale:
-        status = "available"
-    elif "soldout" in raw.lower():
-        status = "soldout"
-    else:
-        status = "closed"  # listed but not selling: presale gap, paused, etc.
+    status = state
     date_text = _perf_date_text(p)
     perf_name = f"Perf {perf_code}" + (f" · {date_text}" if date_text else "")
     label = {
@@ -284,30 +306,28 @@ def fetch_event_seats(event_code):
     keep seats from different perfs distinct.
 
     Buyability gate — the subtle part. `getAllSelectableSeats` returns
-    seats flagged AVAILABLE even for a performance whose sale is CLOSED:
-    they're just unsold physical seats, not purchasable inventory (MKS26
-    served 191 "AVAILABLE" seats while both dates were sold out and the
-    event page redirected to the homepage). So seat *count* is NOT a
-    reliable drop signal. The authoritative gate is `salesOptions` from
-    getPerformanceDetail (>0 ⇒ at least one sales channel open) — the same
-    flag the SPA checks before it lets you into the seat map. We also
-    prefer it over the perf list's `active` flag, which is served from a
-    cached endpoint and lags — exactly the lag that made the watcher miss
-    real drops.
+    seats flagged AVAILABLE even for a performance whose sale is closed or
+    sold out: they're just unsold physical seats, not purchasable inventory
+    (MKS26/001 served 260 "AVAILABLE" seats while sold out). So seat *count*
+    is NOT a reliable drop signal. The reliable one is the perf-list
+    `status` string via `_perf_sale_state` — NOT `active` (lags) and NOT
+    salesOptions (0 for everything since 2026-07). See `_ON_SALE_STATUSES`.
 
-    For each non-past perf we therefore read salesOptions first:
+    For each non-past perf:
       - always emit a status pseudo-seat (`_perf_status_seat`) so a
-        soldout→on-sale page flip pings even when no individual seat moves;
-      - only when on-sale do we fetch and include the seat-level rows, so
-        the watcher records buyable drops and not phantom closed-sale seats.
+        soldout/closed → on-sale flip pings even when no individual seat
+        moves (the seat set can be unchanged across the flip);
+      - only when the status says on-sale do we fetch and include the
+        seat-level rows, so the watcher records buyable drops and not
+        phantom closed-sale seats.
 
     Perfs past showtime (plus a grace window) are dropped entirely.
 
     Raises TicketmasterError if the perf list itself can't be fetched, or
-    if every polled perf errored out (so a transient outage can't wipe the
-    stored seat state and re-ping everything on recovery). Partial per-perf
-    failures land in `per_perf_errors` so the caller can log them without
-    failing the watcher.
+    if every on-sale perf's seat fetch errored out (so a transient outage
+    can't wipe the stored seat state and re-ping everything on recovery).
+    Partial per-perf failures land in `per_perf_errors` so the caller can
+    log them without failing the watcher.
     """
     perfs = list_performances(event_code)  # raises on failure
     seats = []
@@ -323,16 +343,11 @@ def fetch_event_seats(event_code):
                 continue
         except (TypeError, ValueError):
             pass
-        attempted += 1
-        try:
-            detail = fetch_performance_detail(event_code, perf_code)
-            on_sale = bool(detail.get("salesOptions"))  # >0 ⇒ a channel is open
-        except Exception as e:
-            per_perf_errors[perf_code] = f"detail: {type(e).__name__}: {e}"
-            on_sale = False
-        seats.append(_perf_status_seat(p, on_sale))
-        if not on_sale:
+        state = _perf_sale_state(p)
+        seats.append(_perf_status_seat(p, state))
+        if state != "available":
             continue
+        attempted += 1
         try:
             ps = fetch_selectable_seats(event_code, perf_code)
             for s in ps:
