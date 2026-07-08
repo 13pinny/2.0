@@ -694,15 +694,59 @@ def download_ticket_pdfs(ticket_url, qty=1, with_text=False):
             browser.close()
 
 
-def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section):
-    """Attach ticket PDFs to a just-created listing via its E-Tickets flow.
+_MARKET_ROW_RE = re.compile(r'<tr data-id="(\d*)"[^>]*class="([^"]*)"[^>]*>(.*?)</tr>', re.S)
+_MARKET_TD_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
 
-    On the Listings page each event card expands to per-section rows; the
-    row for a listing that still needs tickets shows an 'Upload Now' link
-    (class js-upload-etickets) that opens /Listings/UploadETickets. We set
-    the PDFs on that page's file input and click its 'continue' save button
-    (class js-save). Non-fatal — the listing already exists; the caller
-    swallows failures. Cleans up temp files regardless.
+
+def _find_owned_listing_id(page, event_id, section, row=None, qty=None):
+    """Resolve OUR listing's id on an event via /Listings/MarketDataV3 —
+    server-truth, immune to the /Listings page's lagging event-card list.
+    Owned rows carry class "owned"; cells are [_, section, row, qty, price,
+    proceeds]. `row` and `qty` disambiguate same-section listings (a split
+    order can put two Orchestra listings on one event; a GA event can hold
+    several of our listings); newest id wins a tie."""
+    resp = page.request.post(
+        "https://inv.viagogo.com/Listings/MarketDataV3",
+        form={"eventId": str(event_id), "latestServerStamp": "0"},
+    )
+    if not resp.ok:
+        raise ViagogoListingError(f"MarketDataV3 {resp.status} for event {event_id}")
+
+    def _clean(cell):
+        txt = re.sub(r"<[^>]+>", " ", cell)
+        txt = txt.replace("&nbsp;", " ")
+        return re.sub(r"\s+", " ", txt).strip()
+
+    sec_norm = re.sub(r"\s+", " ", section or "").strip().lower()
+    cand = []
+    for rid, cls, body in _MARKET_ROW_RE.findall(resp.text()):
+        if "owned" not in cls or not rid:
+            continue
+        tds = [_clean(c) for c in _MARKET_TD_RE.findall(body)]
+        if len(tds) < 4:
+            continue
+        if sec_norm and sec_norm not in tds[1].lower():
+            continue
+        if row is not None and str(row).strip() and tds[2] != str(row).strip():
+            continue
+        if qty is not None and tds[3] != str(qty):
+            continue
+        cand.append(int(rid))
+    if not cand:
+        raise ViagogoListingError(
+            f"no owned listing found on event {event_id} matching "
+            f"section '{section}'" + (f" row {row}" if row else "")
+            + (f" qty {qty}" if qty else "")
+        )
+    return str(max(cand))
+
+
+def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section, row=None):
+    """Attach ticket PDFs to a just-created listing via its E-Tickets flow:
+    resolve the listing id (MarketDataV3), deep-link its UploadETickets
+    page, set the PDFs on the file input, assign each to a seat slot, and
+    save. Non-fatal — the listing already exists; the caller surfaces
+    failures. Cleans up temp files regardless.
     """
     import tempfile, os, shutil
     tmp_dir = tempfile.mkdtemp(prefix="kartis_tickets_")
@@ -714,51 +758,20 @@ def _upload_ticket_pdfs(page, ticket_pdfs, event_id, section):
                 fh.write(data)
             paths.append(pth)
 
-        # Locate the listing row the same way the scraper does: expand EVERY
-        # event card (scraper._extract_viagogo_rows clicks all collapse
-        # arrows until none remain — the page renders lazily and a brand-new
-        # event can sit anywhere in it; the old climb-from-a-span approach
-        # missed it twice: Shlomo Artzi 2026-07-07, Ben Tzur 2026-07-08),
-        # then match on event_id + section + still-needs-tickets, and click
-        # that exact tr's Upload Now. Retry once with a reload.
-        sec_norm = re.sub(r"\s+", " ", section or "").strip().lower()
-        target_id = None
-        for attempt in range(2):
-            page.goto(LISTINGS_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-            try:
-                page.wait_for_selector("tr.eventRow", timeout=NAV_TIMEOUT_MS)
-            except Exception:
-                continue
-            rows = scraper._extract_viagogo_rows(page)
-            cand = [r for r in rows
-                    if str(r.get("event_id")) == str(event_id)
-                    and sec_norm in re.sub(r"\s+", " ", r.get("section") or "").lower()
-                    and "view e-tickets" not in (r.get("ticket_type") or "").lower()]
-            if cand:
-                # Newest listing = highest id (viagogo ids are sequential).
-                target_id = str(max(cand, key=lambda r: int(r["id"]))["id"])
-                break
-            print(f"[kartis] upload target not found (attempt {attempt + 1}): "
-                  f"event {event_id} section {sec_norm!r} among {len(rows)} rows")
-        if target_id is None:
-            raise ViagogoListingError(
-                f"no ticket-needing listing row for event {event_id} "
-                f"section '{section}' found on Listings page"
-            )
-
-        clicked = page.evaluate(
-            """(id) => {
-              const tr = document.querySelector('tr[data-id="' + id + '"]');
-              const a = tr && tr.querySelector('.js-upload-etickets');
-              if (!a) return false;
-              a.click(); return true;
-            }""",
-            target_id,
+        # Resolve the listing id server-side, then deep-link its upload form.
+        # NEVER hunt the /Listings DOM for it: the event card list lags —
+        # the first listing on a brand-new event has no card for a while
+        # after creation (missed uploads: Shlomo Artzi 2026-07-07, Ben Tzur
+        # 2026-07-08). MarketDataV3 shows our own rows (class "owned")
+        # immediately, and /Listings/UploadETickets?listingId=<id> renders
+        # the upload form directly (probe-confirmed 2026-07-08).
+        target_id = _find_owned_listing_id(page, event_id, section, row,
+                                           qty=len(ticket_pdfs) or None)
+        page.goto(
+            "https://inv.viagogo.com/Listings/UploadETickets?listingId="
+            + target_id + "&returnUrl=%2FListings",
+            wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS,
         )
-        if not clicked:
-            raise ViagogoListingError(
-                f"listing {target_id} has no Upload Now link (already has tickets?)"
-            )
         page.wait_for_selector("#js-preUploadInput, #js-activeUploadInput", timeout=MODAL_TIMEOUT_MS)
         file_input = (page.query_selector("#js-preUploadInput")
                       or page.query_selector("#js-activeUploadInput"))
@@ -912,7 +925,7 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
             ticket_upload_error = None
             if ticket_pdfs:
                 try:
-                    _upload_ticket_pdfs(page, ticket_pdfs, event_id, section)
+                    _upload_ticket_pdfs(page, ticket_pdfs, event_id, section, row=row)
                     tickets_uploaded = True
                 except Exception as e:
                     # Non-fatal — the listing already exists — but the caller
