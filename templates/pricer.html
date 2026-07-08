@@ -69,6 +69,24 @@
   .warn { background: #2a2314; border: 1px solid var(--amber); color: var(--amber); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
   .tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .tablewrap table { min-width: 760px; }
+  .seclink { color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
+  .vschip { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 10px; border: 1px solid var(--purple); color: var(--purple); border-radius: 1px; white-space: nowrap; }
+  #mpanel-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 50; }
+  #mpanel { position: fixed; top: 5vh; left: 50%; transform: translateX(-50%); width: min(680px, 94vw); max-height: 88vh; overflow-y: auto; background: var(--bg-2); border: 1px solid var(--line-2); z-index: 51; padding: 16px; }
+  #mpanel h3 { margin: 0 0 2px; font-size: 14px; }
+  #mpanel .sub { color: var(--muted); font-size: 11px; margin-bottom: 12px; }
+  #mpanel .sec { border: 1px solid var(--line); margin-bottom: 8px; }
+  #mpanel .sec-head { display: flex; align-items: center; gap: 10px; padding: 9px 10px; background: var(--bg-3); cursor: pointer; }
+  #mpanel .sec-head input { width: 18px; height: 18px; }
+  #mpanel .sec-head .nm { font-weight: 700; flex: 1; }
+  #mpanel .sec-head .cheap { color: var(--muted); font-size: 11px; }
+  #mpanel .mrow { display: flex; justify-content: space-between; padding: 4px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
+  #mpanel .mrow.owned { color: var(--green); }
+  #mpanel .mrow.owned::after { content: "YOURS"; font-size: 9px; letter-spacing: 1px; border: 1px solid var(--green); padding: 0 4px; margin-left: 8px; }
+  #mpanel .actions { display: flex; gap: 10px; margin-top: 14px; }
+  @media (max-width: 700px) {
+    #mpanel { top: 0; left: 0; transform: none; width: 100vw; max-height: 100vh; height: 100vh; }
+  }
   .only-mobile { display: none; }
 
   /* ---- phone layout (iPhone 14 = 390pt wide) ---- */
@@ -193,6 +211,18 @@
 </table>
 </div>
 <div id="plogempty" class="empty" style="display:none">// no pricer activity yet</div>
+
+<div id="mpanel-overlay"></div>
+<div id="mpanel" style="display:none">
+  <h3 id="mp-title">—</h3>
+  <div class="sub" id="mp-sub">—</div>
+  <div id="mp-sections"></div>
+  <div class="actions">
+    <button id="mp-save" style="color:var(--green); border-color:var(--green); font-weight:700;">Save</button>
+    <button id="mp-refresh" title="Live fetch from viagogo (~30s)">Refresh market</button>
+    <button id="mp-close">Close</button>
+  </div>
+</div>
 </main>
 
 <script>
@@ -235,7 +265,7 @@ function renderListings() {
     tr.innerHTML = `
       <td class="c-wide">${esc(r.event_name)}<div style="color:var(--muted); font-size:10px;">${esc(r.venue)}<span class="only-mobile"> · ${esc(r.event_date)}</span></div></td>
       <td class="only-desktop">${esc(r.event_date)}</td>
-      <td data-label="section">${esc((r.section||"").split("\n")[0])}</td>
+      <td data-label="section"><span class="seclink" data-id="${esc(r.id)}" title="Open the market — see every listing on this event and pick sections to undercut">${esc((r.section||"").split("\n")[0])}</span>${(r.pricer_compete_sections||[]).length ? `<span class="vschip" title="Also undercutting: ${esc(r.pricer_compete_sections.join(", "))}">vs +${r.pricer_compete_sections.length}</span>` : ""}</td>
       <td class="num" data-label="avail">${r.available ?? ""}</td>
       <td class="num" data-label="cost /ea" style="color:var(--amber);">${money(r.face_value)}</td>
       <td class="num" data-label="price">${money(r.price)}</td>
@@ -274,7 +304,109 @@ function renderListings() {
     await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ listing_id: e.target.dataset.id, resume: true }) });
     loadAll();
   }));
+  tbody.querySelectorAll(".seclink").forEach(el => el.addEventListener("click", (e) => {
+    openMarketPanel(e.target.dataset.id);
+  }));
 }
+
+// ---- market panel: pick which sections a listing competes with ----
+const normSec = (s) => (s || "").trim().split("\n")[0].replace(/\s+/g, " ").toLowerCase();
+let _mpListing = null;   // the /api/viagogo row the panel is open for
+
+async function openMarketPanel(listingId, forceRefresh = false) {
+  const row = _byId[String(listingId)];
+  if (!row) return;
+  _mpListing = row;
+  document.getElementById("mpanel-overlay").style.display = "block";
+  const panel = document.getElementById("mpanel");
+  panel.style.display = "block";
+  document.getElementById("mp-title").textContent = row.event_name + " — " + (row.section || "").split("\n")[0];
+  const sub = document.getElementById("mp-sub");
+  sub.textContent = "loading market...";
+  document.getElementById("mp-sections").innerHTML = "";
+  try {
+    let data;
+    if (forceRefresh) {
+      const res = await fetch(`/api/pricer/market/${encodeURIComponent(row.event_id)}/refresh`, { method: "POST" });
+      data = await res.json();
+      if (!res.ok) { sub.textContent = "// refresh failed: " + (data.error || res.status); return; }
+    } else {
+      data = await (await fetch(`/api/pricer/market/${encodeURIComponent(row.event_id)}`)).json();
+    }
+    renderMarketPanel(row, data);
+  } catch (e) {
+    sub.textContent = "// failed to load market: " + e;
+  }
+}
+
+function renderMarketPanel(row, data) {
+  const sub = document.getElementById("mp-sub");
+  if (!data.rows || !data.rows.length) {
+    sub.textContent = "// no market snapshot yet — hit Refresh market (needs ~30s), or wait for the next pricer tick";
+    return;
+  }
+  const age = data.fetched_at ? Math.round((Date.now() - new Date(data.fetched_at)) / 60000) : null;
+  sub.textContent = `${data.rows.length} listings // fetched ${age != null ? age + "m ago" : "?"} — tick the sections this listing should undercut`;
+  const ownSec = normSec(row.section);
+  const chosen = new Set((row.pricer_compete_sections || []).map(normSec));
+  // group rows by section
+  const groups = new Map();
+  for (const r of data.rows) {
+    const key = normSec(r.section);
+    if (!groups.has(key)) groups.set(key, { name: (r.section || "").trim(), rows: [] });
+    groups.get(key).rows.push(r);
+  }
+  const wrap = document.getElementById("mp-sections");
+  wrap.innerHTML = "";
+  const sorted = [...groups.entries()].sort((a, b) => (a[0] === ownSec ? -1 : b[0] === ownSec ? 1 : a[1].name.localeCompare(b[1].name)));
+  for (const [key, g] of sorted) {
+    const own = key === ownSec;
+    const prices = g.rows.filter(r => r.price != null).map(r => r.price);
+    const cheapest = prices.length ? Math.min(...prices) : null;
+    const div = document.createElement("div");
+    div.className = "sec";
+    div.innerHTML = `
+      <label class="sec-head">
+        <input type="checkbox" class="mp-sec" data-sec="${esc(key)}" ${own || chosen.has(key) ? "checked" : ""} ${own ? "disabled" : ""}>
+        <span class="nm">${esc(g.name)}${own ? ' <span style="color:var(--muted); font-weight:400; font-size:10px;">(yours — always on)</span>' : ""}</span>
+        <span class="cheap">${g.rows.length}× · from ${cheapest != null ? money(cheapest) : "—"}</span>
+      </label>
+      ${g.rows.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)).map(r => `
+        <div class="mrow ${r.is_ours ? "owned" : ""}">
+          <span>${r.qty ?? "?"} ticket${r.qty === 1 ? "" : "s"}${r.row ? " · row " + esc(r.row) : ""}</span>
+          <span>${r.price != null ? money(r.price) : "—"}</span>
+        </div>`).join("")}
+    `;
+    wrap.appendChild(div);
+  }
+}
+
+function closeMarketPanel() {
+  document.getElementById("mpanel").style.display = "none";
+  document.getElementById("mpanel-overlay").style.display = "none";
+  _mpListing = null;
+}
+
+document.getElementById("mp-close").addEventListener("click", closeMarketPanel);
+document.getElementById("mpanel-overlay").addEventListener("click", closeMarketPanel);
+document.getElementById("mp-refresh").addEventListener("click", async (e) => {
+  if (!_mpListing) return;
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "refreshing... (~30s)";
+  try { await openMarketPanel(_mpListing.id, true); }
+  finally { btn.disabled = false; btn.textContent = "Refresh market"; }
+});
+document.getElementById("mp-save").addEventListener("click", async () => {
+  if (!_mpListing) return;
+  const own = normSec(_mpListing.section);
+  const secs = [...document.querySelectorAll("#mpanel .mp-sec")]
+    .filter(cb => cb.checked && cb.dataset.sec !== own)
+    .map(cb => cb.dataset.sec);
+  const res = await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ listing_id: _mpListing.id, compete_sections: secs }) });
+  if (!res.ok) { alert((await res.json()).error || "save failed"); return; }
+  closeMarketPanel();
+  loadAll();
+});
 
 function renderLog(log) {
   const tbody = document.getElementById("plogbody");

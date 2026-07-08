@@ -254,6 +254,56 @@ def fetch_market_listings(page, event_id):
     return rows or None
 
 
+def cheapest_competitor(market_rows, section_set, min_competitor_qty=1):
+    """Cheapest NON-ours price across the given set of normalized section
+    names (a listing's compete set). None = no qualifying competitor there.
+    Unknown quantities are kept; singles drop out at min_competitor_qty=2."""
+    best = None
+    for r in market_rows:
+        if r["is_ours"] or r["price"] is None:
+            continue
+        if _norm_section(r["section"]) not in section_set:
+            continue
+        if r["qty"] is not None and r["qty"] < min_competitor_qty:
+            continue
+        if best is None or r["price"] < best:
+            best = r["price"]
+    return best
+
+
+def listing_section_set(cfg, row):
+    """The sections a listing competes with: its own section always, plus
+    any extras the user picked in the market panel (compete_sections JSON)."""
+    out = {_norm_section(row.get("section"))}
+    raw = cfg.get("compete_sections")
+    if raw:
+        try:
+            extras = json.loads(raw)
+            out |= {_norm_section(s) for s in extras if s}
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def refresh_market_snapshot(event_id):
+    """On-demand MarketDataV3 fetch for the /pricer market panel's Refresh
+    button. Opens its own warmed page (~30s), persists the snapshot, and
+    returns the parsed rows. Serialized with ticks via _exclusive_browser."""
+    with _exclusive_browser(), sync_playwright() as p:
+        page = viagogo_listing._open_listings_page(p)
+        try:
+            rows = fetch_market_listings(page, event_id)
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+    if rows is None:
+        raise PricerError(f"MarketDataV3 returned nothing for event {event_id}")
+    db.market_snapshot_set(event_id, json.dumps(rows), _now_iso())
+    return rows
+
+
 def market_section_prices(market_rows, min_competitor_qty=1):
     """Per-section competitor anchor from MarketDataV3 rows. Returns
     {norm_section: {"cheapest_competitor_usd": float|None}} — None means the
@@ -678,158 +728,159 @@ def run_pricer_tick(dry_run=None):
                 # Primary source: MarketDataV3 on the inv session — USD,
                 # own rows marked, one POST. Public event page only as a
                 # fallback if viagogo ever breaks/denies the endpoint.
-                sections = None
+                market = None
+                sections = None       # fallback path only
                 source = "market"
                 try:
                     market = fetch_market_listings(page, event_id)
                 except Exception as e:
-                    market = None
                     print(f"[pricer] MarketDataV3 failed for {event_id}: {e}")
                 if market:
-                    sections = market_section_prices(market, min_competitor_qty=min_qty)
+                    try:
+                        db.market_snapshot_set(event_id, json.dumps(market), now)
+                    except Exception as e:
+                        print(f"[pricer] snapshot write failed (non-fatal): {e}")
                 else:
                     source = "public"
                     sections = _public_sections_fallback(
                         context, event_id, event_name, our_ids_event,
                         live_by_id, min_qty)
-                if sections is None:
-                    for lid, cfg, row in members:
+                    if sections is None:
+                        for lid, cfg, row in members:
+                            _log({"listing_id": lid, "event_id": event_id,
+                                  "section": row.get("section"),
+                                  "action": "fetch_failed",
+                                  "detail": "market data and public page both failed"})
+                        counters["skipped"] += len(members)
+                        continue
+
+                # -- per-listing anchor: cheapest competitor across the
+                # listing's compete set (own section + panel picks). Own
+                # rows are never anchors, so same-set listings of ours get
+                # identical targets and never undercut each other. If we
+                # already lead but by less than the undercut this tightens
+                # to a clear lead; a comfortable lead computes a raise
+                # target, which stays skipped while raising is off.
+                for lid, cfg, row in members:
+                    if counters["changed"] >= MAX_CHANGES_PER_TICK:
+                        break
+                    section_set = listing_section_set(cfg, row)
+                    if market:
+                        competitor_usd = cheapest_competitor(
+                            market, section_set, min_competitor_qty=min_qty)
+                        any_rows = any(_norm_section(r["section"]) in section_set
+                                       for r in market)
+                    else:
+                        cands = [sections[s]["cheapest_competitor_usd"]
+                                 for s in section_set if s in sections]
+                        cands = [c for c in cands if c is not None]
+                        competitor_usd = min(cands) if cands else None
+                        any_rows = any(s in sections for s in section_set)
+                    if competitor_usd is None:
                         _log({"listing_id": lid, "event_id": event_id,
                               "section": row.get("section"),
-                              "action": "fetch_failed",
-                              "detail": "market data and public page both failed"})
-                    counters["skipped"] += len(members)
-                    continue
-
-                # -- shared target per (event, section) group --
-                by_section = {}
-                for lid, cfg, row in members:
-                    by_section.setdefault(_norm_section(row["section"]), []).append((lid, cfg, row))
-
-                for sec, group in by_section.items():
-                    info = sections.get(sec)
-                    if not info:
-                        for lid, cfg, row in group:
-                            _log({"listing_id": lid, "event_id": event_id,
-                                  "section": row.get("section"),
-                                  "action": "skip_alone",
-                                  "detail": "section not in market data"})
-                        counters["skipped"] += len(group)
+                              "action": "skip_alone",
+                              "detail": ("no qualifying competitors in "
+                                         f"{len(section_set)} section(s)"
+                                         if any_rows else
+                                         "compete sections not in market data")})
+                        counters["skipped"] += 1
                         continue
-                    if info["cheapest_competitor_usd"] is None:
-                        # every qualifying listing in the section is ours
-                        # (or only singles while they're ignored)
-                        for lid, cfg, row in group:
-                            _log({"listing_id": lid, "event_id": event_id,
-                                  "section": row.get("section"),
-                                  "action": "skip_alone",
-                                  "detail": "no qualifying competitors in section"})
-                        counters["skipped"] += len(group)
+                    allow_raise = bool(raise_global and cfg.get("allow_raise"))
+                    target, action = compute_target(
+                        competitor_usd, row["price"], cfg.get("floor_price"),
+                        allow_raise, undercut,
+                    )
+                    base = {
+                        "listing_id": lid, "event_id": event_id,
+                        "section": row.get("section"),
+                        "old_price": row["price"],
+                        "competitor_price": round(competitor_usd, 2),
+                    }
+                    if target is None:
+                        # noop and skip_raise recur every tick for
+                        # healthy listings — count them but don't write
+                        # a log row each time
+                        counters["skipped"] += 1
                         continue
-
-                    # Anchor on the cheapest NON-ours listing. If we already
-                    # lead but by less than the undercut, this tightens our
-                    # price to a clear lead; a comfortable lead computes a
-                    # raise target, which stays skipped while raising is off.
-                    competitor_usd = info["cheapest_competitor_usd"]
-                    for lid, cfg, row in group:
-                        if counters["changed"] >= MAX_CHANGES_PER_TICK:
-                            break
-                        allow_raise = bool(raise_global and cfg.get("allow_raise"))
-                        target, action = compute_target(
-                            competitor_usd, row["price"], cfg.get("floor_price"),
-                            allow_raise, undercut,
-                        )
-                        base = {
-                            "listing_id": lid, "event_id": event_id,
-                            "section": row.get("section"),
-                            "old_price": row["price"],
-                            "competitor_price": round(competitor_usd, 2),
-                        }
-                        if target is None:
-                            # noop and skip_raise recur every tick for
-                            # healthy listings — count them but don't write
-                            # a log row each time
-                            counters["skipped"] += 1
-                            continue
-                        if target < row["price"]:
-                            # sliding-window drop cap (default 15% per 12h)
-                            min_allowed, baseline = drop_guard(lid, row["price"])
-                            if target < min_allowed - PRICE_EPSILON:
-                                clamped = round(min_allowed, 2)
-                                if clamped >= row["price"] - PRICE_EPSILON:
-                                    # no room left to move this window
-                                    prev = db.pricer_log_recent(1, lid)
-                                    _log({**base, "new_price": target,
-                                          "action": "rate_limited",
-                                          "detail": f"drop cap {max_drop_pct():g}%/"
-                                                    f"{drop_window_hours():g}h hit "
-                                                    f"(baseline ${baseline:.2f})"})
-                                    if not (prev and prev[0]["action"] == "rate_limited"):
-                                        try:
-                                            notify.notify_pricer_rate_limited({
-                                                "event_name": row.get("event_name"),
-                                                "section": row.get("section"),
-                                                "listing_id": lid,
-                                                "current": row["price"],
-                                                "wanted": target,
-                                                "baseline": baseline,
-                                                "pct": max_drop_pct(),
-                                                "hours": drop_window_hours(),
-                                            })
-                                        except Exception as e:
-                                            print(f"[pricer] rate-limit notify failed: {e}")
-                                    counters["skipped"] += 1
-                                    continue
-                                target = clamped
-                                action = "rate_clamp"
-                        if dry_run:
-                            _log({**base, "new_price": target,
-                                  "action": "dry_run", "dry_run": 1,
-                                  "detail": f"would {action} (src {source})"})
-                            try:
-                                notify.notify_pricer_change({
-                                    "event_name": row.get("event_name"),
-                                    "section": row.get("section"),
-                                    "listing_id": lid,
-                                    "old_price": row["price"],
-                                    "new_price": target,
-                                    "competitor_price": round(competitor_usd, 2),
-                                    "floor": cfg.get("floor_price"),
-                                    "dry_run": True,
-                                })
-                            except Exception as e:
-                                print(f"[pricer] notify failed: {e}")
-                            counters["changed"] += 1
-                            continue
-                        if not master_enabled():  # kill switch is live mid-tick
-                            return counters
-                        try:
-                            stuck = set_listing_price(page, lid, target)
-                        except Exception as e:
-                            _log({**base, "new_price": target, "action": "error",
-                                  "detail": str(e)[:300]})
-                            counters["errors"] += 1
-                            continue
-                        db.pricer_config_set(lid, {
-                            "last_set_price": stuck, "last_set_at": _now_iso(),
-                        }, _now_iso())
-                        _log({**base, "new_price": stuck, "action": action,
-                              "detail": f"src {source}"})
+                    if target < row["price"]:
+                        # sliding-window drop cap (default 15% per 12h)
+                        min_allowed, baseline = drop_guard(lid, row["price"])
+                        if target < min_allowed - PRICE_EPSILON:
+                            clamped = round(min_allowed, 2)
+                            if clamped >= row["price"] - PRICE_EPSILON:
+                                # no room left to move this window
+                                prev = db.pricer_log_recent(1, lid)
+                                _log({**base, "new_price": target,
+                                      "action": "rate_limited",
+                                      "detail": f"drop cap {max_drop_pct():g}%/"
+                                                f"{drop_window_hours():g}h hit "
+                                                f"(baseline ${baseline:.2f})"})
+                                if not (prev and prev[0]["action"] == "rate_limited"):
+                                    try:
+                                        notify.notify_pricer_rate_limited({
+                                            "event_name": row.get("event_name"),
+                                            "section": row.get("section"),
+                                            "listing_id": lid,
+                                            "current": row["price"],
+                                            "wanted": target,
+                                            "baseline": baseline,
+                                            "pct": max_drop_pct(),
+                                            "hours": drop_window_hours(),
+                                        })
+                                    except Exception as e:
+                                        print(f"[pricer] rate-limit notify failed: {e}")
+                                counters["skipped"] += 1
+                                continue
+                            target = clamped
+                            action = "rate_clamp"
+                    if dry_run:
+                        _log({**base, "new_price": target,
+                              "action": "dry_run", "dry_run": 1,
+                              "detail": f"would {action} (src {source})"})
                         try:
                             notify.notify_pricer_change({
                                 "event_name": row.get("event_name"),
                                 "section": row.get("section"),
                                 "listing_id": lid,
                                 "old_price": row["price"],
-                                "new_price": stuck,
+                                "new_price": target,
                                 "competitor_price": round(competitor_usd, 2),
                                 "floor": cfg.get("floor_price"),
-                                "dry_run": False,
+                                "dry_run": True,
                             })
                         except Exception as e:
                             print(f"[pricer] notify failed: {e}")
                         counters["changed"] += 1
+                        continue
+                    if not master_enabled():  # kill switch is live mid-tick
+                        return counters
+                    try:
+                        stuck = set_listing_price(page, lid, target)
+                    except Exception as e:
+                        _log({**base, "new_price": target, "action": "error",
+                              "detail": str(e)[:300]})
+                        counters["errors"] += 1
+                        continue
+                    db.pricer_config_set(lid, {
+                        "last_set_price": stuck, "last_set_at": _now_iso(),
+                    }, _now_iso())
+                    _log({**base, "new_price": stuck, "action": action,
+                          "detail": f"src {source}"})
+                    try:
+                        notify.notify_pricer_change({
+                            "event_name": row.get("event_name"),
+                            "section": row.get("section"),
+                            "listing_id": lid,
+                            "old_price": row["price"],
+                            "new_price": stuck,
+                            "competitor_price": round(competitor_usd, 2),
+                            "floor": cfg.get("floor_price"),
+                            "dry_run": False,
+                        })
+                    except Exception as e:
+                        print(f"[pricer] notify failed: {e}")
+                    counters["changed"] += 1
         finally:
             try:
                 page.close()

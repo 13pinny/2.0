@@ -1929,6 +1929,10 @@ def api_viagogo():
         r["pricer_paused"] = bool(cfg.get("paused"))
         r["pricer_paused_reason"] = cfg.get("paused_reason")
         r["pricer_last_set_price"] = cfg.get("last_set_price")
+        try:
+            r["pricer_compete_sections"] = json.loads(cfg.get("compete_sections") or "null")
+        except (TypeError, ValueError):
+            r["pricer_compete_sections"] = None
     totals = {
         "listings": len(rows),
         "tickets_available": sum(r.get("available") or 0 for r in rows),
@@ -4864,6 +4868,15 @@ def api_pricer_config():
         fields["floor_price"] = floor
     if "allow_raise" in body:
         fields["allow_raise"] = 1 if body.get("allow_raise") else 0
+    if "compete_sections" in body:
+        secs = body.get("compete_sections")
+        if secs in (None, []):
+            fields["compete_sections"] = None
+        else:
+            if not isinstance(secs, list) or not all(isinstance(s, str) for s in secs):
+                return jsonify({"error": "compete_sections must be a list of section names"}), 400
+            cleaned = sorted({viagogo_pricer._norm_section(s) for s in secs if s.strip()})
+            fields["compete_sections"] = json.dumps(cleaned) if cleaned else None
     if "enabled" in body:
         enabled = 1 if body.get("enabled") else 0
         if enabled:
@@ -4929,6 +4942,36 @@ def api_pricer_run_now():
         return jsonify({"error": "pricer already running"}), 429
     threading.Thread(target=run_pricer, daemon=True).start()
     return jsonify({"started": True})
+
+
+@app.route("/api/pricer/market/<event_id>")
+def api_pricer_market(event_id):
+    """Last market snapshot for an event (written by every tick). Powers the
+    /pricer market panel's section picker."""
+    snap = db.market_snapshot_get(event_id)
+    if not snap:
+        return jsonify({"event_id": event_id, "fetched_at": None, "rows": []})
+    try:
+        rows = json.loads(snap["rows_json"])
+    except (TypeError, ValueError):
+        rows = []
+    return jsonify({"event_id": event_id, "fetched_at": snap["fetched_at"],
+                    "rows": rows})
+
+
+@app.route("/api/pricer/market/<event_id>/refresh", methods=["POST"])
+def api_pricer_market_refresh(event_id):
+    """Live MarketDataV3 fetch (~30s, needs the CDP Chrome). 429 while a
+    pricer tick holds the run lock."""
+    if _last_pricer["running"]:
+        return jsonify({"error": "pricer tick running — try again in a minute"}), 429
+    try:
+        rows = viagogo_pricer.refresh_market_snapshot(event_id)
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 502
+    return jsonify({"event_id": event_id,
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "rows": rows})
 
 
 @app.route("/api/pacha-events/status")

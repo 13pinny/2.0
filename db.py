@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS viagogo_pricer_log (
 );
 CREATE INDEX IF NOT EXISTS idx_pricer_log_listing
     ON viagogo_pricer_log(listing_id, created_at);
+CREATE TABLE IF NOT EXISTS viagogo_market_snapshots (
+    event_id TEXT PRIMARY KEY,
+    fetched_at TEXT NOT NULL,
+    rows_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS inventory_hidden (
     source TEXT NOT NULL,
     source_id TEXT NOT NULL,
@@ -688,6 +693,11 @@ def init():
         td_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tm_drops)").fetchall()}
         if "notify_count" not in td_cols:
             conn.execute("ALTER TABLE tm_drops ADD COLUMN notify_count INTEGER")
+        # Pricer cross-section competition: JSON array of normalized section
+        # names this listing undercuts. NULL = same-section only.
+        pc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(viagogo_pricer_config)").fetchall()}
+        if "compete_sections" not in pc_cols:
+            conn.execute("ALTER TABLE viagogo_pricer_config ADD COLUMN compete_sections TEXT")
         # Sales snapshots grew multi-source (kupat GA alongside tickchak
         # festival): add source + perf_code and backfill the tickchak rows
         # (perf_code is always '0' for tickchak).
@@ -838,7 +848,7 @@ def pricer_config_all():
 
 _PRICER_CONFIG_FIELDS = (
     "enabled", "floor_price", "allow_raise", "paused", "paused_reason",
-    "paused_at", "last_set_price", "last_set_at",
+    "paused_at", "last_set_price", "last_set_at", "compete_sections",
 )
 
 
@@ -885,6 +895,24 @@ def pricer_log_add(row, now_iso):
                 "created_at": now_iso,
             },
         )
+
+
+def market_snapshot_set(event_id, rows_json, now_iso):
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO viagogo_market_snapshots "
+            "(event_id, fetched_at, rows_json) VALUES (?, ?, ?)",
+            (str(event_id), now_iso, rows_json),
+        )
+
+
+def market_snapshot_get(event_id):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM viagogo_market_snapshots WHERE event_id = ?",
+            (str(event_id),),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def pricer_writes_since(listing_id, since_iso):
