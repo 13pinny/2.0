@@ -400,7 +400,6 @@ function fmtDateTime(s) {
   }
   return out;
 }
-const _todayIso = () => new Date().toISOString().slice(0, 10);
 let _rows = [];
 // Per-event-group total tickets ever bought (Lysted purchases / JeruJam /
 // manual / Viagogo available+sold, max across sources to avoid double-
@@ -1040,28 +1039,6 @@ document.getElementById("toggle-recent").addEventListener("click", () => {
   document.getElementById("toggle-recent").textContent = _recentHidden ? "Show" : "Hide";
 });
 
-// Auto-scroll the All Sales table to "today" once on page load. With the
-// default event-asc sort, that puts the next upcoming event at the top of
-// the viewport — past events are above (scroll up to see), future below
-// (scroll down). scroll-margin-top on tr.group-hdr keeps it clear of the
-// sticky header. Skipped silently if there's no upcoming event.
-let _initialScrollDone = false;
-function _scrollToToday() {
-  if (_initialScrollDone) return;
-  const today = _todayIso();
-  const hdrs = document.querySelectorAll("#tbody tr.group-hdr");
-  for (const h of hdrs) {
-    const d = (h.dataset.eventDate || "").slice(0, 10);
-    if (d && d >= today) {
-      h.scrollIntoView({block: "start"});
-      _initialScrollDone = true;
-      return;
-    }
-  }
-  // No future events at all — stay at top of page.
-  _initialScrollDone = true;
-}
-
 async function load() {
   const [salR, invR, mergesR] = await Promise.all([
     fetch("/api/sales-all"),
@@ -1095,8 +1072,6 @@ async function load() {
     }
   }
   render();
-  // Wait one frame so the table is in the DOM before measuring/scrolling.
-  if (!_initialScrollDone) requestAnimationFrame(_scrollToToday);
 }
 
 for (const id of ["q-search", "q-source", "q-sort", "q-new"]) {
