@@ -5051,14 +5051,35 @@ def api_market_run_now():
     return jsonify(dict(_last_market))
 
 
+def _fresh_thread_job(fn):
+    """Run a scheduler job in a brand-new disposable thread each tick.
+
+    APScheduler's executor REUSES pool threads. When a sync_playwright
+    session dies mid-run (e.g. the CDP Chrome restarts under it —
+    TargetClosedError), it can leave a running asyncio loop behind in that
+    thread, and every later sync_playwright() scheduled onto it fails with
+    "Playwright Sync API inside the asyncio loop" — this silently killed
+    the pricer + market sweep from 2026-07-07 13:10 until the next service
+    restart. A fresh thread per tick makes that poisoning impossible.
+    Only playwright-touching jobs need this."""
+    def _runner():
+        t = threading.Thread(target=fn, daemon=True, name=f"fresh-{fn.__name__}")
+        t.start()
+        t.join()
+    _runner.__name__ = f"{fn.__name__}_fresh"
+    return _runner
+
+
 scheduler = BackgroundScheduler(daemon=True)
-scheduler.add_job(run_scraper, "interval", hours=1, id="scrape")
+scheduler.add_job(_fresh_thread_job(run_scraper), "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
 if TM_CHECK_ENABLED:
     scheduler.add_job(run_tm_check, "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
 else:
     print("[tm_check] disabled via TM_CHECK_ENABLED=0 — drop-checking runs elsewhere (e.g. the VPS watcher)")
-scheduler.add_job(run_mail_intake, "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
+# mail_intake drives the CDP browser too (viagogo event search on kupat/
+# tickchak/TM-IL purchase emails) — fresh thread, same reason as the scrape.
+scheduler.add_job(_fresh_thread_job(run_mail_intake), "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
 if PACHA_MONITOR_ENABLED:
     # First tick shortly after boot (baseline on a fresh DB), then every N min.
     scheduler.add_job(run_pacha_events, "interval",
@@ -5082,13 +5103,13 @@ scheduler.add_job(run_sales_sync, "interval", minutes=FESTIVAL_SYNC_MINUTES,
 # Auto-pricer: offset from the top of the hour (start_date pushes the first
 # run out) so its browser use doesn't collide with the hourly scrape. Cheap
 # no-op while pricer_master_enabled is off.
-scheduler.add_job(run_pricer, "interval", minutes=PRICER_INTERVAL_MINUTES,
+scheduler.add_job(_fresh_thread_job(run_pricer), "interval", minutes=PRICER_INTERVAL_MINUTES,
                   id="pricer",
                   start_date=datetime.now() + timedelta(minutes=7))
 if MARKET_ENABLED:
     # Market-wide availability sweep. Offset well clear of the hourly scrape
     # (t+0) and the pricer (t+7) — this one also launches a Chromium.
-    scheduler.add_job(run_market_sweep, "interval", minutes=MARKET_INTERVAL_MINUTES,
+    scheduler.add_job(_fresh_thread_job(run_market_sweep), "interval", minutes=MARKET_INTERVAL_MINUTES,
                       id="market_sweep",
                       start_date=datetime.now() + timedelta(minutes=20))
 else:
