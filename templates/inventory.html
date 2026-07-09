@@ -5,23 +5,23 @@
 <title>Kartis — Inventory</title>
 <style>
   :root {
-    --bg: #0d1117;
-    --bg-2: #161b22;
-    --bg-3: #11161d;
-    --line: #21262d;
-    --line-2: #2a3038;
-    --text: #c9d1d9;
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
     --muted: #6e7681;
-    --accent: #58a6ff;
-    --green: #56d364;
-    --red: #f85149;
-    --amber: #d29922;
-    --orange: #f97316;
-    --purple: #a78bfa;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
     --pink: #f06595;
   }
   * { box-sizing: border-box; }
-  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
   header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
@@ -32,7 +32,7 @@
   header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
   header .nav a:hover, header .nav a.active { color: var(--accent); }
   main { padding: 18px 24px 60px; }
-  .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
   .stat { background: var(--bg); padding: 12px 14px; }
   .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
@@ -43,7 +43,7 @@
   input, select, button, a.btn { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
   input:focus, select:focus { outline: none; border-color: var(--accent); }
   button, a.btn { cursor: pointer; text-decoration: none; display: inline-block; }
-  button:hover, a.btn:hover { background: #1f262e; }
+  button:hover, a.btn:hover { background: #e9edf2; }
   button:disabled { opacity: 0.5; cursor: wait; }
   .bar .label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -53,16 +53,16 @@
   tbody tr:hover td { background: var(--bg-3); }
   tr.group-hdr td { background: var(--bg-2); padding: 9px 12px; border-top: 1px solid var(--line); cursor: default; user-select: none; }
   tr.group-hdr.has-sales td { cursor: pointer; }
-  tr.group-hdr.has-sales td:hover { background: #1c232b; }
+  tr.group-hdr.has-sales td:hover { background: #e7ebf0; }
   tr.group-hdr .chev { display: inline-block; width: 12px; color: var(--muted); transition: transform 0.15s; }
   tr.group-hdr.expanded .chev { transform: rotate(90deg); }
   tr.group-hdr .evt-title { color: var(--text); font-weight: 700; letter-spacing: 0.5px; }
   tr.group-hdr .evt-meta { color: var(--muted); margin-left: 8px; font-size: 11px; }
   tr.group-hdr .evt-stats { float: right; color: var(--muted); font-size: 11px; }
   tr.group-hdr .evt-stats .sold { color: var(--green); margin-left: 8px; }
-  tr.sale-row td { background: #0e1722; color: var(--muted); font-size: 12px; }
+  tr.sale-row td { background: #f1f4f8; color: var(--muted); font-size: 12px; }
   tr.sale-row .pill { padding: 1px 6px; border: 1px solid var(--green); color: var(--green); border-radius: 2px; font-size: 10px; letter-spacing: 1.5px; margin-left: 4px; }
-  tr.sale-hdr td { background: #0a1018; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 12px; border-top: 1px dashed var(--line); }
+  tr.sale-hdr td { background: #eaeef3; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 12px; border-top: 1px dashed var(--line); }
   .src { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
   .src-lysted { color: var(--accent); border-color: var(--accent); }
   .src-viagogo { color: var(--orange); border-color: var(--orange); }
@@ -94,8 +94,8 @@
   .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
   .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
   .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-  .modal-foot button.primary:hover { background: #79b8ff; }
-  .modal-foot button:hover { background: #1f262e; }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot button:hover { background: #e9edf2; }
   .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
   .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; }
   .row-del { color: var(--red); }
@@ -115,7 +115,7 @@
   .att-list .att-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .att-list .att-item .size { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
   .att-list .att-item a { color: var(--accent); text-decoration: none; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--line); padding: 3px 8px; }
-  .att-list .att-item a:hover { background: #1f262e; }
+  .att-list .att-item a:hover { background: #e9edf2; }
   .att-list .att-item button.del { background: transparent; color: var(--red); border: 1px solid var(--line); padding: 3px 8px; font-size: 11px; cursor: pointer; }
   .att-list .att-item button.del:hover { background: rgba(248,81,73,0.1); border-color: var(--red); }
   .att-empty { color: var(--muted); font-size: 11px; padding: 6px 0; font-style: italic; }
@@ -123,7 +123,7 @@
   .att-upload input[type="file"] { flex: 1; font-family: inherit; font-size: 11px; color: var(--text); }
   #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); color: var(--text); border: 1px solid var(--line); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; z-index: 1000; letter-spacing: 0.5px; }
   #toast button { margin-left: 12px; padding: 3px 10px; background: transparent; color: var(--amber); border: 1px solid var(--line-2); cursor: pointer; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
-  #toast button:hover { background: #1f262e; }
+  #toast button:hover { background: #e9edf2; }
   #toast .kbd { color: var(--muted); margin-left: 8px; font-size: 10px; letter-spacing: 1px; }
   .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
 </style>
@@ -131,7 +131,7 @@
 <body>
 <header>
   <div class="left">
-    <h1>// KARTIS</h1>
+    <h1>KARTIS</h1>
     <span class="meta" id="lastrun">—</span>
   </div>
   <nav class="nav">
@@ -142,9 +142,7 @@
     <a href="/cashback">CASHBACK</a>
     <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
-    <a href="/sources">SOURCES</a>
     <a href="/pricer">PRICER</a>
-    <a href="/jerujam">JERUJAM</a>
     <a href="/festival">FESTIVAL</a>
     <a href="/ga">GA</a>
     <a href="/market">MARKET</a>
@@ -179,7 +177,7 @@
     <button id="chrome-restart" title="After re-signing in, bounce the scraper's Chrome so it picks up the fresh session">Restart Chrome</button>
     <button id="add-pending" title="Add a ticket I have but haven't listed yet">+ Pending</button>
     <button id="open-stubhub" title="Open the exact StubHub page for every visible event, 20 tabs at a time. Allow pop-ups for this site once.">Open StubHub ×20</button>
-    <input type="search" id="q-search" placeholder="search // event venue section" style="flex:1; min-width:200px;">
+    <input type="search" id="q-search" placeholder="search event venue section" style="flex:1; min-width:200px;">
     <select id="q-source"><option value="all">SRC: ALL</option><option value="lysted">LYSTED</option><option value="viagogo">VIAGOGO</option><option value="jerujam">JERUJAM</option></select>
     <select id="q-sort">
       <option value="date-asc">DATE ↑</option>
@@ -202,14 +200,14 @@
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
-  <div id="empty" class="empty" style="display:none">// no matches</div>
+  <div id="empty" class="empty" style="display:none">no matches</div>
 </main>
 
 <div id="toast"><span id="toast-msg"></span><button id="toast-undo">Undo</button><span class="kbd">Ctrl+Z</span></div>
 
 <div id="pend-bg" class="modal-bg">
   <div class="modal">
-    <h3><span>// ADD PENDING TICKET</span><button class="close" id="pend-close">×</button></h3>
+    <h3><span>ADD PENDING TICKET</span><button class="close" id="pend-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line">Tickets you have but haven't listed yet — auto-clears once Lysted/Viagogo picks them up.</div>
       <label>Event Name *</label><div style="position:relative">
@@ -237,7 +235,7 @@
 
 <div id="sell-bg" class="modal-bg">
   <div class="modal">
-    <h3><span>// RECORD SALE <span id="sell-src" class="src-tag"></span></span><button class="close" id="sell-close">×</button></h3>
+    <h3><span>RECORD SALE <span id="sell-src" class="src-tag"></span></span><button class="close" id="sell-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line" id="sell-meta"></div>
       <label id="sell-seats-label" style="align-self:start;">Seats sold</label>
@@ -270,7 +268,7 @@
 
 <div id="att-bg" class="modal-bg">
   <div class="modal">
-    <h3><span>// ATTACHMENTS <span id="att-event" class="src-tag" style="border-color:var(--line);color:var(--muted);"></span></span><button class="close" id="att-close">×</button></h3>
+    <h3><span>ATTACHMENTS <span id="att-event" class="src-tag" style="border-color:var(--line);color:var(--muted);"></span></span><button class="close" id="att-close">×</button></h3>
     <div class="att-list" id="att-list"></div>
     <div class="att-upload">
       <input type="file" id="att-file">
@@ -285,7 +283,7 @@
 
 <div id="modal-bg" class="modal-bg">
   <div class="modal">
-    <h3><span>// EDIT LISTING <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
+    <h3><span>EDIT LISTING <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line" id="m-event"></div>
       <label>Section</label><input id="m-section" type="text">
@@ -311,7 +309,7 @@
 
 <div id="pair-bg" class="modal-bg">
   <div class="modal" style="max-width:640px;">
-    <h3><span>// PAIR WITH SALE <span id="pair-event" class="src-tag" style="border-color:var(--line);color:var(--muted);"></span></span><button class="close" id="pair-close">×</button></h3>
+    <h3><span>PAIR WITH SALE <span id="pair-event" class="src-tag" style="border-color:var(--line);color:var(--muted);"></span></span><button class="close" id="pair-close">×</button></h3>
     <div class="modal-body" style="display:block;">
       <div class="meta-line" style="grid-column:unset;">Pick an unmatched sale to pair with this inventory row. Use this when the auto-matcher missed because of a section or row label mismatch.</div>
       <div id="pair-list" style="margin-top:10px;font-size:12px;"></div>
@@ -408,7 +406,7 @@ function render() {
       <td colspan="10">
         <span class="chev">${hasSales ? "▸" : ""}</span>
         <span class="evt-title">${esc(g.event_name)}</span>
-        <span class="evt-meta">// ${esc(g.event_date)} · ${esc(g.venue)}</span>
+        <span class="evt-meta">${esc(g.event_date)} · ${esc(g.venue)}</span>
         <span class="evt-stats">${qty} unsold · ${money(cost)}${hasSales ? `<span class="sold">${soldQty} SOLD · ${money(soldRev)}</span>` : ""}</span>
       </td>
     `;
@@ -452,7 +450,7 @@ function render() {
     if (expanded && hasSales) {
       const subhdr = document.createElement("tr");
       subhdr.className = "sale-hdr";
-      subhdr.innerHTML = `<td colspan="10">// SOLD · ${sales.length} ${sales.length === 1 ? "sale" : "sales"}</td>`;
+      subhdr.innerHTML = `<td colspan="10">SOLD · ${sales.length} ${sales.length === 1 ? "sale" : "sales"}</td>`;
       tbody.appendChild(subhdr);
       const sortedSales = sales.slice().sort((a,b) => (b.sale_date || "").localeCompare(a.sale_date || ""));
       for (const s of sortedSales) {
@@ -716,18 +714,18 @@ function openPairModal(row) {
   const label = `${row.event_name || ""}${row.section ? " · " + row.section : ""}${row.row ? "/" + row.row : ""} · qty ${row.qty_unsold}`;
   eventBadge.textContent = label;
   const list = document.getElementById("pair-list");
-  list.innerHTML = '<div style="color:var(--muted);font-size:11px;">// loading unmatched sales…</div>';
+  list.innerHTML = '<div style="color:var(--muted);font-size:11px;">loading unmatched sales…</div>';
   document.getElementById("pair-bg").classList.add("open");
   fetch("/api/sales/unmatched?event=" + encodeURIComponent(row.event_name || ""))
     .then(r => r.ok ? r.json() : {rows: []})
     .then(d => renderPairList(d.rows || []))
-    .catch(() => { list.innerHTML = '<div style="color:var(--red);">// failed to load unmatched sales</div>'; });
+    .catch(() => { list.innerHTML = '<div style="color:var(--red);">failed to load unmatched sales</div>'; });
 }
 
 function renderPairList(rows) {
   const list = document.getElementById("pair-list");
   if (!rows.length) {
-    list.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0;">// no unmatched sales for this event</div>';
+    list.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0;">no unmatched sales for this event</div>';
     return;
   }
   list.innerHTML = `
@@ -816,7 +814,7 @@ function fmtBytes(n) {
 function renderAttList(items) {
   const list = document.getElementById("att-list");
   if (!items || !items.length) {
-    list.innerHTML = '<div class="att-empty">// no files attached yet</div>';
+    list.innerHTML = '<div class="att-empty">no files attached yet</div>';
     return;
   }
   list.innerHTML = items.map(a => `

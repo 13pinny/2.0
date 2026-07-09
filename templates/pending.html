@@ -5,14 +5,14 @@
 <title>Kartis — Pending Inventory</title>
 <style>
   :root {
-    --bg: #0d1117; --bg-2: #161b22; --bg-3: #11161d;
-    --line: #21262d; --line-2: #2a3038;
-    --text: #c9d1d9; --muted: #6e7681;
-    --accent: #58a6ff; --green: #56d364; --red: #f85149;
-    --amber: #d29922; --orange: #f97316; --purple: #a78bfa;
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
   }
   * { box-sizing: border-box; }
-  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
   header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
@@ -33,7 +33,7 @@
   input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
   input:focus, select:focus { outline: none; border-color: var(--accent); }
   button { cursor: pointer; }
-  button:hover { background: #1f262e; }
+  button:hover { background: #e9edf2; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -64,7 +64,7 @@
   .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
   .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
   .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-  .modal-foot button.primary:hover { background: #79b8ff; }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
   .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
 
   .att-list { padding: 12px 18px; border-bottom: 1px dashed var(--line); }
@@ -72,7 +72,7 @@
   .att-list .att-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .att-list .att-item .size { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
   .att-list .att-item a { color: var(--accent); text-decoration: none; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--line); padding: 3px 8px; }
-  .att-list .att-item a:hover { background: #1f262e; }
+  .att-list .att-item a:hover { background: #e9edf2; }
   .att-list .att-item button.del { background: transparent; color: var(--red); border: 1px solid var(--line); padding: 3px 8px; font-size: 11px; cursor: pointer; }
   .att-list .att-item button.del:hover { background: rgba(248,81,73,0.1); border-color: var(--red); }
   .att-empty { color: var(--muted); font-size: 11px; padding: 6px 0; font-style: italic; }
@@ -95,12 +95,12 @@
   .inbox-card .ic-body input:focus { outline: none; border-color: var(--accent); }
   .inbox-card .ic-files { padding: 8px 14px; border-top: 1px dashed var(--line); display: flex; flex-wrap: wrap; gap: 6px; }
   .inbox-card .ic-files a { color: var(--accent); text-decoration: none; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--line); padding: 3px 8px; }
-  .inbox-card .ic-files a:hover { background: #1f262e; }
+  .inbox-card .ic-files a:hover { background: #e9edf2; }
   .inbox-card .ic-files .none { color: var(--muted); font-size: 11px; font-style: italic; }
   .inbox-card .ic-foot { padding: 10px 14px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
   .inbox-card .ic-foot button { font-family: inherit; font-size: 11px; padding: 6px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
   .inbox-card .ic-foot button.confirm { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-  .inbox-card .ic-foot button.confirm:hover { background: #79b8ff; }
+  .inbox-card .ic-foot button.confirm:hover { background: #0a5cc2; }
   .inbox-card .ic-foot button.reject { color: var(--red); border-color: var(--red); }
   .inbox-card .ic-foot button.reject:hover { background: rgba(248,81,73,0.1); }
   .inbox-empty { color: var(--muted); padding: 18px 14px; text-align: center; font-size: 11px; font-style: italic; border: 1px dashed var(--line); margin-bottom: 14px; }
@@ -115,7 +115,7 @@
 <body>
 <header>
   <div class="left">
-    <h1>// KARTIS</h1>
+    <h1>KARTIS</h1>
     <span class="meta" id="lastrun">—</span>
   </div>
   <nav class="nav">
@@ -126,9 +126,7 @@
     <a href="/cashback">CASHBACK</a>
     <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
-    <a href="/sources">SOURCES</a>
     <a href="/pricer">PRICER</a>
-    <a href="/jerujam">JERUJAM</a>
     <a href="/festival">FESTIVAL</a>
     <a href="/ga">GA</a>
     <a href="/market">MARKET</a>
@@ -164,7 +162,7 @@
 
   <h2>Pending Inventory
     <button id="add-pending" style="margin-left:14px;font-size:11px;letter-spacing:1px;">+ Add Pending</button>
-    <input type="search" id="q-search" placeholder="search // event venue section" style="margin-left:14px;font-size:11px;width:240px;">
+    <input type="search" id="q-search" placeholder="search event venue section" style="margin-left:14px;font-size:11px;width:240px;">
   </h2>
 
   <table>
@@ -176,13 +174,13 @@
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
-  <div id="empty" class="empty" style="display:none">// no pending tickets</div>
+  <div id="empty" class="empty" style="display:none">no pending tickets</div>
 </main>
 
 <!-- Add/edit pending modal -->
 <div id="pend-bg" class="modal-bg">
   <div class="modal">
-    <h3><span id="pend-title">// ADD PENDING TICKET</span><button class="close" id="pend-close">×</button></h3>
+    <h3><span id="pend-title">ADD PENDING TICKET</span><button class="close" id="pend-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line">Tickets you have but haven't listed yet — auto-clears once Lysted/Viagogo picks them up.</div>
       <label>Event Name *</label><div style="position:relative">
@@ -211,7 +209,7 @@
 <!-- Record sale modal -->
 <div id="sell-bg" class="modal-bg">
   <div class="modal">
-    <h3><span>// MARK AS SOLD</span><button class="close" id="sell-close">×</button></h3>
+    <h3><span>MARK AS SOLD</span><button class="close" id="sell-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line" id="sell-meta"></div>
       <label id="sell-seats-label" style="align-self:start;">Seats sold</label>
@@ -255,7 +253,7 @@
 <!-- Attachments modal (mirrors inventory.html) -->
 <div id="att-bg" class="modal-bg">
   <div class="modal">
-    <h3><span>// ATTACHMENTS <span id="att-event" style="font-size:10px;padding:1px 6px;border:1px solid var(--line);color:var(--muted);"></span></span><button class="close" id="att-close">×</button></h3>
+    <h3><span>ATTACHMENTS <span id="att-event" style="font-size:10px;padding:1px 6px;border:1px solid var(--line);color:var(--muted);"></span></span><button class="close" id="att-close">×</button></h3>
     <div class="att-list" id="att-list"></div>
     <div class="att-upload">
       <input type="file" id="att-file">
@@ -309,7 +307,7 @@ function renderInbox(rows, lastIntake) {
     $("poll-status").textContent = summary;
   }
   if (!rows.length) {
-    container.innerHTML = '<div class="inbox-empty">// inbox is empty — forwarded purchase emails will land here</div>';
+    container.innerHTML = '<div class="inbox-empty">inbox is empty — forwarded purchase emails will land here</div>';
     return;
   }
   container.innerHTML = "";
@@ -359,7 +357,7 @@ function renderViagogoPush(rows) {
   const container = $("viagogo-container");
   const active = rows.filter(r => !["created", "rejected"].includes(r.status));
   if (!active.length) {
-    container.innerHTML = '<div class="inbox-empty">// no viagogo matches waiting on review</div>';
+    container.innerHTML = '<div class="inbox-empty">no viagogo matches waiting on review</div>';
     return;
   }
   container.innerHTML = "";
@@ -746,7 +744,7 @@ function fmtBytes(n) {
 
 function renderAttList(items) {
   const list = $("att-list");
-  if (!items || !items.length) { list.innerHTML = '<div class="att-empty">// no files attached yet</div>'; return; }
+  if (!items || !items.length) { list.innerHTML = '<div class="att-empty">no files attached yet</div>'; return; }
   list.innerHTML = items.map(a => `
     <div class="att-item" data-id="${esc(a.id)}">
       <span class="name" title="${esc(a.filename)}">${esc(a.filename)}</span>

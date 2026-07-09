@@ -5,23 +5,23 @@
 <title>Kartis — Sales</title>
 <style>
   :root {
-    --bg: #0d1117;
-    --bg-2: #161b22;
-    --bg-3: #11161d;
-    --line: #21262d;
-    --line-2: #2a3038;
-    --text: #c9d1d9;
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
     --muted: #6e7681;
-    --accent: #58a6ff;
-    --green: #56d364;
-    --red: #f85149;
-    --amber: #d29922;
-    --orange: #f97316;
-    --purple: #a78bfa;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
     --pink: #f06595;
   }
   * { box-sizing: border-box; }
-  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
   header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
@@ -47,7 +47,7 @@
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
   td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
   tbody tr:hover td { background: var(--bg-3); }
-  tr.is-new td { background: #0e1d12; }
+  tr.is-new td { background: #e6f4ea; }
   .src { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
   .src-lysted { color: var(--accent); border-color: var(--accent); }
   .src-viagogo { color: var(--orange); border-color: var(--orange); }
@@ -59,12 +59,12 @@
   h2 .count { color: var(--muted); font-weight: 400; font-size: 11px; }
   .pill-bar { display: flex; gap: 4px; margin-bottom: 12px; }
   .pill-bar .pill { font-family: inherit; font-size: 10px; letter-spacing: 1.5px; padding: 5px 12px; border: 1px solid var(--line); background: var(--bg-2); color: var(--muted); cursor: pointer; text-transform: uppercase; }
-  .pill-bar .pill:hover { background: #1f262e; color: var(--text); }
+  .pill-bar .pill:hover { background: #e9edf2; color: var(--text); }
   .pill-bar .pill.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.06); }
   tbody tr { cursor: pointer; }
   tr.group-hdr { scroll-margin-top: 130px; }
   tr.group-hdr td { background: var(--bg-2); padding: 12px 14px; border-top: 1px solid var(--line); cursor: pointer; user-select: none; }
-  tr.group-hdr td:hover { background: #1c232b; }
+  tr.group-hdr td:hover { background: #e7ebf0; }
   tr.group-hdr .chev { display: inline-block; width: 14px; color: var(--muted); transition: transform 0.15s; font-size: 14px; vertical-align: middle; }
   tr.group-hdr.expanded .chev { transform: rotate(90deg); }
   tr.group-hdr .evt-title { color: var(--text); font-weight: 700; letter-spacing: 0.3px; font-size: 15px; vertical-align: middle; }
@@ -73,11 +73,11 @@
   tr.group-hdr .evt-stats .ratio { color: var(--text); margin-right: 12px; }
   tr.group-hdr .evt-stats .pos { color: var(--green); }
   tr.group-hdr .evt-stats .neg { color: var(--red); }
-  tr.listing-hdr td { background: #0a1018; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 12px; border-top: 1px dashed var(--line); cursor: default; }
+  tr.listing-hdr td { background: #eaeef3; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 12px; border-top: 1px dashed var(--line); cursor: default; }
   tr.listing-row { cursor: pointer; }
   tr.listing-row[data-clickable="false"] { cursor: default; }
-  tr.listing-row td { background: #0e1722; color: var(--muted); font-size: 12px; }
-  tr.listing-row:hover td { background: #142035; }
+  tr.listing-row td { background: #f1f4f8; color: var(--muted); font-size: 12px; }
+  tr.listing-row:hover td { background: #e2ecf9; }
   tr.listing-row .src { opacity: 0.85; }
   tr.listing-row .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid var(--line); cursor: pointer; font-size: 14px; line-height: 18px; padding: 0; opacity: 0.85; transition: opacity 0.1s, background 0.1s, border-color 0.1s; margin-right: 2px; }
   tr.listing-row:hover .row-action { opacity: 1; }
@@ -129,8 +129,8 @@
   .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
   .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
   .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-  .modal-foot button.primary:hover { background: #79b8ff; }
-  .modal-foot button:hover { background: #1f262e; }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot button:hover { background: #e9edf2; }
   .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
   .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
   .muted { color: var(--muted); }
@@ -141,21 +141,21 @@
   #bulk-bar.open { display: flex; }
   #bulk-bar .bulk-count { color: var(--accent); font-weight: 600; }
   #bulk-bar button { font-family: inherit; font-size: 11px; padding: 6px 12px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; }
-  #bulk-bar button:hover { background: #1f262e; }
+  #bulk-bar button:hover { background: #e9edf2; }
   #bulk-bar button.danger { color: var(--red); border-color: var(--red); }
   #bulk-bar button.danger:hover { background: rgba(248,81,73,0.1); }
   #bulk-bar button.primary { color: var(--accent); border-color: var(--accent); }
   #bulk-bar button.primary:hover { background: rgba(88,166,255,0.1); }
   #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); color: var(--text); border: 1px solid var(--line); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; z-index: 1000; letter-spacing: 0.5px; }
   #toast button { margin-left: 12px; padding: 3px 10px; background: transparent; color: var(--amber); border: 1px solid var(--line-2); cursor: pointer; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
-  #toast button:hover { background: #1f262e; }
+  #toast button:hover { background: #e9edf2; }
   #toast .kbd { color: var(--muted); margin-left: 8px; font-size: 10px; letter-spacing: 1px; }
 </style>
 </head>
 <body>
 <header>
   <div class="left">
-    <h1>// SALES</h1>
+    <h1>SALES</h1>
     <span class="meta" id="sub">—</span>
   </div>
   <nav class="nav">
@@ -166,9 +166,7 @@
     <a href="/cashback">CASHBACK</a>
     <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
-    <a href="/sources">SOURCES</a>
     <a href="/pricer">PRICER</a>
-    <a href="/jerujam">JERUJAM</a>
     <a href="/festival">FESTIVAL</a>
     <a href="/ga">GA</a>
     <a href="/market">MARKET</a>
@@ -213,7 +211,7 @@
   </div>
 
   <div class="bar">
-    <input type="search" id="q-search" placeholder="search // event venue platform" style="flex:1; min-width:200px;">
+    <input type="search" id="q-search" placeholder="search event venue platform" style="flex:1; min-width:200px;">
     <select id="q-source">
       <option value="all">SRC: ALL</option>
       <option value="lysted">LYSTED</option>
@@ -234,7 +232,7 @@
     </select>
   </div>
 
-  <h2 id="recent-header">// RECENT <span class="count" id="recent-count"></span><span class="count" id="recent-rev"></span>
+  <h2 id="recent-header">RECENT <span class="count" id="recent-count"></span><span class="count" id="recent-rev"></span>
     <button type="button" id="toggle-recent" class="pill" style="margin-left:auto;font-size:10px;letter-spacing:1.5px;padding:4px 10px;background:var(--bg-2);color:var(--muted);border:1px solid var(--line);cursor:pointer;text-transform:uppercase;">Hide</button>
   </h2>
   <div id="recent-wrap">
@@ -247,10 +245,10 @@
       </tr></thead>
       <tbody id="recentbody"></tbody>
     </table>
-    <div id="recentempty" class="empty" style="display:none">// no sales in this window</div>
+    <div id="recentempty" class="empty" style="display:none">no sales in this window</div>
   </div>
 
-  <h2>// ALL SALES <span class="count" id="all-count"></span></h2>
+  <h2>ALL SALES <span class="count" id="all-count"></span></h2>
   <table>
     <thead><tr>
       <th class="col-check"><input type="checkbox" class="row-check" id="check-all" title="Select all visible"></th>
@@ -260,9 +258,9 @@
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
-  <div id="empty" class="empty" style="display:none">// no sales match</div>
+  <div id="empty" class="empty" style="display:none">no sales match</div>
 
-  <h2 id="unsold-header" style="display:none; color:var(--red);">// DIDN'T SELL <span class="count" id="unsold-count"></span><span class="count" id="unsold-loss"></span></h2>
+  <h2 id="unsold-header" style="display:none; color:var(--red);">DIDN'T SELL <span class="count" id="unsold-count"></span><span class="count" id="unsold-loss"></span></h2>
   <table id="unsold-table" style="display:none">
     <thead><tr>
       <th>EVENT</th><th>VENUE</th><th>SEC/ROW</th><th>SEATS</th>
@@ -272,7 +270,7 @@
     <tbody id="unsoldbody"></tbody>
   </table>
 
-  <h2 id="canceled-header" style="display:none; color:var(--amber);">// CANCELED <span class="count" id="canceled-count"></span><span class="count" id="canceled-lost"></span></h2>
+  <h2 id="canceled-header" style="display:none; color:var(--amber);">CANCELED <span class="count" id="canceled-count"></span><span class="count" id="canceled-lost"></span></h2>
   <table id="canceled-table" style="display:none">
     <thead><tr>
       <th>SOLD</th><th>EVENT</th><th>VENUE</th><th>SEC/ROW</th>
@@ -299,7 +297,7 @@
 
 <div id="merge-modal-bg" class="modal-bg">
   <div class="modal">
-    <h3><span>// MERGE EVENT GROUPS <span class="src-tag" id="merge-modal-count" style="color:var(--purple);border-color:var(--purple);">0 GROUPS</span></span><button class="close" id="merge-close">×</button></h3>
+    <h3><span>MERGE EVENT GROUPS <span class="src-tag" id="merge-modal-count" style="color:var(--purple);border-color:var(--purple);">0 GROUPS</span></span><button class="close" id="merge-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line">Pick which event name to use for the merged group, or type your own. Future inventory + sales rows that match any of these groups will display under the chosen name.</div>
       <div id="merge-opts"></div>
@@ -318,7 +316,7 @@
 
 <div id="bulk-bg" class="modal-bg">
   <div class="modal">
-    <h3><span>// BULK EDIT <span class="src-tag" id="bulk-src" style="color:var(--accent);border-color:var(--accent);">0 SALES</span></span><button class="close" id="bulk-close">×</button></h3>
+    <h3><span>BULK EDIT <span class="src-tag" id="bulk-src" style="color:var(--accent);border-color:var(--accent);">0 SALES</span></span><button class="close" id="bulk-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line">Only filled-in fields are applied. Leave blank to keep each row's existing value.</div>
       <label>Sale Date</label><input id="bulk-sale_date" type="text" placeholder="(unchanged)">
@@ -352,7 +350,7 @@
 
 <div id="modal-bg" class="modal-bg">
   <div class="modal">
-    <h3><span>// EDIT SALE <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
+    <h3><span>EDIT SALE <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line" id="m-meta"></div>
       <label>Sale Date</label><input id="m-sale_date" type="date">
@@ -620,7 +618,7 @@ function _renderGrouped(tbody, rows, groupOrder) {
         <input type="checkbox" class="grp-check" data-grp-key="${esc(g.key)}" title="Select to merge with another event"${checked}>
         <span class="chev">▸</span>
         <span class="evt-title">${esc(g.event_name)}</span>
-        <span class="evt-meta">// ${esc(fmtDateTime(g.event_date_iso || g.event_date || ""))} · ${esc(g.venue || "")}</span>
+        <span class="evt-meta">${esc(fmtDateTime(g.event_date_iso || g.event_date || ""))} · ${esc(g.venue || "")}</span>
         ${mergedBadge}
         <span class="evt-stats">
           <span class="ratio">${sold}/${total} sold</span>
@@ -643,7 +641,7 @@ function _renderGrouped(tbody, rows, groupOrder) {
       if (totalUnsold > 0) {
         const subhdr = document.createElement("tr");
         subhdr.className = "listing-hdr";
-        subhdr.innerHTML = `<td colspan="14">// ${totalUnsold} ${totalUnsold === 1 ? "ticket" : "tickets"} still listed</td>`;
+        subhdr.innerHTML = `<td colspan="14">${totalUnsold} ${totalUnsold === 1 ? "ticket" : "tickets"} still listed</td>`;
         tbody.appendChild(subhdr);
         let remaining = totalUnsold;
         for (const l of listings) {

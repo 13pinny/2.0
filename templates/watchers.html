@@ -5,23 +5,23 @@
 <title>Kartis — Watchers</title>
 <style>
   :root {
-    --bg: #0d1117;
-    --bg-2: #161b22;
-    --bg-3: #11161d;
-    --line: #21262d;
-    --line-2: #2a3038;
-    --text: #c9d1d9;
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
     --muted: #6e7681;
-    --accent: #58a6ff;
-    --green: #56d364;
-    --red: #f85149;
-    --amber: #d29922;
-    --orange: #f97316;
-    --purple: #a78bfa;
-    --cyan: #14b8a6;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
+    --cyan: #0f766e;
   }
   * { box-sizing: border-box; }
-  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
   header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
@@ -31,8 +31,8 @@
   main { padding: 18px 24px 60px; }
   h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 24px 0 10px; color: var(--text); }
   h2:first-child { margin-top: 0; }
-  .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
-  .ok { background: #102a14; border: 1px solid var(--green); color: var(--green); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .ok { background: #d8eede; border: 1px solid var(--green); color: var(--green); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
   .stat { background: var(--bg); padding: 12px 14px; }
   .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
@@ -45,10 +45,10 @@
   textarea { resize: vertical; min-height: 90px; width: 100%; font-size: 12px; }
   input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
   button, a.btn { cursor: pointer; text-decoration: none; display: inline-block; }
-  button:hover, a.btn:hover { background: #1f262e; }
+  button:hover, a.btn:hover { background: #e9edf2; }
   button:disabled { opacity: 0.5; cursor: wait; }
-  button.danger { color: var(--red); border-color: #4a1f1f; }
-  button.danger:hover { background: #2a1414; }
+  button.danger { color: var(--red); border-color: #f2b8b5; }
+  button.danger:hover { background: #fdecea; }
   button.big-stop { background: var(--red); color: #fff; border-color: var(--red); padding: 10px 18px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
   button.big-stop:hover { background: #c63a31; }
   button.big-resume { background: var(--green); color: #061; border-color: var(--green); padding: 10px 18px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
@@ -123,14 +123,14 @@
   .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
   .modal-foot button { padding: 7px 14px; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
   .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-  .modal-foot button.primary:hover { background: #79b8ff; }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
   .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; }
 </style>
 </head>
 <body>
 <header>
   <div class="left">
-    <h1>// WATCHERS</h1>
+    <h1>WATCHERS</h1>
     <span class="meta" id="meta">—</span>
   </div>
   <nav class="nav">
@@ -141,9 +141,7 @@
     <a href="/cashback">CASHBACK</a>
     <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
-    <a href="/sources">SOURCES</a>
     <a href="/pricer">PRICER</a>
-    <a href="/jerujam">JERUJAM</a>
     <a href="/festival">FESTIVAL</a>
     <a href="/ga">GA</a>
     <a href="/market">MARKET</a>
@@ -166,7 +164,7 @@
   <div class="stat red"><div class="label">Errors</div><div class="value" id="s-errors">0</div></div>
 </div>
 
-<h2>// MASTER CONTROLS</h2>
+<h2>MASTER CONTROLS</h2>
 <div class="master-controls">
   <div class="toggle-group" id="tg-paused">
     <label class="switch"><input type="checkbox" id="m-paused"><span class="slider"></span></label>
@@ -181,7 +179,7 @@
   <button class="big-resume" id="btn-resume">▶ RESUME ALL</button>
 </div>
 
-<h2>// ADD WATCHER</h2>
+<h2>ADD WATCHER</h2>
 <form class="add-form" id="addForm">
   <input id="add-url" placeholder="Paste Ticketmaster.co.il /performance/ or kupat.co.il /booking/features/ URL" required>
   <input id="add-label" placeholder="label (optional)">
@@ -207,7 +205,7 @@ https://tickets.kupat.co.il/booking/features/1358?display=list&prsntId=51596
   <span class="meta" id="interval">—</span>
 </div>
 
-<h2>// WATCHERS</h2>
+<h2>WATCHERS</h2>
 <table>
   <thead><tr>
     <th>LABEL</th>
@@ -223,9 +221,9 @@ https://tickets.kupat.co.il/booking/features/1358?display=list&prsntId=51596
   </tr></thead>
   <tbody id="watchersBody"></tbody>
 </table>
-<div id="watchersEmpty" class="empty" style="display:none">// no watchers yet — paste a URL above to start</div>
+<div id="watchersEmpty" class="empty" style="display:none">no watchers yet — paste a URL above to start</div>
 
-<h2>// DROP HISTORY</h2>
+<h2>DROP HISTORY</h2>
 <table>
   <thead><tr>
     <th>WHEN</th><th>WATCHER</th><th class="num">+ADDED</th><th class="num">-REMOVED</th>
@@ -233,7 +231,7 @@ https://tickets.kupat.co.il/booking/features/1358?display=list&prsntId=51596
   </tr></thead>
   <tbody id="dropsBody"></tbody>
 </table>
-<div id="dropsEmpty" class="empty" style="display:none">// no drops detected yet</div>
+<div id="dropsEmpty" class="empty" style="display:none">no drops detected yet</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -507,7 +505,7 @@ async function openFiltersModal(watcherId) {
 
   const modalHtml = `
     <div class="modal">
-      <h3>// Filters <button class="close" id="f-close" type="button">×</button></h3>
+      <h3>Filters <button class="close" id="f-close" type="button">×</button></h3>
       <div class="modal-body">
         <div class="row">
           <label>Min seats</label>

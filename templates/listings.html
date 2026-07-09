@@ -5,14 +5,14 @@
 <title>Kartis — Listings</title>
 <style>
   :root {
-    --bg: #0d1117; --bg-2: #161b22; --bg-3: #11161d;
-    --line: #21262d; --line-2: #2a3038;
-    --text: #c9d1d9; --muted: #6e7681;
-    --accent: #58a6ff; --green: #56d364; --red: #f85149;
-    --amber: #d29922; --orange: #f97316; --purple: #a78bfa;
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
   }
   * { box-sizing: border-box; }
-  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
   header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
@@ -22,14 +22,14 @@
   main { padding: 18px 24px 60px; }
   h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
   button { background: var(--bg-2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; font-family: inherit; font-size: 12px; letter-spacing: 1px; cursor: pointer; text-transform: uppercase; }
-  button:hover { background: #1f262e; }
+  button:hover { background: #e9edf2; }
   button.confirm { border-color: var(--green); color: var(--green); }
-  button.confirm:hover { background: #0d1f12; }
+  button.confirm:hover { background: #e6f4ea; }
   button.confirm:disabled { opacity: 0.4; cursor: not-allowed; }
   button.reject { border-color: var(--red); color: var(--red); }
-  button.reject:hover { background: #1f0d0d; }
+  button.reject:hover { background: #fdecea; }
   button.publish { border-color: var(--orange); color: var(--orange); }
-  button.publish:hover { background: #2a1505; }
+  button.publish:hover { background: #fdefe3; }
   button.publish:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .inbox-empty { color: var(--muted); font-size: 12px; padding: 18px 0; letter-spacing: 1px; }
@@ -59,7 +59,7 @@
 <body>
 <header>
   <div class="left">
-    <h1>// KARTIS</h1>
+    <h1>KARTIS</h1>
     <span class="meta" id="lastpoll"></span>
   </div>
   <nav class="nav">
@@ -70,9 +70,7 @@
     <a href="/cashback">CASHBACK</a>
     <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
-    <a href="/sources">SOURCES</a>
     <a href="/pricer">PRICER</a>
-    <a href="/jerujam">JERUJAM</a>
     <a href="/festival">FESTIVAL</a>
     <a href="/ga">GA</a>
     <a href="/market">MARKET</a>
@@ -143,7 +141,7 @@ function renderCards(rows) {
 
   const active = rows.filter(r => !["created", "listed", "rejected"].includes(r.status));
   if (!active.length) {
-    container.innerHTML = '<div class="inbox-empty">// no viagogo matches waiting on review</div>';
+    container.innerHTML = '<div class="inbox-empty">no viagogo matches waiting on review</div>';
     return;
   }
   container.innerHTML = "";

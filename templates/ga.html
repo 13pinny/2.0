@@ -5,12 +5,12 @@
 <title>Kartis — GA Tracker</title>
 <style>
   :root {
-    --bg: #0d1117; --bg-2: #161b22; --bg-3: #11161d; --line: #21262d; --line-2: #2a3038;
-    --text: #c9d1d9; --muted: #6e7681; --accent: #58a6ff; --green: #56d364;
-    --red: #f85149; --amber: #d29922; --orange: #f97316; --purple: #a78bfa; --cyan: #14b8a6;
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df; --cyan: #0f766e;
   }
   * { box-sizing: border-box; }
-  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
   header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
@@ -47,18 +47,18 @@
   .vel.hot { color: var(--green); font-weight: 600; }
   .vel .star { color: var(--amber); }
   .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
-  .err { background: #2a1414; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
   /* Add bar + per-row management */
   .addbar { display: flex; gap: 8px; margin: 0 0 20px; flex-wrap: wrap; align-items: center; }
   .addbar input { flex: 1; min-width: 320px; font-family: inherit; font-size: 12px; padding: 8px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); }
   .addbar input:focus { outline: none; border-color: var(--accent); }
   button { font-family: inherit; font-size: 12px; padding: 7px 12px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); cursor: pointer; }
-  button:hover { background: #1f262e; }
+  button:hover { background: #e9edf2; }
   button:disabled { opacity: .5; cursor: wait; }
   button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
-  button.primary:hover { background: #79b8ff; }
-  button.danger { color: var(--red); border-color: #4a1f1f; }
-  button.danger:hover { background: #2a1414; }
+  button.primary:hover { background: #0a5cc2; }
+  button.danger { color: var(--red); border-color: #f2b8b5; }
+  button.danger:hover { background: #fdecea; }
   .addmsg { font-size: 11px; }
   .addmsg.ok { color: var(--green); }
   .addmsg.bad { color: var(--red); }
@@ -78,7 +78,7 @@
 <body>
 <header>
   <div class="left">
-    <h1>// GA TRACKER</h1>
+    <h1>GA TRACKER</h1>
     <span class="meta" id="meta">—</span>
   </div>
   <nav class="nav">
@@ -89,9 +89,7 @@
     <a href="/cashback">CASHBACK</a>
     <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
-    <a href="/sources">SOURCES</a>
     <a href="/pricer">PRICER</a>
-    <a href="/jerujam">JERUJAM</a>
     <a href="/festival">FESTIVAL</a>
     <a href="/ga" class="active">GA</a>
     <a href="/market">MARKET</a>

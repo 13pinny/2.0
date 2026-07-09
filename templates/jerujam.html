@@ -5,22 +5,22 @@
 <title>Kartis — JeruJam</title>
 <style>
   :root {
-    --bg: #0d1117;
-    --bg-2: #161b22;
-    --bg-3: #11161d;
-    --line: #21262d;
-    --line-2: #2a3038;
-    --text: #c9d1d9;
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
     --muted: #6e7681;
-    --accent: #58a6ff;
-    --green: #56d364;
-    --red: #f85149;
-    --amber: #d29922;
-    --orange: #f97316;
-    --purple: #a78bfa;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
   }
   * { box-sizing: border-box; }
-  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
   header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
@@ -41,7 +41,7 @@
   input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
   input:focus, select:focus { outline: none; border-color: var(--accent); }
   button { cursor: pointer; }
-  button:hover { background: #1f262e; }
+  button:hover { background: #e9edf2; }
   button:disabled { opacity: 0.5; cursor: wait; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; background: var(--bg); }
@@ -66,7 +66,7 @@
 <body>
 <header>
   <div class="left">
-    <h1>// JERUJAM</h1>
+    <h1>JERUJAM</h1>
     <span class="meta" id="lastimport">—</span>
   </div>
   <nav class="nav">
@@ -77,7 +77,6 @@
     <a href="/cashback">CASHBACK</a>
     <a href="/credits">CREDITS</a>
     <a href="/maaser">MAASER</a>
-    <a href="/sources">SOURCES</a>
     <a href="/pricer">PRICER</a>
     <a href="/jerujam" class="active">JERUJAM</a>
     <a href="/festival">FESTIVAL</a>
@@ -103,7 +102,7 @@
 
   <div class="bar">
     <button id="reimport">Re-import from JeruJam</button>
-    <input type="search" id="t-search" placeholder="search // event venue city" style="flex:1; min-width:200px;">
+    <input type="search" id="t-search" placeholder="search event venue city" style="flex:1; min-width:200px;">
     <select id="t-status"><option value="all">STATUS: ALL</option></select>
     <select id="t-sort">
       <option value="date-asc">DATE ↑</option>
@@ -115,7 +114,7 @@
   </div>
   <div class="pill-bar" id="status-pills"></div>
 
-  <h2>// TICKETS <span class="count" id="t-count"></span></h2>
+  <h2>TICKETS <span class="count" id="t-count"></span></h2>
   <table>
     <thead><tr>
       <th>EVENT</th><th>DATE</th><th>VENUE</th><th>SEC/ROW</th>
@@ -124,9 +123,9 @@
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
-  <div id="tempty" class="empty" style="display:none">// no tickets match</div>
+  <div id="tempty" class="empty" style="display:none">no tickets match</div>
 
-  <h2>// SALES <span class="count" id="s-count"></span></h2>
+  <h2>SALES <span class="count" id="s-count"></span></h2>
   <table>
     <thead><tr>
       <th>SALE DATE</th><th>EVENT</th><th>PLATFORM</th>
@@ -134,7 +133,7 @@
     </tr></thead>
     <tbody id="sbody"></tbody>
   </table>
-  <div id="sempty" class="empty" style="display:none">// no sales yet</div>
+  <div id="sempty" class="empty" style="display:none">no sales yet</div>
 </main>
 
 <script>

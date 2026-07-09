@@ -5,14 +5,14 @@
 <title>Kartis — Credits</title>
 <style>
   :root {
-    --bg: #0d1117; --bg-2: #161b22; --bg-3: #11161d;
-    --line: #21262d; --line-2: #2a3038;
-    --text: #c9d1d9; --muted: #6e7681;
-    --accent: #58a6ff; --green: #56d364; --red: #f85149;
-    --amber: #d29922; --orange: #f97316; --purple: #a78bfa;
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
   }
   * { box-sizing: border-box; }
-  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
   header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
@@ -32,7 +32,7 @@
   input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
   input:focus, select:focus { outline: none; border-color: var(--accent); }
   button { cursor: pointer; }
-  button:hover { background: #1f262e; }
+  button:hover { background: #e9edf2; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -69,7 +69,7 @@
   .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
   .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
   .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-  .modal-foot button.primary:hover { background: #79b8ff; }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
   .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
 
   .toast { position: fixed; top: 70px; right: 24px; z-index: 200; min-width: 320px; max-width: 420px; background: var(--bg-2); border: 1px solid var(--green); box-shadow: 0 12px 32px rgba(0,0,0,0.6); padding: 14px 16px; display: none; }
@@ -90,7 +90,7 @@
 <body>
 <header>
   <div class="left">
-    <h1>// CREDITS</h1>
+    <h1>CREDITS</h1>
     <span class="meta" id="sub">—</span>
   </div>
   <nav class="nav">
@@ -101,9 +101,7 @@
     <a href="/cashback">CASHBACK</a>
     <a href="/credits" class="active">CREDITS</a>
     <a href="/maaser">MAASER</a>
-    <a href="/sources">SOURCES</a>
     <a href="/pricer">PRICER</a>
-    <a href="/jerujam">JERUJAM</a>
     <a href="/festival">FESTIVAL</a>
     <a href="/ga">GA</a>
     <a href="/market">MARKET</a>
@@ -144,13 +142,13 @@
     </tr></thead>
     <tbody id="credits-tbody"></tbody>
   </table>
-  <div id="credits-empty" class="empty" style="display:none">// no credits yet — click + Add Credit above</div>
+  <div id="credits-empty" class="empty" style="display:none">no credits yet — click + Add Credit above</div>
 </main>
 
 <!-- Add/edit credit modal -->
 <div id="cr-bg" class="modal-bg">
   <div class="modal">
-    <h3><span id="cr-title">// ADD CREDIT</span><button class="close" id="cr-close">×</button></h3>
+    <h3><span id="cr-title">ADD CREDIT</span><button class="close" id="cr-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line">Issued date and ILS face are required. Original USD cost is optional but recommended.</div>
       <label>Issued *</label><input id="cr-date" type="date">
@@ -184,7 +182,7 @@
 <!-- Add spend modal -->
 <div id="sp-bg" class="modal-bg">
   <div class="modal">
-    <h3><span id="sp-title">// LOG SPEND</span><button class="close" id="sp-close">×</button></h3>
+    <h3><span id="sp-title">LOG SPEND</span><button class="close" id="sp-close">×</button></h3>
     <div class="modal-body">
       <div class="meta-line" id="sp-meta">—</div>
       <label>Spend date *</label><input id="sp-date" type="date">
@@ -330,7 +328,7 @@ function render() {
           </table>
         `;
       } else {
-        spendsHtml = `<div class="empty-spends">// no spends logged yet</div>`;
+        spendsHtml = `<div class="empty-spends">no spends logged yet</div>`;
       }
       td.innerHTML = `
         <div class="spend-panel">
