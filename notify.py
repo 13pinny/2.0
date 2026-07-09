@@ -561,7 +561,8 @@ def notify_pacha_event(kind, ev, old=None):
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
-_SITE_EVENT_LABELS = {"kupat": "Kupat", "tm": "Ticketmaster IL", "zappa": "Zappa"}
+_SITE_EVENT_LABELS = {"kupat": "Kupat", "tm": "Ticketmaster IL", "zappa": "Zappa",
+                      "barby": "Barby"}
 
 
 def notify_site_event(kind, ev, old=None):
@@ -584,6 +585,8 @@ def notify_site_event(kind, ev, old=None):
         lines.append(f"**{ev['date_text']}**")
     if ev.get("venue"):
         lines.append(ev["venue"])
+    if ev.get("price_text"):
+        lines.append(f"From {ev['price_text']}")
 
     if kind == "onsale":
         title = f"🎟️ {label}: {name} is now ON SALE"

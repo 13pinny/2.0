@@ -90,6 +90,7 @@ def _norm(event_key, name, venue, city, first_ms, url, price_text=""):
         "first_date_ms": int(first_ms) if first_ms else None,
         "on_sale": None,  # unknown from the listing feeds — see check_on_sale
         "url": url,
+        "price_text": price_text,
     }
 
 

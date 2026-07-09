@@ -17,6 +17,7 @@ from flask import Flask, jsonify, render_template, send_file
 from openpyxl import Workbook
 
 import attachments as attachments_mod
+import barby_events
 import db
 import filters as watcher_filters
 import import_jerujam
@@ -142,7 +143,7 @@ PACHA_MAX_PINGS_PER_TICK = 12
 # HTTP) and pings Discord on new events and, for TM, listed→on-sale flips.
 # Same single-machine rule as the Pacha monitor: prod = the VPS; a locally
 # run dashboard sets KARTIS_IL_EVENTS_ENABLED=0 or Discord double-pings.
-IL_EVENT_SOURCES = {"kupat": kupat_events, "tm": tm_events}
+IL_EVENT_SOURCES = {"kupat": kupat_events, "tm": tm_events, "barby": barby_events}
 _last_il_events = {"at": None, "events": {}, "new": 0, "onsale": 0,
                    "notified": 0, "baseline": [], "errors": {},
                    "error": None, "running": False}
