@@ -621,7 +621,7 @@ function _renderGrouped(tbody, rows, groupOrder) {
         <span class="evt-stats">
           <span class="ratio">${sold}/${total} sold</span>
           ${money(cost)} cost · ${money(payout)} payout ·
-          <span class="${profCls}">${profSign}${money(profit)} profit</span>
+          <span class="${profCls}">${profSign}${money(profit)} profit${cost ? ` · ${profSign}${((profit / cost) * 100).toFixed(1)}% ROI` : ""}</span>
         </span>
       </td>
     `;
