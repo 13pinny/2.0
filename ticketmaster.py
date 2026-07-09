@@ -13,6 +13,7 @@ returns one row per currently-buyable seat:
 We diff the set of (block, row, seat_num) tuples between consecutive checks
 and treat anything in `new - old` as a fresh drop.
 """
+import os
 import re
 import time
 import urllib.request
@@ -185,7 +186,92 @@ def fetch_selectable_seats(event_code, perf_code):
             "row": str(s.get("r") or ""),
             "seat": str(s.get("l") if s.get("l") is not None else ""),
         })
+    if not out:
+        # No selectable seats can mean "seated show, sold out" OR "GA
+        # (unnumbered) show, which never has a seat map". Check the GA
+        # endpoint: if the perf has GA allocations, track it as one
+        # status-encoded pseudo-seat (kupat GA model). Seated shows get []
+        # from getAllGaBlock too, so this adds one cheap request only while
+        # a show has zero seats.
+        try:
+            ga_seat = ga_status_seat(event_code, perf_code)
+        except Exception:
+            ga_seat = None
+        if ga_seat is not None:
+            return [ga_seat]
     return out
+
+
+def fetch_ga_blocks(event_code, perf_code):
+    """GA (unnumbered) allocations for a performance, or [] when the perf is
+    fully seated. Each row is one (block, price-profile) allocation:
+        {"b": "STND", "l": 2, "f": 13, "t": 5000, "a": 2600, "ga": true}
+    `t` is the allocation's capacity and `a` its remaining count. The same
+    block can appear once per profile (`f`) with the same `t` — the `a`
+    values are disjoint and sum to at most `t`, so sum(a) is the real
+    tickets-left number but block totals must be deduped per block.
+    """
+    url = f"{API_HOST}{ISM_PATH}/getAllGaBlock/{event_code}/{perf_code}"
+    status, raw = _http_get(url)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise TicketmasterError(f"invalid JSON from getAllGaBlock: {e}") from e
+    if payload.get("status") != "SUCCESS":
+        raise TicketmasterError(f"API said: {payload.get('status')} — {payload.get('errors')}")
+    data = payload.get("data") or []
+    return [r for r in data if isinstance(r, dict) and r.get("ga")]
+
+
+def ga_available(rows):
+    """Total tickets-left across GA allocations (sum of every `a`)."""
+    return sum(int(r.get("a") or 0) for r in rows)
+
+
+def ga_total(rows):
+    """Total GA capacity: `t` deduped per block (repeats across profiles)."""
+    per_block = {}
+    for r in rows:
+        b = r.get("b") or ""
+        t = int(r.get("t") or 0)
+        per_block[b] = max(per_block.get(b, 0), t)
+    return sum(per_block.values())
+
+
+# GA events expose counts, not a "last tickets" flag — same threshold idea
+# as kupat's GA tracker.
+GA_LOW_THRESHOLD = int(os.getenv("KARTIS_TM_GA_LOW") or 25)
+
+
+def ga_status(avail):
+    """available | lasttickets | soldout from a tickets-left count."""
+    if avail <= 0:
+        return "soldout"
+    if avail <= GA_LOW_THRESHOLD:
+        return "lasttickets"
+    return "available"
+
+
+def ga_status_seat(event_code, perf_code):
+    """Status-encoded pseudo-seat for a GA performance, or None when the perf
+    has no GA allocations. Mirrors the kupat GA model: the status is part of
+    the seat key, so soldout↔available transitions surface as an `added`
+    seat through the normal diff, and `ga=True` opts it into the one-line
+    status rendering in notify.py and the count-threshold path in filters.py.
+    """
+    rows = fetch_ga_blocks(event_code, perf_code)
+    if not rows:
+        return None
+    avail = ga_available(rows)
+    status = ga_status(avail)
+    label = {"available": "GA available", "lasttickets": "GA last tickets",
+             "soldout": "GA sold out"}[status]
+    return {
+        "block": label, "row": "GA", "seat": "1",
+        "ga": True, "status": status,
+        "qty_available": avail,
+        "price": None,
+    }
 
 
 def list_performances(event_code):

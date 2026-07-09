@@ -105,7 +105,7 @@
   <div class="err" id="errbox"></div>
 
   <div class="addbar">
-    <input id="addUrl" placeholder="Paste a kupat GA show URL  (tickets.kupat.co.il/booking/features/…?prsntId=…)" />
+    <input id="addUrl" placeholder="Paste a kupat or ticketmaster.co.il GA show URL  (…/booking/features/…?prsntId=…  or  …/performance/EVENT/PERF/ALL/iw)" />
     <button id="addBtn" class="primary">+ Add GA show</button>
     <span class="addmsg" id="addMsg"></span>
   </div>
@@ -193,13 +193,15 @@ async function load(){
 
   const rows = d.shows || [];
   if (!rows.length) {
-    $('rows').innerHTML = `<tr><td colspan="11" class="empty">No kupat GA shows tracked yet. Paste a kupat GA show URL above to add one.</td></tr>`;
+    $('rows').innerHTML = `<tr><td colspan="11" class="empty">No GA shows tracked yet. Paste a kupat or ticketmaster.co.il GA show URL above to add one.</td></tr>`;
     $('foot').innerHTML = '';
     return;
   }
   $('rows').innerHTML = rows.map(s => {
     const price = priceOf(s.festival_types);
-    const url = `https://tickets.kupat.co.il/booking/features/${escape(s.event_code)}?prsntId=${escape(s.perf_code)}`;
+    const url = s.source === 'ticketmaster'
+      ? `https://www.ticketmaster.co.il/performance/${escape(s.event_code)}/${escape(s.perf_code)}/ALL/iw`
+      : `https://tickets.kupat.co.il/booking/features/${escape(s.event_code)}?prsntId=${escape(s.perf_code)}`;
     const st = s.status || 'unknown';
     const name = s.event_name || s.label || s.event_code;
     const left = (s.available != null)
@@ -230,7 +232,7 @@ async function load(){
 
   const since = rows.map(s=>s.tracking_since).filter(Boolean).sort()[0];
   $('footnote').textContent = since
-    ? `"Sold" = drop in tickets-left between snapshots. * = window longer than tracking history (since ${new Date(since).toLocaleString()}); fills in over time. Kupat GA exposes only tickets-left, so there's no released/total.`
+    ? `"Sold" = drop in tickets-left between snapshots. * = window longer than tracking history (since ${new Date(since).toLocaleString()}); fills in over time. Kupat GA exposes only tickets-left (no total); TM shows left / allocation-capacity.`
     : 'Sales tracking just started — rolling-window numbers fill in over the next minutes/days.';
 }
 

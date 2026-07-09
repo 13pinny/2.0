@@ -4071,6 +4071,14 @@ def _counted_fresh_labels(w):
         if not (cached.get("meta") or {}).get("ga"):
             return None
         return kupat.get_labels(w["event_code"], w["perf_code"], lang="iw", force=True)
+    if src == "ticketmaster":
+        # TM GA (unnumbered) shows carry counts in the labels meta (from
+        # getAllGaBlock — pure HTTP, cheap). Confirm via cache before the
+        # forced refresh so seated TM watchers don't refetch every sync.
+        cached = ticketmaster.get_labels(w["event_code"], w["perf_code"], lang="iw")
+        if not (cached.get("meta") or {}).get("ga"):
+            return None
+        return ticketmaster.get_labels(w["event_code"], w["perf_code"], lang="iw", force=True)
     return None
 
 
@@ -4175,6 +4183,7 @@ def _counted_shows(source_name, flag_key, status_key):
         windows, earliest_t = _sales_windows(series, now)
         sold = max(0, total - cur_avail) if (total is not None and cur_avail is not None) else None
         shows.append({
+            "source": source_name,
             "event_code": ec, "perf_code": pc, "label": w.get("label"),
             "event_name": meta.get("eventName"), "when": meta.get("firstPerfText"),
             "status": meta.get(status_key),
@@ -4215,6 +4224,8 @@ def ga_page():
 @app.route("/api/ga")
 def api_ga():
     shows, now = _counted_shows("kupat", "ga", "gaStatus")
+    tm_shows, _ = _counted_shows("ticketmaster", "ga", "gaStatus")
+    shows = sorted(shows + tm_shows, key=lambda s: (s.get("when") or ""))
     return jsonify({
         "shows": shows, "totals": _sales_totals(shows),
         "windows": [k for k, _ in FESTIVAL_WINDOWS],

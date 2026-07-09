@@ -109,18 +109,22 @@ _INTERNET = "INTERNET"
 
 
 def _discover_extra_blocks(event_code, perf_code):
-    """Discover every block code in the venue, plus the seated capacity.
+    """Discover every block code in the venue, plus the seated capacity and
+    GA (unnumbered) allocations.
 
-    Returns (extras, totalSeated). `extras` is the set of block codes seen
-    in getAllBlockSeats / getAllGaBlock. `totalSeated` is the dot-count of
-    the seat plan — every entry in getAllBlockSeats is one physical seat
-    regardless of state, so the length of the array IS the venue's seated
-    capacity for this performance.
+    Returns (extras, totalSeated, gaRows). `extras` is the set of block
+    codes seen in getAllBlockSeats / getAllGaBlock. `totalSeated` is the
+    dot-count of the seat plan — every entry in getAllBlockSeats is one
+    physical seat regardless of state, so the length of the array IS the
+    venue's seated capacity for this performance. `gaRows` is the raw
+    getAllGaBlock list — one row per (block, price-profile) allocation with
+    `t` (capacity) and `a` (remaining); [] for fully-seated shows.
 
     Cached for an hour as part of the labels payload.
     """
     extras = set()
     total_seated = 0
+    ga_rows = []
     try:
         payload = _http_get_json(f"{_ISM_HOST}/getAllBlockSeats/{event_code}/{perf_code}")
         data = payload.get("data") or []
@@ -138,9 +142,11 @@ def _discover_extra_blocks(event_code, perf_code):
             for s in data:
                 if isinstance(s, dict) and s.get("b"):
                     extras.add(s["b"])
+                    if s.get("ga"):
+                        ga_rows.append(s)
     except Exception:
         pass
-    return extras, total_seated
+    return extras, total_seated, ga_rows
 
 
 def fetch_fresh(event_code, perf_code, lang="iw"):
@@ -155,8 +161,9 @@ def fetch_fresh(event_code, perf_code, lang="iw"):
     # appear in getPriceByProfiles — typically restricted/accessibility
     # tiers and standing blocks. Also captures the total seated capacity.
     total_seated = 0
+    ga_rows = []
     try:
-        extras, total_seated = _discover_extra_blocks(event_code, perf_code)
+        extras, total_seated, ga_rows = _discover_extra_blocks(event_code, perf_code)
         for code in extras:
             blocks.setdefault(code, {
                 "name": code,
@@ -168,6 +175,26 @@ def fetch_fresh(event_code, perf_code, lang="iw"):
         pass
     if total_seated:
         meta["totalSeats"] = total_seated
+    if ga_rows:
+        # GA (unnumbered) show — expose counts + status for the GA Tracker
+        # page, mirroring kupat's meta keys (ga / gaStatus / availSeats /
+        # totalSeats / firstPerfText). Lazy import: ticketmaster.py only
+        # imports labels inside a function, so there's no import cycle.
+        import ticketmaster as _tm
+        avail = _tm.ga_available(ga_rows)
+        meta["ga"] = True
+        meta["gaStatus"] = _tm.ga_status(avail)
+        meta["availSeats"] = avail
+        meta["totalSeats"] = (_tm.ga_total(ga_rows) or 0) + total_seated or None
+    if meta.get("firstPerfMs"):
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            meta["firstPerfText"] = datetime.fromtimestamp(
+                meta["firstPerfMs"] / 1000, ZoneInfo("Asia/Jerusalem")
+            ).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
     payload = {
         "_fetched_at": time.time(),
         "event_code": event_code,
