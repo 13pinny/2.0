@@ -84,8 +84,12 @@ Pricing rules (user requirements):
   * single-ticket listings don't count as competitors while
     pricer_ignore_singles is on (default ON) — a lone single undercutting
     us isn't real competition for a multi-ticket listing
-  * manual price change on inv.viagogo (live price != last_set_price)
-    pauses the listing + notifies; resume from the dashboard re-adopts
+  * external price change on inv.viagogo (live price != last_set_price):
+    ADOPTED as the new baseline by default (pricer_manual_change_mode=
+    'adopt') — a manual raise holds until a competitor undercuts it, then
+    auto resumes; dollar-scale moves ping Discord, viagogo's own cent-
+    drift adopts silently. Set the mode to 'pause' for the old
+    freeze-until-resumed behavior.
   * dry-run mode (pricer_dry_run, default ON) logs/notifies without writing
 """
 import json
@@ -153,6 +157,17 @@ def dry_run_enabled():
 
 def allow_raise_global():
     return db.setting_get_bool("pricer_allow_raise_global", False)
+
+
+def manual_change_mode():
+    """What to do when the price on inv differs from what the pricer last
+    set: 'adopt' (default) takes it as the new baseline and keeps pricing —
+    a raise holds until a competitor undercuts it, then auto resumes;
+    'pause' is the old freeze-until-resumed behavior. Adopt also self-heals
+    the false pauses caused by viagogo's own price-reduction feature
+    shaving 1-4 cents off listings (observed on 13181893170 + 13216838386)."""
+    v = (db.setting_get("pricer_manual_change_mode") or "adopt").strip().lower()
+    return "pause" if v == "pause" else "adopt"
 
 
 def ignore_single_competitors():
@@ -732,27 +747,55 @@ def run_pricer_tick(dry_run=None):
                     continue
                 last_set = cfg.get("last_set_price")
                 if last_set is not None and abs(row["price"] - last_set) >= PRICE_EPSILON:
+                    if manual_change_mode() == "pause":
+                        db.pricer_config_set(lid, {
+                            "paused": 1, "paused_reason": "manual_change",
+                            "paused_at": now,
+                        }, now)
+                        _log({"listing_id": lid, "event_id": row.get("event_id"),
+                              "section": row.get("section"),
+                              "old_price": last_set, "new_price": row["price"],
+                              "action": "pause_manual",
+                              "detail": "price on inv differs from last auto-set"})
+                        try:
+                            notify.notify_pricer_paused({
+                                "event_name": row.get("event_name"),
+                                "section": row.get("section"),
+                                "listing_id": lid,
+                                "expected": last_set,
+                                "seen": row["price"],
+                            })
+                        except Exception as e:
+                            print(f"[pricer] pause notify failed: {e}")
+                        counters["paused"] += 1
+                        continue
+                    # Adopt mode (default): the changed price — the user's
+                    # deliberate raise, or viagogo's own cent-shaving price
+                    # reduction feature — becomes the new baseline and the
+                    # listing stays live. Lower-only pricing then does the
+                    # right thing on a raise: hold while nobody is under
+                    # us, resume undercutting the moment someone is.
                     db.pricer_config_set(lid, {
-                        "paused": 1, "paused_reason": "manual_change",
-                        "paused_at": now,
+                        "last_set_price": row["price"], "last_set_at": now,
                     }, now)
                     _log({"listing_id": lid, "event_id": row.get("event_id"),
                           "section": row.get("section"),
                           "old_price": last_set, "new_price": row["price"],
-                          "action": "pause_manual",
-                          "detail": "price on inv differs from last auto-set"})
-                    try:
-                        notify.notify_pricer_paused({
-                            "event_name": row.get("event_name"),
-                            "section": row.get("section"),
-                            "listing_id": lid,
-                            "expected": last_set,
-                            "seen": row["price"],
-                        })
-                    except Exception as e:
-                        print(f"[pricer] pause notify failed: {e}")
-                    counters["paused"] += 1
-                    continue
+                          "action": "manual_adopt",
+                          "detail": "external price change adopted as baseline"})
+                    if abs(row["price"] - last_set) >= 0.50:
+                        # a real (dollar-scale) manual move — worth a ping;
+                        # viagogo's own 1-4 cent drift stays silent
+                        try:
+                            notify.notify_pricer_adopted({
+                                "event_name": row.get("event_name"),
+                                "section": row.get("section"),
+                                "listing_id": lid,
+                                "expected": last_set,
+                                "seen": row["price"],
+                            })
+                        except Exception as e:
+                            print(f"[pricer] adopt notify failed: {e}")
                 eligible[lid] = (cfg, row)
             counters["eligible"] = len(eligible)
 

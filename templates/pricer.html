@@ -483,7 +483,7 @@ function renderLog(log) {
   tbody.innerHTML = "";
   const cls = (a) => a === "lower" || a === "floor_clamp" ? "act-lower"
     : a === "dry_run" ? "act-dry"
-    : a === "pause_manual" ? "act-pause"
+    : a === "pause_manual" || a === "manual_adopt" ? "act-pause"
     : a === "error" || a === "fetch_failed" ? "act-err" : "act-skip";
   for (const e of log) {
     const row = _byId[e.listing_id] || {};

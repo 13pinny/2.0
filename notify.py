@@ -650,6 +650,33 @@ def notify_pricer_paused(info):
     return {"discord": discord_result, "email": email_result}
 
 
+def notify_pricer_adopted(info):
+    """Auto-pricer noticed an external price change (user's manual move on
+    inv.viagogo) and adopted it as the new baseline — pricing continues,
+    and a raise holds until a competitor undercuts it. Only sent for
+    dollar-scale moves; viagogo's own cent-drift adopts silently.
+    `info`: event_name, section, listing_id, expected, seen."""
+    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+    lines = [
+        f"**{info.get('event_name') or '(unknown event)'}** — "
+        f"{(info.get('section') or '').splitlines()[0]}",
+        f"Pricer had set ${info.get('expected'):,.2f}; inv now shows "
+        f"**${info.get('seen'):,.2f}** — adopted as the new baseline.",
+        "",
+        "Auto-pricing stays ON: this price holds while you're cheapest, "
+        "and the pricer undercuts again the moment a competitor goes below it.",
+    ]
+    embed = {
+        "title": "🔄 Auto-pricer adopted your price change",
+        "description": "\n".join(lines)[:4000],
+        "url": "https://kartis.homes/pricer",
+        "color": 0x58A6FF,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
 def notify_pricer_rate_limited(info):
     """Auto-pricer hit the sliding-window drop cap on a listing (e.g. 15% in
     12h) and stopped lowering. Sent once per episode (not every tick).
