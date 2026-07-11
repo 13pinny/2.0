@@ -97,7 +97,7 @@ Each runner uses a threading lock as a poor-man's mutex so the scheduler can't s
 ## Conventions worth knowing
 
 - Seat dicts use mixed key naming: normalized (`block`, `row`, `seat`) for kupat and newer ticketmaster code; raw (`b`, `r`, `l`) for older ticketmaster fixtures. Helpers in `notify.py` (`_seat_block`, `_seat_row`, `_seat_num`) accept both — if you add code that reads seat fields, accept both forms.
-- Discord notifications route per category to separate channels via optional `DISCORD_WEBHOOK_DROPS` / `_NEW_EVENTS` / `_PRICER` / `_LISTINGS` / `_TODOS` env vars (see `_WEBHOOK_ENV` in `notify.py`); any category without its own webhook falls back to `DISCORD_WEBHOOK_URL`. New notification kinds should pick a category (or add one) rather than reading `DISCORD_WEBHOOK_URL` directly.
+- Discord notifications route per category to separate channels via optional `DISCORD_WEBHOOK_DROPS` / `_STATUS` / `_NEW_EVENTS` / `_PRICER` / `_LISTINGS` / `_TODOS` env vars (see `_WEBHOOK_ENV` in `notify.py`); any category without its own webhook falls back to `DISCORD_WEBHOOK_URL`. New notification kinds should pick a category (or add one) rather than reading `DISCORD_WEBHOOK_URL` directly. Within `notify_drop`, alerts whose added seats are all non-buyable status pseudo-seats (sold out / last tickets / closed) route to `status`; anything actually buyable routes to `drops`.
 - All persisted timestamps are UTC ISO-8601 (`datetime.now(timezone.utc).isoformat()`).
 - Watcher IDs are `tmw-<12 hex chars>` (`add_watcher.py:63`).
 - `KARTIS_ATTACHMENTS_DIR` defaults to `./attachments` inside the repo — and the repo lives in OneDrive on the main PC, which is the intended cloud backup for ticket PDFs.

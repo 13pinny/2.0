@@ -4,8 +4,8 @@ Reads credentials from the environment:
   DISCORD_WEBHOOK_URL  — main/fallback webhook from a Discord server's
                          integrations page. Every category lands here unless
                          it has its own webhook below.
-  DISCORD_WEBHOOK_DROPS / DISCORD_WEBHOOK_NEW_EVENTS / DISCORD_WEBHOOK_PRICER
-  / DISCORD_WEBHOOK_LISTINGS / DISCORD_WEBHOOK_TODOS
+  DISCORD_WEBHOOK_DROPS / DISCORD_WEBHOOK_STATUS / DISCORD_WEBHOOK_NEW_EVENTS
+  / DISCORD_WEBHOOK_PRICER / DISCORD_WEBHOOK_LISTINGS / DISCORD_WEBHOOK_TODOS
                        — optional per-category webhooks (one Discord channel
                          each). Unset categories fall back to
                          DISCORD_WEBHOOK_URL, never to silence.
@@ -38,7 +38,8 @@ BASE_URL = (os.environ.get("KARTIS_BASE_URL") or "https://kartis.homes").rstrip(
 # channel's webhook. _discord_webhook() falls back to DISCORD_WEBHOOK_URL
 # for any category without its own webhook.
 _WEBHOOK_ENV = {
-    "drops":      "DISCORD_WEBHOOK_DROPS",       # seat-drop alerts (notify_drop)
+    "drops":      "DISCORD_WEBHOOK_DROPS",       # buyable-seat alerts (notify_drop)
+    "status":     "DISCORD_WEBHOOK_STATUS",      # sold-out / last-tickets signals (notify_drop)
     "new_events": "DISCORD_WEBHOOK_NEW_EVENTS",  # pacha + kupat + TM-IL monitors
     "pricer":     "DISCORD_WEBHOOK_PRICER",      # auto-pricer changes/pauses/caps
     "listings":   "DISCORD_WEBHOOK_LISTINGS",    # intake→viagogo push pipeline
@@ -224,8 +225,19 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
     `headline` — optional banner prepended to the Discord embed title and email
         subject. Used by event-level watchers to flag a sold-out → available
         transition (e.g. "🎟️ MSP03 — tickets just opened").
+
+    Discord channel routing: an alert whose added seats are ALL status
+    pseudo-seats in a non-buyable state (sold out / last tickets / sales
+    closed) is a market signal, not a buy-now drop — it routes to the
+    'status' category. Anything with real seats, or a status seat saying
+    "available" (tickets just opened), is actionable and routes to 'drops'.
     """
-    discord_url = _discord_webhook("drops")
+    status_only = bool(added_seats) and all(
+        (s.get("festival") or s.get("ga"))
+        and (s.get("status") or "") in ("soldout", "lasttickets", "closed")
+        for s in added_seats
+    )
+    discord_url = _discord_webhook("status" if status_only else "drops")
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
     to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
