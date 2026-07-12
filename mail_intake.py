@@ -699,12 +699,25 @@ def set_push_event_from_url(push_id, url_or_id, now_iso=None):
         raise ValueError(f"push {push_id} not found")
 
     term = _resolve_search_term(push.get("event_name") or "", push.get("venue") or "")
-    rows = viagogo_listing.search_event(term, limit=25)
-    match = next((r for r in rows if str(r.get("event_id")) == event_id), None)
-    if not match and (push.get("chosen_event_name") or "") and \
-            (push.get("chosen_event_name") or "") != term:
-        rows = viagogo_listing.search_event(push["chosen_event_name"], limit=25)
-        match = next((r for r in rows if str(r.get("event_id")) == event_id), None)
+    queries = [term]
+    if (push.get("chosen_event_name") or "") and push["chosen_event_name"] != term:
+        queries.append(push["chosen_event_name"])
+    # The picker's async filter is flaky — a search sometimes returns the
+    # unfiltered event list without our row. Retry each query a few times
+    # before concluding the event genuinely isn't listable.
+    match = None
+    for attempt in range(3):
+        for q in queries:
+            try:
+                rows = viagogo_listing.search_event(q, limit=25)
+            except Exception as e:
+                print(f"[intake] set-event picker search failed ({q!r}): {e}")
+                continue
+            match = next((r for r in rows if str(r.get("event_id")) == event_id), None)
+            if match:
+                break
+        if match:
+            break
     if not match:
         raise ValueError(
             f"viagogo's seller picker doesn't list event {event_id} under "
