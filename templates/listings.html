@@ -188,6 +188,11 @@ function renderCards(rows) {
           ${eventOptions}
         </select>
         <div data-hint="date" style="grid-column: 2 / -1; font-size: 11px; letter-spacing: 0.5px; min-height: 14px; margin-top: -4px;"></div>
+        <label title="Show missing from the list? Paste its public viagogo page URL (…/E-123456) and it gets verified + added">viagogo link</label>
+        <div style="grid-column: 2 / -1; display: flex; gap: 8px;">
+          <input data-f="event_url" type="text" placeholder="paste https://www.viagogo.com/…/E-123456 if the right show isn't listed above" style="flex: 1;">
+          <button type="button" data-act="vg-set-event" style="padding: 4px 12px; font-size: 11px; white-space: nowrap;">Use link</button>
+        </div>
         <label>Section *</label>
         <select data-f="section" style="grid-column: 2 / -1;">
           <option value="">— pick event to load sections —</option>
@@ -417,8 +422,28 @@ async function teachName(card) {
   setTimeout(() => load(), 5000);
 }
 
+async function setEventFromLink(card) {
+  const id = card.dataset.id;
+  const url = (card.querySelector("input[data-f='event_url']")?.value || "").trim();
+  if (!url) { alert("Paste the viagogo event page URL first (…/E-123456)"); return; }
+  const btn = card.querySelector("[data-act='vg-set-event']");
+  if (btn) { btn.disabled = true; btn.textContent = "verifying… (~15s)"; }
+  try {
+    const res = await fetch("/api/viagogo-push/set-event", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({id, url}),
+    });
+    const d = await res.json();
+    if (!res.ok) { alert(d.error || "failed"); return; }
+    await load();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Use link"; }
+  }
+}
+
 document.addEventListener("click", async (e) => {
-  const btn = e.target.closest(".inbox-card .ic-foot button, .inbox-card [data-act='vg-teach']");
+  const btn = e.target.closest(".inbox-card .ic-foot button, .inbox-card [data-act='vg-teach'], .inbox-card [data-act='vg-set-event']");
   if (!btn) return;
   e.stopPropagation();
   const card = btn.closest(".inbox-card");
@@ -426,6 +451,7 @@ document.addEventListener("click", async (e) => {
   else if (btn.dataset.act === "vg-approve-live") await approveCard(card, true);
   else if (btn.dataset.act === "vg-reject") await rejectCard(card);
   else if (btn.dataset.act === "vg-teach") await teachName(card);
+  else if (btn.dataset.act === "vg-set-event") await setEventFromLink(card);
 });
 
 $("poll-now").addEventListener("click", async () => {

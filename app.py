@@ -2418,6 +2418,27 @@ def api_viagogo_push_reject():
     return jsonify({"ok": True})
 
 
+@app.route("/api/viagogo-push/set-event", methods=["POST"])
+def api_viagogo_push_set_event():
+    """Point a push at a viagogo event by pasted public URL (.../E-<id>) or
+    bare id — for shows the picker search didn't surface as candidates.
+    Body: {id, url}. Drives the live browser (~15s) to verify the seller
+    picker can actually see the event."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    push_id = (body.get("id") or "").strip()
+    url = (body.get("url") or "").strip()
+    if not push_id or not url:
+        return jsonify({"error": "id and url required"}), 400
+    try:
+        candidate = mail_intake.set_push_event_from_url(push_id, url)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 502
+    return jsonify({"ok": True, "candidate": candidate})
+
+
 @app.route("/api/kupat-name-map", methods=["POST"])
 def api_kupat_name_map():
     """Teach a Hebrew→English name mapping and optionally re-run the search

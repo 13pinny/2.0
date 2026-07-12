@@ -676,6 +676,61 @@ def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None):
     }, now_iso)
 
 
+def set_push_event_from_url(push_id, url_or_id, now_iso=None):
+    """Point an existing push at a viagogo event pasted as a public URL
+    (.../E-<id>) or a bare event id — the escape hatch for shows the picker
+    search didn't surface as candidates (e.g. a freshly added extra night).
+
+    The seller flows (fetch_sections, create_draft_listing) locate events
+    through the New Listing picker, so the pasted event must be findable
+    there: we re-search the picker under the push's resolved English term
+    and require a row with that id. Found -> merged into candidates, set as
+    chosen, date-mismatch recomputed. Not found -> ValueError with a clear
+    reason (the event may not be open for seller listings yet).
+    """
+    if now_iso is None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+    m = re.search(r"/E-(\d+)", str(url_or_id)) or re.fullmatch(r"\s*(\d+)\s*", str(url_or_id))
+    if not m:
+        raise ValueError("couldn't find an event id in that link — expected .../E-123456 or a bare id")
+    event_id = m.group(1)
+    push = db.viagogo_push_get(push_id)
+    if not push:
+        raise ValueError(f"push {push_id} not found")
+
+    term = _resolve_search_term(push.get("event_name") or "", push.get("venue") or "")
+    rows = viagogo_listing.search_event(term, limit=25)
+    match = next((r for r in rows if str(r.get("event_id")) == event_id), None)
+    if not match and (push.get("chosen_event_name") or "") and \
+            (push.get("chosen_event_name") or "") != term:
+        rows = viagogo_listing.search_event(push["chosen_event_name"], limit=25)
+        match = next((r for r in rows if str(r.get("event_id")) == event_id), None)
+    if not match:
+        raise ValueError(
+            f"viagogo's seller picker doesn't list event {event_id} under "
+            f"'{term}' — the show may not be open for seller listings yet; "
+            "try again later")
+
+    candidate = {k: match.get(k) for k in
+                 ("event_id", "event_name", "venue", "city", "weekday", "date", "time")}
+    try:
+        cands = json.loads(push.get("candidates_json") or "[]")
+    except (TypeError, ValueError):
+        cands = []
+    if not any(str(c.get("event_id")) == event_id for c in cands):
+        cands.append(candidate)
+    db.viagogo_push_update(push_id, {
+        "status": "awaiting_approval",
+        "candidates_json": json.dumps(cands, ensure_ascii=False),
+        "chosen_event_id": event_id,
+        "chosen_event_name": candidate.get("event_name"),
+        "chosen_venue": candidate.get("venue"),
+        "chosen_event_date": candidate.get("date"),
+        "error": _candidate_date_mismatch(candidate, push.get("event_date_iso")),
+    }, now_iso)
+    return candidate
+
+
 def _notify_viagogo_push(push):
     if not push:
         return
