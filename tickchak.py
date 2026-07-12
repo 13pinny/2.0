@@ -285,7 +285,7 @@ def _normalize_form_init_tickets(init):
 
     Two kinds of types come back from tickchak:
       * Capped types (``amount > 0``) — real seats. Count toward
-        ``total_capacity`` and ``total_available``.
+        ``total_capacity``; PUBLIC ones count toward ``total_available``.
       * Uncapped types (``amount == 0``, e.g. donation tiers, "guest
         of friend" entries) — no inventory limit. tickchak reports
         ``amount_avaliable`` as a sentinel (typically 500_000) for
@@ -293,7 +293,19 @@ def _normalize_form_init_tickets(init):
         can list them) but don't include them in the seat totals — a
         donation isn't a seat.
 
-    Returns ``(blocks_map, total_capacity, total_available)``."""
+    Restricted types: a non-null ``crid`` marks a coupon/club-gated type
+    (וועד ירושלמי benefit, employee allocations, Coca-Cola promos, hidden
+    reserves). The public form only renders these after a matching code is
+    entered in the voucher box, so their inventory is NOT publicly buyable
+    — they stay in the blocks map flagged ``restricted`` but are excluded
+    from ``total_available``. This is what makes "in stock but only for
+    special customers" read as sold out. (Verified against the Chutzot
+    Hayotzer 2026 hub: the buy page shows a quantity stepper exactly for
+    types with active=1, crid=null, amount_avaliable>0; active=0 types are
+    hidden entirely; crid types hide behind the voucher box.)
+
+    Returns ``(blocks_map, total_capacity, total_available)`` where
+    ``total_available`` counts publicly buyable seats only."""
     out = {}
     cap = 0
     avail = 0
@@ -302,6 +314,7 @@ def _normalize_form_init_tickets(init):
             continue
         if str(t.get("active") or "1") != "1":
             continue
+        restricted = t.get("crid") not in (None, "", "0", 0)
         try:
             amount = int(t.get("amount") or 0)
         except (TypeError, ValueError):
@@ -320,7 +333,8 @@ def _normalize_form_init_tickets(init):
             # rows over-report when the venue moves seats around).
             avail_capped = max(0, min(raw_avail, amount))
             cap += amount
-            avail += avail_capped
+            if not restricted:
+                avail += avail_capped
             unlimited = False
         else:
             # Donation / unlimited entry — present but not a seat.
@@ -339,6 +353,7 @@ def _normalize_form_init_tickets(init):
             "available": avail_capped,
             "active": True,
             "unlimited": unlimited,
+            "restricted": restricted,
             "tid": t.get("tid"),
         }
     return out, cap, avail
@@ -565,12 +580,23 @@ def _fetch_festival_feed(slug):
     return feed
 
 
-def _festival_status(ev_info, total_available, have_counts):
-    """Derive a single status flag. The hub's own soldOut/lastTickets
-    flags are authoritative for the headline; live counts corroborate
-    sold-out (sometimes the flag lags)."""
-    sold_out = bool(ev_info.get("soldOut")) or (have_counts and total_available <= 0)
-    if sold_out:
+def _festival_status(ev_info, public_available, have_counts):
+    """Derive a single "can the public buy right now?" flag.
+
+    Live per-type counts (public = active, not coupon-gated — see
+    _normalize_form_init_tickets) are authoritative when we have them; the
+    hub's own soldOut/lastTickets flags only fill in when /ajax/form/init
+    is unreachable. The flags alone lie in BOTH directions (Chutzot
+    Hayotzer 2026): soldOut=0 while every open type is club/coupon-gated
+    (page shows nothing to buy), and soldOut=1 while an accessible type
+    still sells publicly (page shows a live quantity stepper)."""
+    if have_counts:
+        if public_available <= 0:
+            return "soldout"
+        if ev_info.get("lastTickets"):
+            return "lasttickets"
+        return "available"
+    if ev_info.get("soldOut"):
         return "soldout"
     if ev_info.get("lastTickets"):
         return "lasttickets"
@@ -629,6 +655,7 @@ def _festival_snapshot(event_code, lang="iw"):
     if have_counts:
         types, total_capacity, total_available = _normalize_form_init_tickets(init)
         for key, info in types.items():
+            restricted = info.get("restricted", False)
             blocks[key] = {
                 "name": info["name"],
                 "price": info["price"],
@@ -637,7 +664,9 @@ def _festival_snapshot(event_code, lang="iw"):
                 "sold": info["sold"],
                 "available": info["available"],
                 "unlimited": info.get("unlimited", False),
-                "availability": "in_stock" if info["available"] > 0 else "out_of_stock",
+                "restricted": restricted,
+                "availability": ("restricted" if restricted else
+                                 "in_stock" if info["available"] > 0 else "out_of_stock"),
             }
 
     status = _festival_status(ev_info, total_available, have_counts)
@@ -731,7 +760,9 @@ def fetch_selectable_seats(event_code, perf_code="0"):
          actually buy through the public flow.
       2. ``/ajax/form/init`` per-type quantities — the same endpoint the
          iframe form uses to populate the ticket picker. Has real
-         ``amount_avaliable``, ``amount``, ``sold`` per type.
+         ``amount_avaliable``, ``amount``, ``sold`` per type. Coupon/club
+         gated types (non-null ``crid``) are skipped — their inventory
+         isn't publicly buyable.
       3. JSON-LD as fallback when form/init is unreachable.
 
     We emit ONE virtual seat per active type with available > 0. The
@@ -759,6 +790,10 @@ def fetch_selectable_seats(event_code, perf_code="0"):
         out = []
         for key, info in types.items():
             if (info.get("available") or 0) <= 0:
+                continue
+            if info.get("restricted"):
+                # Coupon/club-gated type — not publicly buyable, so its
+                # inventory must not read as a drop.
                 continue
             out.append({
                 "block": key,
@@ -858,6 +893,7 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
         total_available = raw_avail if button_enabled else 0
         for key, info in types.items():
             available = info["available"] if button_enabled else 0
+            restricted = info.get("restricted", False)
             blocks[key] = {
                 "name": info["name"],
                 "price": info["price"],
@@ -865,7 +901,9 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
                 "amount": info["amount"],
                 "sold": info["sold"],
                 "available": available,
-                "availability": "in_stock" if available > 0 else "out_of_stock",
+                "restricted": restricted,
+                "availability": ("restricted" if restricted else
+                                 "in_stock" if available > 0 else "out_of_stock"),
             }
     else:
         # Legacy path: JSON-LD only. No real seat counts; report ticket-type
