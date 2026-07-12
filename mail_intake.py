@@ -413,7 +413,7 @@ def _rank_viagogo_candidates(candidates, event_date_iso):
 
 
 def _resolve_search_term(event_name, venue):
-    """Translate a Hebrew Kupat event/venue into the English term to search
+    """Translate a Hebrew Kupat EVENT NAME into the English term to search
     viagogo with, using the learned kupat_name_map.
 
     Kupat event names often carry a suffix the map key won't include —
@@ -422,27 +422,31 @@ def _resolve_search_term(event_name, venue):
     (b) check whether any known map key is a substring of the event name.
     Falls back to the raw Hebrew (which usually returns nothing) so the push
     lands as no_match and the user can teach the mapping.
+
+    The VENUE is deliberately never used to build the search term: venue map
+    entries (היכל מנורה מבטחים → Menora Mivtachim Arena) exist for section
+    translation, and searching the picker by venue returns every show at
+    that hall — three Eyal Golan pushes auto-matched to a Miri Mesika event
+    that way (2026-07-09). Better an honest no_match + teach box than a
+    confident wrong artist.
     """
-    for key in (event_name, venue):
-        hit = db.kupat_name_map_get(key) if key else None
+    if event_name:
+        hit = db.kupat_name_map_get(event_name)
         if hit:
             return hit
-    for raw in (event_name, venue):
-        if not raw:
-            continue
-        for frag in re.split(r"\s*[-–—|,/]\s*", raw):
+        for frag in re.split(r"\s*[-–—|,/]\s*", event_name):
             frag = frag.strip()
             if frag:
                 hit = db.kupat_name_map_get(frag)
                 if hit:
                     return hit
-    try:
-        for m in (db.kupat_name_map_all() or []):
-            heb = m.get("hebrew_name") or ""
-            if heb and (heb in event_name or (venue and heb in venue)):
-                return m.get("english_name") or event_name or venue
-    except Exception:
-        pass
+        try:
+            for m in (db.kupat_name_map_all() or []):
+                heb = m.get("hebrew_name") or ""
+                if heb and heb in event_name:
+                    return m.get("english_name") or event_name
+        except Exception:
+            pass
     return event_name or venue
 
 
