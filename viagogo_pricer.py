@@ -204,8 +204,16 @@ def drop_guard(listing_id, current_price):
              - timedelta(hours=drop_window_hours())).isoformat()
     writes = db.pricer_writes_since(str(listing_id), since)
     baseline = None
-    if writes and writes[0].get("old_price"):
-        baseline = writes[0]["old_price"]
+    for w in writes:
+        if w.get("action") == "manual_adopt" and w.get("new_price"):
+            # The user's own price change resets the guard: pricer drops
+            # are measured from what THEY set, not the pre-manual price
+            # (otherwise a big manual cut leaves the pricer rate_limited
+            # against a stale baseline — seen live on 13336046972:
+            # $495.96 baseline blocking a 2-cent tie-break at $165).
+            baseline = w["new_price"]
+        elif baseline is None and w.get("old_price"):
+            baseline = w["old_price"]
     if not baseline:
         baseline = current_price
     return baseline * (1.0 - max_drop_pct() / 100.0), baseline
