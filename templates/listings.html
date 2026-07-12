@@ -164,8 +164,8 @@ function renderCards(rows) {
         <span class="when">${esc(when)}</span>
         ${r.error ? `<span class="warn" title="${esc(r.error)}">${esc(r.error.slice(0, 80))}</span>` : ""}
       </div>
-      <div class="ic-subject" style="direction: rtl; text-align: right; color: var(--text);" title="What the Kupat email/ticket says — confirm the viagogo section against this">
-        🎫 ${esc(r.event_name || "?")}${r.venue ? ` — ${esc(r.venue)}` : ""} &nbsp;·&nbsp; אזור: <b style="color: var(--amber);">${esc(r.section || "— לא צוין —")}</b>${r.row_label ? ` &nbsp;·&nbsp; שורה: ${esc(r.row_label)}` : ""}${r.seats ? ` &nbsp;·&nbsp; כיסאות: ${esc(r.seats)}` : ""}
+      <div class="ic-subject" style="direction: rtl; text-align: right; color: var(--text);" title="What the Kupat email/ticket says — confirm the viagogo section AND DATE against this">
+        🎫 ${esc(r.event_name || "?")}${r.venue ? ` — ${esc(r.venue)}` : ""} &nbsp;·&nbsp; 📅 <b style="color: var(--accent);">${esc(fmtTicketDate(r.event_date_iso) || "— תאריך לא זוהה —")}</b> &nbsp;·&nbsp; אזור: <b style="color: var(--amber);">${esc(r.section || "— לא צוין —")}</b>${r.row_label ? ` &nbsp;·&nbsp; שורה: ${esc(r.row_label)}` : ""}${r.seats ? ` &nbsp;·&nbsp; כיסאות: ${esc(r.seats)}` : ""}
       </div>
       <div class="ic-subject">
         ${noMatch
@@ -187,6 +187,7 @@ function renderCards(rows) {
           <option value="">— select —</option>
           ${eventOptions}
         </select>
+        <div data-hint="date" style="grid-column: 2 / -1; font-size: 11px; letter-spacing: 0.5px; min-height: 14px; margin-top: -4px;"></div>
         <label>Section *</label>
         <select data-f="section" style="grid-column: 2 / -1;">
           <option value="">— pick event to load sections —</option>
@@ -237,7 +238,49 @@ function renderCards(rows) {
 
     // Auto-load sections for the pre-chosen event
     if (r.chosen_event_id) loadSections(card, r.chosen_event_id, "E-Tickets");
+
+    // Live date check: ticket email date vs the selected viagogo event's
+    // date — a same-artist wrong-night match is an expensive mistake.
+    const dateCheck = () => {
+      const hint = card.querySelector("[data-hint='date']");
+      if (!hint) return;
+      card.dataset.dateMismatch = "";
+      const want = parseDateLoose(r.event_date_iso);
+      const cand = (r.candidates || []).find(c => c.event_id === eventSel.value);
+      const got = cand ? parseDateLoose(cand.date) : null;
+      if (!eventSel.value) { hint.textContent = ""; return; }
+      if (!want || !got) {
+        hint.style.color = "var(--amber)";
+        hint.textContent = "⚠ can't verify the date — ticket says " + (fmtTicketDate(r.event_date_iso) || "?") + ", check the show manually";
+        return;
+      }
+      if (want.getTime() === got.getTime()) {
+        hint.style.color = "var(--green)";
+        hint.textContent = "✓ date matches the ticket — " + fmtDateNice(want);
+      } else {
+        hint.style.color = "var(--red)";
+        hint.textContent = "⛔ WRONG SHOW? ticket is " + fmtDateNice(want) + " but this viagogo event is " + fmtDateNice(got);
+        card.dataset.dateMismatch = "1";
+      }
+    };
+    eventSel.addEventListener("change", dateCheck);
+    dateCheck();
   }
+}
+
+function parseDateLoose(s) {
+  if (!s) return null;
+  const d = new Date(/^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) + "T00:00:00" : s);
+  if (isNaN(d)) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function fmtDateNice(d) {
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+}
+function fmtTicketDate(iso) {
+  const d = parseDateLoose(iso);
+  return d ? fmtDateNice(d) : null;
 }
 
 // Pick the program's best guess for the viagogo section, given the live
@@ -323,6 +366,10 @@ async function approveCard(card, publish) {
   card.querySelectorAll("[data-f]").forEach(el => { f[el.dataset.f] = el.value; });
   if (!f.event_id) { alert("Pick the matching viagogo event first"); return; }
   if (!f.section || !f.section.trim()) { alert("Section is required — pick a viagogo section"); return; }
+  if (card.dataset.dateMismatch === "1" &&
+      !confirm("⛔ The selected viagogo event's DATE does not match the ticket email.\nSelling tickets for the wrong show is expensive.\n\nApprove anyway?")) {
+    return;
+  }
   const price = parseFloat(f.website_price || "0");
   const proceeds = parseFloat(f.proceeds || "0") || +(price * 0.9).toFixed(2);
   const body = {

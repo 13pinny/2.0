@@ -386,12 +386,46 @@ def _parse_kupat(subject, body, links=None):
     return out
 
 
+def _parse_candidate_date(text):
+    """viagogo picker date display -> datetime.date, or None. Seen formats:
+    'Sep 06 2026', '4 Jun 2026', with or without a weekday prefix/commas."""
+    if not text:
+        return None
+    parts = re.sub(r",", " ", str(text)).split()
+    tail = " ".join(parts[-3:])
+    for fmt in ("%b %d %Y", "%d %b %Y", "%B %d %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(tail, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+
+def _candidate_date_mismatch(chosen, event_date_iso):
+    """Human-readable warning when the auto-chosen viagogo event's date
+    differs from the ticket email's date — multi-night runs (Eyal Golan
+    Sep 06/07/10 2026) make a same-artist wrong-night match an expensive
+    mistake. None when the dates agree or either side is unparseable."""
+    if not chosen or not event_date_iso:
+        return None
+    try:
+        want = datetime.strptime(event_date_iso[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    got = _parse_candidate_date(chosen.get("date"))
+    if not got or got == want:
+        return None
+    return (f"DATE MISMATCH: ticket is {want.strftime('%a %b %d %Y')} but the "
+            f"matched viagogo event is {got.strftime('%a %b %d %Y')} — pick the "
+            "right show before approving")
+
+
 def _rank_viagogo_candidates(candidates, event_date_iso):
-    """Best-effort: prefer the candidate whose displayed date contains the
-    Kupat email's day-of-month. viagogo's picker doesn't return a parseable
-    ISO date, just a display string (e.g. "4 Jun 2026"), so this is a loose
-    tie-breaker among same-named events on different dates, not a strict
-    match — the user still confirms on /pending before anything is created.
+    """Prefer the candidate whose date PARSES to exactly the Kupat email's
+    date; fall back to the old day-of-month-substring heuristic, then to the
+    first live candidate. The user still confirms on the card, and a chosen
+    candidate whose date disagrees with the email gets a DATE MISMATCH
+    warning stamped into the row (see _candidate_date_mismatch).
 
     viagogo's picker also lists "requested event" placeholder rows alongside
     the real live event (same artist, same date). Never auto-pick a
@@ -404,6 +438,15 @@ def _rank_viagogo_candidates(candidates, event_date_iso):
     live = [c for c in candidates
             if "requested" not in (c.get("event_name") or "").lower()]
     pool = live or candidates
+    want = None
+    try:
+        want = datetime.strptime((event_date_iso or "")[:10], "%Y-%m-%d").date()
+    except ValueError:
+        pass
+    if want:
+        for c in pool:
+            if _parse_candidate_date(c.get("date")) == want:
+                return c
     day = (event_date_iso or "")[8:10]
     if day:
         for c in pool:
@@ -574,6 +617,8 @@ def _push_kupat_to_viagogo(intake_id, fields):
                 "fx_rate": fx_rate,
                 "cost_usd_per_ticket": cost_usd,
                 "website_price_usd": website_price,
+                "error": _candidate_date_mismatch(
+                    chosen, fields.get("event_date_iso")),
             })
         db.viagogo_push_insert(row, now_iso)
         push = db.viagogo_push_get(push_id)
@@ -627,7 +672,7 @@ def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None):
         "fx_rate": fx_rate,
         "cost_usd_per_ticket": cost_usd,
         "website_price_usd": website_price,
-        "error": None,
+        "error": _candidate_date_mismatch(chosen, fields.get("event_date_iso")),
     }, now_iso)
 
 
