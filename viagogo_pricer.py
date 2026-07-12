@@ -177,6 +177,13 @@ def ignore_single_competitors():
     return db.setting_get_bool("pricer_ignore_singles", True)
 
 
+def drop_cap_enabled():
+    """Global switch for the sliding-window drop cap. Off = every listing
+    may follow the market down to its floor without rate limiting. The
+    per-listing no_drop_cap flag does the same for one listing."""
+    return db.setting_get_bool("pricer_drop_cap_enabled", True)
+
+
 def max_drop_pct():
     """Hard brake: max total decrease per listing inside the drop window."""
     try:
@@ -908,7 +915,8 @@ def run_pricer_tick(dry_run=None):
                         # a log row each time
                         counters["skipped"] += 1
                         continue
-                    if target < row["price"]:
+                    if target < row["price"] and drop_cap_enabled() \
+                            and not cfg.get("no_drop_cap"):
                         # sliding-window drop cap (default 15% per 12h)
                         min_allowed, baseline = drop_guard(lid, row["price"])
                         if target < min_allowed - PRICE_EPSILON:

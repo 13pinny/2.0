@@ -1930,6 +1930,7 @@ def api_viagogo():
         r["pricer_paused"] = bool(cfg.get("paused"))
         r["pricer_paused_reason"] = cfg.get("paused_reason")
         r["pricer_last_set_price"] = cfg.get("last_set_price")
+        r["pricer_no_drop_cap"] = bool(cfg.get("no_drop_cap"))
         for src_key, out_key in (("compete_sections", "pricer_compete_sections"),
                                  ("compete_include", "pricer_compete_include"),
                                  ("compete_exclude", "pricer_compete_exclude")):
@@ -4853,6 +4854,7 @@ def api_pricer_status():
         "undercut": viagogo_pricer.undercut_amount(),
         "max_drop_pct": viagogo_pricer.max_drop_pct(),
         "drop_window_hours": viagogo_pricer.drop_window_hours(),
+        "drop_cap_enabled": viagogo_pricer.drop_cap_enabled(),
         "ignore_singles": viagogo_pricer.ignore_single_competitors(),
         "interval_minutes": PRICER_INTERVAL_MINUTES,
         "configs": db.pricer_config_all(),
@@ -4883,6 +4885,8 @@ def api_pricer_config():
         fields["floor_price"] = floor
     if "allow_raise" in body:
         fields["allow_raise"] = 1 if body.get("allow_raise") else 0
+    if "no_drop_cap" in body:
+        fields["no_drop_cap"] = 1 if body.get("no_drop_cap") else 0
     if "compete_sections" in body:
         secs = body.get("compete_sections")
         if secs in (None, []):
@@ -4958,6 +4962,10 @@ def api_pricer_settings():
             return jsonify({"error": "max_drop_pct must be between 1 and 90"}), 400
         db.setting_set("pricer_max_drop_pct", f"{pct:g}", now_iso)
         out["max_drop_pct"] = pct
+    if "drop_cap_enabled" in body:
+        v = "true" if body.get("drop_cap_enabled") else "false"
+        db.setting_set("pricer_drop_cap_enabled", v, now_iso)
+        out["drop_cap_enabled"] = v
     if not out:
         return jsonify({"error": "nothing to update"}), 400
     return jsonify({"ok": True, **out})

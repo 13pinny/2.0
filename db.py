@@ -706,6 +706,8 @@ def init():
             conn.execute("ALTER TABLE viagogo_pricer_config ADD COLUMN compete_include TEXT")
         if "compete_exclude" not in pc_cols:
             conn.execute("ALTER TABLE viagogo_pricer_config ADD COLUMN compete_exclude TEXT")
+        if "no_drop_cap" not in pc_cols:
+            conn.execute("ALTER TABLE viagogo_pricer_config ADD COLUMN no_drop_cap INTEGER NOT NULL DEFAULT 0")
         # Sales snapshots grew multi-source (kupat GA alongside tickchak
         # festival): add source + perf_code and backfill the tickchak rows
         # (perf_code is always '0' for tickchak).
@@ -857,7 +859,7 @@ def pricer_config_all():
 _PRICER_CONFIG_FIELDS = (
     "enabled", "floor_price", "allow_raise", "paused", "paused_reason",
     "paused_at", "last_set_price", "last_set_at", "compete_sections",
-    "compete_include", "compete_exclude",
+    "compete_include", "compete_exclude", "no_drop_cap",
 )
 
 
