@@ -490,7 +490,10 @@ CREATE TABLE IF NOT EXISTS pacha_seen_events (
     ga_sold_out  INTEGER,
     buy_url      TEXT,
     first_seen_at TEXT NOT NULL,
-    last_seen_at  TEXT NOT NULL
+    last_seen_at  TEXT NOT NULL,
+    ga_release   TEXT,
+    ga_available INTEGER,
+    ga_quantity  INTEGER
 );
 -- Israeli-sites new-event monitor (kupat_events.py / tm_events.py +
 -- app.py run_il_events). One row per (source, event) ever seen on the
@@ -516,7 +519,7 @@ CREATE TABLE IF NOT EXISTS site_seen_events (
 -- that powers the sold-per-window columns lives in tickchak_sales_snapshots
 -- under the same (source, event_code, perf_code) key.
 CREATE TABLE IF NOT EXISTS market_events (
-    source        TEXT NOT NULL,          -- kupat | tm | tickchak | zappa
+    source        TEXT NOT NULL,          -- kupat | tm | tickchak | zappa | pacha
     event_code    TEXT NOT NULL,
     perf_code     TEXT NOT NULL DEFAULT '0',
     name          TEXT,
@@ -524,14 +527,15 @@ CREATE TABLE IF NOT EXISTS market_events (
     date_text     TEXT,
     first_date_ms INTEGER,
     url           TEXT,
-    status        TEXT,                   -- available|lasttickets|soldout|closed|past|unknown
+    status        TEXT,                   -- available|lasttickets|soldout|closed|past|waitlist|unknown
     capacity      INTEGER,                -- NULL where the site exposes no total
     available     INTEGER,
-    min_price     REAL,                   -- cheapest currently-buyable tier, ILS
+    min_price     REAL,                   -- cheapest currently-buyable tier, in `currency`
     manual        INTEGER NOT NULL DEFAULT 0,
     first_seen_at TEXT NOT NULL,
     last_seen_at  TEXT NOT NULL,
     last_error    TEXT,
+    currency      TEXT DEFAULT 'ILS',     -- ISO code; pacha rows are USD
     PRIMARY KEY (source, event_code, perf_code)
 );
 -- Tickchak has no global catalog — the user pastes event/hub URLs on the
@@ -724,6 +728,21 @@ def init():
             "CREATE INDEX IF NOT EXISTS idx_tcsnap2 ON "
             "tickchak_sales_snapshots(source, event_code, perf_code, captured_at)"
         )
+        # market_events grew a currency column when pacha (USD) joined the
+        # ILS-only sources.
+        me_cols = {row["name"] for row in conn.execute("PRAGMA table_info(market_events)").fetchall()}
+        if "currency" not in me_cols:
+            conn.execute("ALTER TABLE market_events ADD COLUMN currency TEXT DEFAULT 'ILS'")
+            conn.execute("UPDATE market_events SET currency = 'ILS' WHERE currency IS NULL")
+        # Pacha monitor grew GA-release availability tracking (low-stock
+        # alerts): the current release's name + tickets-left counts.
+        pe_cols = {row["name"] for row in conn.execute("PRAGMA table_info(pacha_seen_events)").fetchall()}
+        if "ga_release" not in pe_cols:
+            conn.execute("ALTER TABLE pacha_seen_events ADD COLUMN ga_release TEXT")
+        if "ga_available" not in pe_cols:
+            conn.execute("ALTER TABLE pacha_seen_events ADD COLUMN ga_available INTEGER")
+        if "ga_quantity" not in pe_cols:
+            conn.execute("ALTER TABLE pacha_seen_events ADD COLUMN ga_quantity INTEGER")
         # Maaser tax-deductible flag — existing rows default to 0 (not
         # claimed) which is a safe default; user can edit any back-history
         # entries to flip them on.
@@ -2083,17 +2102,22 @@ def pacha_upsert_seen(ev, now_iso):
         conn.execute(
             """INSERT INTO pacha_seen_events (event_id, name, slug, date_text,
                    start_date, on_sale, ga_price, ga_sold_out, buy_url,
-                   first_seen_at, last_seen_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   first_seen_at, last_seen_at, ga_release, ga_available,
+                   ga_quantity)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(event_id) DO UPDATE SET
                    name = excluded.name, slug = excluded.slug,
                    date_text = excluded.date_text, start_date = excluded.start_date,
                    on_sale = excluded.on_sale, ga_price = excluded.ga_price,
                    ga_sold_out = excluded.ga_sold_out, buy_url = excluded.buy_url,
-                   last_seen_at = excluded.last_seen_at""",
+                   last_seen_at = excluded.last_seen_at,
+                   ga_release = excluded.ga_release,
+                   ga_available = excluded.ga_available,
+                   ga_quantity = excluded.ga_quantity""",
             (ev["event_id"], ev.get("name"), ev.get("slug"), ev.get("date_text"),
              ev.get("start_date"), 1 if ev.get("on_sale") else 0, ev.get("ga_price"),
-             1 if ev.get("ga_sold_out") else 0, ev.get("buy_url"), now_iso, now_iso),
+             1 if ev.get("ga_sold_out") else 0, ev.get("buy_url"), now_iso, now_iso,
+             ev.get("ga_release"), ev.get("ga_available"), ev.get("ga_quantity")),
         )
 
 
@@ -2152,8 +2176,8 @@ def market_upsert(ev, now_iso):
             """INSERT INTO market_events (source, event_code, perf_code, name,
                    venue, date_text, first_date_ms, url, status, capacity,
                    available, min_price, manual, first_seen_at, last_seen_at,
-                   last_error)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   last_error, currency)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(source, event_code, perf_code) DO UPDATE SET
                    name = excluded.name, venue = excluded.venue,
                    date_text = excluded.date_text,
@@ -2163,13 +2187,14 @@ def market_upsert(ev, now_iso):
                    available = excluded.available,
                    min_price = excluded.min_price,
                    last_seen_at = excluded.last_seen_at,
-                   last_error = excluded.last_error""",
+                   last_error = excluded.last_error,
+                   currency = excluded.currency""",
             (ev["source"], str(ev["event_code"]), str(ev.get("perf_code") or "0"),
              ev.get("name"), ev.get("venue"), ev.get("date_text"),
              ev.get("first_date_ms"), ev.get("url"), ev.get("status"),
              ev.get("capacity"), ev.get("available"), ev.get("min_price"),
              1 if ev.get("manual") else 0, now_iso, now_iso,
-             ev.get("last_error")),
+             ev.get("last_error"), ev.get("currency") or "ILS"),
         )
 
 

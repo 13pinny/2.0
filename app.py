@@ -129,14 +129,17 @@ _todo_remind_lock = threading.Lock()
 # enabled or Discord gets double pings. Prod = the VPS; a locally-run
 # dashboard sets KARTIS_PACHA_MONITOR_ENABLED=0 (same idea as TM_CHECK_ENABLED).
 _last_pacha_events = {"at": None, "events": 0, "new": 0, "onsale": 0,
-                      "price_up": 0, "notified": 0, "baseline": False,
-                      "error": None, "running": False}
+                      "price_up": 0, "low_stock": 0, "notified": 0,
+                      "baseline": False, "error": None, "running": False}
 _pacha_events_lock = threading.Lock()
 PACHA_MONITOR_INTERVAL_MINUTES = int(os.getenv("KARTIS_PACHA_MONITOR_INTERVAL_MINUTES") or 10)
 PACHA_MONITOR_ENABLED = (os.getenv("KARTIS_PACHA_MONITOR_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 # One tick can't spam more pings than this — a parser anomaly that makes
 # every event look "new" should hit the cap, not flood the channel.
 PACHA_MAX_PINGS_PER_TICK = 12
+# Low-stock alert: ping once when the GA release's tickets-left count
+# crosses at/below this (re-armed by the next release).
+PACHA_LOW_STOCK_THRESHOLD = int(os.getenv("KARTIS_PACHA_LOW_STOCK_THRESHOLD") or 20)
 
 # Israeli-sites new-event monitor — polls the kupat.co.il and
 # ticketmaster.co.il listing feeds (kupat_events.py / tm_events.py, pure
@@ -187,15 +190,56 @@ def run_mail_intake():
         _intake_lock.release()
 
 
+def _pacha_market_rows(events, now_iso):
+    """Feed the /market page from the pacha tick: upsert one market_events
+    row per event and snapshot availability so the velocity windows work.
+    Availability = sum across the currently purchasable tiers; capacity is
+    left NULL (tier quantities are per-release, not event capacity — same
+    treatment as kupat GA rows)."""
+    for ev in events:
+        if ev.get("ga_sold_out") and not ev.get("total_available"):
+            status = "soldout"
+        elif ev.get("iswaitlist"):
+            status = "waitlist"
+        elif ev.get("on_sale"):
+            status = "available"
+        else:
+            status = "unknown"
+        first_ms = None
+        if ev.get("start_date"):
+            try:
+                first_ms = int(datetime.fromisoformat(ev["start_date"]).timestamp() * 1000)
+            except ValueError:
+                pass
+        db.market_upsert({
+            "source": "pacha", "event_code": ev["event_id"], "perf_code": "0",
+            "name": ev.get("name"), "venue": "Pacha NYC",
+            "date_text": ev.get("date_text"), "first_date_ms": first_ms,
+            "url": ev.get("page_url"), "status": status,
+            "capacity": None, "available": ev.get("total_available"),
+            "min_price": ev.get("ga_price"), "currency": "USD",
+            "manual": False, "last_error": None,
+        }, now_iso)
+        if ev.get("total_available") is not None:
+            db.sales_snapshot_insert("pacha", ev["event_id"], "0",
+                                     None, ev["total_available"], None, now_iso)
+
+
 def run_pacha_events():
     """One tick of the Pacha NYC new-event monitor. Fetch the current event
     list, diff against pacha_seen_events, ping Discord for: brand-new
-    events, waitlist→on-sale flips, and GA price climbs (both prices > 0).
+    events, waitlist→on-sale flips, GA price climbs (both prices > 0), and
+    the GA release's tickets-left count crossing below
+    PACHA_LOW_STOCK_THRESHOLD (early warning that the price will jump).
+    Every tick also feeds the /market page (market_events row + availability
+    snapshot per event, source='pacha').
 
     Gating mirrors the drop checker: the very first tick ever (empty seen
     table) is a baseline — store everything, ping nothing. master_paused
     skips the tick entirely; master_muted keeps state current but skips the
-    Discord sends."""
+    Discord sends. Low-stock fires only on a crossing within the SAME
+    release (old count above threshold, new at/below), so it pings once per
+    release, and a release flip re-arms it."""
     if not _pacha_events_lock.acquire(blocking=False):
         return
     _last_pacha_events["running"] = True
@@ -222,6 +266,12 @@ def run_pacha_events():
                 old_ga, new_ga = old["ga_price"], ev["ga_price"]
                 if old_ga and new_ga and new_ga > old_ga:
                     pings.append(("price_up", ev, old))
+                elif (ev.get("ga_available") is not None
+                        and old.get("ga_available") is not None
+                        and old.get("ga_release") == ev.get("ga_release")
+                        and old["ga_available"] > PACHA_LOW_STOCK_THRESHOLD
+                        and ev["ga_available"] <= PACHA_LOW_STOCK_THRESHOLD):
+                    pings.append(("low_stock", ev, old))
 
         notified = 0
         if not muted:
@@ -235,12 +285,14 @@ def run_pacha_events():
 
         for ev in events:
             db.pacha_upsert_seen(ev, now_iso)
+        _pacha_market_rows(events, now_iso)
 
         _last_pacha_events.update(
             at=now_iso, error=None, events=len(events), baseline=baseline,
             new=sum(1 for k, _, _ in pings if k == "new"),
             onsale=sum(1 for k, _, _ in pings if k == "onsale"),
             price_up=sum(1 for k, _, _ in pings if k == "price_up"),
+            low_stock=sum(1 for k, _, _ in pings if k == "low_stock"),
             notified=notified,
         )
         if baseline:
@@ -4282,6 +4334,7 @@ def api_market():
             "first_date_ms": r.get("first_date_ms"), "url": r.get("url"),
             "status": r.get("status"), "total": r.get("capacity"),
             "available": avail, "min_price": r.get("min_price"),
+            "currency": r.get("currency") or "ILS",
             "manual": bool(r.get("manual")),
             "windows": windows,
             "tracking_since": earliest_t.isoformat() if earliest_t else None,

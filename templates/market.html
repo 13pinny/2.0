@@ -55,12 +55,14 @@
   .src.ticketmaster { color: var(--accent); }
   .src.tickchak { color: var(--purple); }
   .src.zappa { color: var(--orange); }
+  .src.pacha { color: #e91e63; }
   .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; }
   .badge.available { background: #16a34a; }
   .badge.lasttickets { background: #d97706; }
   .badge.soldout { background: #dc2626; }
   .badge.closed { background: #8a949e; }
   .badge.unknown { background: #888; }
+  .badge.waitlist { background: #7c3aed; }
   .pct { font-size: 10px; color: var(--muted); }
   .vel { font-variant-numeric: tabular-nums; }
   .vel.zero { color: var(--muted); }
@@ -125,7 +127,8 @@
 const $ = id => document.getElementById(id);
 function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 const WIN_LABELS = { '1h':'Last hour', '6h':'Last 6 hours', '24h':'Last 24 hours', '3d':'Last 3 days', '7d':'Last 7 days' };
-const SRC_LABELS = { kupat:'Kupat', ticketmaster:'TM', tickchak:'Tickchak', zappa:'Zappa' };
+const SRC_LABELS = { kupat:'Kupat', ticketmaster:'TM', tickchak:'Tickchak', zappa:'Zappa', pacha:'Pacha' };
+const CUR_SYMBOLS = { ILS:'₪', USD:'$' };
 const fmt = n => (n == null) ? '—' : n.toLocaleString();
 const HOT_24H = 25;   // 24h-sold at/above this highlights the row
 
@@ -146,7 +149,7 @@ const COLS = [
   { key:'w24h',  label:'+24h', num:true },
   { key:'w3d',   label:'+3d', num:true },
   { key:'w7d',   label:'+7d', num:true },
-  { key:'price', label:'Min ₪', num:true },
+  { key:'price', label:'Min', num:true },
 ];
 
 function fmtAgo(iso){
@@ -235,7 +238,7 @@ function render(){
       ${velCell((s.windows||{})['24h'])}
       ${velCell((s.windows||{})['3d'])}
       ${velCell((s.windows||{})['7d'])}
-      <td class="num">${s.min_price != null ? '₪' + fmt(s.min_price) : '—'}</td>
+      <td class="num">${s.min_price != null ? (CUR_SYMBOLS[s.currency] || '₪') + fmt(s.min_price) : '—'}</td>
     </tr>`;
   }).join('');
 }

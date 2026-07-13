@@ -525,14 +525,29 @@ def notify_pricer_change(info):
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
+def _pacha_tier_lines(ev, limit=5):
+    """'• General Access - 20th Release: 18 of 20 left — $185' per tier.
+    Tiers without an available count are skipped."""
+    out = []
+    for t in (ev.get("tiers") or [])[:limit]:
+        if t.get("available") is None:
+            continue
+        qty = f" of {t['quantity']}" if t.get("quantity") is not None else ""
+        price = f" — ${t['price']:,.0f}" if t.get("price") is not None else ""
+        out.append(f"• {t['name'] or 'Tickets'}: **{t['available']}**{qty} left{price}")
+    return out
+
+
 def notify_pacha_event(kind, ev, old=None):
     """Pacha NYC event-monitor ping. Discord-only — fires up to every 10
     minutes and speed matters more than a paper trail. `kind` is one of
     'new' (event just appeared on pacha-nyc.com/events), 'onsale'
     (waitlist/hidden-GA event became buyable), 'price_up' (headline GA
-    price climbed a release). `ev` is a normalized dict from
-    pacha_events.fetch_events(); `old` is the previously stored DB row
-    (used by price_up for the old price)."""
+    price climbed a release), 'low_stock' (the GA release's tickets-left
+    count crossed below the alert threshold — the price is about to jump).
+    `ev` is a normalized dict from pacha_events.fetch_events(); `old` is
+    the previously stored DB row (price_up uses its old price, low_stock
+    its old count)."""
     discord_url = _discord_webhook("new_events")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
@@ -552,6 +567,16 @@ def notify_pacha_event(kind, ev, old=None):
         title = f"📈 Pacha NYC: {name} GA ${old_price:,.0f} → ${ga:,.0f}"
         color = 0xFAA61A
         lines.append("Selling through — price climbs with each release.")
+    elif kind == "low_stock":
+        left = ev.get("ga_available")
+        release = ev.get("ga_release") or "current GA release"
+        title = f"⏳ Pacha NYC: {name} — only {left} left in {release}"
+        color = 0xED4245
+        was = (old or {}).get("ga_available")
+        if was is not None:
+            lines.append(f"Was {was} earlier — the next release usually costs more.")
+        else:
+            lines.append("The next release usually costs more.")
     else:
         title = f"🪩 New Pacha NYC event — {name}"
         color = 0xE91E63
@@ -562,6 +587,7 @@ def notify_pacha_event(kind, ev, old=None):
         if ev.get("iswaitlist"):
             lines.append("⏳ Waitlist only for now — not yet buyable.")
 
+    lines.extend(_pacha_tier_lines(ev))
     if ev.get("buy_url"):
         lines.append(f"[Buy tickets]({ev['buy_url']})")
     embed = {

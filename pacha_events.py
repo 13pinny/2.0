@@ -120,6 +120,26 @@ def parse_events(html):
     return _fallback_scan(payload)
 
 
+_GA_TIER_RE = re.compile(r"general\s*(access|admission)|early\s*entry", re.I)
+
+
+def _pick_ga_tier(tiers, ga_price):
+    """The 'general access'-family tier whose count backs the site's
+    "only N left" banner. Prefer a GA-named tier at the headline price,
+    then any GA-named tier, then the tier priced at the headline. Tiers
+    named VIP never qualify."""
+    non_vip = [t for t in tiers if "vip" not in (t["name"] or "").lower()]
+    ga_named = [t for t in non_vip if _GA_TIER_RE.search(t["name"] or "")]
+    for pool in (ga_named, non_vip):
+        for t in pool:
+            if ga_price is not None and t.get("price") == ga_price and t.get("available") is not None:
+                return t
+    for t in ga_named:
+        if t.get("available") is not None:
+            return t
+    return None
+
+
 def _normalize(e):
     prices = e.get("prices") or {}
     slug = e.get("slug") or ""
@@ -131,8 +151,12 @@ def _normalize(e):
         tiers.append({
             "name": (t.get("name") or cp.get("name") or "").strip(),
             "price": cp.get("price"),
+            "quantity": cp.get("quantity"),
+            "used": cp.get("used"),
             "available": cp.get("available"),
         })
+    ga_price = prices.get("general_access")
+    ga_tier = _pick_ga_tier(tiers, ga_price)
     return {
         "event_id": e.get("event_id"),
         "name": (e.get("name") or "").strip(),
@@ -141,13 +165,27 @@ def _normalize(e):
         "start_date": e.get("start_date"),
         "iswaitlist": iswaitlist,
         "on_sale": not iswaitlist and not hide_ga,
-        "ga_price": prices.get("general_access"),
+        "ga_price": ga_price,
         "ga_sold_out": bool(prices.get("general_access_sold_out")),
         "vip_price": prices.get("vip_experiences"),
         "buy_url": e.get("iframe") or "",
         "page_url": event_page_url(slug),
         "tiers": tiers,
+        # The release whose count backs the site's "only N left" banner.
+        "ga_release": ga_tier["name"] if ga_tier else None,
+        "ga_available": ga_tier.get("available") if ga_tier else None,
+        "ga_quantity": ga_tier.get("quantity") if ga_tier else None,
+        # Whole-event rollup across current tiers (each release resets these,
+        # so treat as "currently purchasable", not lifetime totals).
+        "total_available": _sum_or_none(tiers, "available"),
+        "total_quantity": _sum_or_none(tiers, "quantity"),
+        "total_used": _sum_or_none(tiers, "used"),
     }
+
+
+def _sum_or_none(tiers, key):
+    vals = [t[key] for t in tiers if t.get(key) is not None]
+    return sum(vals) if vals else None
 
 
 def fetch_events():
