@@ -283,6 +283,17 @@ def run_pacha_events():
             if len(pings) > PACHA_MAX_PINGS_PER_TICK:
                 print(f"[pacha] ping cap hit — {len(pings) - PACHA_MAX_PINGS_PER_TICK} suppressed")
 
+        # Lifetime sold since tracking began: accumulate availability drops
+        # between ticks. Release flips ADD inventory (available jumps up) —
+        # clamped to 0 like _sales_windows, so they never subtract.
+        for ev in events:
+            old = seen.get(ev["event_id"]) or {}
+            delta = 0
+            if old.get("total_available") is not None and ev.get("total_available") is not None:
+                delta = max(0, old["total_available"] - ev["total_available"])
+            ev["sold_cum"] = (old.get("sold_cum") or 0) + delta
+            ev["sold_cum_since"] = old.get("sold_cum_since") or now_iso
+
         for ev in events:
             db.pacha_upsert_seen(ev, now_iso)
         _pacha_market_rows(events, now_iso)
@@ -4320,6 +4331,9 @@ def api_market():
     pages use; rows that also have a watcher simply ride a denser series."""
     now = datetime.now(timezone.utc)
     series_map = db.sales_snapshot_series_bulk((now - timedelta(days=7)).isoformat())
+    # Pacha rows carry a lifetime sold-since-tracking counter (snapshots are
+    # pruned at ~7d, so the windows can't provide this).
+    pacha_seen = db.pacha_all_seen()
     shows = []
     for r in db.market_all():
         series = series_map.get((r["source"], r["event_code"], r["perf_code"]), [])
@@ -4327,7 +4341,10 @@ def api_market():
         avail = r.get("available")
         if avail is None and series:
             avail = series[-1][1]
+        pacha_row = pacha_seen.get(r["event_code"]) if r["source"] == "pacha" else None
         shows.append({
+            "sold_cum": pacha_row.get("sold_cum") if pacha_row else None,
+            "tracked_from": pacha_row.get("sold_cum_since") if pacha_row else None,
             "source": r["source"], "event_code": r["event_code"],
             "perf_code": r["perf_code"], "name": r.get("name"),
             "venue": r.get("venue"), "date_text": r.get("date_text"),

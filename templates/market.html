@@ -149,6 +149,7 @@ const COLS = [
   { key:'w24h',  label:'+24h', num:true },
   { key:'w3d',   label:'+3d', num:true },
   { key:'w7d',   label:'+7d', num:true },
+  { key:'scum',  label:'Σ Sold', num:true },
   { key:'price', label:'Min', num:true },
 ];
 
@@ -182,6 +183,7 @@ function sortVal(s, key){
     case 'w24h': return w('24h');
     case 'w3d': return w('3d');
     case 'w7d': return w('7d');
+    case 'scum': return s.sold_cum == null ? -1 : s.sold_cum;
     case 'price': return s.min_price == null ? Infinity : s.min_price;
     default: return 0;
   }
@@ -238,6 +240,7 @@ function render(){
       ${velCell((s.windows||{})['24h'])}
       ${velCell((s.windows||{})['3d'])}
       ${velCell((s.windows||{})['7d'])}
+      <td class="num"${s.tracked_from ? ` title="sold since tracking began ${escape(s.tracked_from.slice(0,10))}"` : ''}>${s.sold_cum != null ? fmt(s.sold_cum) : '—'}</td>
       <td class="num">${s.min_price != null ? (CUR_SYMBOLS[s.currency] || '₪') + fmt(s.min_price) : '—'}</td>
     </tr>`;
   }).join('');
@@ -322,7 +325,7 @@ async function load(){
   $('meta').textContent = `${live.length} tracked`;
   const since = live.map(s=>s.tracking_since).filter(Boolean).sort()[0];
   $('footnote').textContent = since
-    ? `* "limited history" = the window is longer than how long that event has been tracked. Oldest data: ${new Date(since).toLocaleString()}. Hourly sweep; watched events also get 10-min snapshots.`
+    ? `* "limited history" = the window is longer than how long that event has been tracked. Oldest data: ${new Date(since).toLocaleString()}. Hourly sweep; watched events also get 10-min snapshots. Σ Sold = actual sales counted since tracking began (Pacha only; hover for the start date).`
     : 'First sweep pending — velocity columns fill in as snapshots accrue.';
 
   renderChips();
