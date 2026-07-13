@@ -503,6 +503,25 @@ CREATE TABLE IF NOT EXISTS pacha_seen_events (
     sold_cum_since TEXT,
     tiers_json   TEXT                 -- current tier breakdown as of last tick
 );
+-- One row per release (ticket tier) per pacha event, from first sighting to
+-- sell-out/removal — the supply-side history the live page discards. Keyed
+-- on the tier NAME (carries the release number); releases already open when
+-- logging started have first_seen_at = that deploy's first tick.
+CREATE TABLE IF NOT EXISTS pacha_release_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id     TEXT NOT NULL,
+    tier_name    TEXT NOT NULL,
+    price        REAL,
+    quantity     INTEGER,              -- latest allocation seen
+    available_last INTEGER,
+    used_last    INTEGER,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL,
+    sold_out_at  TEXT,                 -- first tick at 0 left, or when the
+                                       -- tier vanished (available_last > 0
+                                       -- then means removed, not sold out)
+    UNIQUE(event_id, tier_name)
+);
 -- Israeli-sites new-event monitor (kupat_events.py / tm_events.py +
 -- app.py run_il_events). One row per (source, event) ever seen on the
 -- site's listing feed; rows persist after the event drops off the feed
@@ -2149,6 +2168,67 @@ def pacha_seen_count():
     with connect() as conn:
         row = conn.execute("SELECT COUNT(*) AS n FROM pacha_seen_events").fetchone()
     return row["n"]
+
+
+def pacha_release_sync(event_id, tiers, now_iso):
+    """Reconcile one event's currently-listed tiers against its release log.
+    New tier name → new log row; known tier → refresh counts (+stamp
+    sold_out_at the first tick it reads 0); open log rows whose tier is no
+    longer listed → close with sold_out_at=now (available_last tells whether
+    it actually sold out or was just removed)."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM pacha_release_log WHERE event_id = ?", (event_id,)
+        ).fetchall()
+        logged = {r["tier_name"]: dict(r) for r in rows}
+        current_names = set()
+        for t in tiers or []:
+            name = (t.get("name") or "").strip()
+            if not name:
+                continue
+            current_names.add(name)
+            old = logged.get(name)
+            sold_out_now = t.get("available") == 0
+            if old is None:
+                conn.execute(
+                    """INSERT INTO pacha_release_log (event_id, tier_name,
+                           price, quantity, available_last, used_last,
+                           first_seen_at, last_seen_at, sold_out_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (event_id, name, t.get("price"), t.get("quantity"),
+                     t.get("available"), t.get("used"), now_iso, now_iso,
+                     now_iso if sold_out_now else None),
+                )
+            else:
+                conn.execute(
+                    """UPDATE pacha_release_log SET price = ?, quantity = ?,
+                           available_last = ?, used_last = ?, last_seen_at = ?,
+                           sold_out_at = COALESCE(sold_out_at, ?)
+                       WHERE event_id = ? AND tier_name = ?""",
+                    (t.get("price"), t.get("quantity"), t.get("available"),
+                     t.get("used"), now_iso,
+                     now_iso if sold_out_now else None,
+                     event_id, name),
+                )
+        for name, old in logged.items():
+            if name not in current_names and not old.get("sold_out_at"):
+                conn.execute(
+                    "UPDATE pacha_release_log SET sold_out_at = ? "
+                    "WHERE event_id = ? AND tier_name = ?",
+                    (now_iso, event_id, name),
+                )
+
+
+def pacha_release_log_all():
+    """All release-log rows grouped by event_id, oldest release first."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM pacha_release_log ORDER BY first_seen_at, id"
+        ).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["event_id"], []).append(dict(r))
+    return out
 
 
 def site_events_all_seen(source):

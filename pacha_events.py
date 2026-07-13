@@ -149,6 +149,11 @@ def _normalize(e):
     for t in prices.get("tickets") or []:
         cp = t.get("current_price") or {}
         tiers.append({
+            # NOTE neither _id is a safe release key: t._id is the ticket
+            # TYPE (may survive a release roll) and cp._id is shared between
+            # tiers on some events. The release log keys on the NAME, which
+            # carries the release number ("General Access - 20th Release").
+            "id": t.get("_id"),
             "name": (t.get("name") or cp.get("name") or "").strip(),
             "price": cp.get("price"),
             "quantity": cp.get("quantity"),

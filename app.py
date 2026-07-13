@@ -296,6 +296,7 @@ def run_pacha_events():
 
         for ev in events:
             db.pacha_upsert_seen(ev, now_iso)
+            db.pacha_release_sync(ev["event_id"], ev.get("tiers"), now_iso)
         _pacha_market_rows(events, now_iso)
 
         _last_pacha_events.update(
@@ -4339,6 +4340,7 @@ def api_pacha():
     import json as _json
     now = datetime.now(timezone.utc)
     series_map = db.sales_snapshot_series_bulk((now - timedelta(days=7)).isoformat())
+    release_log = db.pacha_release_log_all()
     cutoff = (now - timedelta(hours=24)).isoformat()
     events = []
     for r in db.pacha_all_seen().values():
@@ -4367,6 +4369,15 @@ def api_pacha():
             "sold_cum_since": r.get("sold_cum_since"),
             "buy_url": r.get("buy_url"),
             "tiers": tiers,
+            "releases": [
+                {"name": x["tier_name"], "price": x.get("price"),
+                 "quantity": x.get("quantity"),
+                 "available_last": x.get("available_last"),
+                 "used_last": x.get("used_last"),
+                 "first_seen_at": x.get("first_seen_at"),
+                 "sold_out_at": x.get("sold_out_at")}
+                for x in release_log.get(r["event_id"], [])
+            ],
             "windows": windows,
             "first_seen_at": r.get("first_seen_at"),
             "last_seen_at": r.get("last_seen_at"),

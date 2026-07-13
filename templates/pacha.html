@@ -45,6 +45,11 @@
   tr.tiers td { background: var(--bg-2); padding: 4px 10px 10px 26px; font-size: 11px; color: var(--muted); }
   tr.tiers .tier { padding: 2px 0; }
   tr.tiers .tier b { color: var(--text); }
+  tr.tiers .rh { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
+  tr.tiers .rh .rhh { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 3px; }
+  tr.tiers .rel-row { padding: 1px 0; }
+  tr.tiers .rel-row .so { color: var(--red); }
+  tr.tiers .rel-row .op { color: var(--green); }
   tr.tiers .bar { display: inline-block; width: 90px; height: 6px; background: var(--bg-3); border-radius: 3px; margin: 0 8px; vertical-align: middle; overflow: hidden; }
   tr.tiers .bar i { display: block; height: 100%; background: var(--pink); }
   a.buy { color: #fff; background: var(--pink); text-decoration: none; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }
@@ -165,16 +170,37 @@ function velCell(w){
 }
 
 function tierRows(e){
-  if (!(e.tiers||[]).length) return '<div class="tier">No tier data yet — fills in on the next 10-min check.</div>';
-  return e.tiers.map(t => {
-    const has = t.available != null && t.quantity;
-    const pctLeft = has ? Math.max(0, Math.min(100, t.available / t.quantity * 100)) : 0;
-    const counts = t.available != null ? `<b>${fmt(t.available)}</b>${t.quantity ? ' of ' + fmt(t.quantity) : ''} left` : 'no count';
-    const sold = (t.used != null && t.used > 0) ? ` · ${fmt(t.used)} sold` : '';
-    return `<div class="tier">${escape(t.name || 'Tickets')} — ${counts}${sold}` +
-           (has ? `<span class="bar"><i style="width:${pctLeft}%"></i></span>` : '') +
-           (t.price != null ? ` ${money(t.price)}` : '') + `</div>`;
+  let html = !(e.tiers||[]).length ? '<div class="tier">No tier data yet — fills in on the next 10-min check.</div>'
+    : e.tiers.map(t => {
+      const has = t.available != null && t.quantity;
+      const pctLeft = has ? Math.max(0, Math.min(100, t.available / t.quantity * 100)) : 0;
+      const counts = t.available != null ? `<b>${fmt(t.available)}</b>${t.quantity ? ' of ' + fmt(t.quantity) : ''} left` : 'no count';
+      const sold = (t.used != null && t.used > 0) ? ` · ${fmt(t.used)} sold` : '';
+      return `<div class="tier">${escape(t.name || 'Tickets')} — ${counts}${sold}` +
+             (has ? `<span class="bar"><i style="width:${pctLeft}%"></i></span>` : '') +
+             (t.price != null ? ` ${money(t.price)}` : '') + `</div>`;
+    }).join('');
+  html += releaseHistory(e);
+  return html;
+}
+
+function releaseHistory(e){
+  const rel = e.releases || [];
+  if (!rel.length) return '';
+  const released = rel.map(r => r.quantity).filter(x => x != null).reduce((a,b)=>a+b, 0);
+  const prices = rel.map(r => r.price).filter(x => x != null);
+  const walk = prices.length > 1 ? ` · price ${money(Math.min(...prices))} → ${money(Math.max(...prices))}` : '';
+  const day = iso => iso ? iso.slice(5,10).replace('-','/') : '?';
+  const lines = rel.map(r => {
+    const end = r.sold_out_at
+      ? (r.available_last === 0
+          ? `<span class="so">sold out ${day(r.sold_out_at)}</span>`
+          : `<span class="so">removed ${day(r.sold_out_at)} (${fmt(r.available_last)} unsold)</span>`)
+      : `<span class="op">open</span>`;
+    return `<div class="rel-row">${escape(r.name)} — ${r.quantity != null ? fmt(r.quantity) + ' tickets' : '?'}` +
+           `${r.price != null ? ' @ ' + money(r.price) : ''} · seen ${day(r.first_seen_at)} · ${end}</div>`;
   }).join('');
+  return `<div class="rh"><div class="rhh">Release history — ${rel.length} release${rel.length>1?'s':''}, ${fmt(released)} tickets logged${walk}</div>${lines}</div>`;
 }
 
 function render(){
@@ -246,7 +272,7 @@ function renderTotals(){
   $('statusline').textContent = `Monitor: ${s.enabled ? 'on' : 'OFF'} · every ${s.interval_minutes} min · last check ${fmtAgo(s.at)}` +
     (s.error ? ` · ⚠ ${s.error}` : '') + ` · pings last tick: ${['new','onsale','price_up','low_stock'].map(k => `${k} ${s[k]??0}`).join(', ')}`;
   $('meta').textContent = `${evs.length} events`;
-  $('footnote').textContent = 'Counts are per-release (a new release adds inventory at a higher price). +1h/+6h/… = actual tickets sold in that window; * = limited history. Σ Sold = everything sold since tracking began. BUY opens the FourVenues checkout.';
+  $('footnote').textContent = 'Counts are per-release (a new release adds inventory at a higher price). +1h/+6h/… = actual tickets sold in that window; * = limited history. Σ Sold = everything sold since tracking began. Release history logs every release from first sighting (releases already open when logging started show that date). BUY opens the FourVenues checkout.';
 }
 
 async function load(){
