@@ -2,11 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Pricer" />
-<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230d1117'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='%2356d364' font-family='monospace'%3E%24%3C/text%3E%3C/svg%3E" />
+{% include "_pwa.html" %}
 <title>Kartis — Pricer</title>
 <style>
   :root {
@@ -331,6 +327,21 @@ function renderListings() {
 const normSec = (s) => (s || "").trim().split("\n")[0].replace(/\s+/g, " ").toLowerCase();
 let _mpListing = null;   // the /api/viagogo row the panel is open for
 
+async function fetchJsonSafe(url, opts) {
+  // A deploy restart or proxy hiccup mid-request yields an empty/HTML body;
+  // raw res.json() then throws "Unexpected end of JSON input". Read text and
+  // parse defensively so callers get {ok, status, data|null} instead.
+  try {
+    const res = await fetch(url, opts);
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (e) { /* HTML error page */ }
+    return { ok: res.ok, status: res.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: null, neterr: String(e) };
+  }
+}
+
 async function openMarketPanel(listingId, forceRefresh = false) {
   const row = _byId[String(listingId)];
   if (!row) return;
@@ -342,19 +353,29 @@ async function openMarketPanel(listingId, forceRefresh = false) {
   const sub = document.getElementById("mp-sub");
   sub.textContent = "loading market...";
   document.getElementById("mp-sections").innerHTML = "";
-  try {
-    let data;
-    if (forceRefresh) {
-      const res = await fetch(`/api/pricer/market/${encodeURIComponent(row.event_id)}/refresh`, { method: "POST" });
-      data = await res.json();
-      if (!res.ok) { sub.textContent = "// refresh failed: " + (data.error || res.status); return; }
-    } else {
-      data = await (await fetch(`/api/pricer/market/${encodeURIComponent(row.event_id)}`)).json();
+  const base = `/api/pricer/market/${encodeURIComponent(row.event_id)}`;
+  let r;
+  if (forceRefresh) {
+    r = await fetchJsonSafe(base + "/refresh", { method: "POST" });
+  } else {
+    r = await fetchJsonSafe(base);
+    if (!r.data) {                    // server mid-restart? one quiet retry
+      sub.textContent = "loading market... (retrying)";
+      await new Promise(s => setTimeout(s, 2000));
+      r = await fetchJsonSafe(base);
     }
-    renderMarketPanel(row, data);
-  } catch (e) {
-    sub.textContent = "// failed to load market: " + e;
   }
+  if (!r.data) {
+    sub.textContent = "// market load failed (" +
+      (r.status ? "HTTP " + r.status : (r.neterr || "empty response")) +
+      ") — the server may have been restarting; close and try again";
+    return;
+  }
+  if (!r.ok) {
+    sub.textContent = "// " + (forceRefresh ? "refresh" : "load") + " failed: " + (r.data.error || r.status);
+    return;
+  }
+  renderMarketPanel(row, r.data);
 }
 
 function renderMarketPanel(row, data) {
