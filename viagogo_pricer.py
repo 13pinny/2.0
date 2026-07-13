@@ -756,8 +756,25 @@ def run_pricer_tick(dry_run=None):
             for lid, cfg in configs.items():
                 row = live_by_id.get(lid)
                 if row is None or not row.get("price"):
-                    _log({"listing_id": lid, "action": "fetch_failed",
-                          "detail": "listing not on inv Listings page"})
+                    # Transient render miss vs genuinely deleted listing:
+                    # the mirror's last_seen_at decides. Not seen by any of
+                    # the ~100 daily reads for 6h+ = the user deleted it on
+                    # inv — auto-disable so it stops ticking (and stops
+                    # spamming fetch_failed).
+                    mirror = db.viagogo_get(lid)
+                    seen = (mirror or {}).get("last_seen_at") or ""
+                    stale_cutoff = (datetime.now(timezone.utc)
+                                    - timedelta(hours=6)).isoformat()
+                    if not mirror or seen < stale_cutoff:
+                        db.pricer_config_set(lid, {
+                            "enabled": 0, "paused": 0, "paused_reason": None,
+                        }, now)
+                        _log({"listing_id": lid, "action": "disabled_gone",
+                              "detail": "listing no longer on inv.viagogo "
+                                        "(not seen 6h+) — auto-disabled"})
+                    else:
+                        _log({"listing_id": lid, "action": "fetch_failed",
+                              "detail": "listing not on inv Listings page"})
                     counters["skipped"] += 1
                     continue
                 last_set = cfg.get("last_set_price")

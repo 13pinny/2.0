@@ -836,6 +836,14 @@ def all_viagogo():
     return [dict(r) for r in rows]
 
 
+def viagogo_get(listing_id):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM viagogo_listings WHERE id = ?", (str(listing_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
 # --- Viagogo auto-pricer -------------------------------------------------
 # Config + audit tables live apart from viagogo_listings so the scrape
 # mirror stays a pure rewrite target. listing_id is an FK by convention to

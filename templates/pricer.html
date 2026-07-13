@@ -245,7 +245,15 @@ function _isPast(iso) {
 function renderListings() {
   const search = (document.getElementById("p-search").value || "").toLowerCase();
   const onlyAuto = document.getElementById("p-onlyauto").checked;
+  // The scrape mirror never forgets: listings deleted on inv.viagogo keep
+  // their last-seen row forever (history feeds /sources totals). Only show
+  // rows seen by a recent read — within 3h of the freshest row, so a
+  // stopped scraper shifts the reference instead of blanking the page.
+  const seenMs = (r) => { const d = new Date(r.last_seen_at || 0); return isNaN(d) ? 0 : d.getTime(); };
+  const freshestMs = _rows.reduce((m, r) => Math.max(m, seenMs(r)), 0);
+  const seenCutoffMs = freshestMs ? freshestMs - 3 * 3600 * 1000 : null;
   const rows = _rows.filter(r => {
+    if (seenCutoffMs && seenMs(r) < seenCutoffMs) return false;  // deleted on inv
     if (_isPast(r.event_date_iso)) return false;   // past events can't sell
     if (onlyAuto && !r.pricer_enabled && !r.pricer_paused) return false;
     // pricing only matters for listings with tickets to sell
