@@ -4324,6 +4324,65 @@ def market_page():
     return render_template("market.html")
 
 
+@app.route("/pacha")
+def pacha_page():
+    return render_template("pacha.html")
+
+
+@app.route("/api/pacha")
+def api_pacha():
+    """Everything the /pacha page needs in one call: each currently-listed
+    event's state from pacha_seen_events (incl. the tier breakdown stored
+    per tick), its sold-per-window velocity from the shared snapshot series,
+    and the monitor status. Events that dropped off pacha-nyc.com (past
+    shows) age out via last_seen_at."""
+    import json as _json
+    now = datetime.now(timezone.utc)
+    series_map = db.sales_snapshot_series_bulk((now - timedelta(days=7)).isoformat())
+    cutoff = (now - timedelta(hours=24)).isoformat()
+    events = []
+    for r in db.pacha_all_seen().values():
+        if (r.get("last_seen_at") or "") < cutoff:
+            continue  # dropped off the site (past / pulled)
+        windows, earliest_t = _sales_windows(
+            series_map.get(("pacha", r["event_id"], "0"), []), now)
+        tiers = []
+        if r.get("tiers_json"):
+            try:
+                tiers = _json.loads(r["tiers_json"])
+            except ValueError:
+                pass
+        events.append({
+            "event_id": r["event_id"], "name": r.get("name"),
+            "slug": r.get("slug"), "date_text": r.get("date_text"),
+            "start_date": r.get("start_date"),
+            "on_sale": bool(r.get("on_sale")),
+            "ga_price": r.get("ga_price"),
+            "ga_sold_out": bool(r.get("ga_sold_out")),
+            "ga_release": r.get("ga_release"),
+            "ga_available": r.get("ga_available"),
+            "ga_quantity": r.get("ga_quantity"),
+            "total_available": r.get("total_available"),
+            "sold_cum": r.get("sold_cum"),
+            "sold_cum_since": r.get("sold_cum_since"),
+            "buy_url": r.get("buy_url"),
+            "tiers": tiers,
+            "windows": windows,
+            "first_seen_at": r.get("first_seen_at"),
+            "last_seen_at": r.get("last_seen_at"),
+        })
+    events.sort(key=lambda e: e.get("start_date") or "9999")
+    return jsonify({
+        "events": events,
+        "low_stock_threshold": PACHA_LOW_STOCK_THRESHOLD,
+        "status": {**_last_pacha_events,
+                   "enabled": PACHA_MONITOR_ENABLED,
+                   "interval_minutes": PACHA_MONITOR_INTERVAL_MINUTES},
+        "windows": [k for k, _ in FESTIVAL_WINDOWS],
+        "now": now.isoformat(),
+    })
+
+
 @app.route("/api/market")
 def api_market():
     """Every tracked market row + its sold-per-window velocity. One bulk

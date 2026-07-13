@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -499,7 +500,8 @@ CREATE TABLE IF NOT EXISTS pacha_seen_events (
                                       -- accumulated availability drops between
                                       -- ticks (release flips add inventory and
                                       -- are clamped out, same as _sales_windows)
-    sold_cum_since TEXT
+    sold_cum_since TEXT,
+    tiers_json   TEXT                 -- current tier breakdown as of last tick
 );
 -- Israeli-sites new-event monitor (kupat_events.py / tm_events.py +
 -- app.py run_il_events). One row per (source, event) ever seen on the
@@ -756,6 +758,8 @@ def init():
             conn.execute("ALTER TABLE pacha_seen_events ADD COLUMN sold_cum INTEGER")
         if "sold_cum_since" not in pe_cols:
             conn.execute("ALTER TABLE pacha_seen_events ADD COLUMN sold_cum_since TEXT")
+        if "tiers_json" not in pe_cols:
+            conn.execute("ALTER TABLE pacha_seen_events ADD COLUMN tiers_json TEXT")
         # Maaser tax-deductible flag — existing rows default to 0 (not
         # claimed) which is a safe default; user can edit any back-history
         # entries to flip them on.
@@ -2116,8 +2120,9 @@ def pacha_upsert_seen(ev, now_iso):
             """INSERT INTO pacha_seen_events (event_id, name, slug, date_text,
                    start_date, on_sale, ga_price, ga_sold_out, buy_url,
                    first_seen_at, last_seen_at, ga_release, ga_available,
-                   ga_quantity, total_available, sold_cum, sold_cum_since)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ga_quantity, total_available, sold_cum, sold_cum_since,
+                   tiers_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(event_id) DO UPDATE SET
                    name = excluded.name, slug = excluded.slug,
                    date_text = excluded.date_text, start_date = excluded.start_date,
@@ -2129,12 +2134,14 @@ def pacha_upsert_seen(ev, now_iso):
                    ga_quantity = excluded.ga_quantity,
                    total_available = excluded.total_available,
                    sold_cum = excluded.sold_cum,
-                   sold_cum_since = excluded.sold_cum_since""",
+                   sold_cum_since = excluded.sold_cum_since,
+                   tiers_json = excluded.tiers_json""",
             (ev["event_id"], ev.get("name"), ev.get("slug"), ev.get("date_text"),
              ev.get("start_date"), 1 if ev.get("on_sale") else 0, ev.get("ga_price"),
              1 if ev.get("ga_sold_out") else 0, ev.get("buy_url"), now_iso, now_iso,
              ev.get("ga_release"), ev.get("ga_available"), ev.get("ga_quantity"),
-             ev.get("total_available"), ev.get("sold_cum"), ev.get("sold_cum_since")),
+             ev.get("total_available"), ev.get("sold_cum"), ev.get("sold_cum_since"),
+             json.dumps(ev["tiers"], ensure_ascii=False) if ev.get("tiers") else None),
         )
 
 
