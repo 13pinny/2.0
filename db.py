@@ -579,6 +579,19 @@ CREATE TABLE IF NOT EXISTS market_manual (
 );
 CREATE INDEX IF NOT EXISTS idx_tcsnap_full
     ON tickchak_sales_snapshots(source, event_code, perf_code, captured_at);
+-- /market hide list: noise events the user snoozed off the page (water
+-- parks, kids' attractions, …). Display-only — the sweep keeps snapshotting
+-- them, so history is intact if they're unhidden. Keyed per EVENT so one
+-- hide covers all of that event's dates. hidden_until NULL = forever;
+-- expired rows are pruned lazily by market_hidden_active().
+CREATE TABLE IF NOT EXISTS market_hidden (
+    source       TEXT NOT NULL,
+    event_code   TEXT NOT NULL,
+    name         TEXT,
+    hidden_until TEXT,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (source, event_code)
+);
 CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -2344,6 +2357,43 @@ def market_manual_add(source, kind, code, label, now_iso):
 def market_manual_remove(id_):
     with connect() as conn:
         conn.execute("DELETE FROM market_manual WHERE id = ?", (id_,))
+
+
+def market_hide(source, event_code, name, until_iso, now_iso):
+    """Snooze one event off the /market page until until_iso (None = forever).
+    Re-hiding an already-hidden event just updates the window."""
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO market_hidden (source, event_code, name,
+                   hidden_until, created_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(source, event_code) DO UPDATE SET
+                   name = excluded.name,
+                   hidden_until = excluded.hidden_until,
+                   created_at = excluded.created_at""",
+            (source, str(event_code), name, until_iso, now_iso),
+        )
+
+
+def market_unhide(source, event_code):
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM market_hidden WHERE source = ? AND event_code = ?",
+            (source, str(event_code)),
+        )
+
+
+def market_hidden_active(now_iso):
+    """Currently-active hide rows; expired ones are pruned on the way."""
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM market_hidden WHERE hidden_until IS NOT NULL AND hidden_until <= ?",
+            (now_iso,),
+        )
+        rows = conn.execute(
+            "SELECT * FROM market_hidden ORDER BY created_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def tm_record_drop(watcher_id, added_count, removed_count, seats_json, notify_result, now_iso, notify_count=None):

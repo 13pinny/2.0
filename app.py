@@ -4404,8 +4404,14 @@ def api_market():
     # Pacha rows carry a lifetime sold-since-tracking counter (snapshots are
     # pruned at ~7d, so the windows can't provide this).
     pacha_seen = db.pacha_all_seen()
+    # User-snoozed noise events (water parks etc.) — filtered out of shows
+    # and totals, returned separately so the page can list/unhide them.
+    hidden_rows = db.market_hidden_active(now.isoformat())
+    hidden_keys = {(h["source"], h["event_code"]) for h in hidden_rows}
     shows = []
     for r in db.market_all():
+        if (r["source"], r["event_code"]) in hidden_keys:
+            continue
         series = series_map.get((r["source"], r["event_code"], r["perf_code"]), [])
         windows, earliest_t = _sales_windows(series, now)
         avail = r.get("available")
@@ -4431,9 +4437,55 @@ def api_market():
     return jsonify({
         "shows": shows, "totals": _sales_totals(shows),
         "windows": [k for k, _ in FESTIVAL_WINDOWS],
+        "hidden": hidden_rows,
         "last_sweep": {k: v for k, v in _last_market.items()},
         "now": now.isoformat(),
     })
+
+
+_MARKET_HIDE_DURATIONS = {
+    "1d": timedelta(days=1),
+    "1w": timedelta(weeks=1),
+    "1m": timedelta(days=30),
+    "always": None,
+}
+
+
+@app.route("/api/market/hide", methods=["POST"])
+def api_market_hide():
+    """Snooze an event off the /market page. Body: {"source", "event_code",
+    "duration": "1d"|"1w"|"1m"|"always", "name"?}. Hides every date of that
+    event; the sweep keeps snapshotting it, so unhiding restores full
+    velocity history."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    event_code = str(body.get("event_code") or "").strip()
+    duration = (body.get("duration") or "").strip()
+    if not source or not event_code:
+        return jsonify({"error": "source and event_code are required"}), 400
+    if duration not in _MARKET_HIDE_DURATIONS:
+        return jsonify({"error": f"duration must be one of {sorted(_MARKET_HIDE_DURATIONS)}"}), 400
+    now = datetime.now(timezone.utc)
+    delta = _MARKET_HIDE_DURATIONS[duration]
+    until_iso = (now + delta).isoformat() if delta else None
+    db.market_hide(source, event_code, (body.get("name") or "").strip() or None,
+                   until_iso, now.isoformat())
+    return jsonify({"hidden": {"source": source, "event_code": event_code,
+                               "until": until_iso or "always"}})
+
+
+@app.route("/api/market/unhide", methods=["POST"])
+def api_market_unhide():
+    """Body: {"source", "event_code"} — bring a snoozed event back."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    event_code = str(body.get("event_code") or "").strip()
+    if not source or not event_code:
+        return jsonify({"error": "source and event_code are required"}), 400
+    db.market_unhide(source, event_code)
+    return jsonify({"unhidden": {"source": source, "event_code": event_code}})
 
 
 @app.route("/api/market/add", methods=["POST"])
