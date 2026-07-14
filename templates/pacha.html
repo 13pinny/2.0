@@ -52,6 +52,8 @@
   tr.tiers .rel-row .op { color: var(--green); }
   tr.tiers .bar { display: inline-block; width: 90px; height: 6px; background: var(--bg-3); border-radius: 3px; margin: 0 8px; vertical-align: middle; overflow: hidden; }
   tr.tiers .bar i { display: block; height: 100%; background: var(--pink); }
+  tr.tiers .pctlbl { font-size: 10px; color: var(--muted); margin-right: 6px; }
+  tr.tiers .pctlbl.hot { color: var(--red); font-weight: 600; }
   a.buy { color: #fff; background: var(--pink); text-decoration: none; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }
   a.buy.off { background: var(--line-2); color: var(--muted); pointer-events: none; }
   .when { color: var(--muted); font-size: 11px; white-space: nowrap; }
@@ -174,10 +176,12 @@ function tierRows(e){
     : e.tiers.map(t => {
       const has = t.available != null && t.quantity;
       const pctLeft = has ? Math.max(0, Math.min(100, t.available / t.quantity * 100)) : 0;
+      const pctSold = has ? Math.round(100 - pctLeft) : null;
       const counts = t.available != null ? `<b>${fmt(t.available)}</b>${t.quantity ? ' of ' + fmt(t.quantity) : ''} left` : 'no count';
       const sold = (t.used != null && t.used > 0) ? ` · ${fmt(t.used)} sold` : '';
       return `<div class="tier">${escape(t.name || 'Tickets')} — ${counts}${sold}` +
-             (has ? `<span class="bar"><i style="width:${pctLeft}%"></i></span>` : '') +
+             (has ? `<span class="bar"><i style="width:${pctLeft}%"></i></span>` +
+                    `<span class="pctlbl${pctSold >= 80 ? ' hot' : ''}">${pctSold}% sold</span>` : '') +
              (t.price != null ? ` ${money(t.price)}` : '') + `</div>`;
     }).join('');
   html += releaseHistory(e);
