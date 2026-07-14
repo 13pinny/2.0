@@ -79,6 +79,11 @@
   .tierchip { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 9px; letter-spacing: 1px; border-radius: 1px; vertical-align: 1px; }
   .tierchip.same { border: 1px solid var(--purple); color: var(--purple); }
   .tierchip.up { border: 1px solid var(--amber); color: var(--amber); }
+  #mp-tiers { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; align-items: center; }
+  #mp-tiers .lbl { font-size: 10px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-right: 2px; }
+  .tierbtn { padding: 4px 9px; font-size: 11px; border: 1px solid var(--line-2); background: var(--bg-2); border-radius: 12px; cursor: pointer; white-space: nowrap; }
+  .tierbtn:hover { background: var(--bg-3); }
+  .tierbtn.on { border-color: var(--green); color: var(--green); font-weight: 700; }
   #mpanel .mrow { display: flex; justify-content: space-between; padding: 4px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
   #mpanel .mrow.owned { color: var(--green); }
   #mpanel .mrow.owned::after { content: "YOURS"; font-size: 9px; letter-spacing: 1px; border: 1px solid var(--green); padding: 0 4px; margin-left: 8px; }
@@ -179,6 +184,13 @@
 <h2>LISTINGS</h2>
 <div class="bar">
   <input type="search" id="p-search" placeholder="search event venue section" style="flex:1; min-width:200px;">
+  <label title="Filter by where the show is">region
+    <select id="p-region" style="padding:5px 6px;">
+      <option value="all">all</option>
+      <option value="il">🇮🇱 Israel</option>
+      <option value="row">rest of world</option>
+    </select>
+  </label>
   <label><input type="checkbox" id="p-onlyauto"> auto-priced only</label>
 </div>
 <div class="tablewrap">
@@ -212,6 +224,7 @@
 <div id="mpanel" style="display:none">
   <h3 id="mp-title">—</h3>
   <div class="sub" id="mp-sub">—</div>
+  <div id="mp-tiers"></div>
   <div id="mp-sections"></div>
   <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:12px; color:var(--amber);" title="This listing may follow the market straight down to its floor — the global %/12h brake is ignored for it">
     <input type="checkbox" id="mp-nocap"> no drop cap for this listing (floor still applies)
@@ -231,6 +244,15 @@ const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&a
 let _rows = [];      // /api/viagogo rows (already merged with pricer config)
 let _byId = {};      // listing_id -> row, for the activity table
 
+// Location detection: Israeli shows carry Hebrew artist/venue names, or sit
+// at a known IL venue/city. Buyer-facing viagogo data has no country field, so
+// we sniff the event name + venue string.
+const _IL_PLACES = /(israel|tel[\s-]?aviv|jerusalem|haifa|caesarea|rishon|netanya|be'?er[\s-]?sheva|ramat[\s-]?gan|nokia|menora|bloomfield|sultan|hangar\s*11|live[\s-]?park|ganei[\s-]?yehoshua|pais\s*arena|zappa|barby|amphi|ra'?anana|herzliya|ashdod|ashkelon|eilat|nazareth|hayarkon|expo\s*tel|shuni|yarkon)/i;
+function isIsrael(r) {
+  const hay = ((r.event_name || "") + " " + (r.venue || ""));
+  return new RegExp("[\\u0590-\\u05FF]").test(hay) || _IL_PLACES.test(hay);
+}
+
 function _isPast(iso) {
   if (!iso) return false;                    // unknown date — keep it visible
   const d = new Date(iso);
@@ -241,6 +263,7 @@ function _isPast(iso) {
 function renderListings() {
   const search = (document.getElementById("p-search").value || "").toLowerCase();
   const onlyAuto = document.getElementById("p-onlyauto").checked;
+  const region = document.getElementById("p-region").value;
   // The scrape mirror never forgets: listings deleted on inv.viagogo keep
   // their last-seen row forever (history feeds /sources totals). Only show
   // rows seen by a recent read — within 3h of the freshest row, so a
@@ -252,11 +275,17 @@ function renderListings() {
     if (seenCutoffMs && seenMs(r) < seenCutoffMs) return false;  // deleted on inv
     if (_isPast(r.event_date_iso)) return false;   // past events can't sell
     if (onlyAuto && !r.pricer_enabled && !r.pricer_paused) return false;
+    if (region !== "all") { const il = isIsrael(r); if (region === "il" && !il) return false; if (region === "row" && il) return false; }
     // pricing only matters for listings with tickets to sell
     if (!(r.available > 0) && !r.pricer_enabled && !r.pricer_paused) return false;
     if (search && !((r.event_name||"") + " " + (r.venue||"") + " " + (r.section||"")).toLowerCase().includes(search)) return false;
     return true;
-  }).sort((a,b) => ((a.event_date_iso||"zzz").localeCompare(b.event_date_iso||"zzz")));
+  }).sort((a,b) => {
+    // Israel first, then by date — keeps the two regions in separate blocks
+    const ia = isIsrael(a) ? 0 : 1, ib = isIsrael(b) ? 0 : 1;
+    if (ia !== ib) return ia - ib;
+    return (a.event_date_iso||"zzz").localeCompare(b.event_date_iso||"zzz");
+  });
   const tbody = document.getElementById("ptbody");
   tbody.innerHTML = "";
   for (const r of rows) {
@@ -353,6 +382,7 @@ async function openMarketPanel(listingId, forceRefresh = false) {
   const sub = document.getElementById("mp-sub");
   sub.textContent = "loading market...";
   document.getElementById("mp-sections").innerHTML = "";
+  document.getElementById("mp-tiers").innerHTML = "";
   const base = `/api/pricer/market/${encodeURIComponent(row.event_id)}`;
   let r;
   if (forceRefresh) {
@@ -460,11 +490,60 @@ function renderMarketPanel(row, data) {
       wrap.querySelectorAll(`.mp-row[data-sec="${CSS.escape(secCb.dataset.sec)}"]`)
         .forEach(cb => { cb.checked = secCb.checked; });
       secCb.indeterminate = false;
+      refreshTierBtns();
     });
   });
   wrap.querySelectorAll(".mp-row").forEach(cb => cb.addEventListener("change", () => {
     syncSection(wrap.querySelector(`.mp-sec[data-sec="${CSS.escape(cb.dataset.sec)}"]`));
+    refreshTierBtns();
   }));
+
+  // ---- tier quick-picks (Upper / Middle / Lower / …) ----
+  // viagogo's venue_area is the "level" grouping; one tap checks every section
+  // in that tier so you don't hand-pick each one. Own section is left alone.
+  const tierMap = new Map();               // tier label -> Set(section keys)
+  for (const [key, g] of groups) {
+    if (key === ownSec) continue;
+    const t = (g.area || "").trim();
+    if (!t) continue;
+    if (!tierMap.has(t)) tierMap.set(t, new Set());
+    tierMap.get(t).add(key);
+  }
+  const tierBar = document.getElementById("mp-tiers");
+  tierBar.innerHTML = "";
+  const secRowsOn = (key) => {
+    const rows = [...wrap.querySelectorAll(`.mp-row[data-sec="${CSS.escape(key)}"]`)];
+    if (!rows.length) {   // section holds only our rows — use its section box
+      const sc = wrap.querySelector(`.mp-sec[data-sec="${CSS.escape(key)}"]`);
+      return { on: sc && sc.checked ? 1 : 0, total: 1 };
+    }
+    return { on: rows.filter(cb => cb.checked).length, total: rows.length };
+  };
+  const tierFullyOn = (keys) => [...keys].every(k => { const s = secRowsOn(k); return s.on === s.total; });
+  let refreshTierBtns = () => {};
+  if (tierMap.size) {
+    const lbl = document.createElement("span");
+    lbl.className = "lbl"; lbl.textContent = "select tier:";
+    tierBar.appendChild(lbl);
+    const btns = [];
+    for (const [tier, keys] of tierMap) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "tierbtn"; b.textContent = tier;
+      b.addEventListener("click", () => {
+        const turnOn = !tierFullyOn(keys);   // toggle: if all on, clear; else fill
+        for (const key of keys) {
+          wrap.querySelectorAll(`.mp-row[data-sec="${CSS.escape(key)}"]`).forEach(cb => { cb.checked = turnOn; });
+          const sc = wrap.querySelector(`.mp-sec[data-sec="${CSS.escape(key)}"]`);
+          if (sc) { sc.checked = turnOn; sc.indeterminate = false; }
+        }
+        refreshTierBtns();
+      });
+      btns.push([b, keys]);
+      tierBar.appendChild(b);
+    }
+    refreshTierBtns = () => { for (const [b, keys] of btns) b.classList.toggle("on", tierFullyOn(keys)); };
+    refreshTierBtns();
+  }
 }
 
 function closeMarketPanel() {
@@ -632,7 +711,7 @@ document.getElementById("p-run").addEventListener("click", async (e) => {
   await fetch("/api/pricer/run-now", { method: "POST" });
   setTimeout(() => { btn.disabled = false; btn.textContent = "Run pricer now"; loadAll(); }, 6000);
 });
-for (const id of ["p-search", "p-onlyauto"]) {
+for (const id of ["p-search", "p-onlyauto", "p-region"]) {
   document.getElementById(id).addEventListener("input", renderListings);
   document.getElementById(id).addEventListener("change", renderListings);
 }
