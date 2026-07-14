@@ -240,7 +240,7 @@ function render(){
       ${velCell((e.windows||{})['1h'])}${velCell((e.windows||{})['6h'])}${velCell((e.windows||{})['24h'])}${velCell((e.windows||{})['3d'])}${velCell((e.windows||{})['7d'])}
       <td class="num"${scumTitle}>${fmt(e.sold_cum)}</td>
       <td class="num">${money(e.ga_price)}</td>
-      <td><a class="buy${e.on_sale ? '' : ' off'}" href="${escape(e.buy_url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a></td>
+      <td><a class="buy${e.on_sale ? '' : ' off'}" href="${escape(e.slug ? 'https://pacha-nyc.com/event/' + e.slug + '#tickets' : (e.buy_url||'#'))}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a></td>
     </tr>` + (opened ? `<tr class="tiers"><td colspan="${COLS.length}">${tierRows(e)}</td></tr>` : '');
   }).join('');
   $('rows').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
@@ -276,7 +276,7 @@ function renderTotals(){
   $('statusline').textContent = `Monitor: ${s.enabled ? 'on' : 'OFF'} · every ${s.interval_minutes} min · last check ${fmtAgo(s.at)}` +
     (s.error ? ` · ⚠ ${s.error}` : '') + ` · pings last tick: ${['new','onsale','price_up','low_stock'].map(k => `${k} ${s[k]??0}`).join(', ')}`;
   $('meta').textContent = `${evs.length} events`;
-  $('footnote').textContent = 'Counts are per-release (a new release adds inventory at a higher price). +1h/+6h/… = actual tickets sold in that window; * = limited history. Σ Sold = everything sold since tracking began. Release history logs every release from first sighting (releases already open when logging started show that date). BUY opens the FourVenues checkout.';
+  $('footnote').textContent = 'Counts are per-release (a new release adds inventory at a higher price). +1h/+6h/… = actual tickets sold in that window; * = limited history. Σ Sold = everything sold since tracking began. Release history logs every release from first sighting (releases already open when logging started show that date). BUY opens the event page\'s tickets section (the FourVenues iframe checkout adds tax).';
 }
 
 async function load(){

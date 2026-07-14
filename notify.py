@@ -588,8 +588,11 @@ def notify_pacha_event(kind, ev, old=None):
             lines.append("⏳ Waitlist only for now — not yet buyable.")
 
     lines.extend(_pacha_tier_lines(ev))
-    if ev.get("buy_url"):
-        lines.append(f"[Buy tickets]({ev['buy_url']})")
+    # Customer-facing checkout is the event page's #tickets section — the
+    # FourVenues iframe URL also sells but adds tax there.
+    buy = f"{ev['page_url']}#tickets" if ev.get("page_url") else ev.get("buy_url")
+    if buy:
+        lines.append(f"[Buy tickets]({buy})")
     embed = {
         "title": title[:250],
         "description": "\n".join(lines)[:4000],
