@@ -529,6 +529,10 @@ async function openFiltersModal(watcherId) {
         <div class="row">
           <label style="align-self:flex-start">Exclude sections</label>
           <div>
+            ${sections.length ? `<div style="display:flex;gap:8px;margin-bottom:4px">
+              <button type="button" id="f-sec-all">Select all</button>
+              <button type="button" id="f-sec-none">Clear all</button>
+            </div>` : ''}
             <div class="sections-grid" id="f-sections">${sectionsHtml}</div>
             <div class="help" style="grid-column:auto;margin-top:4px">Tick sections to skip. Leave all unchecked to include everything.</div>
           </div>
@@ -546,6 +550,12 @@ async function openFiltersModal(watcherId) {
   document.body.appendChild(bg);
 
   const close = () => bg.remove();
+  const setAllSections = (checked) =>
+    bg.querySelectorAll('#f-sections input[type=checkbox]').forEach(c => { c.checked = checked; });
+  const secAll = bg.querySelector('#f-sec-all');
+  const secNone = bg.querySelector('#f-sec-none');
+  if (secAll) secAll.onclick = () => setAllSections(true);
+  if (secNone) secNone.onclick = () => setAllSections(false);
   bg.querySelector('#f-close').addEventListener('click', close);
   bg.querySelector('#f-cancel').addEventListener('click', close);
   bg.addEventListener('click', e => { if (e.target === bg) close(); });
