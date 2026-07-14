@@ -411,6 +411,7 @@ CREATE TABLE IF NOT EXISTS pending_intake (
     raw_text TEXT,
     parse_warnings TEXT,
     ticket_url TEXT,
+    buyer_email TEXT,
     status TEXT NOT NULL DEFAULT 'new',
     created_at TEXT NOT NULL
 );
@@ -660,6 +661,7 @@ CREATE TABLE IF NOT EXISTS viagogo_push (
     cost_usd_per_ticket REAL,
     website_price_usd REAL,
     ticket_url TEXT,
+    buyer_email TEXT,
     listing_id TEXT,
     error TEXT,
     created_at TEXT NOT NULL,
@@ -687,6 +689,8 @@ def init():
         for _sql in (
             "ALTER TABLE pending_intake ADD COLUMN ticket_url TEXT",
             "ALTER TABLE viagogo_push ADD COLUMN ticket_url TEXT",
+            "ALTER TABLE pending_intake ADD COLUMN buyer_email TEXT",
+            "ALTER TABLE viagogo_push ADD COLUMN buyer_email TEXT",
         ):
             try:
                 conn.executescript(_sql)
@@ -1912,11 +1916,11 @@ def insert_pending_intake(row, now_iso):
             INSERT INTO pending_intake (id, message_id, provider, email_from,
                 email_subject, email_received_at, event_name, event_date_iso,
                 venue, section, row_label, seats, qty, cost, cost_per_unit,
-                raw_text, parse_warnings, ticket_url, status, created_at)
+                raw_text, parse_warnings, ticket_url, buyer_email, status, created_at)
             VALUES (:id, :message_id, :provider, :email_from,
                 :email_subject, :email_received_at, :event_name, :event_date_iso,
                 :venue, :section, :row_label, :seats, :qty, :cost, :cost_per_unit,
-                :raw_text, :parse_warnings, :ticket_url, :status, :created_at)
+                :raw_text, :parse_warnings, :ticket_url, :buyer_email, :status, :created_at)
             ON CONFLICT(message_id) DO NOTHING
             """,
             {**row, "created_at": now_iso},
@@ -2448,19 +2452,19 @@ def viagogo_push_insert(row, now_iso):
                 event_date_iso, section, row_label, seats, qty, cost, cost_per_unit,
                 candidates_json, chosen_event_id, chosen_event_name, chosen_venue,
                 chosen_event_date, viagogo_section, fx_rate, cost_usd_per_ticket,
-                website_price_usd, ticket_url, listing_id, error, created_at, updated_at)
+                website_price_usd, ticket_url, buyer_email, listing_id, error, created_at, updated_at)
             VALUES (:id, :intake_id, :status, :event_name, :venue,
                 :event_date_iso, :section, :row_label, :seats, :qty, :cost, :cost_per_unit,
                 :candidates_json, :chosen_event_id, :chosen_event_name, :chosen_venue,
                 :chosen_event_date, :viagogo_section, :fx_rate, :cost_usd_per_ticket,
-                :website_price_usd, :ticket_url, :listing_id, :error, :created_at, :updated_at)
+                :website_price_usd, :ticket_url, :buyer_email, :listing_id, :error, :created_at, :updated_at)
             """,
             {
                 "status": "searching",
                 "candidates_json": None, "chosen_event_id": None, "chosen_event_name": None,
                 "chosen_venue": None, "chosen_event_date": None, "viagogo_section": None,
                 "fx_rate": None, "cost_usd_per_ticket": None, "website_price_usd": None,
-                "ticket_url": None, "listing_id": None, "error": None,
+                "ticket_url": None, "buyer_email": None, "listing_id": None, "error": None,
                 **row,
                 "created_at": now_iso, "updated_at": now_iso,
             },

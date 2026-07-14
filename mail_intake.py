@@ -91,6 +91,27 @@ _FWD_SUBJECT_RX = re.compile(r"^\s*(fwd?|fw|forward)\s*:", re.I)
 #   Subject: original subject
 # We only need From and Subject for provider detection + display.
 _FWD_FROM_RX = re.compile(r"^\s*From:\s*(.+?)\s*$", re.I | re.M)
+_FWD_TO_RX = re.compile(r"^\s*To:\s*(.+?)\s*$", re.I | re.M)
+_EMAIL_ADDR_RX = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def _buyer_email(msg, body):
+    """Which of the user's addresses the ticket provider originally mailed —
+    i.e. the account the purchase was made under (needed to know where the
+    seller must deliver from). Manual forwards keep the original 'To:' in
+    the forwarded header block; direct/auto-forwarded mail keeps it in the
+    real To:/Delivered-To headers. The forwarding inbox's own address is
+    never the answer."""
+    fwd_addr = (os.getenv("GMAIL_USER") or "").lower()
+    candidates = []
+    for m in _FWD_TO_RX.finditer(body or ""):
+        candidates.extend(_EMAIL_ADDR_RX.findall(m.group(1)))
+    for hdr in ("To", "Delivered-To", "X-Forwarded-To"):
+        candidates.extend(_EMAIL_ADDR_RX.findall(_decode(msg.get(hdr) or "")))
+    for addr in candidates:
+        if addr.lower() != fwd_addr:
+            return addr.lower()
+    return candidates[0].lower() if candidates else ""
 _FWD_SUBJECT_INNER_RX = re.compile(r"^\s*Subject:\s*(.+?)\s*$", re.I | re.M)
 
 
@@ -599,6 +620,7 @@ def _push_kupat_to_viagogo(intake_id, fields):
             "cost": g_cost,
             "cost_per_unit": g_cpu,
             "ticket_url": fields.get("ticket_url"),
+            "buyer_email": fields.get("buyer_email"),
         }
         if search_error:
             row["status"] = "error"
@@ -1183,6 +1205,7 @@ def run_intake():
             html = _email_html(_msg)
             links = re.findall(r'href=["\']([^"\']+)["\']', html, re.IGNORECASE) if html else []
             fields = extract_fields(provider, parsed["subject"], parsed["from"], parsed["body"], parsed["attachments"], links=links, html=html)
+            fields["buyer_email"] = _buyer_email(_msg, parsed["body"])
             intake_id = "intake-" + uuid.uuid4().hex[:12]
             row = {
                 "id": intake_id,
@@ -1203,6 +1226,7 @@ def run_intake():
                 "raw_text": (parsed["body"] or "")[:8000],
                 "parse_warnings": ",".join(fields.get("warnings") or []),
                 "ticket_url": (fields or {}).get("ticket_url"),
+                "buyer_email": (fields or {}).get("buyer_email"),
                 "status": "new",
             }
             db.insert_pending_intake(row, datetime.now(timezone.utc).isoformat())
