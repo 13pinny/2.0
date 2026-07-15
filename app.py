@@ -5770,6 +5770,28 @@ def _fresh_thread_job(fn):
     return _runner
 
 
+def _reconcile_orphaned_pushes():
+    """A viagogo approve runs in a background thread; if the process dies
+    mid-run (a deploy restart, a crash), its push is left stuck in
+    'creating' forever with no thread to finish it. On startup, kick any
+    such row back to awaiting_approval so the user can simply re-approve —
+    the approve flow is idempotent enough (a half-created listing shows up
+    on /Listings and won't be duplicated blindly; the user reviews first)."""
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for row in db.viagogo_push_all(status="creating"):
+            db.viagogo_push_update(row["id"], {
+                "status": "awaiting_approval",
+                "error": ("interrupted mid-create (server restart) — re-approve; "
+                          "if a listing was already made on viagogo, reject this instead"),
+            }, now_iso)
+            print(f"[viagogo-push] reset orphaned 'creating' row {row['id']} → awaiting_approval")
+    except Exception:
+        traceback.print_exc()
+
+
+_reconcile_orphaned_pushes()
+
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(_fresh_thread_job(run_scraper), "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
