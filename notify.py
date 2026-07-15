@@ -147,36 +147,45 @@ def _format_seat_lines(seats, limit=40, labels=None):
     return lines
 
 
-def _seat_content_summary(seats, labels=None, max_len=1800):
-    """Compact one-liner per block for the Discord message `content` field:
-    'VIP B ₪499: row 8 seats 36,37,38 | Section 49: row 3 seat 66'.
+def _seat_content_summary(seats, labels=None, when=None, max_seat_lines=14):
+    """Multiline seat summary for the Discord message `content` field:
+
+        📅 September 9th
+        **VIP B ₪499 ×2**
+        row 8 seat 36
+        row 8 seat 37
 
     The embed description already lists every seat, but Discord's PUSH
     NOTIFICATION preview shows only the plain content/title — without this,
-    a phone ping reads just \"3 new seats dropped\" and the section/seat
+    a phone ping reads just \"3 new seats dropped\" and the date/section/seat
     numbers are invisible until the message is opened. Seated drops only;
     GA/status seats have no seat numbers to show.
     """
     real = [s for s in seats if not (s.get("festival") or s.get("ga"))]
     if not real:
         return None
+    lines = []
+    if when:
+        lines.append(f"📅 {when}")
     by_block = {}
     for s in real:
         by_block.setdefault(_seat_block(s) or "?", []).append(s)
-    parts = []
+    shown = 0
     for code, group in sorted(by_block.items(), key=lambda kv: (-len(kv[1]), kv[0])):
         name, price = _block_info(labels, code)
-        by_row = {}
-        for s in group:
-            by_row.setdefault(_seat_row(s), []).append(_seat_num(s))
-        row_bits = []
-        for row, nums in sorted(by_row.items()):
-            nums = sorted(nums, key=lambda n: (len(n), n))
-            row_bits.append(f"row {row} seat{'s' if len(nums) > 1 else ''} {','.join(nums)}")
-        head = str(name) + (f" ₪{price:.0f}" if price is not None else "")
-        parts.append(f"{head}: {'; '.join(row_bits)}")
-    out = " | ".join(parts)
-    return out[: max_len - 1] + "…" if len(out) > max_len else out
+        head = str(name)
+        if price is not None:
+            head += f" ₪{price:.0f}"
+        if len(group) > 1:
+            head += f" ×{len(group)}"
+        lines.append(f"**{head}**")
+        for s in sorted(group, key=lambda s: (_seat_row(s), _seat_num(s))):
+            if shown >= max_seat_lines:
+                lines.append(f"… +{len(real) - shown} more")
+                return "\n".join(lines)
+            lines.append(f"row {_seat_row(s)} seat {_seat_num(s)}")
+            shown += 1
+    return "\n".join(lines)
 
 
 def _group_by_perf(seats):
@@ -333,7 +342,7 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
         if removed_count:
             embed["fields"].append({"name": "Also removed", "value": str(removed_count), "inline": True})
         payload = {"embeds": [embed]}
-        summary = _seat_content_summary(added_seats, labels=labels)
+        summary = _seat_content_summary(added_seats, labels=labels, when=when)
         if summary:
             payload["content"] = summary[:1990]
         discord_result = _post_discord(discord_url, payload)
