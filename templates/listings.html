@@ -174,7 +174,7 @@ function renderCards(rows) {
       </div>
       <div class="ic-subject">
         ${noMatch
-          ? `No viagogo match — searched <em>${esc(r.event_name || r.venue || "?")}</em>. Teach the English name below to retry.`
+          ? `No viagogo match — searched <em>${esc(r.event_name || r.venue || "?")}</em>. Teach the English name below to retry — or paste the viagogo event link (…/E-12345678) to pin the exact event.`
           : r.cost_per_unit == null
             ? `<span style="color: var(--amber);">No price in the email — enter Viagogo $/ea and Face value below before approving.</span>`
             : `Paid: &#8362;${Number(r.cost_per_unit).toFixed(2)}/ea &times; ${r.qty || 0} &nbsp;&rarr;&nbsp; viagogo $${Number(r.website_price_usd || 0).toFixed(2)}/ea (5&times;, fx ${r.fx_rate ? Number(r.fx_rate).toFixed(4) : "?"})`}
@@ -182,7 +182,7 @@ function renderCards(rows) {
       <div class="ic-body">
         ${noMatch ? `
         <label>Hebrew name</label><input type="text" value="${esc(r.event_name || "")}" readonly style="opacity:0.6;" title="Kupat event name">
-        <label>English name *</label><input data-f="teach_english" type="text" placeholder="e.g. Eden Ben Zaken">
+        <label>English name *</label><input data-f="teach_english" type="text" placeholder="e.g. Eden Ben Zaken — or a viagogo event URL">
         <div style="grid-column: span 4; text-align: right; margin: -4px 0 4px;">
           <button class="confirm" data-act="vg-teach" style="padding: 4px 12px; font-size: 11px;">Teach &amp; Re-search</button>
         </div>

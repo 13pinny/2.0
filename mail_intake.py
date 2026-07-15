@@ -650,15 +650,21 @@ def _push_kupat_to_viagogo(intake_id, fields):
     return first_push
 
 
-def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None):
+def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None,
+                                  force_term=None, force_event_id=None):
     """Re-run the viagogo event search for an existing push row (e.g. after
-    the user teaches a Hebrew→English name mapping) and update it in place."""
+    the user teaches a Hebrew→English name mapping) and update it in place.
+
+    force_term / force_event_id come from a pasted viagogo event URL: the
+    picker is searched with the URL's slug-derived name and the exact event
+    id from the URL must be among the results (the create flow replays the
+    same search later, so the term must actually surface the event)."""
     if now_iso is None:
         now_iso = datetime.now(timezone.utc).isoformat()
     event_name = fields.get("event_name") or ""
     venue = fields.get("venue") or ""
     cost_per_unit = fields.get("cost_per_unit")
-    search_term = _resolve_search_term(event_name, venue)
+    search_term = force_term or _resolve_search_term(event_name, venue)
     try:
         candidates = _search_viagogo(search_term)
     except Exception as e:
@@ -676,7 +682,20 @@ def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None):
         }, now_iso)
         return
 
-    chosen = _rank_viagogo_candidates(candidates, fields.get("event_date_iso"))
+    if force_event_id:
+        chosen = next((c for c in candidates
+                       if str(c.get("event_id")) == str(force_event_id)), None)
+        if chosen is None:
+            db.viagogo_push_update(push_id, {
+                "status": "no_match",
+                "candidates_json": json.dumps(candidates, ensure_ascii=False),
+                "error": (f"event {force_event_id} from the pasted link wasn't in "
+                          f"the picker results for '{search_term}' — pick from the "
+                          f"dropdown or try a different link"),
+            }, now_iso)
+            return
+    else:
+        chosen = _rank_viagogo_candidates(candidates, fields.get("event_date_iso"))
     try:
         fx_rate = fx.ils_to_usd_rate()
         cost_usd = fx.ils_to_usd(cost_per_unit) if cost_per_unit is not None else None

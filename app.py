@@ -20,6 +20,7 @@ import attachments as attachments_mod
 import barby
 import barby_events
 import db
+import discord_bot
 import filters as watcher_filters
 import import_jerujam
 import kupat
@@ -2575,22 +2576,41 @@ def api_kupat_name_map():
     if not hebrew or not english:
         return jsonify({"error": "hebrew and english required"}), 400
     now_iso = datetime.now(timezone.utc).isoformat()
-    db.kupat_name_map_set(hebrew, english, now_iso)
+
+    # A pasted viagogo event URL beats a name: it carries the exact event id
+    # (…/Gordon-Fight-Night-Tickets/E-161493942) plus a searchable name in
+    # the slug. Event-specific, so it is NOT saved as a name mapping — a
+    # generic sender name (e.g. tickchak's "Tickchak4u") must not get
+    # permanently bound to one event.
+    force_term = force_event_id = None
+    m = re.search(r"viagogo\.[^\s/]+/.*E-(\d+)", english, re.I)
+    if m:
+        force_event_id = m.group(1)
+        slug = re.search(r"/([^/]+?)(?:-Tickets)?/E-\d+", english)
+        force_term = (slug.group(1).replace("-", " ").strip() if slug else "")
+        if not force_term:
+            return jsonify({"error": "couldn't read an event name from that link"}), 400
+    else:
+        db.kupat_name_map_set(hebrew, english, now_iso)
 
     push_id = (body.get("push_id") or "").strip()
     if push_id:
         push = db.viagogo_push_get(push_id)
         if push and push.get("status") in ("no_match", "error"):
-            # Re-run the search in background with the new mapping.
-            def _retry(pid, fields, now):
+            # Re-run the search in background with the new mapping / link.
+            def _retry(pid, fields, now, term, evid):
                 import mail_intake as _mi
-                _mi._push_kupat_to_viagogo_update(pid, fields, now)
+                _mi._push_kupat_to_viagogo_update(pid, fields, now,
+                                                  force_term=term,
+                                                  force_event_id=evid)
             fields = {k: push.get(k) for k in
                       ("event_name", "venue", "event_date_iso", "section",
                        "row_label", "seats", "qty", "cost", "cost_per_unit",
                        "ticket_url")}
             threading.Thread(
-                target=_retry, args=(push_id, fields, now_iso), daemon=True
+                target=_retry,
+                args=(push_id, fields, now_iso, force_term, force_event_id),
+                daemon=True,
             ).start()
     return jsonify({"ok": True})
 
@@ -4072,6 +4092,7 @@ def _check_one_watcher(w, now_iso):
                 total_now=len(seats), labels=labels,
                 channels=enabled,
                 headline=headline,
+                discord_override=discord_bot.webhook_for(w.get("discord_channel")),
             )
         elif not matched and added:
             # All new seats filtered out — record the drop so the user sees
@@ -4512,7 +4533,7 @@ def _dice_payload(force=False):
             "event_code": code,
             "tracked_by": tracked_by,
             "name": meta.get("eventName"),
-            "venue": " Â· ".join(v for v in ((meta.get("venueName") or "").strip(),
+            "venue": " · ".join(v for v in ((meta.get("venueName") or "").strip(),
                                             (meta.get("venueCity") or "").strip()) if v),
             "date_text": meta.get("firstPerfText"),
             "first_date_ms": meta.get("firstPerfMs"),
@@ -4544,7 +4565,7 @@ def api_dice():
 @app.route("/api/dice/refresh", methods=["POST"])
 def api_dice_refresh():
     """Force-fetch every tracked event from the DICE API right now and log
-    any tier/price/status changes. Synchronous â€” a handful of events is a
+    any tier/price/status changes. Synchronous — a handful of events is a
     couple of seconds."""
     return jsonify(_dice_payload(force=True))
 
@@ -5165,6 +5186,11 @@ def _add_one_watcher(url, label=None):
         # singles); GA sources (tickchak) override to {min_group_size: 1}
         # since adjacency doesn't apply to ticket-type buckets.
         "filters": json.dumps(getattr(src, "DEFAULT_FILTERS", {"min_group_size": 2})),
+        # Per-event Discord routing: auto-derive a dateless channel name from
+        # the label so all dates of one artist share a channel. Only when the
+        # bot is configured — otherwise everything stays on the shared drops
+        # webhook and the column stays NULL.
+        "discord_channel": (discord_bot.slugify_label(final_label) or None) if discord_bot.configured() else None,
     }, datetime.now(timezone.utc).isoformat())
     w = db.tm_get_watcher(wid)
     warning = None
@@ -5237,6 +5263,12 @@ def api_watchers_update():
         new_label = (body["label"] or "").strip()
         if new_label:
             fields["label"] = new_label
+    if "discord_channel" in body:
+        # Empty string clears it (back to the shared drops channel). Names
+        # are normalized the same way the auto-default is, so typing
+        # "Peer Tasi" and the derived "peer-tasi" land on one channel.
+        raw = (body["discord_channel"] or "").strip()
+        fields["discord_channel"] = discord_bot.slugify_label(raw) or None if raw else None
     if "filters" in body:
         # Validate + normalize the filter object before storing.
         f = body["filters"] or {}
