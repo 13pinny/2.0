@@ -58,6 +58,7 @@
   .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; white-space: nowrap; }
   .badge.selling { background: #16a34a; }
   .badge.soldout { background: #dc2626; }
+  .badge.upcoming { background: #7c3aed; }
   .badge.unknown { background: #9ca3af; }
   .tier { font-size: 10px; color: var(--purple); }
   .trk { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
@@ -196,7 +197,10 @@ function detailRows(e){
     const tier = t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index+1) : '');
     const st = t.status === 'on-sale' ? '<span class="on">on sale</span>' : `<span class="off">${escape(t.status||'?')}</span>`;
     return `<div class="ty"><b>${escape(t.name)}</b>${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} — ${money(t.price, t.currency)} · ${st}</div>`;
-  }).join('') || '<div class="ty">No ticket types.</div>';
+  }).join('') || `<div class="ty">${
+    e.status === 'soldout' ? 'Sold out — DICE returns no ticket types (waitlist may be open on the event page).'
+    : e.status === 'upcoming' ? 'Not on sale yet — ticket types appear when the sale opens.'
+    : 'No ticket types returned.'}</div>`;
   const hist = e.history || [];
   if (hist.length){
     html += `<div class="hh">Change log — ${hist.length} state${hist.length>1?'s':''} recorded</div>`;
@@ -226,6 +230,7 @@ function render(){
   $('rows').innerHTML = evs.map(e => {
     const st = e.status === 'selling' ? '<span class="badge selling">On sale</span>'
       : e.status === 'soldout' ? '<span class="badge soldout">Sold out</span>'
+      : e.status === 'upcoming' ? '<span class="badge upcoming">Upcoming</span>'
       : `<span class="badge unknown">${escape(e.status||'?')}</span>`;
     const tier = cheapestTier(e);
     const opened = open.has(e.event_code);

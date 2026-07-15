@@ -276,6 +276,22 @@ def _read_cache(event_code, lang="iw"):
     return None
 
 
+def _sale_not_started(dates):
+    """True when the event's sale_start_date is in the future — an
+    announced-but-not-yet-on-sale show (no ticket_types yet)."""
+    start = (dates or {}).get("sale_start_date")
+    if not start:
+        return False
+    try:
+        from datetime import timezone
+        dt = datetime.fromisoformat(str(start))
+        if dt.tzinfo is None:
+            return False
+        return dt > datetime.now(timezone.utc)
+    except (TypeError, ValueError):
+        return False
+
+
 def _parse_iso_perf(start_date):
     """'2026-10-07T22:00:00-04:00' → (epoch_ms, venue-local 'YYYY-MM-DD HH:MM')."""
     if not start_date:
@@ -319,6 +335,22 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
     dates = data.get("dates") or {}
     perf_ms, perf_text = _parse_iso_perf(dates.get("event_start_date"))
 
+    # Status derivation. A buyable type wins outright. With NO ticket_types
+    # in the payload the top-level `status` field lies (it stays "on-sale"
+    # for a sold-out show — same lagging-flag trap as TM/tickchak), so read
+    # the real signals: `is_fully_locked` = inventory gone (sold out, usually
+    # waitlist-only), and a future sale_start = not on sale yet.
+    if any_on_sale:
+        status = "selling"
+    elif blocks:
+        status = "soldout"       # types exist but every one is off-sale
+    elif data.get("is_fully_locked"):
+        status = "soldout"       # locked, no types → sold out / waitlist
+    elif _sale_not_started(dates):
+        status = "upcoming"      # announced, sale hasn't opened yet
+    else:
+        status = "unknown"
+
     payload = {
         "_fetched_at": time.time(),
         "source": SOURCE_NAME,
@@ -334,7 +366,7 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
             # DICE publishes no counts — tier jumps are the demand proxy.
             "totalSeats": None,
             "availSeats": None,
-            "status": ("selling" if any_on_sale else ("soldout" if blocks else "unknown")),
+            "status": status,
             "permName": (data.get("perm_name") or "").strip() or None,
             "eventStatus": data.get("status"),
             "saleEnd": dates.get("sale_end_date"),

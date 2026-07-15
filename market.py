@@ -386,8 +386,8 @@ def _dice_event_entity(code):
     if not prices:
         prices = [b.get("price") for b in blocks.values() if b.get("price")]
     currency = next((b.get("currency") for b in blocks.values() if b.get("currency")), "USD")
-    status = {"selling": "available", "soldout": "soldout"}.get(
-        meta.get("status"), "unknown")
+    status = {"selling": "available", "soldout": "soldout",
+              "upcoming": "upcoming"}.get(meta.get("status"), "unknown")
     return _entity(
         "dice", code, "0",
         name=meta.get("eventName"),
