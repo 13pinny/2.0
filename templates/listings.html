@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+{% include "_pwa.html" %}
 <title>Kartis — Listings</title>
 <style>
   :root {
@@ -71,6 +72,7 @@
     <a href="/maaser">MAASER</a>
     <a href="/pricer">PRICER</a>
     <a href="/listings" class="active">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
     <a href="/festival">CHUTZOT HAYOTZER</a>
     <a href="/ga">GA</a>
     <a href="/market">ISRAEL MARKET</a>
@@ -134,6 +136,7 @@ function renderCards(rows) {
       <span style="flex:1;">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
       <span style="color:var(--muted);">${esc(r.chosen_event_date || r.event_date_iso || "")}</span>
       ${r.viagogo_section ? `<span style="color:var(--muted);">${esc(r.viagogo_section)}</span>` : ""}
+      ${r.buyer_email ? `<span style="color:var(--accent);font-size:10px;" title="Account the tickets were bought under">📧 ${esc(r.buyer_email)}</span>` : ""}
       ${r.error ? `<span style="color:var(--red);border:1px solid var(--red);padding:1px 6px;font-size:10px;" title="${esc(r.error)}">⚠ ${esc(r.error.slice(0, 60))}</span>` : ""}
       <span style="color:var(--muted);font-size:10px;">${esc(when)}</span>
     </div>`;
@@ -162,6 +165,7 @@ function renderCards(rows) {
       <div class="ic-head">
         <span class="provider status-${esc(r.status)}">${esc(r.status.replace(/_/g, " "))}</span>
         <span class="from" title="${esc(r.chosen_venue || r.venue || "")}">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
+        ${r.buyer_email ? `<span style="font-size:10px;color:var(--accent);letter-spacing:0.5px;" title="Account the tickets were bought under — deliver from this inbox">📧 ${esc(r.buyer_email)}</span>` : ""}
         <span class="when">${esc(when)}</span>
         ${r.error ? `<span class="warn" title="${esc(r.error)}">${esc(r.error.slice(0, 80))}</span>` : ""}
       </div>

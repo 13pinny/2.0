@@ -13,7 +13,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, send_file
+from flask import Flask, jsonify, render_template, send_file, send_from_directory
 from openpyxl import Workbook
 
 import attachments as attachments_mod
@@ -38,6 +38,7 @@ import ticketmaster
 import tm_events
 import todos as todos_mod
 import viagogo_listing
+import viagogo_market_sales
 import viagogo_pricer
 
 # Drop-checker sources keyed by the value stored in tm_watchers.source.
@@ -166,6 +167,17 @@ _last_market = {"at": None, "counts": {}, "errors": {}, "entities": 0,
 _market_lock = threading.Lock()
 MARKET_INTERVAL_MINUTES = int(os.getenv("KARTIS_MARKET_INTERVAL_MINUTES") or 60)
 MARKET_ENABLED = (os.getenv("KARTIS_MARKET_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+# Market-wide viagogo sales tracker (/vgsales) — polls the MarketDataV3
+# magnifier popup for every event we're listed on + the watchlist and
+# records the "past ten sales" grid (viagogo_market_sales.py docstring has
+# the empirical facts). Needs the CDP Chrome, so dashboard machine only
+# (KARTIS_VGSALES_ENABLED=0 elsewhere). No notifications in v1.
+_last_vgsales = {"at": None, "targets": 0, "fetched": 0, "skipped_fresh": 0,
+                 "deferred": 0, "new_sales": 0, "baselines": 0,
+                 "overflows": 0, "errors": 0, "error": None, "running": False}
+_vgsales_lock = threading.Lock()
+VGSALES_ENABLED = (os.getenv("KARTIS_VGSALES_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def run_mail_intake():
@@ -440,6 +452,36 @@ def run_market_sweep():
     finally:
         _last_market["running"] = False
         _market_lock.release()
+
+
+def run_vgsales(force=False):
+    """One tick of the viagogo market-sales tracker. No notifications —
+    this only feeds the /vgsales page. Chrome down surfaces as `error` in
+    the status dict, same as the pricer/market jobs. force=True (the
+    run-now button) bypasses the fetched-recently skip that normally lets
+    the pricer piggyback halve requests."""
+    if not _vgsales_lock.acquire(blocking=False):
+        return
+    _last_vgsales["running"] = True
+    try:
+        if db.setting_get_bool("master_paused", default=False):
+            _last_vgsales.update(at=datetime.now(timezone.utc).isoformat(), error=None)
+            return
+        summary = viagogo_market_sales.run_sales_tick(force=force)
+        _last_vgsales.update(
+            at=datetime.now(timezone.utc).isoformat(), error=None, **summary)
+        print(f"[vgsales] {summary['fetched']}/{summary['targets']} events, "
+              f"{summary['new_sales']} new sales, {summary['baselines']} baselines, "
+              f"{summary['overflows']} overflows, {summary['errors']} errors")
+    except Exception as e:
+        _last_vgsales.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_vgsales["running"] = False
+        _vgsales_lock.release()
 
 
 def run_todo_remind():
@@ -1621,6 +1663,12 @@ def _build_combined_sales(only_canceled=False):
 @app.route("/")
 def home():
     return render_template("inventory.html")
+
+
+@app.route("/sw.js")
+def service_worker():
+    # Served from the root (not /static/) so its scope covers the whole app.
+    return send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript")
 
 
 @app.route("/sources")
@@ -4537,6 +4585,173 @@ def api_market_manual():
     return jsonify({"entries": db.market_manual_all()})
 
 
+@app.route("/vgsales")
+def vgsales_page():
+    return render_template("vgsales.html")
+
+
+def _vg_windows(rows, now, tracking_since_iso):
+    """Per-window {sold, count, partial} from discrete sale rows (ascending,
+    baseline rows already excluded). Unlike _sales_windows there's no delta
+    math — a row IS a sale; `sold` sums qty, `count` counts orders. A window
+    that started before we began tracking the event is partial (same `*`
+    semantics as the availability-based pages)."""
+    out = {}
+    for key, secs in FESTIVAL_WINDOWS:
+        start_iso = (now - timedelta(seconds=secs)).isoformat()
+        inside = [r for r in rows if r["observed_at"] >= start_iso]
+        partial = not tracking_since_iso or tracking_since_iso > start_iso
+        out[key] = {"sold": sum(r.get("qty") or 0 for r in inside),
+                    "count": len(inside), "partial": partial}
+    return out
+
+
+def _vg_median(values):
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    return vals[mid] if len(vals) % 2 else round((vals[mid - 1] + vals[mid]) / 2, 2)
+
+
+_VG_DATE_TEXT_FMT = "%A, %B %d, %Y"   # "Sunday, August 23, 2026" (popup header)
+
+
+def _vg_date_iso(listed_row, seen_row):
+    """Best-effort sortable date: the scrape mirror's ISO when we're listed,
+    else parse the popup header's locale text."""
+    if listed_row and listed_row.get("event_date_iso"):
+        return listed_row["event_date_iso"]
+    txt = (seen_row or {}).get("event_date")
+    if txt:
+        try:
+            return datetime.strptime(txt.strip(), _VG_DATE_TEXT_FMT).date().isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+@app.route("/api/vgsales")
+def api_vgsales():
+    """Everything the /vgsales page needs in one call: every tracked event
+    (fresh listings + watchlist + anything with sales observed in the last
+    7d), its sales-per-window velocity, per-section 7d aggregates, the raw
+    recent rows for the expanded view, and the tracker status. All prices
+    USD (MarketDataV3 answers in our account currency)."""
+    now = datetime.now(timezone.utc)
+    fresh = (now - timedelta(hours=viagogo_market_sales.LISTING_FRESH_HOURS)).isoformat()
+    listed = {str(r["event_id"]): r for r in db.viagogo_listing_event_ids(fresh)}
+    watch = {str(w["event_id"]): w for w in db.vg_watchlist_all()}
+    seen = {e["event_id"]: e for e in db.vg_sales_events_all()}
+    sales7 = db.vg_market_sales_since((now - timedelta(days=7)).isoformat())
+    totals = db.vg_market_sales_totals()
+
+    event_ids = set(listed) | set(watch) | {
+        eid for eid, rows in sales7.items() if rows}
+    events = []
+    for eid in event_ids:
+        lr, wr, sr = listed.get(eid), watch.get(eid), seen.get(eid)
+        date_iso = _vg_date_iso(lr, sr)
+        if not (lr or wr) and date_iso and date_iso[:10] < (now - timedelta(days=1)).date().isoformat():
+            continue  # delisted + past — history only, off the page
+        rows = sales7.get(eid, [])
+        live = [r for r in rows if not r["baseline"]]
+        tracking_since = (sr or {}).get("first_seen_at")
+        tot = totals.get(eid, {"tickets": 0, "sales": 0})
+        sections = {}
+        for r in live:
+            s = sections.setdefault(r.get("section") or "?", {
+                "section": r.get("section") or "?", "sold": 0, "count": 0,
+                "prices": [], "last_at": None})
+            s["sold"] += r.get("qty") or 0
+            s["count"] += 1
+            s["prices"].append(r.get("price"))
+            s["last_at"] = max(s["last_at"] or "", r["observed_at"])
+        section_list = sorted(
+            ({**s, "median": _vg_median(s.pop("prices"))} for s in sections.values()),
+            key=lambda s: -s["sold"])
+        events.append({
+            "event_id": eid,
+            "name": (lr or {}).get("name") or (sr or {}).get("name")
+                    or (wr or {}).get("label") or f"event {eid}",
+            "venue": (lr or {}).get("venue") or (sr or {}).get("venue"),
+            "date_iso": date_iso,
+            "date_text": (sr or {}).get("event_date"),
+            "listed": bool(lr), "watch": bool(wr),
+            "our_listings": (lr or {}).get("listings") or 0,
+            "url": (wr or {}).get("url"),
+            "windows": _vg_windows(live, now, tracking_since),
+            "total_sold": tot["tickets"], "total_sales": tot["sales"],
+            "median_price": _vg_median([r.get("price") for r in live]),
+            "last_sale_at": live[-1]["observed_at"] if live else None,
+            "sections": section_list,
+            "recent": list(reversed(rows[-20:])),
+            "tracking_since": tracking_since,
+            "last_fetch_at": (sr or {}).get("last_fetch_at"),
+            "last_error": (sr or {}).get("last_error"),
+        })
+    events.sort(key=lambda e: e.get("date_iso") or "9999")
+    return jsonify({
+        "events": events,
+        "status": {**_last_vgsales, "enabled": VGSALES_ENABLED,
+                   "interval_minutes": viagogo_market_sales.INTERVAL_MINUTES},
+        "windows": [k for k, _ in FESTIVAL_WINDOWS],
+        "now": now.isoformat(),
+    })
+
+
+def _parse_vg_event_id(s):
+    """Accept a bare numeric id, a public www.viagogo.com/...(E-<id>) URL,
+    or an inv URL with an eventId query param."""
+    s = (s or "").strip()
+    m = re.search(r"/E-(\d+)", s)
+    if m:
+        return m.group(1)
+    m = re.search(r"[?&]eventId=(\d+)", s)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"\d{6,}", s):
+        return s
+    return None
+
+
+@app.route("/api/vgsales/watch", methods=["POST"])
+def api_vgsales_watch():
+    """Track an event we hold no listing on. Body: {"url": <public URL or
+    bare event id>, "label": optional}. First fetch happens inline so the
+    row appears immediately; failure still adds the watch (warning, not
+    500) — the next tick retries."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
+    eid = _parse_vg_event_id(url)
+    if not eid:
+        return jsonify({"error": "couldn't find a viagogo event id in that"
+                                 " (paste a .../E-<id> URL or the bare id)"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.vg_watchlist_add(eid, (body.get("label") or "").strip() or None,
+                        url if url != eid else None, now_iso)
+    try:
+        res = viagogo_market_sales.fetch_one(eid, lock_timeout=30)
+    except Exception as e:
+        return jsonify({"added": eid,
+                        "warning": f"added, but first fetch failed: {e}"})
+    return jsonify({"added": eid, "name": res["header"].get("name"),
+                    "window": res["window"]})
+
+
+@app.route("/api/vgsales/unwatch", methods=["POST"])
+def api_vgsales_unwatch():
+    """Stop watching. Observed sales stay (history) but stop refreshing —
+    unless we're listed on the event, which keeps it tracked."""
+    from flask import request
+    eid = ((request.get_json(silent=True) or {}).get("event_id") or "").strip()
+    if not eid:
+        return jsonify({"error": "event_id is required"}), 400
+    db.vg_watchlist_remove(eid)
+    return jsonify({"removed": eid})
+
+
 @app.route("/tools")
 def tools_page():
     return render_template("tools.html")
@@ -5284,6 +5499,25 @@ def api_market_run_now():
     return jsonify(dict(_last_market))
 
 
+@app.route("/api/vgsales/status")
+def api_vgsales_status():
+    return jsonify({
+        **_last_vgsales,
+        "enabled": VGSALES_ENABLED,
+        "interval_minutes": viagogo_market_sales.INTERVAL_MINUTES,
+    })
+
+
+@app.route("/api/vgsales/run-now", methods=["POST"])
+def api_vgsales_run_now():
+    """Manual tick — synchronous (~2s per tracked event under the browser
+    lock). Works even when the scheduled job is disabled on this machine."""
+    if _last_vgsales["running"]:
+        return jsonify({"error": "vgsales tick already running"}), 429
+    run_vgsales(force=True)
+    return jsonify(dict(_last_vgsales))
+
+
 def _fresh_thread_job(fn):
     """Run a scheduler job in a brand-new disposable thread each tick.
 
@@ -5347,6 +5581,15 @@ if MARKET_ENABLED:
                       start_date=datetime.now() + timedelta(minutes=20))
 else:
     print("[market] disabled via KARTIS_MARKET_ENABLED=0 — the sweep runs elsewhere")
+if VGSALES_ENABLED:
+    # Viagogo market-sales tracker — drives the CDP Chrome, so fresh thread
+    # and staggered clear of scrape (t+0) / pricer (t+7) / market (t+20).
+    scheduler.add_job(_fresh_thread_job(run_vgsales), "interval",
+                      minutes=viagogo_market_sales.INTERVAL_MINUTES,
+                      id="vgsales",
+                      start_date=datetime.now() + timedelta(minutes=13))
+else:
+    print("[vgsales] disabled via KARTIS_VGSALES_ENABLED=0 — the tracker runs elsewhere")
 
 # One-shot: archive any pre-existing inventory_overrides rows whose status
 # value was already typed as "not sold" (or a variant). Idempotent so

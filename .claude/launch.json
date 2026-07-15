@@ -6,7 +6,16 @@
       "runtimeExecutable": ".venv\\Scripts\\python.exe",
       "runtimeArgs": ["app.py"],
       "port": 5000,
-      "env": { "TM_CHECK_ENABLED": "0" }
+      "env": {
+        "TM_CHECK_ENABLED": "0",
+        "TM_CHECK_INTERVAL_SECONDS": "999999",
+        "KARTIS_PACHA_MONITOR_ENABLED": "0",
+        "KARTIS_IL_EVENTS_ENABLED": "0",
+        "KARTIS_MARKET_ENABLED": "0",
+        "KARTIS_VGSALES_ENABLED": "0",
+        "KARTIS_INTAKE_INTERVAL_MINUTES": "99999",
+        "KARTIS_PRICER_INTERVAL_MINUTES": "99999"
+      }
     },
     {
       "name": "templates-static",

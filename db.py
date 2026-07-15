@@ -682,6 +682,48 @@ CREATE TABLE IF NOT EXISTS viagogo_push (
 );
 CREATE INDEX IF NOT EXISTS idx_viagogo_push_status ON viagogo_push(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_viagogo_push_intake ON viagogo_push(intake_id);
+-- Market-wide viagogo sales tracker (viagogo_market_sales.py + /vgsales).
+-- One row per sale observed in the MarketDataV3 "Sales" grid (all sellers,
+-- not just us). The feed shows the last 10 sales with NO dates and NO ids,
+-- so observed_at (the tick that first saw the row) is the effective sale
+-- time (accurate to the poll interval) and newness is decided by aligning
+-- the ordered window against the previous one (viagogo_sales_events.
+-- window_json) — content hashing can't work, identical sales are common.
+-- baseline=1 marks rows from an event's first-ever window: real sales, but
+-- of unknown age, so velocity windows exclude them.
+CREATE TABLE IF NOT EXISTS viagogo_market_sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id    TEXT NOT NULL,
+    section     TEXT,
+    row_label   TEXT,
+    seats       TEXT,
+    qty         INTEGER,
+    price       REAL,                    -- USD per ticket
+    is_ours     INTEGER NOT NULL DEFAULT 0,  -- tr class owned/current
+    baseline    INTEGER NOT NULL DEFAULT 0,
+    observed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vgms_event ON viagogo_market_sales(event_id, observed_at);
+-- Events the user pasted on /vgsales to track without holding a listing.
+CREATE TABLE IF NOT EXISTS viagogo_sales_watchlist (
+    event_id TEXT PRIMARY KEY,
+    label    TEXT,
+    url      TEXT,
+    added_at TEXT NOT NULL
+);
+-- Per-event fetch bookkeeping + display metadata (name/venue/date parsed
+-- from the MarketDataV3 header — works for events we hold no listing on).
+CREATE TABLE IF NOT EXISTS viagogo_sales_events (
+    event_id      TEXT PRIMARY KEY,
+    name          TEXT,
+    venue         TEXT,
+    event_date    TEXT,
+    window_json   TEXT,                  -- last seen ordered sales window
+    last_fetch_at TEXT,
+    last_error    TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL
+);
 """
 
 
@@ -2651,6 +2693,155 @@ def sales_snapshot_prune(cutoff_iso):
         conn.execute(
             "DELETE FROM tickchak_sales_snapshots WHERE captured_at < ?", (cutoff_iso,),
         )
+
+
+# ---------------- viagogo market sales (/vgsales) ---------------------------
+
+def vg_sales_event_upsert(event_id, name, venue, event_date, window_json,
+                          last_error, now_iso):
+    """Bookkeeping row for one tracked event. Metadata only overwrites with
+    non-NULL values so a failed fetch doesn't blank out the header fields."""
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO viagogo_sales_events (event_id, name, venue,
+                   event_date, window_json, last_fetch_at, last_error,
+                   first_seen_at, last_seen_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(event_id) DO UPDATE SET
+                   name = COALESCE(excluded.name, name),
+                   venue = COALESCE(excluded.venue, venue),
+                   event_date = COALESCE(excluded.event_date, event_date),
+                   window_json = COALESCE(excluded.window_json, window_json),
+                   last_fetch_at = excluded.last_fetch_at,
+                   last_error = excluded.last_error,
+                   last_seen_at = excluded.last_seen_at""",
+            (str(event_id), name, venue, event_date, window_json, now_iso,
+             last_error, now_iso, now_iso),
+        )
+
+
+def vg_sales_event_get(event_id):
+    with connect() as conn:
+        r = conn.execute(
+            "SELECT * FROM viagogo_sales_events WHERE event_id = ?",
+            (str(event_id),),
+        ).fetchone()
+    return dict(r) if r else None
+
+
+def vg_sales_events_all():
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM viagogo_sales_events").fetchall()
+    return [dict(r) for r in rows]
+
+
+def vg_market_sales_insert_many(event_id, rows, baseline, now_iso):
+    """Append observed sale rows. rows: [{section, row, seats, qty, price,
+    is_ours}, …] in feed order. Returns the number inserted."""
+    with connect() as conn:
+        conn.executemany(
+            """INSERT INTO viagogo_market_sales
+               (event_id, section, row_label, seats, qty, price, is_ours,
+                baseline, observed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(str(event_id), r.get("section"), r.get("row"), r.get("seats"),
+              r.get("qty"), r.get("price"), 1 if r.get("is_ours") else 0,
+              1 if baseline else 0, now_iso) for r in rows],
+        )
+    return len(rows)
+
+
+def vg_market_sales_since(since_iso):
+    """{event_id: ascending [row dicts]} for every sale observed since
+    since_iso (baseline rows included — callers filter). One scan, same
+    rationale as sales_snapshot_series_bulk."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM viagogo_market_sales WHERE observed_at >= ? "
+            "ORDER BY observed_at ASC, id ASC",
+            (since_iso,),
+        ).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["event_id"], []).append(dict(r))
+    return out
+
+
+def vg_market_sales_recent(event_id, limit=30):
+    """Newest-first recent rows for one event's expanded view."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM viagogo_market_sales WHERE event_id = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (str(event_id), int(limit)),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def vg_market_sales_totals():
+    """{event_id: {tickets, sales}} counted over every non-baseline row —
+    'Σ sold since tracking began' for the /vgsales table."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT event_id, SUM(qty) AS tickets, COUNT(*) AS sales "
+            "FROM viagogo_market_sales WHERE baseline = 0 GROUP BY event_id"
+        ).fetchall()
+    return {r["event_id"]: {"tickets": r["tickets"] or 0,
+                            "sales": r["sales"]} for r in rows}
+
+
+def vg_market_sales_prune(cutoff_iso):
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM viagogo_market_sales WHERE observed_at < ?",
+            (cutoff_iso,),
+        )
+
+
+def vg_watchlist_all():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM viagogo_sales_watchlist ORDER BY added_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def vg_watchlist_add(event_id, label, url, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO viagogo_sales_watchlist (event_id, label, url, added_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(event_id) DO UPDATE SET
+                   label = COALESCE(excluded.label, label),
+                   url = COALESCE(excluded.url, url)""",
+            (str(event_id), label, url, now_iso),
+        )
+
+
+def vg_watchlist_remove(event_id):
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM viagogo_sales_watchlist WHERE event_id = ?",
+            (str(event_id),),
+        )
+
+
+def viagogo_listing_event_ids(fresh_since_iso):
+    """Distinct viagogo event ids we currently hold listings on, with display
+    metadata. Freshness-gated on the scrape mirror's last_seen_at so deleted
+    listings age out; past-dated events are skipped by the caller (it has a
+    'now' to compare event_date_iso against)."""
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT event_id, MIN(event_name) AS name, MIN(venue) AS venue,
+                      MIN(event_date_iso) AS event_date_iso, COUNT(*) AS listings
+               FROM viagogo_listings
+               WHERE event_id IS NOT NULL AND event_id != ''
+                 AND last_seen_at >= ?
+               GROUP BY event_id""",
+            (fresh_since_iso,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------- Kupat credits ---------------------------------------------
