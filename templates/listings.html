@@ -216,6 +216,17 @@ function renderCards(rows) {
         <label>Face value $/ea</label><input data-f="face_value" type="number" step="0.01" value="${r.cost_usd_per_ticket ?? ""}">
         <label>Row</label><input data-f="row" type="text" value="${esc(r.row_label || "")}">
         <label>Seats (kupat)</label><input type="text" value="${esc(r.seats || "")}" readonly style="opacity:0.6;">
+        <label title="Enroll in the auto-pricer as soon as the listing is created — undercuts the cheapest competitor, never below your floor">Auto-price</label>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input data-f="pricer_enabled" type="checkbox" style="width:auto;cursor:pointer;">
+          <span style="font-size:10px;color:var(--muted);">undercut competitors from the moment it's live</span>
+        </div>
+        <label title="Auto-pricing never goes below this — required when Auto-price is on">Floor $/ea *</label>
+        <input data-f="pricer_floor" type="number" step="0.01" placeholder="never price below">
+        <label title="Sections whose competitors this listing prices against — defaults to its own section. Ctrl/Cmd-click for multiple.">Compete vs</label>
+        <select data-f="pricer_sections" multiple size="3" style="grid-column: 2 / -1;">
+          <option disabled>— pick event to load sections —</option>
+        </select>
       </div>
       <div class="ic-foot">
         <button class="reject" data-act="vg-reject">Reject</button>
@@ -344,6 +355,14 @@ async function loadSections(card, eventId, ticketType) {
     sel.innerHTML = '<option value="">— select section —</option>' +
       d.sections.map(s => `<option value="${esc(s)}" ${s === g.value ? "selected" : ""}>${esc(s)}</option>`).join("");
     sel.disabled = false;
+    // Same section list feeds the auto-pricer's compete-vs picker; keep any
+    // choices the user already made, else default to the guessed section.
+    const comp = card.querySelector("select[data-f='pricer_sections']");
+    if (comp) {
+      const prev = new Set([...comp.selectedOptions].map(o => o.value));
+      comp.innerHTML = d.sections.map(s =>
+        `<option value="${esc(s)}" ${(prev.size ? prev.has(s) : s === g.value) ? "selected" : ""}>${esc(s)}</option>`).join("");
+    }
     if (hint) {
       if (g.source === "learned") {
         hint.style.color = "var(--green)";
@@ -394,8 +413,19 @@ async function approveCard(card, publish) {
     row: (f.row || "").trim(),
     publish: !!publish,
   };
+  const pricerOn = !!card.querySelector("input[data-f='pricer_enabled']")?.checked;
+  if (pricerOn) {
+    const floor = parseFloat(f.pricer_floor || "0");
+    if (!(floor > 0)) { alert("Auto-price is on — set a floor price first (it never prices below that)."); return; }
+    const compSel = card.querySelector("select[data-f='pricer_sections']");
+    const compete = compSel ? [...compSel.selectedOptions].map(o => o.value).filter(Boolean) : [];
+    body.pricer = {enabled: true, floor_price: floor, compete_sections: compete};
+  }
   const kind = publish ? "LIVE listing — buyers can purchase immediately" : "DRAFT (unpublished) listing";
-  if (!confirm(`Create a ${kind} — ${body.available_tickets} × $${price.toFixed(2)}/ea (you net $${proceeds.toFixed(2)}/ea) in "${body.section}"?`)) return;
+  const pricerTxt = body.pricer
+    ? ` Auto-pricer ON (floor $${body.pricer.floor_price.toFixed(2)}, vs ${body.pricer.compete_sections.length ? body.pricer.compete_sections.join(", ") : "own section"}).`
+    : "";
+  if (!confirm(`Create a ${kind} — ${body.available_tickets} × $${price.toFixed(2)}/ea (you net $${proceeds.toFixed(2)}/ea) in "${body.section}"?${pricerTxt}`)) return;
   const res = await fetch("/api/viagogo-push/approve", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
   if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Approve failed: " + (e.error || res.status)); return; }
   await load();

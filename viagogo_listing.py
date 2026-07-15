@@ -1012,6 +1012,16 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
             page.click("#modal a.js-ok")
             page.wait_for_timeout(2000)
 
+            # Resolve the new listing's id right away (MarketDataV3, server
+            # truth) — the ticket upload targets it and the caller needs it
+            # to enroll the listing in the auto-pricer. Best-effort.
+            listing_id = None
+            try:
+                listing_id = _find_owned_listing_id(
+                    page, event_id, section, row, qty=available_tickets)
+            except Exception:
+                traceback.print_exc()
+
             tickets_uploaded = False
             ticket_upload_error = None
             if ticket_pdfs:
@@ -1034,6 +1044,7 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
                 "proceeds": resolved_proceeds,
                 "face_value": face_value,
                 "published": bool(publish),
+                "listing_id": listing_id,
                 "tickets_uploaded": tickets_uploaded,
                 "ticket_upload_error": ticket_upload_error,
             }

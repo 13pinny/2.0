@@ -2368,7 +2368,8 @@ def api_pending_intake_reject():
 def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
                           available_tickets, website_price, face_value, row,
                           seat_from, seat_to, venue_for_map, kupat_section,
-                          ticket_url=None, publish=False, proceeds=None):
+                          ticket_url=None, publish=False, proceeds=None,
+                          pricer=None):
     now = lambda: datetime.now(timezone.utc).isoformat()
     db.viagogo_push_update(push_id, {"status": "creating"}, now())
     try:
@@ -2402,6 +2403,30 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         if ticket_pdfs and not result.get("tickets_uploaded"):
             ticket_problem = (f"ticket upload failed: "
                               f"{result.get('ticket_upload_error') or 'unknown'}")
+        listing_id = result.get("listing_id")
+        if listing_id:
+            db.viagogo_push_update(push_id, {"listing_id": str(listing_id)}, now())
+        # Optional auto-pricer enrollment, straight from the approve card —
+        # saves the round-trip to /pricer after every listing.
+        pricer_note = None
+        if pricer and pricer.get("enabled"):
+            if not listing_id:
+                pricer_note = ("auto-pricer NOT enrolled: listing id could not "
+                               "be resolved — enable it on /pricer manually")
+            else:
+                try:
+                    secs = sorted({viagogo_pricer._norm_section(s)
+                                   for s in (pricer.get("compete_sections") or [])
+                                   if s and s.strip()})
+                    db.pricer_config_set(str(listing_id), {
+                        "enabled": 1,
+                        "floor_price": float(pricer["floor_price"]),
+                        "compete_sections": json.dumps(secs) if secs else None,
+                        "last_set_price": None, "last_set_at": None,
+                        "paused": 0, "paused_reason": None, "paused_at": None,
+                    }, now())
+                except Exception as e:
+                    pricer_note = f"auto-pricer enrollment failed: {type(e).__name__}: {e}"
         if venue_for_map and kupat_section and section:
             db.viagogo_section_map_set(venue_for_map, kupat_section, section, now())
         # Teach Hebrew→English name mapping so future emails auto-match.
@@ -2413,11 +2438,15 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         # Success clears stale error text from earlier failed attempts; a
         # ticket problem replaces it so the card shows the listing exists
         # but NEEDS TICKETS before a sale can be fulfilled.
+        notes = []
+        if ticket_problem:
+            notes.append(f"NO TICKETS ATTACHED — {ticket_problem}")
+        if pricer_note:
+            notes.append(pricer_note)
         db.viagogo_push_update(push_id, {
             "status": "listed" if publish else "created",
             "viagogo_section": section,
-            "error": (f"NO TICKETS ATTACHED — {ticket_problem}"[:500]
-                      if ticket_problem else None),
+            "error": ("; ".join(notes)[:500] if notes else None),
         }, now())
     except Exception as e:
         db.viagogo_push_update(push_id, {"status": "error", "error": f"{type(e).__name__}: {e}"}, now())
@@ -2510,6 +2539,20 @@ def api_viagogo_push_approve():
         proceeds = float(pr) if pr not in (None, "") else None
     except (TypeError, ValueError):
         proceeds = None
+    pricer_opts = None
+    _p = body.get("pricer") or {}
+    if _p.get("enabled"):
+        try:
+            _floor = float(_p.get("floor_price") or 0)
+        except (TypeError, ValueError):
+            _floor = 0
+        if _floor <= 0:
+            return jsonify({"error": "a floor price > 0 is required to enable auto-pricing"}), 400
+        _secs = _p.get("compete_sections") or []
+        if not isinstance(_secs, list):
+            return jsonify({"error": "compete_sections must be a list"}), 400
+        pricer_opts = {"enabled": True, "floor_price": _floor,
+                       "compete_sections": [str(s) for s in _secs]}
     row = (body.get("row") or push.get("row_label") or "").strip() or None
     seat_from = (body.get("seat_from") or "").strip() or None
     seat_to = (body.get("seat_to") or "").strip() or None
@@ -2526,7 +2569,7 @@ def api_viagogo_push_approve():
         target=_run_viagogo_approve,
         args=(push_id, event_id, search_query, ticket_type, section, available_tickets,
               website_price, face_value, row, seat_from, seat_to, venue_for_map, kupat_section,
-              ticket_url, publish, proceeds),
+              ticket_url, publish, proceeds, pricer_opts),
         daemon=True,
     ).start()
     return jsonify({"ok": True, "status": "creating"})
