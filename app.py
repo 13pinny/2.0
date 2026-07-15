@@ -25,6 +25,7 @@ import import_jerujam
 import kupat
 import kupat_credits
 import kupat_events
+import dice
 import kupat_pdf
 import mail_intake
 import market
@@ -51,6 +52,7 @@ WATCHER_SOURCES = {
     "kupat": kupat,
     "tickchak": tickchak,
     "barby": barby,
+    "dice": dice,
 }
 
 
@@ -64,6 +66,8 @@ def _detect_source(url):
     s = (url or "").strip().lower()
     if "barby.co.il" in s:
         return "barby", barby
+    if "dice.fm" in s:
+        return "dice", dice
     if "tickchak.co.il" in s:
         return "tickchak", tickchak
     if "kupat.co.il" in s:
@@ -72,6 +76,10 @@ def _detect_source(url):
         return "ticketmaster", ticketmaster
     if re.fullmatch(r"\s*\d+\s*/\s*\d+\s*", s or ""):
         return "kupat", kupat
+    # Bare 24-hex shorthand is a DICE internal event id (must run before
+    # the tickchak bare-slug rule, which would also match it).
+    if re.fullmatch(r"\s*[a-f0-9]{24}\s*", s or ""):
+        return "dice", dice
     # Bare slug shorthand with no slash, scheme, or query string — most
     # likely a tickchak event slug (e.g. "mada26", "103350").
     if re.fullmatch(r"\s*[a-z0-9_\-]{2,}\s*", s or "") and "/" not in s and "?" not in s:
@@ -4542,29 +4550,36 @@ def api_market_unhide():
 
 @app.route("/api/market/add", methods=["POST"])
 def api_market_add():
-    """Manually track a tickchak event or hub. Body: {"url": ...}. Hub URLs
-    (home.tickchak.co.il/<slug>) expand to their member events every sweep;
-    event URLs track that one event. The new entry is swept inline so its
-    row appears immediately. Note tickchak.parse_url's caveat: numeric /e/
-    ids and slugs are distinct namespaces — paste the public URL you'd buy
-    from."""
+    """Manually track a tickchak event/hub or a dice.fm event. Body:
+    {"url": ...}. Hub URLs (home.tickchak.co.il/<slug>) expand to their
+    member events every sweep; event URLs track that one event. The new
+    entry is swept inline so its row appears immediately. Note
+    tickchak.parse_url's caveat: numeric /e/ ids and slugs are distinct
+    namespaces — paste the public URL you'd buy from."""
     from flask import request
     url = ((request.get_json(silent=True) or {}).get("url") or "").strip()
     if not url:
         return jsonify({"error": "url is required"}), 400
     now_iso = datetime.now(timezone.utc).isoformat()
+    source = "tickchak"
     m = re.search(r"home\.tickchak\.co\.il/([^/?#]+)", url)
     if m:
         kind, code = "hub", m.group(1)
+    elif "dice.fm" in url.lower():
+        try:
+            code, _ = dice.parse_url(url)
+        except Exception as e:
+            return jsonify({"error": f"not a dice.fm URL I understand: {e}"}), 400
+        source, kind = "dice", "event"
     else:
         try:
             code, _ = tickchak.parse_url(url)
         except Exception as e:
             return jsonify({"error": f"not a tickchak URL I understand: {e}"}), 400
         kind = "event"
-    db.market_manual_add("tickchak", kind, code, url, now_iso)
+    db.market_manual_add(source, kind, code, url, now_iso)
     try:
-        entities = market.sweep_one_manual(kind, code)
+        entities = market.sweep_one_manual(kind, code, source)
     except Exception as e:
         return jsonify({"added": {"kind": kind, "code": code},
                         "warning": f"added, but first fetch failed: {e}"})

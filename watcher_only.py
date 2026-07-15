@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 
 import barby
 import db
+import dice
 import filters as watcher_filters
 import kupat
 import notify
@@ -38,7 +39,7 @@ load_dotenv(Path(__file__).parent / ".env")
 db.init()
 
 SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
-           "barby": barby}
+           "barby": barby, "dice": dice}
 
 import os
 INTERVAL = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)

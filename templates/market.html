@@ -66,6 +66,7 @@
   .src.tickchak { color: var(--purple); }
   .src.zappa { color: var(--orange); }
   .src.pacha { color: #e91e63; }
+  .src.dice { color: #00c2ff; }
   .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; }
   .badge.available { background: #16a34a; }
   .badge.lasttickets { background: #d97706; }
@@ -119,7 +120,7 @@
   <div class="controls" id="chips"></div>
   <div class="controls">
     <input type="text" id="q" placeholder="filter by name / venue…" />
-    <input type="text" id="addUrl" placeholder="tickchak event or hub URL to track…" />
+    <input type="text" id="addUrl" placeholder="tickchak or dice.fm event URL to track…" />
     <button class="act" id="addBtn">Track</button>
     <span class="note" id="addNote"></span>
   </div>
@@ -141,7 +142,7 @@
 const $ = id => document.getElementById(id);
 function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 const WIN_LABELS = { '1h':'Last hour', '6h':'Last 6 hours', '24h':'Last 24 hours', '3d':'Last 3 days', '7d':'Last 7 days' };
-const SRC_LABELS = { kupat:'Kupat', ticketmaster:'TM', tickchak:'Tickchak', zappa:'Zappa', pacha:'Pacha' };
+const SRC_LABELS = { kupat:'Kupat', ticketmaster:'TM', tickchak:'Tickchak', zappa:'Zappa', pacha:'Pacha', dice:'DICE' };
 const CUR_SYMBOLS = { ILS:'₪', USD:'$' };
 const fmt = n => (n == null) ? '—' : n.toLocaleString();
 const HOT_24H = 25;   // 24h-sold at/above this highlights the row
@@ -325,8 +326,8 @@ async function loadManual(){
     const d = await r.json();
     const entries = d.entries || [];
     $('manualList').innerHTML = entries.length
-      ? 'Tracked tickchak: ' + entries.map(e =>
-          `${escape(e.code)} (${e.kind})<a class="x" href="#" data-id="${e.id}" title="stop tracking">✕</a>`
+      ? 'Tracked manually: ' + entries.map(e =>
+          `${escape(e.code)} (${escape(e.source || 'tickchak')} ${e.kind})<a class="x" href="#" data-id="${e.id}" title="stop tracking">✕</a>`
         ).join(' · ')
       : '';
     $('manualList').querySelectorAll('.x').forEach(a => a.onclick = async ev => {

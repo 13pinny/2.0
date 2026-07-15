@@ -47,7 +47,7 @@ il_events job diffs that table for its new-event pings, and pre-seeding a
 row would swallow the ping forever.
 
 CLI probe (house convention):
-    python market.py --source kupat|tm|tickchak|all [--json] [--write]
+    python market.py --source kupat|tm|tickchak|zappa|dice|all [--json] [--write]
 Default is a dry-run table; --write persists entities + snapshots like a
 real sweep tick.
 """
@@ -57,6 +57,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import db
+import dice
 import kupat
 import kupat_events  # noqa: F401  (il_events owns discovery; imported for parity/debug)
 import notify
@@ -110,6 +111,7 @@ def _entity(source, event_code, perf_code, **kw):
         "min_price": kw.get("min_price"),
         "manual": kw.get("manual", False),
         "last_error": kw.get("last_error"),
+        "currency": kw.get("currency"),  # None → db defaults to ILS
     }
 
 
@@ -362,6 +364,57 @@ def sweep_tickchak(manual_rows=None):
     return entities
 
 
+# ---------------------------------------------------------------- dice ----
+
+def _dice_event_entity(code):
+    """One manually-added dice.fm event via the anonymous ticket_types API
+    (1h disk cache through dice.get_labels). DICE publishes no counts, so
+    rows carry status + from-price only — like zappa, but the current
+    price TIER is visible, so tier jumps show up as min_price moves."""
+    labels = dice.get_labels(code, "0")
+    meta = (labels or {}).get("meta") or {}
+    blocks = (labels or {}).get("blocks") or {}
+    prices = [b.get("price") for b in blocks.values()
+              if b.get("price") and b.get("availability") == "in_stock"]
+    if not prices:
+        prices = [b.get("price") for b in blocks.values() if b.get("price")]
+    currency = next((b.get("currency") for b in blocks.values() if b.get("currency")), "USD")
+    status = {"selling": "available", "soldout": "soldout"}.get(
+        meta.get("status"), "unknown")
+    return _entity(
+        "dice", code, "0",
+        name=meta.get("eventName"),
+        venue=" · ".join(v for v in ((meta.get("venueName") or "").strip(),
+                                     (meta.get("venueCity") or "").strip()) if v),
+        date_text=meta.get("firstPerfText"),
+        first_date_ms=meta.get("firstPerfMs"),
+        url=dice.perf_url(code),
+        status=status,
+        capacity=None, available=None,
+        min_price=min(prices) if prices else None,
+        currency=currency,
+        manual=True,
+    )
+
+
+def sweep_dice(manual_rows=None):
+    if manual_rows is None:
+        manual_rows = [r for r in db.market_manual_all() if r["source"] == "dice"]
+    entities = []
+    for row in manual_rows:
+        time.sleep(REQUEST_SPACING_SECONDS)
+        try:
+            entities.append(_dice_event_entity(row["code"]))
+        except Exception as e:
+            entities.append(_entity(
+                "dice", row["code"], "0",
+                name=row.get("label") or row["code"],
+                status="unknown", manual=True, currency="USD",
+                last_error=str(e)[:200],
+            ))
+    return entities
+
+
 # --------------------------------------------------------------- zappa ----
 
 MAX_ZAPPA_PINGS_PER_TICK = 12
@@ -422,6 +475,7 @@ ADAPTERS = {
     "ticketmaster": sweep_tm,
     "tickchak": sweep_tickchak,
     "zappa": sweep_zappa,
+    "dice": sweep_dice,
 }
 
 # CLI aliases (the TM adapter is spelled both ways in casual use)
@@ -485,11 +539,13 @@ def run_sweep(sources=None, write=True):
     }
 
 
-def sweep_one_manual(kind, code):
-    """Fetch + persist a single just-added tickchak entry so the /market row
-    appears immediately instead of after the next hourly sweep."""
+def sweep_one_manual(kind, code, source="tickchak"):
+    """Fetch + persist a single just-added tickchak/dice entry so the
+    /market row appears immediately instead of after the next hourly sweep."""
     now_iso = datetime.now(timezone.utc).isoformat()
-    if kind == "hub":
+    if source == "dice":
+        entities = [_dice_event_entity(code)]
+    elif kind == "hub":
         entities = _tickchak_hub_entities(code)
     else:
         entities = [_tickchak_event_entity(code)]
@@ -516,7 +572,7 @@ def main(argv):
     if "--source" in argv:
         i = argv.index("--source")
         if i + 1 >= len(argv):
-            print("usage: python market.py [--source kupat|tm|tickchak|all] [--json] [--write]")
+            print("usage: python market.py [--source kupat|tm|tickchak|zappa|dice|all] [--json] [--write]")
             return 2
         if argv[i + 1] != "all":
             sources = [argv[i + 1]]
@@ -548,7 +604,7 @@ def main(argv):
         print(f"  {ev['source']:<13} {ev['event_code']:>7}/{ev['perf_code']:<7} "
               f"{(ev.get('name') or '?'):<38.38} {(ev.get('date_text') or ''):<17} "
               f"{(ev.get('venue') or ''):<28.28} {ev['status']:<12} left={left:<9} "
-              f"{'₪' + format(price, 'g') if price is not None else ''}"
+              f"{('$' if ev.get('currency') == 'USD' else '₪') + format(price, 'g') if price is not None else ''}"
               f"{'  ERR: ' + ev['last_error'] if ev.get('last_error') else ''}")
     return 0
 

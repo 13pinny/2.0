@@ -26,7 +26,7 @@ All commands assume the venv at `.venv\Scripts\`. On Windows use `.venv\Scripts\
 | List watchers | `.venv\Scripts\python add_watcher.py --list` |
 | Remove a watcher | `.venv\Scripts\python add_watcher.py --remove <id>` |
 | Smoke-test Discord + Gmail | `.venv\Scripts\python notify.py` (expects `{'discord': 'ok (204)', 'email': 'ok'}`, then one line per configured per-category webhook) |
-| Probe a single drop endpoint directly | `.venv\Scripts\python ticketmaster.py EVENT/PERF` (also `kupat.py`, `tickchak.py`, `barby.py <url-or-showId>`) |
+| Probe a single drop endpoint directly | `.venv\Scripts\python ticketmaster.py EVENT/PERF` (also `kupat.py`, `tickchak.py`, `barby.py <url-or-showId>`, `dice.py <dice.fm URL>`) |
 | Extract Pacha NY ticket first-pages from Gmail | `.venv\Scripts\python pacha_tickets.py` (add `--dry-run`, `--days N`, `--folder`) |
 | Probe the Pacha NYC events listing (the new-event monitor's fetcher) | `.venv\Scripts\python pacha_events.py` (add `--json`) |
 | Probe the kupat / TM-IL / barby event listings (the IL new-event monitor's fetchers) | `.venv\Scripts\python kupat_events.py` / `.venv\Scripts\python tm_events.py` / `.venv\Scripts\python barby_events.py` (add `--json`; tm also `--onsale`) |
@@ -59,7 +59,9 @@ URL → source detection lives in `_detect_source` in `app.py:43` and `add_watch
 
 `kupat.py` is the exception that DOES need Chrome: its `seats-status` endpoint 403s any out-of-page fetch, so seats are harvested by capturing the booking SPA's own XHR (~5-10s/check). Two kupat traps are documented at length in its module docstring — the SPA ignores the `prsntId` URL param (you must click the date row), and `isGA` is an int, not a bool. Read it before touching that module.
 
-`barby.py` (barby.co.il, Tel Aviv club) is pure HTTP and status-only: Barby publishes no seat map and no reliable tickets-left (`sold` can exceed `nochair_max_buy`), so a show is tracked as ONE status-encoded pseudo-seat driven by the `isSoldOut` bool from `/api/shows/show/<id>` — sold-out→on-sale adds a `GA available` seat (routes to `drops`), the reverse routes to `status`. perf_code is always `0`. Don't confuse it with `barby_events.py`, which monitors the *catalog* for new shows.
+`dice.py` (dice.fm, EDM/US) is pure HTTP: the anonymous `api.dice.fm/events/<24-hex id>/ticket_types` endpoint exposes per-type prices, status, and the current price TIER — but NO remaining counts. The internal id is resolved once from the event page's `dice://open/events/<id>` meta tag and cached in `tm_cache/dice_ids.json`. One pseudo-seat per on-sale type, key encodes (name, tier, price), so restocks/new types/tier jumps ping and sell-outs are silent removals. Also a manual /market source (paste a dice.fm URL on the page; currency USD, no velocity — like zappa).
+
+`barby.py` (barby.co.il, Tel Aviv club) is pure HTTP and status-only: Barby publishes no seat map and no reliable tickets-left (`sold` can exceed `nochair_max_buy`), so a show is tracked as ONE status-encoded pseudo-seat driven by the `isSoldOut` bool from `/api/shows/show/<id>` — sold-out→on-sale adds a `GA available` seat (routes to `drops`), the reverse routes to `status`. perf_code is always `0`. Don't confuse it with `barby_events.py`, which watches the *catalog* for new shows.
 
 ### Drop-check tick
 
