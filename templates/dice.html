@@ -101,17 +101,23 @@
 
   <h2>Events <span style="font-size:10px;color:var(--muted)">(click a row for types + change history)</span></h2>
   <div class="controls">
+    <input type="text" id="addUrl" placeholder="paste a dice.fm event URL to track…" style="width:340px;max-width:60vw" />
+    <button class="act" id="addBtn">Track</button>
+    <span class="sub" id="addNote" style="margin:0"></span>
+  </div>
+  <div class="controls">
     <input type="text" id="q" placeholder="filter by event or venue…" />
     <button class="act" id="refreshBtn">Refresh now</button>
     <span class="sub" id="refreshNote" style="margin:0"></span>
   </div>
+  <p class="sub" id="manualList" style="margin:-4px 0 12px"></p>
   <div class="tablewrap">
   <table>
     <thead><tr id="head"></tr></thead>
     <tbody id="rows"></tbody>
   </table>
   </div>
-  <p class="sub" id="footnote">Add events here by pasting a dice.fm URL on the ISRAEL MARKET page's add box, or by adding a watcher (dashboard / add_watcher.py). "Tier" = DICE's current price tier per cheapest on-sale type; a tier jump means the previous release sold through. Changes = logged state changes (tier / price / on-off-sale) across all ticket types.</p>
+  <p class="sub" id="footnote">Paste a dice.fm event URL above to track it here (no watcher needed). To also get restock/tier-jump pings, add it as a watcher. "Tier" = DICE's current price tier per cheapest on-sale type; a tier jump means the previous release sold through. Changes = logged state changes (tier / price / on-off-sale) across all ticket types.</p>
 </main>
 
 <script>
@@ -278,9 +284,49 @@ async function load(refresh){
     $('refreshBtn').disabled = false;
   }
 }
+async function loadManual(){
+  try {
+    const r = await fetch('/api/market/manual', {cache:'no-store'});
+    const d = await r.json();
+    const dice = (d.entries || []).filter(e => e.source === 'dice');
+    $('manualList').innerHTML = dice.length
+      ? 'Tracked from this page: ' + dice.map(e =>
+          `${escape(e.label && e.label.length < 60 ? e.label : e.code)}<a class="x" href="#" data-id="${e.id}" title="stop tracking" style="color:var(--red);margin-left:5px;text-decoration:none">✕</a>`
+        ).join(' · ')
+      : '';
+    $('manualList').querySelectorAll('.x').forEach(a => a.onclick = async ev => {
+      ev.preventDefault();
+      await fetch('/api/market/remove', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id: Number(a.dataset.id)})});
+      loadManual(); load(false);
+    });
+  } catch (e) { /* non-fatal */ }
+}
+
+async function addManual(){
+  const url = ($('addUrl').value || '').trim();
+  if (!url) return;
+  if (!/dice\.fm/i.test(url)) { $('addNote').textContent = 'paste a dice.fm event URL'; return; }
+  $('addBtn').disabled = true; $('addNote').textContent = 'adding…';
+  try {
+    const r = await fetch('/api/market/add', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    $('addUrl').value = '';
+    $('addNote').textContent = d.warning ? d.warning : 'added';
+    loadManual(); load(false);
+  } catch (e) {
+    $('addNote').textContent = 'Failed: ' + e.message;
+  } finally {
+    $('addBtn').disabled = false;
+  }
+}
+
 $('q').addEventListener('input', render);
 $('refreshBtn').onclick = () => load(true);
+$('addBtn').onclick = addManual;
+$('addUrl').addEventListener('keydown', e => { if (e.key === 'Enter') addManual(); });
 load(false);
+loadManual();
 setInterval(() => load(false), 120000);
 </script>
 </body>
