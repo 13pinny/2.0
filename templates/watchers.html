@@ -273,6 +273,9 @@ const SRC_URLS = {
   kupat:        (e, p) => `https://tickets.kupat.co.il/booking/features/${e}?display=list&prsntId=${p}`,
   // tickchak's slug IS the URL; perf_code is always "0" — ignore it.
   tickchak:     (e, _p) => `https://tickchak.co.il/${e}`,
+  // dice event_code is the internal 24-hex id — dice.fm 308-redirects it
+  // to the canonical slug URL.
+  dice:         (e, _p) => `https://dice.fm/event/${e}`,
 };
 
 const CHANNEL_CHOICES = [
