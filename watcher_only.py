@@ -145,6 +145,11 @@ def check_one(w, now_iso):
                 "available": f"🎟️ Available again — {_nm}",
                 "closed": f"⛔ Sales closed — {_nm}",
             }.get(_fest.get("status"), headline)
+        # DICE restock snipe — loud, one-tap (perf_url opens the DICE app).
+        # (Keep in sync with app.py._check_one_watcher.)
+        if src_name == "dice" and matched:
+            _dnm = ((lbls or {}).get("meta") or {}).get("eventName") or label or w["event_code"]
+            headline = f"🎯 BUY NOW — {_dnm}" + (" · restocked" if was_empty else "")
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,
@@ -196,6 +201,33 @@ def tick():
         _lock.release()
 
 
+DICE_SNIPER_SECONDS = int(os.getenv("KARTIS_DICE_SNIPER_SECONDS") or 15)
+DICE_SNIPER_ENABLED = (os.getenv("KARTIS_DICE_SNIPER_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def dice_sniper():
+    """Fast restock poll for SOLD-OUT dice watchers only (mirror of
+    app.run_dice_sniper). Shares `_lock` with the main tick so the same
+    watcher is never fetched twice at once."""
+    if db.setting_get_bool("master_paused", default=False):
+        return
+    if not _lock.acquire(blocking=False):
+        return
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for w in db.tm_active_watchers():
+            if (w.get("source") or "") != "dice" or w.get("paused"):
+                continue
+            if (w.get("last_seat_count") or 0) != 0:
+                continue
+            try:
+                check_one(w, now_iso)
+            except Exception:
+                traceback.print_exc()
+    finally:
+        _lock.release()
+
+
 def main():
     # Watcher labels are Hebrew (TM event names); the default Windows console
     # encoding (cp1252) can't render them and crashes the startup print.
@@ -213,6 +245,10 @@ def main():
 
     sched = BackgroundScheduler(daemon=True, timezone="UTC")
     sched.add_job(tick, "interval", seconds=INTERVAL, id="tm_check")
+    if DICE_SNIPER_ENABLED:
+        sched.add_job(dice_sniper, "interval", seconds=DICE_SNIPER_SECONDS,
+                      id="dice_sniper", max_instances=1)
+        print(f"[kartis-watcher] dice restock-snipe on: every {DICE_SNIPER_SECONDS}s while sold out", flush=True)
     sched.start()
 
     # Run one immediate tick so the user sees activity right away

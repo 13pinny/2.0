@@ -123,6 +123,12 @@ _last_pricer = {"at": None, "changed": 0, "paused": 0, "skipped": 0,
 _pricer_lock = threading.Lock()
 PRICER_INTERVAL_MINUTES = int(os.getenv("KARTIS_PRICER_INTERVAL_MINUTES") or 15)
 TM_CHECK_INTERVAL_SECONDS = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
+# DICE restock-snipe fast poll: while a dice watcher is SOLD OUT we poll it
+# every few seconds so a restock is caught in seconds, not up to a minute.
+# Only sold-out dice watchers are fetched (usually 1-2), keeping the
+# request footprint on DICE's anonymous API tiny. Set _ENABLED=0 to disable.
+DICE_SNIPER_SECONDS = int(os.getenv("KARTIS_DICE_SNIPER_SECONDS") or 15)
+DICE_SNIPER_ENABLED = (os.getenv("KARTIS_DICE_SNIPER_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 # Drop-checking can be disabled here when the watcher runs on another machine
 # (e.g. the VPS), so the dashboard still serves inventory/sales without
 # double-pinging Discord. Manual "check now" from the UI still works.
@@ -4128,6 +4134,13 @@ def _check_one_watcher(w, now_iso):
                 "closed": f"⛔ Sales closed — {_nm}",
             }.get(_fest.get("status"), headline)
 
+        # DICE: a buyable type appearing is a snipe opportunity — make the
+        # ping unmistakable and one-tap (perf_url opens the DICE app). Loudest
+        # when the watcher was empty (a genuine restock).
+        if src_name == "dice" and matched:
+            _dnm = ((labels or {}).get("meta") or {}).get("eventName") or label or w["event_code"]
+            headline = f"🎯 BUY NOW — {_dnm}" + (" · restocked" if was_empty else "")
+
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,
@@ -4245,6 +4258,37 @@ def run_tm_check():
         )
     finally:
         _last_tm["running"] = False
+        _tm_lock.release()
+
+
+def run_dice_sniper():
+    """Fast restock poll for dice watchers that are currently SOLD OUT.
+
+    Runs every DICE_SNIPER_SECONDS. Only fetches dice watchers with zero
+    current seats (a watcher that's already on sale has nothing to snipe and
+    is left to the normal 60s tick), so the burst on DICE's anonymous API
+    stays to the handful of events actually being waited on. Shares
+    `_tm_lock` with run_tm_check so the two never double-fire the same
+    watcher — whichever grabs the lock first captures the restock; the diff
+    against stored seat state makes the loser a no-op."""
+    if db.setting_get_bool("master_paused", default=False):
+        return
+    if not _tm_lock.acquire(blocking=False):
+        return  # main tick (or a prior sniper run) still holding the lock
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        targets = [
+            w for w in db.tm_active_watchers()
+            if (w.get("source") or "") == "dice"
+            and not w.get("paused")
+            and (w.get("last_seat_count") or 0) == 0
+        ]
+        for w in targets:
+            try:
+                _check_one_watcher(w, now_iso)
+            except Exception:
+                traceback.print_exc()
+    finally:
         _tm_lock.release()
 
 
@@ -5731,6 +5775,9 @@ scheduler.add_job(_fresh_thread_job(run_scraper), "interval", hours=1, id="scrap
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
 if TM_CHECK_ENABLED:
     scheduler.add_job(run_tm_check, "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
+    if DICE_SNIPER_ENABLED:
+        scheduler.add_job(run_dice_sniper, "interval", seconds=DICE_SNIPER_SECONDS,
+                          id="dice_sniper", max_instances=1)
 else:
     print("[tm_check] disabled via TM_CHECK_ENABLED=0 — drop-checking runs elsewhere (e.g. the VPS watcher)")
 # mail_intake drives the CDP browser too (viagogo event search on kupat/
