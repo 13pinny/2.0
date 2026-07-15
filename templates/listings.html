@@ -55,6 +55,19 @@
 
   .poll-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
   #poll-status { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+
+  /* compete-sections picker (popup with big clickable chips, like /pricer) */
+  #cs-overlay { display: none; position: fixed; inset: 0; background: rgba(15,23,32,0.45); z-index: 40; }
+  #cs-panel { display: none; position: fixed; top: 8vh; left: 50%; transform: translateX(-50%);
+              width: min(560px, 94vw); max-height: 80vh; overflow-y: auto; z-index: 41;
+              background: var(--bg-2); border: 1px solid var(--line-2); box-shadow: 0 12px 40px rgba(0,0,0,0.25); }
+  #cs-panel .cs-head { padding: 14px 18px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; }
+  #cs-panel .cs-sub { padding: 0 18px 10px; font-size: 11px; color: var(--muted); }
+  #cs-chips { display: flex; flex-wrap: wrap; gap: 10px; padding: 6px 18px 16px; }
+  .cs-chip { padding: 10px 16px; border: 1px solid var(--line-2); background: var(--bg-3);
+             font-size: 13px; cursor: pointer; user-select: none; border-radius: 4px; }
+  .cs-chip.sel { border-color: var(--accent); background: #dbeafe; color: var(--accent); font-weight: 600; }
+  #cs-panel .cs-foot { padding: 12px 18px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 10px; }
 </style>
 </head>
 <body>
@@ -99,6 +112,17 @@
   </h2>
   <div id="vg-done"></div>
 </main>
+
+<div id="cs-overlay"></div>
+<div id="cs-panel">
+  <div class="cs-head" id="cs-title">Compete against which sections?</div>
+  <div class="cs-sub">Tap to toggle — the auto-pricer undercuts the cheapest competitor across the selected sections. Empty = its own section only.</div>
+  <div id="cs-chips"></div>
+  <div class="cs-foot">
+    <button type="button" id="cs-cancel">Cancel</button>
+    <button type="button" class="confirm" id="cs-ok">Done</button>
+  </div>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -224,10 +248,11 @@ function renderCards(rows) {
         </div>
         <label title="Auto-pricing never goes below this — required when Auto-price is on">Floor $/ea *</label>
         <input data-f="pricer_floor" type="number" step="0.01" placeholder="never price below">
-        <label title="Sections whose competitors this listing prices against — defaults to its own section. Ctrl/Cmd-click for multiple.">Compete vs</label>
-        <select data-f="pricer_sections" multiple size="3" style="grid-column: 2 / -1;">
-          <option disabled>— pick event to load sections —</option>
-        </select>
+        <label title="Sections whose competitors this listing prices against — defaults to its own section">Compete vs</label>
+        <div style="grid-column: 2 / -1; display: flex; align-items: center; gap: 10px;">
+          <span data-f="compete-summary" style="font-size: 11px; color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">— pick event to load sections —</span>
+          <button type="button" data-act="pick-compete" style="padding: 4px 12px; font-size: 11px;">Pick sections</button>
+        </div>
       </div>
       <div class="ic-foot">
         <button class="reject" data-act="vg-reject">Reject</button>
@@ -356,14 +381,14 @@ async function loadSections(card, eventId, ticketType) {
     sel.innerHTML = '<option value="">— select section —</option>' +
       d.sections.map(s => `<option value="${esc(s)}" ${s === g.value ? "selected" : ""}>${esc(s)}</option>`).join("");
     sel.disabled = false;
-    // Same section list feeds the auto-pricer's compete-vs picker; keep any
-    // choices the user already made, else default to the guessed section.
-    const comp = card.querySelector("select[data-f='pricer_sections']");
-    if (comp) {
-      const prev = new Set([...comp.selectedOptions].map(o => o.value));
-      comp.innerHTML = d.sections.map(s =>
-        `<option value="${esc(s)}" ${(prev.size ? prev.has(s) : s === g.value) ? "selected" : ""}>${esc(s)}</option>`).join("");
-    }
+    // Same section list feeds the auto-pricer's compete-vs picker popup;
+    // keep any choices the user already made, else default to the guess.
+    card.dataset.sectionsList = JSON.stringify(d.sections);
+    const prev = JSON.parse(card.dataset.competeSelected || "[]")
+      .filter(s => d.sections.includes(s));
+    const initial = prev.length ? prev : (g.value ? [g.value] : []);
+    card.dataset.competeSelected = JSON.stringify(initial);
+    updateCompeteSummary(card);
     if (hint) {
       if (g.source === "learned") {
         hint.style.color = "var(--green)";
@@ -389,6 +414,48 @@ async function loadSections(card, eventId, ticketType) {
     clearTimeout(killer);
   }
 }
+
+// ---- compete-sections picker popup --------------------------------------
+let _csCard = null;
+
+function updateCompeteSummary(card) {
+  const el = card.querySelector("[data-f='compete-summary']");
+  if (!el) return;
+  const sel = JSON.parse(card.dataset.competeSelected || "[]");
+  el.textContent = sel.length ? sel.join(" · ") : "own section only";
+  el.style.color = sel.length ? "var(--text)" : "var(--muted)";
+}
+
+function openCompetePicker(card) {
+  const sections = JSON.parse(card.dataset.sectionsList || "[]");
+  if (!sections.length) { alert("Sections not loaded yet — pick the viagogo event first."); return; }
+  _csCard = card;
+  const chosen = new Set(JSON.parse(card.dataset.competeSelected || "[]"));
+  $("cs-title").textContent = "Compete against which sections?";
+  $("cs-chips").innerHTML = sections.map(s =>
+    `<div class="cs-chip ${chosen.has(s) ? "sel" : ""}" data-sec="${esc(s)}">${esc(s)}</div>`).join("");
+  $("cs-overlay").style.display = "block";
+  $("cs-panel").style.display = "block";
+}
+
+function closeCompetePicker(save) {
+  if (save && _csCard) {
+    const sel = [...document.querySelectorAll("#cs-chips .cs-chip.sel")].map(c => c.dataset.sec);
+    _csCard.dataset.competeSelected = JSON.stringify(sel);
+    updateCompeteSummary(_csCard);
+  }
+  $("cs-overlay").style.display = "none";
+  $("cs-panel").style.display = "none";
+  _csCard = null;
+}
+
+document.getElementById("cs-chips").addEventListener("click", (e) => {
+  const chip = e.target.closest(".cs-chip");
+  if (chip) chip.classList.toggle("sel");
+});
+document.getElementById("cs-ok").addEventListener("click", () => closeCompetePicker(true));
+document.getElementById("cs-cancel").addEventListener("click", () => closeCompetePicker(false));
+document.getElementById("cs-overlay").addEventListener("click", () => closeCompetePicker(false));
 
 async function approveCard(card, publish) {
   const id = card.dataset.id;
@@ -418,8 +485,7 @@ async function approveCard(card, publish) {
   if (pricerOn) {
     const floor = parseFloat(f.pricer_floor || "0");
     if (!(floor > 0)) { alert("Auto-price is on — set a floor price first (it never prices below that)."); return; }
-    const compSel = card.querySelector("select[data-f='pricer_sections']");
-    const compete = compSel ? [...compSel.selectedOptions].map(o => o.value).filter(Boolean) : [];
+    const compete = JSON.parse(card.dataset.competeSelected || "[]");
     body.pricer = {enabled: true, floor_price: floor, compete_sections: compete};
   }
   const kind = publish ? "LIVE listing — buyers can purchase immediately" : "DRAFT (unpublished) listing";
@@ -479,7 +545,7 @@ async function setEventFromLink(card) {
 }
 
 document.addEventListener("click", async (e) => {
-  const btn = e.target.closest(".inbox-card .ic-foot button, .inbox-card [data-act='vg-teach'], .inbox-card [data-act='vg-set-event']");
+  const btn = e.target.closest(".inbox-card .ic-foot button, .inbox-card [data-act='vg-teach'], .inbox-card [data-act='vg-set-event'], .inbox-card [data-act='pick-compete']");
   if (!btn) return;
   e.stopPropagation();
   const card = btn.closest(".inbox-card");
@@ -488,6 +554,7 @@ document.addEventListener("click", async (e) => {
   else if (btn.dataset.act === "vg-reject") await rejectCard(card);
   else if (btn.dataset.act === "vg-teach") await teachName(card);
   else if (btn.dataset.act === "vg-set-event") await setEventFromLink(card);
+  else if (btn.dataset.act === "pick-compete") openCompetePicker(card);
 });
 
 $("poll-now").addEventListener("click", async () => {
