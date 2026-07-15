@@ -147,6 +147,38 @@ def _format_seat_lines(seats, limit=40, labels=None):
     return lines
 
 
+def _seat_content_summary(seats, labels=None, max_len=1800):
+    """Compact one-liner per block for the Discord message `content` field:
+    'VIP B ₪499: row 8 seats 36,37,38 | Section 49: row 3 seat 66'.
+
+    The embed description already lists every seat, but Discord's PUSH
+    NOTIFICATION preview shows only the plain content/title — without this,
+    a phone ping reads just \"3 new seats dropped\" and the section/seat
+    numbers are invisible until the message is opened. Seated drops only;
+    GA/status seats have no seat numbers to show.
+    """
+    real = [s for s in seats if not (s.get("festival") or s.get("ga"))]
+    if not real:
+        return None
+    by_block = {}
+    for s in real:
+        by_block.setdefault(_seat_block(s) or "?", []).append(s)
+    parts = []
+    for code, group in sorted(by_block.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        name, price = _block_info(labels, code)
+        by_row = {}
+        for s in group:
+            by_row.setdefault(_seat_row(s), []).append(_seat_num(s))
+        row_bits = []
+        for row, nums in sorted(by_row.items()):
+            nums = sorted(nums, key=lambda n: (len(n), n))
+            row_bits.append(f"row {row} seat{'s' if len(nums) > 1 else ''} {','.join(nums)}")
+        head = str(name) + (f" ₪{price:.0f}" if price is not None else "")
+        parts.append(f"{head}: {'; '.join(row_bits)}")
+    out = " | ".join(parts)
+    return out[: max_len - 1] + "…" if len(out) > max_len else out
+
+
 def _group_by_perf(seats):
     """If any seat has a `_perf` field, return an ordered dict of perf_code
     -> seat list, preserving first-seen perf order. Returns None otherwise so
@@ -300,7 +332,11 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
             embed["fields"].append({"name": "List price", "value": f"₪{total_price:,.0f}", "inline": True})
         if removed_count:
             embed["fields"].append({"name": "Also removed", "value": str(removed_count), "inline": True})
-        discord_result = _post_discord(discord_url, {"embeds": [embed]})
+        payload = {"embeds": [embed]}
+        summary = _seat_content_summary(added_seats, labels=labels)
+        if summary:
+            payload["content"] = summary[:1990]
+        discord_result = _post_discord(discord_url, payload)
 
     email_result = "skipped (channel disabled)" if "email" not in channels else "skipped (no GMAIL creds)"
     if "email" in channels and gmail_user and gmail_pwd and to_addr:
