@@ -523,6 +523,27 @@ CREATE TABLE IF NOT EXISTS pacha_release_log (
                                        -- then means removed, not sold out)
     UNIQUE(event_id, tier_name)
 );
+-- DICE.fm tier/price change log (dice.py + market.py sweep + /dice page).
+-- Append-only: one row per STATE a ticket type has been in (tier index,
+-- price, status). A new row is inserted only when the state differs from
+-- the type's latest row, so the table doubles as the change history the
+-- API itself never exposes (DICE shows only the current tier). ended_at
+-- is stamped on the previous row when it's superseded or the type
+-- disappears from the API response.
+CREATE TABLE IF NOT EXISTS dice_tier_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_code   TEXT NOT NULL,          -- 24-hex internal DICE id
+    type_name    TEXT NOT NULL,          -- "General Admission"
+    tier_index   INTEGER,
+    tier_name    TEXT,                   -- "Second Release" (often null)
+    price        REAL,                   -- per ticket, event currency
+    currency     TEXT,
+    status       TEXT,                   -- on-sale / off-sale / sold-outâ€¦
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL,
+    ended_at     TEXT                    -- null = this is the current state
+);
+CREATE INDEX IF NOT EXISTS idx_dice_tier_log_event ON dice_tier_log(event_code, type_name, id);
 -- Israeli-sites new-event monitor (kupat_events.py / tm_events.py +
 -- app.py run_il_events). One row per (source, event) ever seen on the
 -- site's listing feed; rows persist after the event drops off the feed
@@ -2287,6 +2308,66 @@ def pacha_release_log_all():
     out = {}
     for r in rows:
         out.setdefault(r["event_id"], []).append(dict(r))
+    return out
+
+
+def dice_tier_log_update(event_code, blocks, now_iso):
+    """Diff one event's current ticket-type states (dice labels ``blocks``
+    map) against the latest open log row per type; insert a row on change,
+    stamp ended_at on the superseded/vanished state. Idempotent within a
+    state â€” repeated calls with the same data only bump last_seen_at."""
+    ev = str(event_code)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM dice_tier_log WHERE event_code = ? AND ended_at IS NULL",
+            (ev,),
+        ).fetchall()
+        open_by_type = {r["type_name"]: dict(r) for r in rows}
+        current_types = set()
+        for info in (blocks or {}).values():
+            name = (info.get("name") or "").strip()
+            if not name:
+                continue
+            current_types.add(name)
+            state = (info.get("tier_index"), info.get("price"), info.get("status"))
+            old = open_by_type.get(name)
+            if old and (old.get("tier_index"), old.get("price"), old.get("status")) == state:
+                conn.execute(
+                    "UPDATE dice_tier_log SET last_seen_at = ? WHERE id = ?",
+                    (now_iso, old["id"]),
+                )
+                continue
+            if old:
+                conn.execute(
+                    "UPDATE dice_tier_log SET ended_at = ? WHERE id = ?",
+                    (now_iso, old["id"]),
+                )
+            conn.execute(
+                """INSERT INTO dice_tier_log (event_code, type_name, tier_index,
+                       tier_name, price, currency, status, first_seen_at,
+                       last_seen_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (ev, name, info.get("tier_index"), info.get("tier_name"),
+                 info.get("price"), info.get("currency"), info.get("status"),
+                 now_iso, now_iso),
+            )
+        for name, old in open_by_type.items():
+            if name not in current_types:
+                conn.execute(
+                    "UPDATE dice_tier_log SET ended_at = ? WHERE id = ?",
+                    (now_iso, old["id"]),
+                )
+
+
+def dice_tier_log_all():
+    """All log rows grouped by event_code, oldest state first."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM dice_tier_log ORDER BY first_seen_at, id"
+        ).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["event_code"], []).append(dict(r))
     return out
 
 

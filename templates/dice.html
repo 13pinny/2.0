@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — DICE</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+    --cyan: #00a3d7;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--cyan); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--cyan); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.green { color: var(--green); }
+  .stat .value.zero { color: var(--muted); }
+  .stat .hint { font-size: 9px; color: var(--muted); letter-spacing: 1px; margin-top: 3px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+  input[type=text] { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; width: 260px; }
+  button.act { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 14px; border-radius: 6px; cursor: pointer; }
+  button.act:hover { border-color: var(--accent); color: var(--accent); }
+  button.act:disabled { opacity: .5; cursor: default; }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); white-space: nowrap; cursor: pointer; user-select: none; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th .arrow { color: var(--accent); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr.ev { cursor: pointer; }
+  tbody tr.ev:hover td { background: var(--bg-3); }
+  tr.detail td { background: var(--bg-2); padding: 6px 10px 12px 26px; font-size: 11px; color: var(--muted); }
+  tr.detail .ty { padding: 2px 0; }
+  tr.detail .ty b { color: var(--text); }
+  tr.detail .ty .off { color: var(--red); }
+  tr.detail .ty .on { color: var(--green); }
+  tr.detail .hh { margin-top: 10px; padding-top: 6px; border-top: 1px dashed var(--line); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 3px; }
+  tr.detail .h-row { padding: 1px 0; }
+  tr.detail .h-row .cur { color: var(--green); }
+  tr.detail .h-row .ended { color: var(--muted); }
+  a.buy { color: #fff; background: var(--cyan); text-decoration: none; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }
+  a.buy.off { background: var(--line-2); color: var(--muted); pointer-events: none; }
+  .when { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .badge.selling { background: #16a34a; }
+  .badge.soldout { background: #dc2626; }
+  .badge.unknown { background: #9ca3af; }
+  .tier { font-size: 10px; color: var(--purple); }
+  .trk { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  .chg { font-variant-numeric: tabular-nums; }
+  .chg.hot { color: var(--orange); font-weight: 600; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>DICE</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/dice" class="active">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+
+  <div class="stats" id="totals"></div>
+  <p class="sub" id="statusline">DICE publishes no ticket counts — the tier/price change log below is the demand signal. History accrues from the hourly market sweep and manual refreshes.</p>
+
+  <h2>Events <span style="font-size:10px;color:var(--muted)">(click a row for types + change history)</span></h2>
+  <div class="controls">
+    <input type="text" id="q" placeholder="filter by event or venue…" />
+    <button class="act" id="refreshBtn">Refresh now</button>
+    <span class="sub" id="refreshNote" style="margin:0"></span>
+  </div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr id="head"></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+  <p class="sub" id="footnote">Add events here by pasting a dice.fm URL on the ISRAEL MARKET page's add box, or by adding a watcher (dashboard / add_watcher.py). "Tier" = DICE's current price tier per cheapest on-sale type; a tier jump means the previous release sold through. Changes = logged state changes (tier / price / on-off-sale) across all ticket types.</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const CUR = { USD:'$', GBP:'£', EUR:'€', ILS:'₪' };
+const money = (n, c) => (n == null) ? '—' : (CUR[c] || (c ? c + ' ' : '$')) + n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+
+let DATA = null;
+let sortKey = 'date';
+let sortDir = 1;
+const open = new Set();
+
+const COLS = [
+  { key:'name',   label:'Event' },
+  { key:'venue',  label:'Venue' },
+  { key:'date',   label:'Date' },
+  { key:'status', label:'Status' },
+  { key:'types',  label:'On sale', num:true },
+  { key:'tier',   label:'Tier' },
+  { key:'price',  label:'From', num:true },
+  { key:'chg',    label:'Changes', num:true },
+  { key:'last',   label:'Last change' },
+  { key:'buy',    label:'' },
+];
+
+function cheapestTier(e){
+  const on = (e.types||[]).filter(t => t.status === 'on-sale' && t.price != null);
+  if (!on.length) return null;
+  const t = on.reduce((a,b) => a.price <= b.price ? a : b);
+  return t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index+1) : null);
+}
+
+function sortVal(e, key){
+  switch(key){
+    case 'name': return (e.name||'').toLowerCase();
+    case 'venue': return (e.venue||'').toLowerCase();
+    case 'date': return e.first_date_ms || Infinity;
+    case 'status': return e.status === 'selling' ? 0 : 1;
+    case 'types': return e.types_on_sale || 0;
+    case 'tier': return cheapestTier(e) || '';
+    case 'price': return e.min_price == null ? Infinity : e.min_price;
+    case 'chg': return e.changes || 0;
+    case 'last': return e.last_change_at || '';
+    default: return 0;
+  }
+}
+
+function renderHead(){
+  $('head').innerHTML = COLS.map(c => {
+    const arrow = sortKey === c.key ? `<span class="arrow">${sortDir < 0 ? '▼' : '▲'}</span>` : '';
+    return `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label} ${arrow}</th>`;
+  }).join('');
+  $('head').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.key;
+    if (!k || k === 'buy') return;
+    if (sortKey === k) sortDir = -sortDir;
+    else { sortKey = k; sortDir = (k === 'name' || k === 'venue' || k === 'date') ? 1 : -1; }
+    render();
+  });
+}
+
+function fmtDay(iso){ return iso ? iso.slice(5,10).replace('-','/') : '?'; }
+function fmtAgo(iso){
+  if (!iso) return '—';
+  const secs = (Date.now() - new Date(iso).getTime())/1000;
+  if (secs < 90) return 'just now';
+  if (secs < 5400) return Math.round(secs/60)+'m ago';
+  if (secs < 129600) return Math.round(secs/3600)+'h ago';
+  return Math.round(secs/86400)+'d ago';
+}
+
+function detailRows(e){
+  let html = (e.types||[]).map(t => {
+    const tier = t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index+1) : '');
+    const st = t.status === 'on-sale' ? '<span class="on">on sale</span>' : `<span class="off">${escape(t.status||'?')}</span>`;
+    return `<div class="ty"><b>${escape(t.name)}</b>${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} — ${money(t.price, t.currency)} · ${st}</div>`;
+  }).join('') || '<div class="ty">No ticket types.</div>';
+  const hist = e.history || [];
+  if (hist.length){
+    html += `<div class="hh">Change log — ${hist.length} state${hist.length>1?'s':''} recorded</div>`;
+    html += hist.slice().reverse().map(h => {
+      const tier = h.tier_name || (h.tier_index != null && h.tier_index > 0 ? 'tier ' + (h.tier_index+1) : '');
+      const end = h.ended_at ? `<span class="ended">→ ended ${fmtDay(h.ended_at)}</span>` : '<span class="cur">current</span>';
+      return `<div class="h-row">${fmtDay(h.first_seen_at)} · ${escape(h.type_name)}${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} @ ${money(h.price, h.currency)} · ${escape(h.status||'?')} ${end}</div>`;
+    }).join('');
+  } else {
+    html += `<div class="hh">Change log</div><div class="h-row">Empty — fills in as sweeps/refreshes observe changes.</div>`;
+  }
+  return html;
+}
+
+function render(){
+  if (!DATA) return;
+  renderHead();
+  const q = ($('q').value || '').trim().toLowerCase();
+  let evs = DATA.events || [];
+  if (q) evs = evs.filter(e => ((e.name||'') + ' ' + (e.venue||'')).toLowerCase().includes(q));
+  evs.sort((a,b) => { const va = sortVal(a, sortKey), vb = sortVal(b, sortKey);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir; });
+  if (!evs.length){
+    $('rows').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No DICE events tracked yet — paste a dice.fm URL on the ISRAEL MARKET page or add a watcher.</td></tr>`;
+    return;
+  }
+  $('rows').innerHTML = evs.map(e => {
+    const st = e.status === 'selling' ? '<span class="badge selling">On sale</span>'
+      : e.status === 'soldout' ? '<span class="badge soldout">Sold out</span>'
+      : `<span class="badge unknown">${escape(e.status||'?')}</span>`;
+    const tier = cheapestTier(e);
+    const opened = open.has(e.event_code);
+    return `<tr class="ev" data-id="${e.event_code}">
+      <td><b>${escape(e.name || e.event_code)}</b> <span class="trk">${escape(e.tracked_by)}</span></td>
+      <td>${escape(e.venue||'')}</td>
+      <td class="when">${escape(e.date_text||'')}</td>
+      <td>${st}</td>
+      <td class="num">${fmt(e.types_on_sale)}</td>
+      <td>${tier ? `<span class="tier">${escape(tier)}</span>` : '—'}</td>
+      <td class="num">${money(e.min_price, e.currency)}</td>
+      <td class="num chg${(e.changes||0) > 0 ? ' hot' : ''}">${fmt(e.changes||0)}</td>
+      <td class="when">${e.last_change_at ? fmtAgo(e.last_change_at) : '—'}</td>
+      <td><a class="buy${e.status === 'selling' ? '' : ' off'}" href="${escape(e.url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a></td>
+    </tr>` + (opened ? `<tr class="detail"><td colspan="${COLS.length}">${detailRows(e)}</td></tr>` : '');
+  }).join('');
+  $('rows').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
+    const id = tr.dataset.id;
+    open.has(id) ? open.delete(id) : open.add(id);
+    render();
+  });
+}
+
+function renderTotals(){
+  const evs = DATA.events || [];
+  const changed24 = evs.filter(e => e.last_change_at && (Date.now() - new Date(e.last_change_at).getTime()) < 86400e3).length;
+  const tiles = [
+    ['Events tracked', evs.length, 'market + watchers'],
+    ['On sale', evs.filter(e => e.status === 'selling').length, ''],
+    ['Sold out', evs.filter(e => e.status === 'soldout').length, ''],
+    ['Changed last 24h', changed24, 'tier / price / status moves'],
+    ['Σ changes logged', evs.reduce((a,e) => a + (e.changes||0), 0), 'since tracking began'],
+  ];
+  $('totals').innerHTML = tiles.map(([l,v,h]) =>
+    `<div class="stat"><div class="label">${l}</div><div class="value${l==='Changed last 24h' && v ? ' green' : ''}${v ? '' : ' zero'}">${fmt(v)}</div>${h ? `<div class="hint">${h}</div>` : ''}</div>`
+  ).join('');
+  const freshest = evs.map(e => e.fetched_at).filter(Boolean).sort().pop();
+  $('meta').textContent = `${evs.length} events · data ${freshest ? fmtAgo(new Date(freshest*1000).toISOString()) : '—'}`;
+}
+
+async function load(refresh){
+  try {
+    if (refresh){ $('refreshBtn').disabled = true; $('refreshNote').textContent = 'fetching from DICE…'; }
+    const r = refresh
+      ? await fetch('/api/dice/refresh', {method:'POST'})
+      : await fetch('/api/dice', {cache:'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    DATA = await r.json();
+    $('errbox').style.display = 'none';
+    renderTotals(); render();
+    if (refresh) $('refreshNote').textContent = 'refreshed just now';
+  } catch (e) {
+    $('errbox').textContent = 'Failed to load: ' + e.message;
+    $('errbox').style.display = 'block';
+  } finally {
+    $('refreshBtn').disabled = false;
+  }
+}
+$('q').addEventListener('input', render);
+$('refreshBtn').onclick = () => load(true);
+load(false);
+setInterval(() => load(false), 120000);
+</script>
+</body>
+</html>

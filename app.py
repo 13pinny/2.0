@@ -4454,6 +4454,101 @@ def api_pacha():
     })
 
 
+@app.route("/dice")
+def dice_page():
+    return render_template("dice.html")
+
+
+def _dice_tracked_codes():
+    """Every DICE event we track, from both halves: manual /market entries
+    and drop watchers. Returns {event_code: source_of_tracking_label}."""
+    codes = {}
+    for r in db.market_manual_all():
+        if r["source"] == "dice":
+            codes[str(r["code"])] = "market"
+    for w in db.tm_all_watchers():
+        if (w.get("source") or "") == "dice":
+            codes.setdefault(str(w["event_code"]), "watcher")
+            codes[str(w["event_code"])] = "both" if codes[str(w["event_code"])] == "market" else codes[str(w["event_code"])]
+    return codes
+
+
+def _dice_payload(force=False):
+    """Shared by GET /api/dice and the refresh endpoint. force=True hits
+    the DICE API for every event (and logs changes); otherwise serves the
+    1h labels cache."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    log_map = db.dice_tier_log_all()
+    events = []
+    for code, tracked_by in _dice_tracked_codes().items():
+        labels = dice.get_labels(code, "0", force=force)
+        meta = (labels or {}).get("meta") or {}
+        blocks = (labels or {}).get("blocks") or {}
+        if force:
+            try:
+                db.dice_tier_log_update(code, blocks, now_iso)
+            except Exception:
+                pass
+        types = sorted((
+            {"name": b.get("name"), "price": b.get("price"),
+             "currency": b.get("currency"), "status": b.get("status"),
+             "tier_index": b.get("tier_index"), "tier_name": b.get("tier_name")}
+            for b in blocks.values()
+        ), key=lambda t: (t["price"] is None, t["price"] or 0))
+        on_sale = [t for t in types if t["status"] == "on-sale"]
+        history = log_map.get(code, [])
+        # Change count = log states beyond each type's first sighting.
+        first_states = {}
+        changes = 0
+        last_change_at = None
+        for h in history:
+            if h["type_name"] in first_states:
+                changes += 1
+                last_change_at = h["first_seen_at"]
+            else:
+                first_states[h["type_name"]] = True
+        events.append({
+            "event_code": code,
+            "tracked_by": tracked_by,
+            "name": meta.get("eventName"),
+            "venue": " Â· ".join(v for v in ((meta.get("venueName") or "").strip(),
+                                            (meta.get("venueCity") or "").strip()) if v),
+            "date_text": meta.get("firstPerfText"),
+            "first_date_ms": meta.get("firstPerfMs"),
+            "url": dice.perf_url(code),
+            "status": meta.get("status"),
+            "event_status": meta.get("eventStatus"),
+            "sale_end": meta.get("saleEnd"),
+            "currency": next((t["currency"] for t in types if t["currency"]), "USD"),
+            "min_price": min((t["price"] for t in on_sale if t["price"] is not None), default=None),
+            "types": types,
+            "types_on_sale": len(on_sale),
+            "history": history,
+            "changes": changes,
+            "last_change_at": last_change_at,
+            "fetched_at": labels.get("_fetched_at"),
+        })
+    events.sort(key=lambda e: e.get("first_date_ms") or float("inf"))
+    return {"events": events, "now": now_iso}
+
+
+@app.route("/api/dice")
+def api_dice():
+    """Everything the /dice page needs: each tracked dice.fm event's
+    current ticket types (1h-cached labels), min on-sale price, and the
+    tier/price change log accumulated by the sweeps + refreshes."""
+    return jsonify(_dice_payload(force=False))
+
+
+@app.route("/api/dice/refresh", methods=["POST"])
+def api_dice_refresh():
+    """Force-fetch every tracked event from the DICE API right now and log
+    any tier/price/status changes. Synchronous â€” a handful of events is a
+    couple of seconds."""
+    return jsonify(_dice_payload(force=True))
+
+
 @app.route("/api/market")
 def api_market():
     """Every tracked market row + its sold-per-window velocity. One bulk

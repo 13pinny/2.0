@@ -374,6 +374,13 @@ def _dice_event_entity(code):
     labels = dice.get_labels(code, "0")
     meta = (labels or {}).get("meta") or {}
     blocks = (labels or {}).get("blocks") or {}
+    # Feed the /dice page's tier/price change log — DICE never exposes
+    # history, so we build it from what each sweep observes.
+    try:
+        db.dice_tier_log_update(code, blocks,
+                                datetime.now(timezone.utc).isoformat())
+    except Exception:
+        pass
     prices = [b.get("price") for b in blocks.values()
               if b.get("price") and b.get("availability") == "in_stock"]
     if not prices:
