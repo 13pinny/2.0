@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 import barby
 import db
 import dice
+import discord_bot
 import filters as watcher_filters
 import kupat
 import notify
@@ -150,6 +151,7 @@ def check_one(w, now_iso):
                 added_seats=matched, removed_count=len(removed),
                 total_now=len(seats), labels=lbls, channels=enabled,
                 headline=headline,
+                discord_override=discord_bot.webhook_for(w.get("discord_channel")),
             )
         elif not matched:
             result = {"discord": "skipped (filtered)", "email": "skipped (filtered)"}

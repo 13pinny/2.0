@@ -538,7 +538,7 @@ CREATE TABLE IF NOT EXISTS dice_tier_log (
     tier_name    TEXT,                   -- "Second Release" (often null)
     price        REAL,                   -- per ticket, event currency
     currency     TEXT,
-    status       TEXT,                   -- on-sale / off-sale / sold-outâ€¦
+    status       TEXT,                   -- on-sale / off-sale / sold-out…
     first_seen_at TEXT NOT NULL,
     last_seen_at  TEXT NOT NULL,
     ended_at     TEXT                    -- null = this is the current state
@@ -801,6 +801,21 @@ def init():
             # change under them; new watchers get min_group_size=2 from the
             # insert path's default.
             conn.execute("ALTER TABLE tm_watchers ADD COLUMN filters TEXT")
+        if "discord_channel" not in tw_cols:
+            # Per-event Discord routing: name of the (auto-created) channel
+            # this watcher's DROP pings go to. NULL = shared drops channel.
+            # Watchers for the same artist share a name → share a channel.
+            conn.execute("ALTER TABLE tm_watchers ADD COLUMN discord_channel TEXT")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS discord_event_channels (
+                name TEXT PRIMARY KEY,
+                channel_id TEXT,
+                webhook_url TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         td_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tm_drops)").fetchall()}
         if "notify_count" not in td_cols:
             conn.execute("ALTER TABLE tm_drops ADD COLUMN notify_count INTEGER")
@@ -2085,15 +2100,16 @@ def tm_insert_watcher(row, now_iso):
         conn.execute(
             """
             INSERT INTO tm_watchers (id, label, source, event_code, perf_code,
-                paused, muted, notify_channels, filters, created_at)
+                paused, muted, notify_channels, filters, discord_channel, created_at)
             VALUES (:id, :label, :source, :event_code, :perf_code,
-                :paused, :muted, :notify_channels, :filters, :created_at)
+                :paused, :muted, :notify_channels, :filters, :discord_channel, :created_at)
             """,
             {
                 "muted": 0,
                 "notify_channels": "discord,email",
                 "source": "ticketmaster",
                 "filters": None,
+                "discord_channel": None,
                 **row,
                 "created_at": now_iso,
             },
@@ -2120,6 +2136,27 @@ def tm_active_watchers():
             "SELECT * FROM tm_watchers WHERE paused = 0 ORDER BY created_at"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def discord_channel_get(name):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM discord_event_channels WHERE name = ?", (name,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def discord_channel_put(name, channel_id, webhook_url, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO discord_event_channels (name, channel_id, webhook_url, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET channel_id=excluded.channel_id,
+                webhook_url=excluded.webhook_url
+            """,
+            (name, channel_id, webhook_url, now_iso),
+        )
 
 
 def tm_update_watcher(id_, fields):
@@ -2315,7 +2352,7 @@ def dice_tier_log_update(event_code, blocks, now_iso):
     """Diff one event's current ticket-type states (dice labels ``blocks``
     map) against the latest open log row per type; insert a row on change,
     stamp ended_at on the superseded/vanished state. Idempotent within a
-    state â€” repeated calls with the same data only bump last_seen_at."""
+    state — repeated calls with the same data only bump last_seen_at."""
     ev = str(event_code)
     with connect() as conn:
         rows = conn.execute(

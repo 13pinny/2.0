@@ -99,6 +99,8 @@
   .switch input:checked + .slider:before { transform: translateX(18px); background: #fff; }
   /* Inline channel dropdown */
   select.channels { font-size: 11px; padding: 4px 6px; }
+  input.dchan { display: block; margin-top: 4px; width: 110px; font-family: inherit; font-size: 11px; padding: 3px 6px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  input.dchan::placeholder { color: var(--muted); }
   /* Tabs label area */
   table th.col-tight, table td.col-tight { white-space: nowrap; }
   /* Filter badge + modal */
@@ -329,7 +331,12 @@ async function load() {
       <td><span class="status ${status}" title="${escape(w.last_check_error || '')}">${statusLabel}</span></td>
       <td>${fmtTime(w.last_check_at)}</td>
       <td class="num">${seatCell(w)}</td>
-      <td class="col-tight"><select class="channels" data-id="${w.id}">${channelSel}</select></td>
+      <td class="col-tight">
+        <select class="channels" data-id="${w.id}">${channelSel}</select>
+        <input class="dchan" data-id="${w.id}" type="text" placeholder="#shared drops"
+               value="${escape(w.discord_channel || '')}"
+               title="per-event Discord channel for drop pings — same name across watchers = same channel; empty = shared drops channel">
+      </td>
       <td class="col-tight">
         <label class="switch" title="mute notifications (keeps polling)"><input type="checkbox" data-id="${w.id}" data-act="mute" ${w.muted ? 'checked' : ''}><span class="slider"></span></label>
       </td>
@@ -347,6 +354,7 @@ async function load() {
   wbody.querySelectorAll('button[data-act]').forEach(b => b.addEventListener('click', onWatcherAction));
   wbody.querySelectorAll('select.channels').forEach(s => s.addEventListener('change', onChannelChange));
   wbody.querySelectorAll('input[data-act="mute"]').forEach(c => c.addEventListener('change', onMuteChange));
+  wbody.querySelectorAll('input.dchan').forEach(i => i.addEventListener('change', onDiscordChannelChange));
 
   const watcherById = Object.fromEntries(watchers.map(w => [w.id, w]));
   const dbody = $('dropsBody');
@@ -589,6 +597,15 @@ async function onChannelChange(e) {
     await api('/api/watchers/update', 'POST', { id, notify_channels: value });
     showOk('Channels saved');
   } catch (err) { showError(err.message); await load(); }
+}
+
+async function onDiscordChannelChange(e) {
+  const inp = e.currentTarget;
+  try {
+    await api('/api/watchers/update', 'POST', { id: inp.dataset.id, discord_channel: inp.value });
+    showOk(inp.value.trim() ? 'Channel saved — created on next drop' : 'Back to shared drops channel');
+    await load();
+  } catch (err) { showErr(err); }
 }
 
 async function onMuteChange(e) {

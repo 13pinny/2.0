@@ -18,6 +18,7 @@ saving (draft) — the form defaults it on, and an accidental live listing is
 the one mistake this module must never make. Pass publish=True to explicitly
 go live; the toggle state is then asserted rather than assumed.
 """
+import random
 import re
 import threading
 import traceback

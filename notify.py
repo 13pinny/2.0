@@ -212,7 +212,7 @@ def _send_email(subject, body, gmail_user, gmail_pwd, to_addr):
         return f"{type(e).__name__}: {e}"
 
 
-def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, labels=None, channels=None, headline=None):
+def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, labels=None, channels=None, headline=None, discord_override=None):
     """Send a notification for added seats. Returns {'discord': str, 'email': str}.
 
     `label` — user-facing watcher name (e.g. "אגם בוחבוט · אמפי קיסריה …").
@@ -231,13 +231,20 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
     closed) is a market signal, not a buy-now drop — it routes to the
     'status' category. Anything with real seats, or a status seat saying
     "available" (tickets just opened), is actionable and routes to 'drops'.
+
+    `discord_override` — optional webhook URL for a per-event channel
+    (discord_bot.webhook_for). Only applies to buyable-drop pings; status
+    pings keep going to the shared status channel.
     """
     status_only = bool(added_seats) and all(
         (s.get("festival") or s.get("ga"))
         and (s.get("status") or "") in ("soldout", "lasttickets", "closed")
         for s in added_seats
     )
-    discord_url = _discord_webhook("status" if status_only else "drops")
+    if status_only:
+        discord_url = _discord_webhook("status")
+    else:
+        discord_url = discord_override or _discord_webhook("drops")
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
     to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()

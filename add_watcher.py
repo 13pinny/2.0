@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 import barby
 import db
 import dice
+import discord_bot
 import kupat
 import tickchak
 import ticketmaster
@@ -82,6 +83,8 @@ def cmd_add(url):
         "id": wid, "label": label, "source": src_name,
         "event_code": event_code, "perf_code": perf_code,
         "paused": 0, "muted": 0, "notify_channels": "discord,email",
+        # Same per-event Discord routing default as app.py's _add_one_watcher.
+        "discord_channel": (discord_bot.slugify_label(label) or None) if discord_bot.configured() else None,
     }, datetime.now(timezone.utc).isoformat())
     print(f"added [{src_name}] {event_code}/{perf_code} :: {label} (id={wid})")
     if event_level:
