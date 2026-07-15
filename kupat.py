@@ -19,6 +19,23 @@ The seats-status response is a positional array per seat:
 We only use sectionId, rowLabel, seatLabel, ticketGroupId. The repeated
 positions appear to be a serialization quirk of the kupat backend.
 
+Two traps that silently blind the watcher if you get them wrong:
+
+  * The booking SPA IGNORES the `prsntId` URL param. It auto-selects its own
+    default date (highest-availability) and rewrites the URL to match, so on
+    a multi-date event the seats-status XHR only ever fires for that default
+    — every other date looks empty. You must click the date's row
+    (`#presentation_<pid>`) to make the SPA fetch it. Verified July 2026.
+  * `isGA` is NOT a boolean despite the name. It carries small ints (1 / 2 /
+    24 …) on ordinary seated events, so `if presentation["isGA"]` marks most
+    seated shows as general admission and collapses their whole seat map into
+    one pseudo-seat. GA is instead "venue has no seated sections" — see
+    _has_seated_capacity. (`isReserved` is likewise an int, not a flag.)
+
+seats-status is also bot-protected: unlike the catalog/detail endpoints it
+403s an in-page fetch(), so it can only be harvested by capturing the SPA's
+own XHR (BrowserSession.capture) — never via api_get.
+
 No login, no captcha — these endpoints are anonymous (the Cloudflare
 Turnstile + vee-crm POSTs that show up in the SPA traffic guard the
 checkout flow, not the listing endpoints).
@@ -74,6 +91,20 @@ SOURCE_NAME = "kupat"
 # shows — a single status-encoded "seat" — and derive a low-stock flag from
 # a threshold since kupat has no "last tickets" signal of its own.
 GA_LOW_THRESHOLD = int(os.getenv("KARTIS_KUPAT_GA_LOW") or 25)
+
+
+def _has_seated_capacity(presentation, seatplan):
+    """True when this presentation's venue has a real per-seat map.
+
+    kupat's `isGA` field looks like a flag but is actually a small integer
+    (1 / 2 / 24 …) present on ordinary seated events, so it can't be trusted
+    to mean "general admission". A GA/standing event instead has *no seated
+    sections* — that's the venue-level fact we key on (mirrors the commit
+    that added GA tracking: GA = "no per-seat map and no total capacity").
+    Returns True if the seatplan reports any seated capacity.
+    """
+    _, total_seated = _build_block_map(presentation, seatplan)
+    return total_seated > 0
 
 
 def _ga_status(presentation):
@@ -136,10 +167,20 @@ class BrowserSession:
         self._pw = self._browser = self._ctx = self._anchor = None
         return False
 
-    def capture(self, url, matchers, wait=12):
+    def capture(self, url, matchers, wait=12, select_pid=None):
         """Load `url` in a fresh page and return {key: resp.json()} for every
         response whose URL satisfies matchers[key] (a str predicate). Keys
-        that never matched are simply absent — callers decide severity."""
+        that never matched are simply absent — callers decide severity.
+
+        `select_pid` (a presentation id): after the page loads, click the
+        matching date row (`#presentation_<pid>`). The booking SPA IGNORES
+        the `prsntId` URL param and auto-selects a default date (the last /
+        highest-availability one), so for a multi-date event the seats-status
+        XHR only ever fires for the SPA's default — never for the date we
+        actually watch. Clicking the date row forces the SPA to fetch that
+        presentation's seats. Harmless when the target already is the default
+        (its XHR is captured on load and the loop below short-circuits).
+        """
         page = self._ctx.new_page()
         captured = {}
 
@@ -161,6 +202,18 @@ class BrowserSession:
             except Exception:
                 pass
             raise KupatError(f"failed to load kupat booking page: {e}") from e
+        if select_pid is not None:
+            try:
+                page.wait_for_selector(f"#presentation_{select_pid}", timeout=8000)
+                page.evaluate(
+                    """(pid) => {
+                        const e = document.querySelector('#presentation_' + pid);
+                        if (e) { e.scrollIntoView(); (e.querySelector('.list-item') || e).click(); }
+                    }""",
+                    str(select_pid),
+                )
+            except Exception:
+                pass
         deadline = time.time() + wait
         while time.time() < deadline:
             if all(k in captured for k in matchers):
@@ -224,7 +277,8 @@ def _browse_capture(feature_id, presentation_id, want):
     `want` is a subset of {"seats", "presentation", "seatplan"}. Returns a
     dict with whatever was captured before timeout, `_missing` listing any
     keys that never arrived (soft-fail; caller decides whether to error).
-    Launches and closes its own browser — ~4s per call; batch callers
+    Launches and closes its own browser — ~5-10s per call (the date-row click
+    below has to wait for a second seats-status round-trip); batch callers
     should hold a BrowserSession instead.
     """
     matchers = {}
@@ -240,7 +294,10 @@ def _browse_capture(feature_id, presentation_id, want):
         matchers["seatplan"] = lambda u: "/seats/seatplan" in u
 
     with BrowserSession() as session:
-        raw = session.capture(perf_url(feature_id, presentation_id), matchers)
+        raw = session.capture(
+            perf_url(feature_id, presentation_id), matchers,
+            select_pid=presentation_id,
+        )
 
     captured = {}
     if "seats" in raw:
@@ -322,24 +379,16 @@ def fetch_selectable_seats(feature_id, presentation_id):
 
     Each dict has block (sectionId as str), row (rowLabel), seat (seatLabel),
     plus priceLevel (the ticketGroupId) and `raw` (the original positional
-    array). Costs ~4s per call because the kupat API rejects out-of-page
+    array). Costs ~5-10s per call because the kupat API rejects out-of-page
     requests; we run a headless browser to capture the seats-status XHR.
     """
-    captured = _browse_capture(feature_id, presentation_id, want={"seats", "presentation"})
+    captured = _browse_capture(
+        feature_id, presentation_id, want={"seats", "presentation", "seatplan"}
+    )
     presentation = captured.get("presentation") or {}
-    # GA (standing) events have no real per-seat map — track them as one
-    # status-encoded seat so the diff fires on every sold-out / last-tickets
-    # / available-again transition (mirrors the tickchak festival model).
-    if presentation.get("isGA"):
-        status = _ga_status(presentation)
-        label = {"available": "GA available", "lasttickets": "GA last tickets",
-                 "soldout": "GA sold out"}.get(status, "GA available")
-        return [{
-            "block": label, "row": "GA", "seat": "1",
-            "ga": True, "status": status,
-            "qty_available": presentation.get("availSeats"),
-            "price": None,
-        }]
+    seatplan = captured.get("seatplan") or {}
+    # Real per-seat availability is the ground truth: if the seats-status XHR
+    # returned any per-seat rows, this is a seated event — return them.
     seats = captured.get("seats") or []
     out = []
     for s in seats:
@@ -352,6 +401,26 @@ def fetch_selectable_seats(feature_id, presentation_id):
             "priceLevel": s[5] if len(s) > 5 else None,
             "raw": s,
         })
+    if out:
+        return out
+    # No buyable per-seat rows. This is either a GA (standing) event — which
+    # has no seat map at all, only a tickets-left count — or a seated event
+    # with nothing currently available. kupat's `isGA` field is NOT a boolean
+    # (it carries small ints like 1/2/24 on ordinary seated events), so we
+    # decide GA the way the venue itself does: a GA event has no seated
+    # sections in its seatplan. Track it as one status-encoded seat so the
+    # diff fires on every sold-out / last-tickets / available-again
+    # transition (mirrors the tickchak festival model).
+    if not _has_seated_capacity(presentation, seatplan):
+        status = _ga_status(presentation)
+        label = {"available": "GA available", "lasttickets": "GA last tickets",
+                 "soldout": "GA sold out"}.get(status, "GA available")
+        return [{
+            "block": label, "row": "GA", "seat": "1",
+            "ga": True, "status": status,
+            "qty_available": presentation.get("availSeats"),
+            "price": None,
+        }]
     return out
 
 
@@ -415,6 +484,9 @@ def fetch_fresh(feature_id, presentation_id, lang="iw"):
     presentation = captured.get("presentation") or {}
     seatplan = captured.get("seatplan") or {}
     blocks, total_seated = _build_block_map(presentation, seatplan)
+    # GA (standing) events have no seated sections — see _has_seated_capacity.
+    # `isGA` is an int, not a boolean, so it can't be used here.
+    is_ga = total_seated == 0
     # kupat returns dateTime as "YYYY-MM-DD HH:MM:SS" in venue-local time.
     # We keep both the raw string (for accurate display, no TZ conversion)
     # and an ms-since-epoch interpretation (for sorting). The display path
@@ -446,11 +518,11 @@ def fetch_fresh(feature_id, presentation_id, lang="iw"):
             # For GA, the seatplan capacity is the venue's *seated* dot-count,
             # not the standing/GA allocation, so it's a misleading "total" —
             # null it and show tickets-left only. Non-GA keeps the real total.
-            "totalSeats": None if presentation.get("isGA") else (total_seated or None),
+            "totalSeats": None if is_ga else (total_seated or None),
             # GA (standing) marker + low-stock-aware status for the GA Tracker
             # page. Non-GA kupat events leave ga False and behave as before.
-            "ga": bool(presentation.get("isGA")),
-            "gaStatus": _ga_status(presentation) if presentation.get("isGA") else None,
+            "ga": is_ga,
+            "gaStatus": _ga_status(presentation) if is_ga else None,
         },
         "blocks": blocks,
     }
