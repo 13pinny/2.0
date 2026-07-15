@@ -26,7 +26,7 @@ All commands assume the venv at `.venv\Scripts\`. On Windows use `.venv\Scripts\
 | List watchers | `.venv\Scripts\python add_watcher.py --list` |
 | Remove a watcher | `.venv\Scripts\python add_watcher.py --remove <id>` |
 | Smoke-test Discord + Gmail | `.venv\Scripts\python notify.py` (expects `{'discord': 'ok (204)', 'email': 'ok'}`, then one line per configured per-category webhook) |
-| Probe a single drop endpoint directly | `.venv\Scripts\python ticketmaster.py EVENT/PERF` (also `kupat.py`, `tickchak.py`) |
+| Probe a single drop endpoint directly | `.venv\Scripts\python ticketmaster.py EVENT/PERF` (also `kupat.py`, `tickchak.py`, `barby.py <url-or-showId>`) |
 | Extract Pacha NY ticket first-pages from Gmail | `.venv\Scripts\python pacha_tickets.py` (add `--dry-run`, `--days N`, `--folder`) |
 | Probe the Pacha NYC events listing (the new-event monitor's fetcher) | `.venv\Scripts\python pacha_events.py` (add `--json`) |
 | Probe the kupat / TM-IL / barby event listings (the IL new-event monitor's fetchers) | `.venv\Scripts\python kupat_events.py` / `.venv\Scripts\python tm_events.py` / `.venv\Scripts\python barby_events.py` (add `--json`; tm also `--onsale`) |
@@ -53,9 +53,13 @@ Each ticketing site is a module exposing a fixed interface; sources are register
 - `get_labels(event_code, perf_code, lang="iw", missing_block=None)` — Hebrew section names + ILS prices, cached under `tm_cache/`
 - `event_summary(labels) -> str`
 
-URL → source detection lives in `_detect_source` in `app.py:43` and `add_watcher.py:30` (identical logic; keep in sync). Bare numeric shorthand `1358/51596` routes to kupat; alpha-prefixed `MBP19/001` routes to ticketmaster; bare slug `mada26` routes to tickchak.
+URL → source detection lives in `_detect_source` in `app.py:43` and `add_watcher.py:30` (identical logic; keep in sync). Bare numeric shorthand `1358/51596` routes to kupat; alpha-prefixed `MBP19/001` routes to ticketmaster; bare slug `mada26` routes to tickchak. Barby is matched on the `barby.co.il` host only — a bare show id like `5086` is indistinguishable from a tickchak slug and routes to tickchak, so paste the full URL.
 
 `ticketmaster.py` and `kupat.py` are pure HTTP (anonymous JSON APIs, no login). `tickchak.py` is similar. None of these go through Chrome.
+
+`kupat.py` is the exception that DOES need Chrome: its `seats-status` endpoint 403s any out-of-page fetch, so seats are harvested by capturing the booking SPA's own XHR (~5-10s/check). Two kupat traps are documented at length in its module docstring — the SPA ignores the `prsntId` URL param (you must click the date row), and `isGA` is an int, not a bool. Read it before touching that module.
+
+`barby.py` (barby.co.il, Tel Aviv club) is pure HTTP and status-only: Barby publishes no seat map and no reliable tickets-left (`sold` can exceed `nochair_max_buy`), so a show is tracked as ONE status-encoded pseudo-seat driven by the `isSoldOut` bool from `/api/shows/show/<id>` — sold-out→on-sale adds a `GA available` seat (routes to `drops`), the reverse routes to `status`. perf_code is always `0`. Don't confuse it with `barby_events.py`, which monitors the *catalog* for new shows.
 
 ### Drop-check tick
 

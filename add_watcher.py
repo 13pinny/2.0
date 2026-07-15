@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
+import barby
 import db
 import kupat
 import tickchak
@@ -24,11 +25,14 @@ import ticketmaster
 load_dotenv()
 db.init()
 
-SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak}
+SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
+           "barby": barby}
 
 
 def detect_source(url):
     s = (url or "").strip().lower()
+    if "barby.co.il" in s:
+        return "barby", barby
     if "tickchak.co.il" in s:
         return "tickchak", tickchak
     if "kupat.co.il" in s:

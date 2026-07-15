@@ -24,6 +24,7 @@ from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 
+import barby
 import db
 import filters as watcher_filters
 import kupat
@@ -36,7 +37,8 @@ import ticketmaster
 load_dotenv(Path(__file__).parent / ".env")
 db.init()
 
-SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak}
+SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
+           "barby": barby}
 
 import os
 INTERVAL = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)

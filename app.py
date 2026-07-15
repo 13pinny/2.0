@@ -17,6 +17,7 @@ from flask import Flask, jsonify, render_template, send_file, send_from_director
 from openpyxl import Workbook
 
 import attachments as attachments_mod
+import barby
 import barby_events
 import db
 import filters as watcher_filters
@@ -49,6 +50,7 @@ WATCHER_SOURCES = {
     "ticketmaster": ticketmaster,
     "kupat": kupat,
     "tickchak": tickchak,
+    "barby": barby,
 }
 
 
@@ -60,6 +62,8 @@ def _detect_source(url):
     numeric), so existing callers keep working.
     """
     s = (url or "").strip().lower()
+    if "barby.co.il" in s:
+        return "barby", barby
     if "tickchak.co.il" in s:
         return "tickchak", tickchak
     if "kupat.co.il" in s:
