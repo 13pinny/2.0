@@ -159,14 +159,15 @@ def add_account(fields, now_iso):
     with db.connect() as conn:
         cur = conn.execute(
             """INSERT INTO vault_accounts
-               (platform, label, username, login_url, status,
+               (platform, label, username, phone, login_url, status,
                 password_enc, notes_enc, address_enc, card_enc,
                 created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 fields.get("platform", "").strip(),
                 fields.get("label", "").strip(),
                 fields.get("username", "").strip(),
+                fields.get("phone", "").strip(),
                 fields.get("login_url", "").strip(),
                 fields.get("status", "active").strip() or "active",
                 encrypt(fields.get("password", "")),
@@ -182,7 +183,7 @@ def add_account(fields, now_iso):
 
 def update_account(id_, fields, now_iso):
     sets, vals = [], []
-    for col in ("platform", "label", "username", "login_url", "status"):
+    for col in ("platform", "label", "username", "phone", "login_url", "status"):
         if col in fields:
             sets.append(f"{col} = ?")
             vals.append((fields[col] or "").strip())

@@ -621,6 +621,7 @@ CREATE TABLE IF NOT EXISTS vault_accounts (
     platform     TEXT NOT NULL,            -- free text; UI seeds the known sites
     label        TEXT DEFAULT '',          -- nickname, e.g. "main", "backup #2"
     username     TEXT DEFAULT '',          -- email/username (copyable)
+    phone        TEXT DEFAULT '',          -- phone number on the account (copyable)
     password_enc TEXT DEFAULT '',
     login_url    TEXT DEFAULT '',
     status       TEXT DEFAULT 'active',    -- active | limited | banned | unused
@@ -797,6 +798,9 @@ def init():
         ls_cols = {row["name"] for row in conn.execute("PRAGMA table_info(lysted_sales)").fetchall()}
         if "cost" not in ls_cols:
             conn.execute("ALTER TABLE lysted_sales ADD COLUMN cost REAL")
+        va_cols = {row["name"] for row in conn.execute("PRAGMA table_info(vault_accounts)").fetchall()}
+        if "phone" not in va_cols:
+            conn.execute("ALTER TABLE vault_accounts ADD COLUMN phone TEXT DEFAULT ''")
         mi_cols = {row["name"] for row in conn.execute("PRAGMA table_info(manual_inventory)").fetchall()}
         if "email" not in mi_cols:
             conn.execute("ALTER TABLE manual_inventory ADD COLUMN email TEXT")

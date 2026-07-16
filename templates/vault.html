@@ -202,6 +202,8 @@ function render() {
           <span class="label">${esc(a.label) || "—"}</span>
           <span class="field">user <b>${esc(a.username) || "—"}</b>
             ${a.username ? `<button class="mini" data-copytext="${esc(a.username)}">copy</button>` : ""}</span>
+          ${a.phone ? `<span class="field">phone <b>${esc(a.phone)}</b>
+            <button class="mini" data-copytext="${esc(a.phone)}">copy</button></span>` : ""}
           <span class="field">pass <b class="dots" data-reveal="${a.id}">${a.has_password ? "••••••••" : "—"}</b>
             ${a.has_password ? `<button class="mini" data-copysecret="${a.id}" data-f="password">copy</button>
             <button class="mini" data-eye="${a.id}">👁</button>` : ""}</span>
@@ -229,7 +231,7 @@ function render() {
 }
 
 function editorHtml(a, plat) {
-  const v = a || {platform: plat || "", label: "", username: "", login_url: "", status: "active"};
+  const v = a || {platform: plat || "", label: "", username: "", phone: "", login_url: "", status: "active"};
   const platOpts = platformOrder().map(p => `<option ${p === v.platform ? "selected" : ""}>${esc(p)}</option>`).join("");
   const stOpts = STATUSES.map(s => `<option ${s === v.status ? "selected" : ""}>${s}</option>`).join("");
   return `<div class="editform" data-form="${a ? a.id : "new"}">
@@ -239,6 +241,7 @@ function editorHtml(a, plat) {
     </label>
     <label>Label <input id="f_label" value="${esc(v.label)}" placeholder="main / backup #2 …" /></label>
     <label>Email / username <input id="f_username" value="${esc(v.username)}" /></label>
+    <label>Phone <input id="f_phone" value="${esc(v.phone || "")}" placeholder="+1 …" /></label>
     <label>Password <input id="f_password" placeholder="${a && a.has_password ? "(loading…)" : ""}" /></label>
     <label>Login URL <input id="f_url" value="${esc(v.login_url)}" placeholder="https://…" /></label>
     <label>Status <select id="f_status">${stOpts}</select></label>
@@ -324,6 +327,7 @@ function wireForm(form) {
       platform: sel.value === "__new__" ? inp.value.trim() : sel.value,
       label: form.querySelector("#f_label").value,
       username: form.querySelector("#f_username").value,
+      phone: form.querySelector("#f_phone").value,
       login_url: form.querySelector("#f_url").value,
       status: form.querySelector("#f_status").value,
       password: form.querySelector("#f_password").value,
