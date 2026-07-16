@@ -205,3 +205,79 @@ def update_account(id_, fields, now_iso):
 def delete_account(id_):
     with db.connect() as conn:
         conn.execute("DELETE FROM vault_accounts WHERE id = ?", (id_,))
+
+
+# ------------------------------------------------ TM accounts (/tm page)
+
+TM_SECRET_FIELDS = ("password", "proxy", "cc", "address")
+_TM_PLAIN = ("account_no", "email", "acct_source", "proxy_provider",
+             "card_provider", "notes")
+
+
+def _tm_enc_col(f):
+    return {"cc": "cc_enc"}.get(f, f + "_enc")
+
+
+def tm_list():
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tm_accounts "
+            "ORDER BY CAST(account_no AS INTEGER), account_no, id"
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        for f in TM_SECRET_FIELDS:
+            d["has_" + f] = bool(d.pop(_tm_enc_col(f), ""))
+        out.append(d)
+    return out
+
+
+def tm_get_secrets(id_):
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM tm_accounts WHERE id = ?", (id_,)
+        ).fetchone()
+    if not row:
+        return None
+    return {f: decrypt(row[_tm_enc_col(f)]) for f in TM_SECRET_FIELDS}
+
+
+def tm_add(fields, now_iso):
+    with db.connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO tm_accounts
+               (account_no, email, acct_source, proxy_provider, card_provider,
+                notes, password_enc, proxy_enc, cc_enc, address_enc,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            tuple((fields.get(c) or "").strip() for c in _TM_PLAIN)
+            + tuple(encrypt(fields.get(f, "")) for f in TM_SECRET_FIELDS)
+            + (now_iso, now_iso),
+        )
+        return cur.lastrowid
+
+
+def tm_update(id_, fields, now_iso):
+    sets, vals = [], []
+    for col in _TM_PLAIN:
+        if col in fields:
+            sets.append(f"{col} = ?")
+            vals.append((fields[col] or "").strip())
+    for f in TM_SECRET_FIELDS:
+        if f in fields:
+            sets.append(f"{_tm_enc_col(f)} = ?")
+            vals.append(encrypt(fields[f] or ""))
+    if not sets:
+        return
+    sets.append("updated_at = ?")
+    vals.extend([now_iso, id_])
+    with db.connect() as conn:
+        conn.execute(
+            f"UPDATE tm_accounts SET {', '.join(sets)} WHERE id = ?", vals
+        )
+
+
+def tm_delete(id_):
+    with db.connect() as conn:
+        conn.execute("DELETE FROM tm_accounts WHERE id = ?", (id_,))

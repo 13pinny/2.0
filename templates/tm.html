@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — TM Accounts</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--purple); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  button.act { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 14px; border-radius: 6px; cursor: pointer; }
+  button.act:hover { border-color: var(--accent); color: var(--accent); }
+  button.mini { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--muted); font: inherit; font-size: 10px; padding: 2px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+  button.mini:hover { border-color: var(--accent); color: var(--accent); }
+  button.mini.ok { border-color: var(--green); color: var(--green); }
+  input, textarea { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 6px 10px; border-radius: 6px; }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; border-radius: 6px; }
+
+  #lock { display: none; max-width: 320px; margin: 12vh auto 0; text-align: center; }
+  #lock .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 28px 24px; }
+  #lock h2 { margin: 0 0 6px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; }
+  #lock input { font-size: 24px; letter-spacing: 10px; text-align: center; width: 190px; margin: 14px 0; font-variant-numeric: tabular-nums; }
+  #lock .msg { font-size: 11px; color: var(--red); min-height: 15px; margin-bottom: 8px; }
+
+  #page { display: none; }
+  .tablewrap { overflow-x: auto; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 9px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: var(--bg-3); }
+  td .cellv { font-family: Consolas, monospace; margin-right: 4px; }
+  td .dots { letter-spacing: 2px; color: var(--muted); }
+  td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+
+  .editform { background: var(--bg-3); border-top: 1px solid var(--line); padding: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .editform label { display: flex; flex-direction: column; gap: 3px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  .editform textarea { min-height: 48px; resize: vertical; }
+  .editform .buttons { grid-column: 1 / -1; display: flex; gap: 10px; }
+  .editform .del { margin-left: auto; border-color: var(--red); color: var(--red); }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>TM Accounts</h1>
+    <span class="meta" id="meta">accounts &amp; proxies</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm" class="active">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+
+  <div id="lock">
+    <div class="card">
+      <h2 id="lockTitle">Enter PIN</h2>
+      <p class="sub" id="lockSub">same PIN as the vault</p>
+      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="pin" autocomplete="off" />
+      <div class="msg" id="pinMsg"></div>
+      <button class="act" id="unlockBtn">Unlock</button>
+    </div>
+  </div>
+
+  <div id="page">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+      <button class="act" id="addBtn">+ Add TM account</button>
+      <span class="sub" style="margin:0">password, proxy, card and address are encrypted at rest — copy buttons decrypt on demand</span>
+      <span style="flex:1"></span>
+      <button class="act" id="lockNow">Lock</button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>#</th><th>Email</th><th>Password</th><th>Acct source</th>
+          <th>Proxy provider</th><th>Proxy</th><th>Card</th><th>Address</th><th>Notes</th><th></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="formslot"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+let TOKEN = sessionStorage.getItem("vaultToken") || "";
+let ACCOUNTS = [];
+let openEditor = null;
+
+const $ = (s) => document.querySelector(s);
+function err(msg) { const b = $("#errbox"); b.textContent = msg || ""; b.style.display = msg ? "block" : "none"; }
+function esc(s) { return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function flash(btn) { btn.classList.add("ok"); const t = btn.textContent; btn.textContent = "✓"; setTimeout(() => { btn.classList.remove("ok"); btn.textContent = t; }, 900); }
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({"X-Vault-Token": TOKEN}, opts.headers || {});
+  if (opts.body) opts.headers["Content-Type"] = "application/json";
+  const r = await fetch(path, Object.assign({cache: "no-store"}, opts));
+  if (r.status === 401) { showLock(); throw new Error("locked"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+
+/* ---------------- lock (shared vault PIN/token) ---------------- */
+async function showLock() {
+  TOKEN = ""; sessionStorage.removeItem("vaultToken");
+  $("#page").style.display = "none";
+  $("#lock").style.display = "block";
+  try {
+    const j = await fetch("/api/vault/pin-status").then(r => r.json());
+    $("#lockTitle").textContent = j.pin_set ? "Enter PIN" : "Set a PIN";
+    $("#lockSub").textContent = j.pin_set ? "same PIN as the vault" : "first time — choose a 4–6 digit code";
+  } catch (e) {}
+  $("#pin").value = ""; $("#pin").focus();
+}
+
+async function unlock() {
+  const pin = $("#pin").value.trim();
+  if (!/^\d{4,6}$/.test(pin)) { $("#pinMsg").textContent = "PIN must be 4–6 digits"; return; }
+  $("#unlockBtn").disabled = true; $("#pinMsg").textContent = "";
+  try {
+    const r = await fetch("/api/vault/pin", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({pin})});
+    const j = await r.json();
+    if (!r.ok) { $("#pinMsg").textContent = j.error || "wrong PIN"; $("#pin").value = ""; $("#pin").focus(); return; }
+    TOKEN = j.token; sessionStorage.setItem("vaultToken", TOKEN);
+    $("#lock").style.display = "none"; $("#page").style.display = "block";
+    await load();
+  } catch (e) { $("#pinMsg").textContent = String(e.message || e); }
+  finally { $("#unlockBtn").disabled = false; }
+}
+
+/* ---------------- table ---------------- */
+async function load() {
+  const j = await api("/api/tm");
+  ACCOUNTS = j.accounts;
+  render();
+}
+
+function secretCell(a, field) {
+  if (!a["has_" + field]) return `<span class="dots">—</span>`;
+  return `<span class="dots">••••</span>
+    <button class="mini" data-copysecret="${a.id}" data-f="${field}">copy</button>
+    <button class="mini" data-peek="${a.id}" data-f="${field}">👁</button>`;
+}
+
+function render() {
+  const tb = $("#rows");
+  if (!ACCOUNTS.length && openEditor !== "new") {
+    tb.innerHTML = `<tr><td colspan="10" class="empty">No TM accounts yet — hit “+ Add TM account”.</td></tr>`;
+  } else {
+    tb.innerHTML = ACCOUNTS.map(a => `<tr data-id="${a.id}">
+      <td class="num">${esc(a.account_no) || "—"}</td>
+      <td><span class="cellv">${esc(a.email) || "—"}</span>
+        ${a.email ? `<button class="mini" data-copytext="${esc(a.email)}">copy</button>` : ""}</td>
+      <td data-cell="password-${a.id}">${secretCell(a, "password")}</td>
+      <td>${esc(a.acct_source) || "—"}</td>
+      <td>${esc(a.proxy_provider) || "—"}</td>
+      <td data-cell="proxy-${a.id}">${secretCell(a, "proxy")}</td>
+      <td>${esc(a.card_provider)}${a.card_provider && a.has_cc ? " " : ""}${a.has_cc ? `<button class="mini" data-copysecret="${a.id}" data-f="cc">copy</button>` : (a.card_provider ? "" : "—")}</td>
+      <td>${a.has_address ? `<button class="mini" data-copysecret="${a.id}" data-f="address">copy</button>` : "—"}</td>
+      <td style="white-space:normal;max-width:180px;font-size:11px;color:var(--muted)">${esc(a.notes)}</td>
+      <td><button class="mini" data-edit="${a.id}">edit</button></td>
+    </tr>`).join("");
+  }
+  const slot = $("#formslot");
+  slot.innerHTML = openEditor !== null ? editorHtml(ACCOUNTS.find(a => a.id === openEditor) || null) : "";
+  wire();
+  $("#meta").textContent = ACCOUNTS.length + " accounts";
+}
+
+function editorHtml(a) {
+  const v = a || {};
+  return `<div class="editform" data-form="${a ? a.id : "new"}">
+    <label>Account # <input id="f_account_no" value="${esc(v.account_no || "")}" /></label>
+    <label>TM email <input id="f_email" value="${esc(v.email || "")}" /></label>
+    <label>Password <input id="f_password" placeholder="${a && a.has_password ? "(loading…)" : ""}" /></label>
+    <label>Account source <input id="f_acct_source" value="${esc(v.acct_source || "")}" placeholder="who supplied the account" /></label>
+    <label>Proxy provider <input id="f_proxy_provider" value="${esc(v.proxy_provider || "")}" placeholder="Oxylabs / Smartproxy / …" /></label>
+    <label>Proxy <input id="f_proxy" placeholder="host:port:user:pass" /></label>
+    <label>Card provider <input id="f_card_provider" value="${esc(v.card_provider || "")}" placeholder="Visa / Amex / bank…" /></label>
+    <label>CC details <textarea id="f_cc" placeholder="number / exp / cvv"></textarea></label>
+    <label>Address <textarea id="f_address"></textarea></label>
+    <label>Notes <textarea id="f_notes">${esc(v.notes || "")}</textarea></label>
+    <div class="buttons">
+      <button class="act" id="f_save">Save</button>
+      <button class="act" id="f_cancel">Cancel</button>
+      ${a ? `<button class="act del" id="f_delete">Delete</button>` : ""}
+    </div>
+  </div>`;
+}
+
+/* ---------------- events ---------------- */
+function wire() {
+  document.querySelectorAll("[data-copytext]").forEach(b => b.onclick = async () => {
+    await navigator.clipboard.writeText(b.dataset.copytext); flash(b);
+  });
+  document.querySelectorAll("[data-copysecret]").forEach(b => b.onclick = async () => {
+    try {
+      const j = await api("/api/tm/secret?id=" + b.dataset.copysecret);
+      await navigator.clipboard.writeText(j[b.dataset.f] || "");
+      flash(b);
+    } catch (e) { err(String(e.message || e)); }
+  });
+  document.querySelectorAll("[data-peek]").forEach(b => b.onclick = async () => {
+    const cell = document.querySelector(`[data-cell="${b.dataset.f}-${b.dataset.peek}"]`);
+    const dots = cell.querySelector(".dots");
+    if (dots.dataset.shown) { dots.textContent = "••••"; delete dots.dataset.shown; return; }
+    try {
+      const j = await api("/api/tm/secret?id=" + b.dataset.peek);
+      dots.textContent = j[b.dataset.f]; dots.dataset.shown = "1";
+    } catch (e) { err(String(e.message || e)); }
+  });
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(Number(b.dataset.edit)));
+  const form = document.querySelector("[data-form]");
+  if (form) wireForm(form);
+}
+
+async function openEdit(id) {
+  openEditor = id; render();
+  try {
+    const j = await api("/api/tm/secret?id=" + id);
+    const form = document.querySelector("[data-form]");
+    if (!form) return;
+    form.querySelector("#f_password").value = j.password;
+    form.querySelector("#f_password").placeholder = "";
+    form.querySelector("#f_proxy").value = j.proxy;
+    form.querySelector("#f_cc").value = j.cc;
+    form.querySelector("#f_address").value = j.address;
+  } catch (e) { err(String(e.message || e)); }
+}
+
+function wireForm(form) {
+  const idAttr = form.dataset.form;
+  form.querySelector("#f_cancel").onclick = () => { openEditor = null; render(); };
+  form.querySelector("#f_save").onclick = async () => {
+    const body = {};
+    for (const f of ["account_no", "email", "password", "acct_source", "proxy_provider", "proxy", "card_provider", "cc", "address", "notes"])
+      body[f] = form.querySelector("#f_" + f).value;
+    err("");
+    try {
+      if (idAttr === "new") await api("/api/tm/add", {method: "POST", body: JSON.stringify(body)});
+      else await api("/api/tm/update", {method: "POST", body: JSON.stringify(Object.assign({id: Number(idAttr)}, body))});
+      openEditor = null; await load();
+    } catch (e) { err(String(e.message || e)); }
+  };
+  const del = form.querySelector("#f_delete");
+  if (del) del.onclick = async () => {
+    if (!confirm("Delete this TM account row?")) return;
+    try { await api("/api/tm/delete", {method: "POST", body: JSON.stringify({id: Number(idAttr)})}); openEditor = null; await load(); }
+    catch (e) { err(String(e.message || e)); }
+  };
+}
+
+$("#addBtn").onclick = () => { openEditor = "new"; render(); };
+$("#lockNow").onclick = () => showLock();
+$("#unlockBtn").onclick = unlock;
+$("#pin").addEventListener("keydown", e => { if (e.key === "Enter") unlock(); });
+
+(async function init() {
+  if (TOKEN) {
+    try { await load(); $("#page").style.display = "block"; return; } catch (e) {}
+  }
+  showLock();
+})();
+</script>
+</body>
+</html>

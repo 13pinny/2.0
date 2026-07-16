@@ -631,6 +631,23 @@ CREATE TABLE IF NOT EXISTS vault_accounts (
     created_at   TEXT,
     updated_at   TEXT
 );
+-- /tm page: Ticketmaster buying accounts, one row per account with its
+-- dedicated proxy + card. Same crypto/PIN regime as vault_accounts.
+CREATE TABLE IF NOT EXISTS tm_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_no     TEXT DEFAULT '',        -- user's own numbering
+    email          TEXT DEFAULT '',
+    password_enc   TEXT DEFAULT '',
+    acct_source    TEXT DEFAULT '',        -- where the account came from
+    proxy_provider TEXT DEFAULT '',
+    proxy_enc      TEXT DEFAULT '',        -- host:port:user:pass etc.
+    card_provider  TEXT DEFAULT '',
+    cc_enc         TEXT DEFAULT '',
+    address_enc    TEXT DEFAULT '',
+    notes          TEXT DEFAULT '',
+    created_at     TEXT,
+    updated_at     TEXT
+);
 CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,

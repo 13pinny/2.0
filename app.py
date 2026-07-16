@@ -4964,6 +4964,68 @@ def api_vault_delete():
     return jsonify({"deleted": id_})
 
 
+@app.route("/tm")
+def tm_page():
+    return render_template("tm.html")
+
+
+@app.route("/api/tm")
+def api_tm_list():
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    return jsonify({"accounts": vault.tm_list()})
+
+
+@app.route("/api/tm/secret")
+def api_tm_secret():
+    from flask import request
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        id_ = int(request.args.get("id", ""))
+    except ValueError:
+        return jsonify({"error": "id is required"}), 400
+    secrets_ = vault.tm_get_secrets(id_)
+    if secrets_ is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(secrets_)
+
+
+@app.route("/api/tm/add", methods=["POST"])
+def api_tm_add():
+    from flask import request
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    id_ = vault.tm_add(body, datetime.now(timezone.utc).isoformat())
+    return jsonify({"added": id_})
+
+
+@app.route("/api/tm/update", methods=["POST"])
+def api_tm_update():
+    from flask import request
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    id_ = body.pop("id", None)
+    if not id_:
+        return jsonify({"error": "id is required"}), 400
+    vault.tm_update(int(id_), body, datetime.now(timezone.utc).isoformat())
+    return jsonify({"updated": id_})
+
+
+@app.route("/api/tm/delete", methods=["POST"])
+def api_tm_delete():
+    from flask import request
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    id_ = (request.get_json(silent=True) or {}).get("id")
+    if not id_:
+        return jsonify({"error": "id is required"}), 400
+    vault.tm_delete(int(id_))
+    return jsonify({"deleted": id_})
+
+
 @app.route("/vgsales")
 def vgsales_page():
     return render_template("vgsales.html")
