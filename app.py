@@ -4107,6 +4107,14 @@ def _check_one_watcher(w, now_iso):
         # price range). Diff against `seats` (current full availability) so
         # adjacency reflects the live snapshot, not historical state.
         matched = watcher_filters.apply(added, seats, w.get("filters"), labels=labels)
+        # Mixed venues (a seat map PLUS a GA lawn/pit — kupat Live Park, TM
+        # GA allocations) also carry a GA status pseudo-seat whose
+        # soldout↔available flips are noise next to real per-seat drops.
+        # A watcher whose snapshot has actual seats only pings on those;
+        # GA-ONLY events (no seat map at all) keep their status pings.
+        # (Keep in sync with watcher_only.py.)
+        if any(not (s.get("festival") or s.get("ga")) for s in seats):
+            matched = [s for s in matched if not s.get("ga")]
 
         master_muted = db.setting_get_bool("master_muted", default=False)
         watcher_muted = bool(w.get("muted"))
@@ -4124,7 +4132,9 @@ def _check_one_watcher(w, now_iso):
         # status seats — carry a status flag per tick (the seat key encodes
         # it), so any transition shows up as an `added` seat — phrase the
         # ping for the new status.
-        _fest = next((s for s in added if s.get("festival") or s.get("ga")), None)
+        # Scan matched (not added) so a GA pseudo-seat stripped above can't
+        # slap a status headline onto a real-seat ping.
+        _fest = next((s for s in matched if s.get("festival") or s.get("ga")), None)
         if _fest:
             _nm = label or w["event_code"]
             headline = {
