@@ -40,7 +40,8 @@ BASE_URL = (os.environ.get("KARTIS_BASE_URL") or "https://kartis.homes").rstrip(
 _WEBHOOK_ENV = {
     "drops":      "DISCORD_WEBHOOK_DROPS",       # buyable-seat alerts (notify_drop)
     "status":     "DISCORD_WEBHOOK_STATUS",      # sold-out / last-tickets signals (notify_drop)
-    "new_events": "DISCORD_WEBHOOK_NEW_EVENTS",  # pacha + kupat + TM-IL monitors
+    "new_events": "DISCORD_WEBHOOK_NEW_EVENTS",  # genuinely-new events + on-sale flips (pacha/kupat/TM-IL/barby/zappa)
+    "jumps":      "DISCORD_WEBHOOK_JUMPS",       # pacha tier/price jumps + low-stock (price about to jump)
     "pricer":     "DISCORD_WEBHOOK_PRICER",      # auto-pricer changes/pauses/caps
     "listings":   "DISCORD_WEBHOOK_LISTINGS",    # intake→viagogo push pipeline
     "todos":      "DISCORD_WEBHOOK_TODOS",       # daily to-do digest
@@ -599,8 +600,12 @@ def notify_pacha_event(kind, ev, old=None):
     count crossed below the alert threshold — the price is about to jump).
     `ev` is a normalized dict from pacha_events.fetch_events(); `old` is
     the previously stored DB row (price_up uses its old price, low_stock
-    its old count)."""
-    discord_url = _discord_webhook("new_events")
+    its old count).
+
+    Routing: 'price_up' and 'low_stock' are demand signals about an event
+    we already know, not new inventory — they go to the 'jumps' channel;
+    'new' and 'onsale' stay in 'new_events'."""
+    discord_url = _discord_webhook("jumps" if kind in ("price_up", "low_stock") else "new_events")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
 
