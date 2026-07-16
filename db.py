@@ -613,6 +613,23 @@ CREATE TABLE IF NOT EXISTS market_hidden (
     created_at   TEXT NOT NULL,
     PRIMARY KEY (source, event_code)
 );
+-- /vault account manager. *_enc columns are Fernet blobs (KARTIS_VAULT_KEY
+-- in .env — see vault.py); everything else is plaintext so the list view
+-- needs no decryption.
+CREATE TABLE IF NOT EXISTS vault_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform     TEXT NOT NULL,            -- free text; UI seeds the known sites
+    label        TEXT DEFAULT '',          -- nickname, e.g. "main", "backup #2"
+    username     TEXT DEFAULT '',          -- email/username (copyable)
+    password_enc TEXT DEFAULT '',
+    login_url    TEXT DEFAULT '',
+    status       TEXT DEFAULT 'active',    -- active | limited | banned | unused
+    notes_enc    TEXT DEFAULT '',
+    address_enc  TEXT DEFAULT '',
+    card_enc     TEXT DEFAULT '',          -- free-text card details blob
+    created_at   TEXT,
+    updated_at   TEXT
+);
 CREATE TABLE IF NOT EXISTS todos (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,

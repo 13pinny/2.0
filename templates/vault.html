@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — Vault</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--purple); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; max-width: 1100px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  button.act { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 14px; border-radius: 6px; cursor: pointer; }
+  button.act:hover { border-color: var(--accent); color: var(--accent); }
+  button.act:disabled { opacity: .5; cursor: default; }
+  button.mini { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--muted); font: inherit; font-size: 10px; padding: 2px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+  button.mini:hover { border-color: var(--accent); color: var(--accent); }
+  button.mini.ok { border-color: var(--green); color: var(--green); }
+  input, textarea, select { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 6px 10px; border-radius: 6px; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; border-radius: 6px; }
+
+  /* lock screen */
+  #lock { display: none; max-width: 320px; margin: 12vh auto 0; text-align: center; }
+  #lock .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 28px 24px; }
+  #lock h2 { margin: 0 0 6px; }
+  #lock input { font-size: 24px; letter-spacing: 10px; text-align: center; width: 190px; margin: 14px 0; font-variant-numeric: tabular-nums; }
+  #lock .msg { font-size: 11px; color: var(--red); min-height: 15px; margin-bottom: 8px; }
+
+  /* main list */
+  #vault { display: none; }
+  .platform { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
+  .platform > .phead { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; cursor: pointer; user-select: none; }
+  .platform > .phead:hover { background: var(--bg-3); }
+  .phead .pname { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; font-weight: 700; }
+  .phead .pcount { font-size: 11px; color: var(--muted); }
+  .acct { border-top: 1px solid var(--line); padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 12px; }
+  .acct .label { font-weight: 600; min-width: 90px; }
+  .acct .field { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+  .acct .field b { color: var(--text); font-weight: 500; font-family: Consolas, monospace; }
+  .acct .dots { letter-spacing: 2px; }
+  .acct .spacer { flex: 1; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
+  .chip.active { background: #e6f4ea; color: var(--green); }
+  .chip.limited { background: #fff4e0; color: var(--amber); }
+  .chip.banned { background: #fdecea; color: var(--red); }
+  .chip.unused, .chip.other { background: var(--bg-3); color: var(--muted); }
+  a.lnk { color: var(--accent); text-decoration: none; font-size: 11px; }
+  .extra { width: 100%; font-size: 11px; color: var(--muted); white-space: pre-wrap; display: none; padding: 4px 0 0 104px; }
+
+  /* edit form */
+  .editform { border-top: 1px solid var(--line); background: var(--bg-3); padding: 14px 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+  .editform label { display: flex; flex-direction: column; gap: 3px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  .editform textarea { min-height: 52px; resize: vertical; }
+  .editform .buttons { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; }
+  .editform .del { margin-left: auto; border-color: var(--red); color: var(--red); }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>Vault</h1>
+    <span class="meta" id="meta">accounts &amp; logins</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault" class="active">VAULT</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+
+  <div id="lock">
+    <div class="card">
+      <h2 id="lockTitle">Enter PIN</h2>
+      <p class="sub" id="lockSub">4–6 digit code</p>
+      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="pin" autocomplete="off" />
+      <div class="msg" id="pinMsg"></div>
+      <button class="act" id="unlockBtn">Unlock</button>
+    </div>
+  </div>
+
+  <div id="vault">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+      <button class="act" id="addBtn">+ Add account</button>
+      <span class="sub" style="margin:0">passwords, notes, addresses and cards are encrypted at rest — copy buttons decrypt on demand</span>
+      <span style="flex:1"></span>
+      <button class="act" id="lockNow">Lock</button>
+    </div>
+    <div id="list"></div>
+  </div>
+</main>
+
+<script>
+const PLATFORMS = ["Kupat", "Ticketmaster IL", "TickChak", "Barby", "Ticketmaster US", "DICE", "Eventim"];
+const STATUSES = ["active", "limited", "banned", "unused"];
+let TOKEN = sessionStorage.getItem("vaultToken") || "";
+let ACCOUNTS = [];
+const collapsed = new Set();
+let openEditor = null;   // account id being edited, "new" for add, or null
+
+const $ = (s) => document.querySelector(s);
+function err(msg) { const b = $("#errbox"); b.textContent = msg || ""; b.style.display = msg ? "block" : "none"; }
+function esc(s) { return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({"X-Vault-Token": TOKEN}, opts.headers || {});
+  if (opts.body) opts.headers["Content-Type"] = "application/json";
+  const r = await fetch(path, Object.assign({cache: "no-store"}, opts));
+  if (r.status === 401) { showLock(); throw new Error("locked"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+
+/* ---------------- lock screen ---------------- */
+async function showLock() {
+  TOKEN = ""; sessionStorage.removeItem("vaultToken");
+  $("#vault").style.display = "none";
+  $("#lock").style.display = "block";
+  try {
+    const j = await fetch("/api/vault/pin-status").then(r => r.json());
+    $("#lockTitle").textContent = j.pin_set ? "Enter PIN" : "Set a PIN";
+    $("#lockSub").textContent = j.pin_set ? "4–6 digit code" : "first time — choose a 4–6 digit code";
+  } catch (e) {}
+  $("#pin").value = ""; $("#pin").focus();
+}
+
+async function unlock() {
+  const pin = $("#pin").value.trim();
+  if (!/^\d{4,6}$/.test(pin)) { $("#pinMsg").textContent = "PIN must be 4–6 digits"; return; }
+  $("#unlockBtn").disabled = true; $("#pinMsg").textContent = "";
+  try {
+    const r = await fetch("/api/vault/pin", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({pin})});
+    const j = await r.json();
+    if (!r.ok) { $("#pinMsg").textContent = j.error || "wrong PIN"; $("#pin").value = ""; $("#pin").focus(); return; }
+    TOKEN = j.token; sessionStorage.setItem("vaultToken", TOKEN);
+    $("#lock").style.display = "none"; $("#vault").style.display = "block";
+    await load();
+  } catch (e) { $("#pinMsg").textContent = String(e.message || e); }
+  finally { $("#unlockBtn").disabled = false; }
+}
+
+/* ---------------- list ---------------- */
+async function load() {
+  const j = await api("/api/vault");
+  ACCOUNTS = j.accounts;
+  render();
+}
+
+function platformOrder() {
+  const known = PLATFORMS.slice();
+  const extras = [...new Set(ACCOUNTS.map(a => a.platform))].filter(p => !known.includes(p)).sort();
+  return known.concat(extras);
+}
+
+function render() {
+  const list = $("#list");
+  const byPlat = {};
+  for (const a of ACCOUNTS) (byPlat[a.platform] = byPlat[a.platform] || []).push(a);
+  let html = "";
+  for (const p of platformOrder()) {
+    const rows = byPlat[p] || [];
+    if (!rows.length && openEditor !== "new:" + p) continue;
+    const closed = collapsed.has(p);
+    html += `<div class="platform" data-plat="${esc(p)}">
+      <div class="phead" data-toggle="${esc(p)}">
+        <span class="pname">${esc(p)}</span>
+        <span class="pcount">${rows.length} account${rows.length === 1 ? "" : "s"} ${closed ? "▸" : "▾"}</span>
+      </div>`;
+    if (!closed) {
+      for (const a of rows) {
+        const st = STATUSES.includes(a.status) ? a.status : "other";
+        html += `<div class="acct" data-id="${a.id}">
+          <span class="label">${esc(a.label) || "—"}</span>
+          <span class="field">user <b>${esc(a.username) || "—"}</b>
+            ${a.username ? `<button class="mini" data-copytext="${esc(a.username)}">copy</button>` : ""}</span>
+          <span class="field">pass <b class="dots" data-reveal="${a.id}">${a.has_password ? "••••••••" : "—"}</b>
+            ${a.has_password ? `<button class="mini" data-copysecret="${a.id}" data-f="password">copy</button>
+            <button class="mini" data-eye="${a.id}">👁</button>` : ""}</span>
+          ${a.has_card ? `<span class="field">card <button class="mini" data-copysecret="${a.id}" data-f="card">copy</button></span>` : ""}
+          ${a.has_address ? `<span class="field">addr <button class="mini" data-copysecret="${a.id}" data-f="address">copy</button></span>` : ""}
+          ${a.has_notes ? `<span class="field"><button class="mini" data-notes="${a.id}">notes</button></span>` : ""}
+          <span class="spacer"></span>
+          <span class="chip ${st}">${esc(a.status)}</span>
+          ${a.login_url ? `<a class="lnk" href="${esc(a.login_url)}" target="_blank" rel="noopener">open ↗</a>` : ""}
+          <button class="mini" data-edit="${a.id}">edit</button>
+          <div class="extra" data-extra="${a.id}"></div>
+        </div>`;
+        if (openEditor === a.id) html += editorHtml(a);
+      }
+    }
+    html += `</div>`;
+  }
+  if (openEditor && String(openEditor).startsWith("new")) {
+    const plat = String(openEditor).includes(":") ? String(openEditor).split(":")[1] : "";
+    html = `<div class="platform">${editorHtml(null, plat)}</div>` + html;
+  }
+  list.innerHTML = html || `<p class="sub">No accounts yet — hit “+ Add account”.</p>`;
+  wire();
+  $("#meta").textContent = ACCOUNTS.length + " accounts";
+}
+
+function editorHtml(a, plat) {
+  const v = a || {platform: plat || "", label: "", username: "", login_url: "", status: "active"};
+  const platOpts = platformOrder().map(p => `<option ${p === v.platform ? "selected" : ""}>${esc(p)}</option>`).join("");
+  const stOpts = STATUSES.map(s => `<option ${s === v.status ? "selected" : ""}>${s}</option>`).join("");
+  return `<div class="editform" data-form="${a ? a.id : "new"}">
+    <label>Platform
+      <select id="f_platsel">${platOpts}<option value="__new__">+ new platform…</option></select>
+      <input id="f_platnew" placeholder="platform name" style="display:none;margin-top:4px" value="${a && !platformOrder().includes(v.platform) ? esc(v.platform) : ""}" />
+    </label>
+    <label>Label <input id="f_label" value="${esc(v.label)}" placeholder="main / backup #2 …" /></label>
+    <label>Email / username <input id="f_username" value="${esc(v.username)}" /></label>
+    <label>Password <input id="f_password" placeholder="${a && a.has_password ? "(loading…)" : ""}" /></label>
+    <label>Login URL <input id="f_url" value="${esc(v.login_url)}" placeholder="https://…" /></label>
+    <label>Status <select id="f_status">${stOpts}</select></label>
+    <label>Notes <textarea id="f_notes"></textarea></label>
+    <label>Address <textarea id="f_address"></textarea></label>
+    <label>Card details <textarea id="f_card"></textarea></label>
+    <div class="buttons">
+      <button class="act" id="f_save">Save</button>
+      <button class="act" id="f_cancel">Cancel</button>
+      ${a ? `<button class="act del" id="f_delete">Delete</button>` : ""}
+    </div>
+  </div>`;
+}
+
+/* ---------------- events ---------------- */
+function flash(btn) { btn.classList.add("ok"); const t = btn.textContent; btn.textContent = "✓"; setTimeout(() => { btn.classList.remove("ok"); btn.textContent = t; }, 900); }
+
+function wire() {
+  document.querySelectorAll("[data-toggle]").forEach(el => el.onclick = () => {
+    const p = el.dataset.toggle;
+    collapsed.has(p) ? collapsed.delete(p) : collapsed.add(p);
+    render();
+  });
+  document.querySelectorAll("[data-copytext]").forEach(b => b.onclick = async () => {
+    await navigator.clipboard.writeText(b.dataset.copytext); flash(b);
+  });
+  document.querySelectorAll("[data-copysecret]").forEach(b => b.onclick = async () => {
+    try {
+      const j = await api("/api/vault/secret?id=" + b.dataset.copysecret);
+      await navigator.clipboard.writeText(j[b.dataset.f] || "");
+      flash(b);
+    } catch (e) { err(String(e.message || e)); }
+  });
+  document.querySelectorAll("[data-eye]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.eye;
+    const el = document.querySelector(`[data-reveal="${id}"]`);
+    if (el.dataset.shown) { el.textContent = "••••••••"; el.classList.add("dots"); delete el.dataset.shown; return; }
+    try {
+      const j = await api("/api/vault/secret?id=" + id);
+      el.textContent = j.password; el.classList.remove("dots"); el.dataset.shown = "1";
+    } catch (e) { err(String(e.message || e)); }
+  });
+  document.querySelectorAll("[data-notes]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.notes;
+    const box = document.querySelector(`[data-extra="${id}"]`);
+    if (box.style.display === "block") { box.style.display = "none"; return; }
+    try {
+      const j = await api("/api/vault/secret?id=" + id);
+      const parts = [];
+      if (j.notes) parts.push(j.notes);
+      if (j.address) parts.push("ADDRESS:\n" + j.address);
+      if (j.card) parts.push("CARD:\n" + j.card);
+      box.textContent = parts.join("\n\n"); box.style.display = "block";
+    } catch (e) { err(String(e.message || e)); }
+  });
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(Number(b.dataset.edit)));
+  const form = document.querySelector("[data-form]");
+  if (form) wireForm(form);
+}
+
+async function openEdit(id) {
+  openEditor = id; render();
+  try {
+    const j = await api("/api/vault/secret?id=" + id);
+    const form = document.querySelector("[data-form]");
+    if (!form) return;
+    form.querySelector("#f_password").value = j.password;
+    form.querySelector("#f_password").placeholder = "";
+    form.querySelector("#f_notes").value = j.notes;
+    form.querySelector("#f_address").value = j.address;
+    form.querySelector("#f_card").value = j.card;
+  } catch (e) { err(String(e.message || e)); }
+}
+
+function wireForm(form) {
+  const idAttr = form.dataset.form;
+  const sel = form.querySelector("#f_platsel"), inp = form.querySelector("#f_platnew");
+  if (inp.value) { sel.value = "__new__"; inp.style.display = "block"; }
+  sel.onchange = () => { inp.style.display = sel.value === "__new__" ? "block" : "none"; if (sel.value === "__new__") inp.focus(); };
+  form.querySelector("#f_cancel").onclick = () => { openEditor = null; render(); };
+  form.querySelector("#f_save").onclick = async () => {
+    const body = {
+      platform: sel.value === "__new__" ? inp.value.trim() : sel.value,
+      label: form.querySelector("#f_label").value,
+      username: form.querySelector("#f_username").value,
+      login_url: form.querySelector("#f_url").value,
+      status: form.querySelector("#f_status").value,
+      password: form.querySelector("#f_password").value,
+      notes: form.querySelector("#f_notes").value,
+      address: form.querySelector("#f_address").value,
+      card: form.querySelector("#f_card").value,
+    };
+    if (!body.platform) { err("platform is required"); return; }
+    err("");
+    try {
+      if (idAttr === "new") await api("/api/vault/add", {method: "POST", body: JSON.stringify(body)});
+      else await api("/api/vault/update", {method: "POST", body: JSON.stringify(Object.assign({id: Number(idAttr)}, body))});
+      openEditor = null; await load();
+    } catch (e) { err(String(e.message || e)); }
+  };
+  const del = form.querySelector("#f_delete");
+  if (del) del.onclick = async () => {
+    if (!confirm("Delete this account entry?")) return;
+    try { await api("/api/vault/delete", {method: "POST", body: JSON.stringify({id: Number(idAttr)})}); openEditor = null; await load(); }
+    catch (e) { err(String(e.message || e)); }
+  };
+}
+
+$("#addBtn").onclick = () => { openEditor = "new"; render(); };
+$("#lockNow").onclick = () => showLock();
+$("#unlockBtn").onclick = unlock;
+$("#pin").addEventListener("keydown", e => { if (e.key === "Enter") unlock(); });
+
+(async function init() {
+  if (TOKEN) {
+    try { await load(); $("#vault").style.display = "block"; return; } catch (e) {}
+  }
+  showLock();
+})();
+</script>
+</body>
+</html>

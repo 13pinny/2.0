@@ -40,6 +40,7 @@ import tickchak_pdf
 import ticketmaster
 import tm_events
 import todos as todos_mod
+import vault
 import viagogo_listing
 import viagogo_market_sales
 import viagogo_pricer
@@ -4832,6 +4833,105 @@ def api_market_remove():
 @app.route("/api/market/manual")
 def api_market_manual():
     return jsonify({"entries": db.market_manual_all()})
+
+
+@app.route("/vault")
+def vault_page():
+    return render_template("vault.html")
+
+
+def _vault_authed():
+    from flask import request
+    return vault.token_valid(request.headers.get("X-Vault-Token"))
+
+
+@app.route("/api/vault/pin", methods=["POST"])
+def api_vault_pin():
+    """Body: {"pin"}. Sets the PIN on first use, verifies afterwards.
+    Returns {"token"} on success; 429 while locked out."""
+    from flask import request
+    pin = str((request.get_json(silent=True) or {}).get("pin") or "").strip()
+    if not (pin.isdigit() and 4 <= len(pin) <= 6):
+        return jsonify({"error": "PIN must be 4-6 digits"}), 400
+    rem = vault.lockout_remaining()
+    if rem:
+        return jsonify({"error": f"locked out — try again in {rem}s"}), 429
+    if not vault.pin_is_set():
+        vault.set_pin(pin, datetime.now(timezone.utc).isoformat())
+    elif not vault.check_pin(pin):
+        locked = vault.record_attempt(False)
+        if locked:
+            return jsonify({"error": f"too many attempts — locked for {locked}s"}), 429
+        return jsonify({"error": "wrong PIN"}), 401
+    vault.record_attempt(True)
+    return jsonify({"token": vault.issue_token()})
+
+
+@app.route("/api/vault")
+def api_vault_list():
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    return jsonify({"accounts": vault.list_accounts(),
+                    "pin_set": vault.pin_is_set()})
+
+
+@app.route("/api/vault/pin-status")
+def api_vault_pin_status():
+    return jsonify({"pin_set": vault.pin_is_set()})
+
+
+@app.route("/api/vault/secret")
+def api_vault_secret():
+    """?id=N — decrypted secret fields of one account (copy buttons +
+    edit-form prefill)."""
+    from flask import request
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        id_ = int(request.args.get("id", ""))
+    except ValueError:
+        return jsonify({"error": "id is required"}), 400
+    secrets_ = vault.get_secrets(id_)
+    if secrets_ is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(secrets_)
+
+
+@app.route("/api/vault/add", methods=["POST"])
+def api_vault_add():
+    from flask import request
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    if not (body.get("platform") or "").strip():
+        return jsonify({"error": "platform is required"}), 400
+    id_ = vault.add_account(body, datetime.now(timezone.utc).isoformat())
+    return jsonify({"added": id_})
+
+
+@app.route("/api/vault/update", methods=["POST"])
+def api_vault_update():
+    from flask import request
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    id_ = body.pop("id", None)
+    if not id_:
+        return jsonify({"error": "id is required"}), 400
+    vault.update_account(int(id_), body, datetime.now(timezone.utc).isoformat())
+    return jsonify({"updated": id_})
+
+
+@app.route("/api/vault/delete", methods=["POST"])
+def api_vault_delete():
+    from flask import request
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    id_ = (request.get_json(silent=True) or {}).get("id")
+    if not id_:
+        return jsonify({"error": "id is required"}), 400
+    vault.delete_account(int(id_))
+    return jsonify({"deleted": id_})
 
 
 @app.route("/vgsales")
