@@ -548,6 +548,67 @@ def notify_viagogo_match(push_row):
     return {"discord": discord_result, "email": email_result}
 
 
+def notify_viagogo_listed(info):
+    """A viagogo listing was just created from the approve flow. Discord
+    heads-up with everything needed to trust it went out correctly.
+
+    `info` keys: event_name, venue, event_date, section, row, seats, qty,
+    price, currency (default USD), published (bool), tickets_uploaded
+    (bool/None), ticket_note (str/None), pricer_enabled (bool),
+    pricer_floor (num/None), pricer_sections (list/None), buyer_email,
+    listing_id.
+    """
+    discord_url = _discord_webhook("listings")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    cur = info.get("currency") or "USD"
+    live = info.get("published")
+    price = info.get("price")
+    seatbits = []
+    if info.get("section"):
+        seatbits.append(str(info["section"]).split("\n")[0])
+    if info.get("row"):
+        seatbits.append(f"row {info['row']}")
+    if info.get("seats"):
+        seatbits.append(f"seats {info['seats']}")
+    seat_line = " · ".join(seatbits) or "—"
+
+    tix = info.get("tickets_uploaded")
+    if tix is True:
+        tix_line = "✅ e-tickets attached"
+    elif tix is False:
+        tix_line = "⚠️ e-tickets NOT attached" + (f" — {info['ticket_note']}" if info.get("ticket_note") else "")
+    else:
+        tix_line = "— no e-tickets for this listing"
+
+    if info.get("pricer_enabled"):
+        pr = f"🟢 ON · floor {cur} {float(info.get('pricer_floor') or 0):,.2f}"
+        secs = info.get("pricer_sections") or []
+        pr += f" · vs {', '.join(secs)}" if secs else " · vs own section"
+    else:
+        pr = "⚪ OFF (fixed price)"
+
+    date = info.get("event_date") or ""
+    venue = info.get("venue") or ""
+    desc = [
+        f"**{info.get('event_name') or '(event)'}**" + (f" — {venue}" if venue else ""),
+        f"📅 {date}" if date else "",
+        f"🎫 {seat_line}  ·  qty {info.get('qty') or '?'}",
+        f"💵 {cur} {price:,.2f}/ticket" if price is not None else "",
+        f"🤖 Auto-pricer: {pr}",
+        tix_line,
+        f"📧 sold under {info['buyer_email']}" if info.get("buyer_email") else "",
+    ]
+    embed = {
+        "title": ("🟢 Listing LIVE on viagogo" if live else "📝 Draft listing created on viagogo"),
+        "description": "\n".join(l for l in desc if l)[:4000],
+        "url": BASE_URL + "/listings",
+        "color": 0x2ECC71 if live else 0x95A5A6,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
 def notify_pricer_change(info):
     """Auto-pricer changed (or, dry-run, would change) a listing's price.
     Discord-only — these fire up to every 15 minutes and email would be

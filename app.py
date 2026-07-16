@@ -2472,6 +2472,36 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
             "viagogo_section": section,
             "error": ("; ".join(notes)[:500] if notes else None),
         }, now())
+        # Heads-up ping now that the listing exists on viagogo.
+        try:
+            pr_cfg = db.pricer_config_get(str(listing_id)) if listing_id else None
+            pr_secs = None
+            if pr_cfg and pr_cfg.get("compete_sections"):
+                try:
+                    pr_secs = json.loads(pr_cfg["compete_sections"])
+                except Exception:
+                    pr_secs = None
+            notify.notify_viagogo_listed({
+                "event_name": push_row.get("chosen_event_name") or push_row.get("event_name"),
+                "venue": push_row.get("chosen_venue") or push_row.get("venue"),
+                "event_date": push_row.get("chosen_event_date") or push_row.get("event_date_iso"),
+                "section": section,
+                "row": row,
+                "seats": push_row.get("seats"),
+                "qty": available_tickets,
+                "price": website_price,
+                "currency": "USD",
+                "published": publish,
+                "tickets_uploaded": (result.get("tickets_uploaded") if ticket_pdfs else None),
+                "ticket_note": ticket_problem,
+                "pricer_enabled": bool(pr_cfg and pr_cfg.get("enabled")),
+                "pricer_floor": (pr_cfg or {}).get("floor_price"),
+                "pricer_sections": pr_secs,
+                "buyer_email": push_row.get("buyer_email"),
+                "listing_id": listing_id,
+            })
+        except Exception:
+            traceback.print_exc()
     except Exception as e:
         db.viagogo_push_update(push_id, {"status": "error", "error": f"{type(e).__name__}: {e}"}, now())
         traceback.print_exc()
