@@ -54,6 +54,7 @@
   .src-viagogo { color: var(--orange); border-color: var(--orange); }
   .src-jerujam { color: var(--purple); border-color: var(--purple); }
   .src-crowdvolt { color: var(--pink); border-color: var(--pink); }
+  .src-untracked { color: var(--muted); border-color: var(--muted); }
   .new-badge { padding: 1px 5px; font-size: 9px; background: rgba(86,211,100,0.12); color: var(--green); border: 1px solid var(--green); border-radius: 1px; letter-spacing: 1.5px; margin-left: 4px; }
   h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 28px 0 10px; color: var(--text); display: flex; align-items: baseline; gap: 12px; }
   h2:first-of-type { margin-top: 0; }
@@ -177,6 +178,7 @@
     <a href="/watchers">WATCHERS</a>
     <a href="/todos">TO-DO</a>
     <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
   </nav>
 </header>
 <main>
@@ -658,7 +660,7 @@ function _renderGrouped(tbody, rows, groupOrder) {
           // user still sees the event/venue context for the missing count.
           const sample = sorted[0] || {};
           tbody.appendChild(_renderListingRow({
-            source: "lysted",
+            source: "untracked",
             event_name: sample.event_name || g.event_name,
             event_date: sample.event_date || g.event_date,
             venue: sample.venue || g.venue,

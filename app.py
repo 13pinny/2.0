@@ -974,8 +974,25 @@ def _bought_by_event(groups_map):
         if ("manual", str(r.get("id"))) in hidden:
             continue
         _add("manual", r.get("event_name"), r.get("event_date_iso"), r.get("venue"), r.get("qty"))
-    for r in db.all_viagogo():
+    # Skip stale viagogo rows: nothing prunes viagogo_listings, so a listing
+    # deleted/relisted on viagogo keeps its last snapshot forever and its
+    # available+sold double-counts against the replacement listing, inflating
+    # bought and spawning a phantom "still listed" row. A row absent from the
+    # last couple of scrapes (48h at the hourly cadence) is treated as gone.
+    all_vg = db.all_viagogo()
+    latest_vg_seen = max((r.get("last_seen_at") or "" for r in all_vg), default="")
+    vg_stale_cutoff = ""
+    if latest_vg_seen:
+        try:
+            vg_stale_cutoff = (
+                datetime.fromisoformat(latest_vg_seen) - timedelta(hours=48)
+            ).isoformat()
+        except ValueError:
+            pass
+    for r in all_vg:
         if ("viagogo", str(r.get("id"))) in hidden:
+            continue
+        if vg_stale_cutoff and (r.get("last_seen_at") or "") < vg_stale_cutoff:
             continue
         _add("viagogo", r.get("event_name"), _resolve_iso(r), r.get("venue"), (r.get("available") or 0) + (r.get("sold") or 0))
 
