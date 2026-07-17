@@ -194,7 +194,7 @@ MARKET_ENABLED = (os.getenv("KARTIS_MARKET_ENABLED") or "1").strip().lower() not
 # the empirical facts). Needs the CDP Chrome, so dashboard machine only
 # (KARTIS_VGSALES_ENABLED=0 elsewhere). No notifications in v1.
 _last_vgsales = {"at": None, "targets": 0, "fetched": 0, "skipped_fresh": 0,
-                 "deferred": 0, "new_sales": 0, "baselines": 0,
+                 "deferred": 0, "new_sales": 0, "baselines": 0, "repriced": 0,
                  "overflows": 0, "errors": 0, "error": None, "running": False}
 _vgsales_lock = threading.Lock()
 VGSALES_ENABLED = (os.getenv("KARTIS_VGSALES_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")

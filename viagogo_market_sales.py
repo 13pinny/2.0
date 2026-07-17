@@ -13,17 +13,24 @@ Empirical facts (probe: scripts/probe_viagogo_market_sales.py, 2026-07-14):
 * Sale rows: Section | Row | Seats | Quantity | Price (USD per ticket —
   same unit price observed across qty-2 and qty-4 sales of one batch).
   NO dates, NO ids; our own sales carry tr class "owned" / "current".
+* The USD prices are DISPLAY QUOTES, not transaction records: viagogo
+  recomputes them from the sale's original currency at the current fx
+  rate, so the same sale's shown price drifts (~+0.4% overnight observed
+  on prod, 2026-07-16) — price must never anchor row identity.
 * latestServerStamp is not a cursor — the response never echoes a stamp.
 
 Because rows are dateless and id-less (and identical rows are common — one
 probe window held four "GA 2 $66.73"), newness is decided by ALIGNING the
 ordered window against the previous tick's window (stored in
-viagogo_sales_events.window_json):
+viagogo_sales_events.window_json), on price-LESS keys (section/row/seats/
+qty/is_ours):
 
-  cur == prev                   -> no new sales
+  cur == prev (incl. price)     -> no new sales
+  cur == prev (price-less)      -> "repriced": fx quote moved, nothing new
   cur[k:]  == prev[:len-k]      -> k new rows at the head (newest-first)
   cur[:len-k] == prev[k:]       -> k new rows at the tail (newest-last)
   cur contiguous inside prev    -> rows removed (refund) — nothing new
+  same multiset, new order      -> "reorder": nothing new
   no overlap                    -> "overflow": >= WINDOW_DEPTH sales since
                                    the last tick; the visible rows all
                                    count, the true total is unknowable.
@@ -48,6 +55,7 @@ import random
 import re
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import db
@@ -127,21 +135,39 @@ def parse_header(body):
 # ---------------- window alignment -------------------------------------------
 
 def _key(r):
+    """Full row identity incl. price — only good for the exact-equality
+    fast path."""
     return (r.get("section"), r.get("row"), r.get("seats"), r.get("qty"),
             r.get("price"), bool(r.get("is_ours")))
+
+
+def _rkey(r):
+    """Alignment identity — NO price. The grid's USD prices are display
+    quotes recomputed from the sale's original currency at the CURRENT fx
+    rate, so the same sale's price drifts (~+0.4% observed at the daily fx
+    update, 2026-07-16 midnight UTC, prod). With price in the key the
+    drift zeroed the overlap every day and the whole window re-recorded as
+    'new' — the bug this split fixes."""
+    return (r.get("section"), r.get("row"), r.get("seats"), r.get("qty"),
+            bool(r.get("is_ours")))
 
 
 def diff_window(prev_rows, cur_rows):
     """(new_rows, mode) — see module docstring for the alignment table.
     prev_rows None means the event was never fetched: everything is
-    'baseline'. Known miss: a full window of identical rows plus one more
-    identical sale looks like 'nochange'."""
+    'baseline'. Alignment runs on price-less keys (_rkey); 'repriced'
+    means same sales in the same order, only the fx quote moved. Known
+    miss: a full window of identical price-less rows plus one more
+    identical sale looks like 'nochange' — accepted (undercounting beats
+    the daily re-record)."""
     if prev_rows is None:
         return list(cur_rows), "baseline"
-    prev = [_key(r) for r in prev_rows]
-    cur = [_key(r) for r in cur_rows]
-    if cur == prev:
+    if [_key(r) for r in cur_rows] == [_key(r) for r in prev_rows]:
         return [], "nochange"
+    prev = [_rkey(r) for r in prev_rows]
+    cur = [_rkey(r) for r in cur_rows]
+    if cur == prev:
+        return [], "repriced"
     n = len(cur)
     for k in range(1, n):
         if cur[k:] == prev[:n - k]:
@@ -153,6 +179,8 @@ def diff_window(prev_rows, cur_rows):
         for off in range(0, len(prev) - n + 1):
             if prev[off:off + n] == cur:
                 return [], "shrunk"
+    if Counter(cur) == Counter(prev):
+        return [], "reorder"
     return list(cur_rows), "overflow"
 
 
@@ -250,7 +278,8 @@ def run_sales_tick(force=False, write=True):
     records the error (same failure mode as the pricer/market jobs)."""
     now_dt = datetime.now(timezone.utc)
     summary = {"targets": 0, "fetched": 0, "skipped_fresh": 0, "deferred": 0,
-               "new_sales": 0, "baselines": 0, "overflows": 0, "errors": 0}
+               "new_sales": 0, "baselines": 0, "repriced": 0, "overflows": 0,
+               "errors": 0}
     targets = collect_targets(now_dt)
     summary["targets"] = len(targets)
     if not targets:
@@ -289,6 +318,8 @@ def run_sales_tick(force=False, write=True):
                             summary["baselines"] += 1
                         else:
                             summary["new_sales"] += res["new"]
+                        if res["mode"] == "repriced":
+                            summary["repriced"] += 1
                         if res["mode"] == "overflow":
                             summary["overflows"] += 1
                     except Exception as e:
