@@ -56,6 +56,17 @@
   .poll-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
   #poll-status { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
 
+  /* slider toggles */
+  .sw { position: relative; display: inline-block; width: 38px; height: 20px; flex: none; }
+  .sw input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .sw .track { position: absolute; inset: 0; background: #c6ccd4; border-radius: 20px; cursor: pointer; transition: background .15s; }
+  .sw .track:before { content: ""; position: absolute; height: 16px; width: 16px; left: 2px; top: 2px;
+                      background: #fff; border-radius: 50%; transition: transform .15s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .sw input:checked + .track { background: var(--green); }
+  .sw input:checked + .track:before { transform: translateX(18px); }
+  .sw-row { display: flex; align-items: center; gap: 8px; }
+  .sw-note { font-size: 10px; color: var(--muted); }
+
   /* compete-sections picker (popup with big clickable chips, like /pricer) */
   #cs-overlay { display: none; position: fixed; inset: 0; background: rgba(15,23,32,0.45); z-index: 40; }
   #cs-panel { display: none; position: fixed; top: 8vh; left: 50%; transform: translateX(-50%);
@@ -243,10 +254,17 @@ function renderCards(rows) {
         <label>Face value $/ea</label><input data-f="face_value" type="number" step="0.01" value="${r.cost_usd_per_ticket ?? ""}">
         <label>Row</label><input data-f="row" type="text" value="${esc(r.row_label || "")}">
         <label>Seats (kupat)</label><input type="text" value="${esc(r.seats || "")}" readonly style="opacity:0.6;">
+        <label title="Attach the e-ticket PDFs to this listing right after it's created. Turn off to list now and upload tickets yourself later.">Upload tickets</label>
+        <div class="sw-row">
+          <label class="sw"><input data-f="upload_tickets" type="checkbox" ${r.ticket_url ? "checked" : "disabled"}><span class="track"></span></label>
+          <span class="sw-note" data-f="upload-note">${r.ticket_url
+            ? "pull the tickets from the order link and attach them"
+            : "no ticket link on this order — nothing to upload"}</span>
+        </div>
         <label title="Enroll in the auto-pricer as soon as the listing is created — undercuts the cheapest competitor, never below your floor">Auto-price</label>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <input data-f="pricer_enabled" type="checkbox" style="width:auto;cursor:pointer;">
-          <span style="font-size:10px;color:var(--muted);">undercut competitors from the moment it's live</span>
+        <div class="sw-row">
+          <label class="sw"><input data-f="pricer_enabled" type="checkbox"><span class="track"></span></label>
+          <span class="sw-note">undercut competitors from the moment it's live</span>
         </div>
         <label title="Auto-pricing never goes below this — required when Auto-price is on">Floor $/ea *</label>
         <input data-f="pricer_floor" type="number" step="0.01" placeholder="never price below">
@@ -483,6 +501,8 @@ async function approveCard(card, publish) {
     row: (f.row || "").trim(),
     publish: !!publish,
   };
+  const upEl = card.querySelector("input[data-f='upload_tickets']");
+  body.upload_tickets = !!(upEl && upEl.checked && !upEl.disabled);
   const pricerOn = !!card.querySelector("input[data-f='pricer_enabled']")?.checked;
   if (pricerOn) {
     const floor = parseFloat(f.pricer_floor || "0");
@@ -494,7 +514,10 @@ async function approveCard(card, publish) {
   const pricerTxt = body.pricer
     ? ` Auto-pricer ON (floor $${body.pricer.floor_price.toFixed(2)}, vs ${body.pricer.compete_sections.length ? body.pricer.compete_sections.join(", ") : "own section"}).`
     : "";
-  if (!confirm(`Create a ${kind} — ${body.available_tickets} × $${price.toFixed(2)}/ea (you net $${proceeds.toFixed(2)}/ea) in "${body.section}"?${pricerTxt}`)) return;
+  const upTxt = upEl && !upEl.disabled
+    ? (body.upload_tickets ? " E-tickets will be attached." : " ⚠ Tickets will NOT be uploaded — attach them yourself before it sells.")
+    : "";
+  if (!confirm(`Create a ${kind} — ${body.available_tickets} × $${price.toFixed(2)}/ea (you net $${proceeds.toFixed(2)}/ea) in "${body.section}"?${upTxt}${pricerTxt}`)) return;
   const res = await fetch("/api/viagogo-push/approve", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
   if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Approve failed: " + (e.error || res.status)); return; }
   await load();
