@@ -5001,6 +5001,29 @@ def api_tm_add():
     return jsonify({"added": id_})
 
 
+@app.route("/api/tm/bulk-add", methods=["POST"])
+def api_tm_bulk_add():
+    """Body: {"rows": [{account_no, email, ...}, ...]} — add many at once
+    (the /tm bulk-paste box). Rows with no email AND no password are
+    skipped; returns how many were added."""
+    from flask import request
+    if not _vault_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    rows = (request.get_json(silent=True) or {}).get("rows") or []
+    if not isinstance(rows, list):
+        return jsonify({"error": "rows must be a list"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    added = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if not ((row.get("email") or "").strip() or (row.get("password") or "").strip()):
+            continue
+        vault.tm_add(row, now_iso)
+        added += 1
+    return jsonify({"added": added, "skipped": len(rows) - added})
+
+
 @app.route("/api/tm/update", methods=["POST"])
 def api_tm_update():
     from flask import request

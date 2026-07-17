@@ -98,9 +98,21 @@
   <div id="page">
     <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
       <button class="act" id="addBtn">+ Add TM account</button>
+      <button class="act" id="bulkBtn">Bulk add</button>
       <span class="sub" style="margin:0">password, proxy, card and address are encrypted at rest — copy buttons decrypt on demand</span>
       <span style="flex:1"></span>
       <button class="act" id="lockNow">Lock</button>
+    </div>
+    <div id="bulkPanel" style="display:none;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px">
+      <p class="sub" style="margin-top:0">One account per line, columns separated by <b>tabs</b> (paste straight from Google Sheets) or commas, in this order:</p>
+      <p class="sub" style="font-family:Consolas,monospace;font-size:11px">account # → email → password → account source → proxy provider → proxy → card provider → cc details → address → notes</p>
+      <p class="sub">Leave trailing columns off if you don't have them. Rows missing both email and password are skipped.</p>
+      <textarea id="bulkText" style="width:100%;min-height:130px;font-family:Consolas,monospace;font-size:11px" placeholder="1&#9;tm1@gmail.com&#9;pass123&#9;self&#9;Oxylabs&#9;1.2.3.4:8080:u:p&#9;Visa&#9;4111.../09-28/123&#9;123 Main St NYC"></textarea>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:10px">
+        <button class="act" id="bulkSave" disabled>Add 0 accounts</button>
+        <button class="act" id="bulkCancel">Cancel</button>
+        <span class="sub" id="bulkPreview" style="margin:0"></span>
+      </div>
     </div>
     <div class="tablewrap">
       <table>
@@ -284,6 +296,45 @@ function wireForm(form) {
     catch (e) { err(String(e.message || e)); }
   };
 }
+
+/* ---------------- bulk add ---------------- */
+const BULK_COLS = ["account_no", "email", "password", "acct_source", "proxy_provider", "proxy", "card_provider", "cc", "address", "notes"];
+
+function parseBulk(text) {
+  const rows = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const parts = line.includes("\t") ? line.split("\t") : line.split(",");
+    const row = {};
+    BULK_COLS.forEach((c, i) => row[c] = (parts[i] || "").trim());
+    rows.push(row);
+  }
+  return rows;
+}
+
+function bulkRefresh() {
+  const rows = parseBulk($("#bulkText").value);
+  const ok = rows.filter(r => r.email || r.password);
+  $("#bulkSave").disabled = !ok.length;
+  $("#bulkSave").textContent = `Add ${ok.length} account${ok.length === 1 ? "" : "s"}`;
+  $("#bulkPreview").textContent = ok.length
+    ? `parsed: ${ok.slice(0, 3).map(r => (r.account_no ? "#" + r.account_no + " " : "") + (r.email || "(no email)")).join(" · ")}${ok.length > 3 ? " · …" : ""}${rows.length > ok.length ? ` (${rows.length - ok.length} skipped: no email/password)` : ""}`
+    : "";
+}
+
+$("#bulkBtn").onclick = () => { const p = $("#bulkPanel"); p.style.display = p.style.display === "block" ? "none" : "block"; $("#bulkText").focus(); };
+$("#bulkCancel").onclick = () => { $("#bulkPanel").style.display = "none"; $("#bulkText").value = ""; bulkRefresh(); };
+$("#bulkText").addEventListener("input", bulkRefresh);
+$("#bulkSave").onclick = async () => {
+  const rows = parseBulk($("#bulkText").value);
+  err("");
+  try {
+    const j = await api("/api/tm/bulk-add", {method: "POST", body: JSON.stringify({rows})});
+    $("#bulkPanel").style.display = "none"; $("#bulkText").value = ""; bulkRefresh();
+    await load();
+    if (j.skipped) err(`added ${j.added}, skipped ${j.skipped} row(s) with no email/password`);
+  } catch (e) { err(String(e.message || e)); }
+};
 
 $("#addBtn").onclick = () => { openEditor = "new"; render(); };
 $("#lockNow").onclick = () => showLock();
