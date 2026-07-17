@@ -2393,13 +2393,14 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
                           available_tickets, website_price, face_value, row,
                           seat_from, seat_to, venue_for_map, kupat_section,
                           ticket_url=None, publish=False, proceeds=None,
-                          pricer=None):
+                          pricer=None, upload_tickets=True):
     now = lambda: datetime.now(timezone.utc).isoformat()
     db.viagogo_push_update(push_id, {"status": "creating"}, now())
     try:
         ticket_pdfs = None
         ticket_problem = None
-        if ticket_url:
+        ticket_skipped = bool(ticket_url) and not upload_tickets
+        if ticket_url and upload_tickets:
             try:
                 _push = db.viagogo_push_get(push_id) or {}
                 _qty = _push.get("qty") or available_tickets or 1
@@ -2465,6 +2466,10 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
         notes = []
         if ticket_problem:
             notes.append(f"NO TICKETS ATTACHED — {ticket_problem}")
+        elif ticket_skipped:
+            # Deliberate, not a failure — but still say it, since a listing
+            # can't be fulfilled until the tickets are on it.
+            notes.append("tickets not uploaded by choice — attach them before it sells")
         if pricer_note:
             notes.append(pricer_note)
         db.viagogo_push_update(push_id, {
@@ -2493,7 +2498,10 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
                 "currency": "USD",
                 "published": publish,
                 "tickets_uploaded": (result.get("tickets_uploaded") if ticket_pdfs else None),
-                "ticket_note": ticket_problem,
+                "ticket_note": (ticket_problem or
+                                ("not uploaded by choice — attach before it sells"
+                                 if ticket_skipped else None)),
+                "tickets_skipped": ticket_skipped,
                 "pricer_enabled": bool(pr_cfg and pr_cfg.get("enabled")),
                 "pricer_floor": (pr_cfg or {}).get("floor_price"),
                 "pricer_sections": pr_secs,
@@ -2588,6 +2596,9 @@ def api_viagogo_push_approve():
     if face_value <= 0:
         return jsonify({"error": "face_value must be > 0"}), 400
     publish = bool(body.get("publish"))
+    # Default ON: attaching tickets is the norm; the card can turn it off to
+    # list now and upload manually later.
+    upload_tickets = bool(body.get("upload_tickets", True))
     try:
         pr = body.get("proceeds")
         proceeds = float(pr) if pr not in (None, "") else None
@@ -2623,7 +2634,7 @@ def api_viagogo_push_approve():
         target=_run_viagogo_approve,
         args=(push_id, event_id, search_query, ticket_type, section, available_tickets,
               website_price, face_value, row, seat_from, seat_to, venue_for_map, kupat_section,
-              ticket_url, publish, proceeds, pricer_opts),
+              ticket_url, publish, proceeds, pricer_opts, upload_tickets),
         daemon=True,
     ).start()
     return jsonify({"ok": True, "status": "creating"})
@@ -4713,6 +4724,48 @@ def api_dice_refresh():
     any tier/price/status changes. Synchronous — a handful of events is a
     couple of seconds."""
     return jsonify(_dice_payload(force=True))
+
+
+@app.route("/api/dice/purchases")
+def api_dice_purchases():
+    """The /dice page's Purchases & Holdings section: every auto-recorded
+    DICE purchase (from forwarded confirmation emails) grouped by event,
+    with per-account bought/transferred/held rows, plus the transfer log.
+    Rows are written by mail_intake's dice branch — this is read-only."""
+    purchases = db.dice_purchases_all()
+    transfers = db.dice_transfers_all()
+    groups = {}
+    for p in purchases:
+        key = p.get("event_slug") or ("name:" + (p.get("event_name") or "").lower())
+        g = groups.setdefault(key, {
+            "event_slug": p.get("event_slug") or "",
+            "event_name": p.get("event_name") or "",
+            "event_date_iso": p.get("event_date_iso") or "",
+            "venue": p.get("venue") or "",
+            "url": f"https://dice.fm/event/{p['event_slug']}" if p.get("event_slug") else "",
+            "purchases": [],
+            "qty": 0, "transferred": 0, "held": 0, "spend": 0.0,
+        })
+        held = (p.get("qty") or 0) - (p.get("qty_transferred") or 0)
+        g["purchases"].append({**p, "held": held})
+        g["qty"] += p.get("qty") or 0
+        g["transferred"] += p.get("qty_transferred") or 0
+        g["held"] += held
+        g["spend"] += p.get("price_total") or 0.0
+        # Prefer a dated/venued row's metadata over an undated one's.
+        if not g["event_date_iso"] and p.get("event_date_iso"):
+            g["event_date_iso"] = p["event_date_iso"]
+        if not g["venue"] and p.get("venue"):
+            g["venue"] = p["venue"]
+    events = sorted(groups.values(),
+                    key=lambda g: (not g["event_date_iso"], g["event_date_iso"], g["event_name"]))
+    problem_transfers = [t for t in transfers if t.get("match_status") != "matched"]
+    return jsonify({
+        "events": events,
+        "transfers": transfers,
+        "problem_count": len(problem_transfers),
+        "now": datetime.now(timezone.utc).isoformat(),
+    })
 
 
 @app.route("/api/market")

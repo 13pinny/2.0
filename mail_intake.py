@@ -26,6 +26,7 @@ from email.utils import parsedate_to_datetime
 import attachments as attachments_mod
 import cashback_email
 import db
+import dice_email
 import fx
 import notify
 import viagogo_listing
@@ -44,6 +45,13 @@ LOOKBACK_DAYS = int(os.getenv("KARTIS_INTAKE_LOOKBACK_DAYS") or 3)
 # Wider lookback than the general poll since these are rare and must-not-miss;
 # the source_ref dedup makes a long window cheap and idempotent.
 CASHBACK_LOOKBACK_DAYS = int(os.getenv("KARTIS_CASHBACK_LOOKBACK_DAYS") or 14)
+# DICE purchase/transfer emails get the same targeted-sweep treatment as
+# cash-back: a dedicated FROM search with a wide window, idempotent via the
+# dice tables' message_id UNIQUE.
+DICE_LOOKBACK_DAYS = int(os.getenv("KARTIS_DICE_LOOKBACK_DAYS") or 14)
+# Purchase/transfer pings are off by default in v1; unmatched/overflow
+# transfer warnings always fire regardless.
+DICE_PINGS_ENABLED = os.getenv("KARTIS_DICE_PINGS_ENABLED", "0") == "1"
 
 
 # Map of sender substring → provider tag. Add more as we see real emails.
@@ -1102,6 +1110,144 @@ def _record_cashback(parsed):
     return False
 
 
+def _received_date(parsed):
+    """The email's own date as a datetime.date (or None) — used to infer the
+    year DICE omits from event dates."""
+    try:
+        return datetime.fromisoformat(parsed.get("received_at") or "").date()
+    except ValueError:
+        return None
+
+
+def _apply_dice_transfer(transfer, account_email):
+    """FIFO-match a parsed transfer against the account's open purchases.
+    Bumps qty_transferred across as many matching purchases as needed
+    (oldest first). Returns (purchase_id, match_status, held_after):
+    purchase_id is the first purchase touched; match_status is 'matched',
+    'unmatched' (no candidate purchase), or 'overflow' (transfer qty
+    exceeded what the account held — applied what fit)."""
+    qty = transfer.get("qty") or 0
+    candidates = [p for p in db.dice_purchases_open(account_email)
+                  if dice_email.purchase_matches(transfer, p)]
+    if not candidates:
+        return None, "unmatched", None
+    first_id = None
+    remaining = qty
+    for p in candidates:
+        if remaining <= 0:
+            break
+        take = min(remaining, p["qty"] - p["qty_transferred"])
+        if take <= 0:
+            continue
+        db.dice_purchase_add_transferred(p["id"], take)
+        remaining -= take
+        if first_id is None:
+            first_id = p["id"]
+    held_after = sum(p["qty"] - p["qty_transferred"] for p in candidates) - (qty - remaining)
+    status = "overflow" if remaining > 0 else "matched"
+    return first_id, status, max(held_after, 0)
+
+
+def _record_dice(parsed, raw):
+    """Route an (already-unwrapped) DICE email into dice_purchases /
+    dice_transfers. Returns 'purchase', 'transfer', or None when the mail is
+    neither kind (login codes, incoming 'sent you tickets', ...). Idempotent
+    via has_dice_message + message_id UNIQUE."""
+    sender, subject, body = parsed["from"], parsed["subject"], parsed["body"]
+    is_purchase = dice_email.is_dice_purchase(sender, subject, body)
+    is_transfer = not is_purchase and dice_email.is_dice_transfer(sender, subject, body)
+    if not (is_purchase or is_transfer):
+        return None
+    mid = parsed.get("message_id") or ""
+    if mid and db.has_dice_message(mid):
+        return None
+    msg = message_from_bytes(raw)
+    account = _buyer_email(msg, _email_body_text(msg) if body is None else body)
+    now = datetime.now(timezone.utc).isoformat()
+    email_date = _received_date(parsed)
+
+    if is_purchase:
+        f = dice_email.parse_purchase(subject, body, email_date)
+        row = {
+            "id": "dcp-" + uuid.uuid4().hex[:12],
+            "message_id": mid or None,
+            "account_email": account,
+            "event_name": f.get("event_name") or "",
+            "event_slug": f.get("event_slug") or "",
+            "event_date_iso": f.get("event_date_iso") or "",
+            "venue": f.get("venue") or "",
+            "ticket_type": f.get("ticket_type") or "",
+            "qty": f.get("qty"),
+            "price_total": f.get("price_total"),
+            "price_per_unit": f.get("price_per_unit"),
+            "currency": f.get("currency") or "",
+            "email_date": parsed.get("received_at") or "",
+            "subject": (subject or "")[:500],
+            "raw_text": (body or "")[:8000],
+            "warnings": ",".join(f.get("warnings") or []),
+        }
+        db.insert_dice_purchase(row, now)
+        if DICE_PINGS_ENABLED:
+            try:
+                notify.notify_dice("purchase", {**row, "account_email": account})
+            except Exception:
+                pass
+        return "purchase"
+
+    f = dice_email.parse_transfer(subject, body, email_date)
+    purchase_id, match_status, held_after = _apply_dice_transfer(f, account)
+    row = {
+        "id": "dct-" + uuid.uuid4().hex[:12],
+        "message_id": mid or None,
+        "account_email": account,
+        "event_name": f.get("event_name") or "",
+        "event_slug": f.get("event_slug") or "",
+        "event_date_iso": f.get("event_date_iso") or "",
+        "qty": f.get("qty"),
+        "recipient": f.get("recipient") or "",
+        "purchase_id": purchase_id,
+        "match_status": match_status,
+        "email_date": parsed.get("received_at") or "",
+    }
+    db.insert_dice_transfer(row, now)
+    try:
+        if match_status != "matched":
+            notify.notify_dice("transfer_problem", row)
+        elif DICE_PINGS_ENABLED:
+            notify.notify_dice("transfer", {**row, "held_after": held_after})
+    except Exception:
+        pass
+    return "transfer"
+
+
+def sweep_dice(lookback_days=None):
+    """Targeted DICE capture, independent of the capped general poll —
+    auto-forwards keep From: dice.fm so a FROM search finds them even in a
+    busy inbox. Returns dict(purchases=N, transfers=N)."""
+    out = {"purchases": 0, "transfers": 0}
+    try:
+        candidates = imap_fetch_from("dice.fm", lookback_days or DICE_LOOKBACK_DAYS)
+    except Exception:
+        return out
+    for _uid, raw, mid in candidates:
+        try:
+            if mid and db.has_dice_message(mid):
+                continue
+            parsed = parse_email(raw)
+            eff_from, eff_subject, eff_body = _unwrap_forwarded(parsed)
+            parsed["from"] = eff_from
+            parsed["subject"] = eff_subject
+            parsed["body"] = eff_body
+            kind = _record_dice(parsed, raw)
+            if kind == "purchase":
+                out["purchases"] += 1
+            elif kind == "transfer":
+                out["transfers"] += 1
+        except Exception:
+            continue
+    return out
+
+
 def sweep_cashback():
     """Targeted Capital One cash-back capture, independent of the capped
     general poll. Returns the number of new entries added."""
@@ -1187,6 +1333,8 @@ def run_intake():
     seen = 0
     saved = 0
     cashback_saved = 0
+    dice_purchases_saved = 0
+    dice_transfers_saved = 0
     skipped_dupe = 0
     skipped_provider = 0
     errors = 0
@@ -1212,6 +1360,19 @@ def run_intake():
             if cashback_email.is_capitalone_cashback(parsed["from"], parsed["subject"], parsed["body"]):
                 if _record_cashback(parsed):
                     cashback_saved += 1
+                continue
+            # DICE purchase/transfer emails are a tracker ledger, not
+            # inventory intake — route them straight to dice_purchases /
+            # dice_transfers and never stage a pending_intake row. Same
+            # placement rationale as cashback: dice.fm isn't a PROVIDER_HINT
+            # so it would otherwise be dropped as "unknown".
+            if dice_email.is_dice_purchase(parsed["from"], parsed["subject"], parsed["body"]) \
+                    or dice_email.is_dice_transfer(parsed["from"], parsed["subject"], parsed["body"]):
+                kind = _record_dice(parsed, raw)
+                if kind == "purchase":
+                    dice_purchases_saved += 1
+                elif kind == "transfer":
+                    dice_transfers_saved += 1
                 continue
             provider = _detect_provider(parsed["from"])
             if provider == "unknown" and not allow_unknown:
@@ -1268,10 +1429,20 @@ def run_intake():
         cashback_saved += sweep_cashback()
     except Exception:
         errors += 1
+    # Targeted DICE sweep — auto-forwards keep From: dice.fm, so this catches
+    # anything the capped general poll dropped.
+    try:
+        _dice = sweep_dice()
+        dice_purchases_saved += _dice["purchases"]
+        dice_transfers_saved += _dice["transfers"]
+    except Exception:
+        errors += 1
     return {
         "fetched": seen,
         "saved": saved,
         "cashback_saved": cashback_saved,
+        "dice_purchases_saved": dice_purchases_saved,
+        "dice_transfers_saved": dice_transfers_saved,
         "skipped_dupe": skipped_dupe,
         "skipped_provider": skipped_provider,
         "errors": errors,

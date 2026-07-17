@@ -780,6 +780,47 @@ CREATE TABLE IF NOT EXISTS viagogo_sales_events (
     first_seen_at TEXT NOT NULL,
     last_seen_at  TEXT NOT NULL
 );
+-- DICE (dice.fm) purchases auto-recorded from forwarded confirmation
+-- emails (mail_intake dice branch; parser in dice_email.py). One row per
+-- purchase email; held = qty - qty_transferred (derived, never stored).
+CREATE TABLE IF NOT EXISTS dice_purchases (
+    id              TEXT PRIMARY KEY,          -- dcp-<hex>
+    message_id      TEXT UNIQUE,
+    account_email   TEXT,                      -- which dice account bought
+    event_name      TEXT,
+    event_slug      TEXT,                      -- dice.fm/event/<slug> key
+    event_date_iso  TEXT,
+    venue           TEXT,
+    ticket_type     TEXT,
+    qty             INTEGER,
+    qty_transferred INTEGER NOT NULL DEFAULT 0,
+    price_total     REAL,
+    price_per_unit  REAL,
+    currency        TEXT,
+    email_date      TEXT,
+    subject         TEXT,
+    raw_text        TEXT,
+    warnings        TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dice_purchases_acct ON dice_purchases(account_email, event_slug);
+-- DICE transfer-out confirmations ("Ticket sent to <name>"). purchase_id
+-- points at the (first) matched purchase; match_status records how the
+-- FIFO matcher fared: matched / unmatched / overflow.
+CREATE TABLE IF NOT EXISTS dice_transfers (
+    id             TEXT PRIMARY KEY,           -- dct-<hex>
+    message_id     TEXT UNIQUE,
+    account_email  TEXT,
+    event_name     TEXT,
+    event_slug     TEXT,
+    event_date_iso TEXT,
+    qty            INTEGER,
+    recipient      TEXT,
+    purchase_id    TEXT,
+    match_status   TEXT,
+    email_date     TEXT,
+    created_at     TEXT NOT NULL
+);
 """
 
 
@@ -978,6 +1019,90 @@ def all_lysted_purchases():
             "ORDER BY event_date_iso IS NULL, event_date_iso, event_name"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def has_dice_message(message_id):
+    """Message-ID dedup for the dice intake branch — covers both tables so a
+    re-poll never double-records a purchase OR re-applies a transfer."""
+    if not message_id:
+        return False
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM dice_purchases WHERE message_id = ? "
+            "UNION SELECT 1 FROM dice_transfers WHERE message_id = ? LIMIT 1",
+            (message_id, message_id),
+        ).fetchone()
+    return row is not None
+
+
+def insert_dice_purchase(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO dice_purchases (id, message_id, account_email,
+                event_name, event_slug, event_date_iso, venue, ticket_type,
+                qty, price_total, price_per_unit, currency, email_date,
+                subject, raw_text, warnings, created_at)
+            VALUES (:id, :message_id, :account_email, :event_name, :event_slug,
+                    :event_date_iso, :venue, :ticket_type, :qty, :price_total,
+                    :price_per_unit, :currency, :email_date, :subject,
+                    :raw_text, :warnings, :created_at)
+            """,
+            {**row, "created_at": now_iso},
+        )
+
+
+def insert_dice_transfer(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO dice_transfers (id, message_id, account_email,
+                event_name, event_slug, event_date_iso, qty, recipient,
+                purchase_id, match_status, email_date, created_at)
+            VALUES (:id, :message_id, :account_email, :event_name, :event_slug,
+                    :event_date_iso, :qty, :recipient, :purchase_id,
+                    :match_status, :email_date, :created_at)
+            """,
+            {**row, "created_at": now_iso},
+        )
+
+
+def dice_purchases_all():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM dice_purchases "
+            "ORDER BY event_date_iso IS NULL, event_date_iso, event_name, email_date"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def dice_transfers_all():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM dice_transfers ORDER BY email_date DESC, created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def dice_purchases_open(account_email):
+    """Purchases for one account with tickets still held, oldest first —
+    the FIFO candidate list for transfer matching."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM dice_purchases WHERE account_email = ? "
+            "AND qty IS NOT NULL AND qty_transferred < qty "
+            "ORDER BY email_date, created_at",
+            ((account_email or "").lower(),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def dice_purchase_add_transferred(purchase_id, n):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE dice_purchases SET qty_transferred = qty_transferred + ? WHERE id = ?",
+            (n, purchase_id),
+        )
 
 
 def upsert_viagogo(rows, now_iso):

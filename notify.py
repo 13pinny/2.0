@@ -577,6 +577,8 @@ def notify_viagogo_listed(info):
     tix = info.get("tickets_uploaded")
     if tix is True:
         tix_line = "✅ e-tickets attached"
+    elif info.get("tickets_skipped"):
+        tix_line = "⏭️ e-tickets skipped by choice — attach before it sells"
     elif tix is False:
         tix_line = "⚠️ e-tickets NOT attached" + (f" — {info['ticket_note']}" if info.get("ticket_note") else "")
     else:
@@ -717,6 +719,50 @@ def notify_pacha_event(kind, ev, old=None):
         "url": ev.get("page_url") or "https://pacha-nyc.com/events",
         "color": color,
     }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
+def notify_dice(kind, info):
+    """DICE purchases-tracker ping. `kind` is 'purchase' (new purchase email
+    recorded), 'transfer' (transfer applied to holdings), or
+    'transfer_problem' (transfer couldn't be matched cleanly — unmatched /
+    overflow — needs a human look). Routed to 'listings' (the intake
+    pipeline channel). Discord-only."""
+    discord_url = _discord_webhook("listings")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    name = info.get("event_name") or "(unknown event)"
+    acct = info.get("account_email") or "?"
+    qty = info.get("qty")
+    lines = []
+    if info.get("event_date_iso"):
+        lines.append(f"**{info['event_date_iso']}**")
+    lines.append(f"Account: `{acct}`")
+
+    if kind == "purchase":
+        title = f"🎲 DICE purchase — {qty} × {name}"
+        color = 0x5865F2
+        if info.get("ticket_type"):
+            lines.append(info["ticket_type"])
+        if info.get("price_total") is not None:
+            lines.append(f"Total ${info['price_total']:,.2f}")
+    elif kind == "transfer":
+        title = f"📤 DICE transfer — {qty} × {name} sent"
+        color = 0x56D364
+        if info.get("recipient"):
+            lines.append(f"To: {info['recipient']}")
+        if info.get("held_after") is not None:
+            lines.append(f"{info['held_after']} still held on this account")
+    else:
+        title = f"⚠️ DICE transfer needs review — {qty or '?'} × {name}"
+        color = 0xED4245
+        lines.append(f"Match status: **{info.get('match_status') or 'unmatched'}**")
+        if info.get("recipient"):
+            lines.append(f"To: {info['recipient']}")
+        lines.append("Couldn't be applied to a recorded purchase — check /dice.")
+
+    embed = {"title": title[:250], "description": "\n".join(lines)[:4000], "color": color}
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
