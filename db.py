@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS viagogo_listings (
     proceeds REAL,
     available INTEGER,
     sold INTEGER,
+    published INTEGER,
+    list_state TEXT,
     last_seen_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS viagogo_pricer_config (
@@ -853,6 +855,11 @@ def init():
             conn.execute("ALTER TABLE inventory ADD COLUMN event_date_iso TEXT")
         if "stubhub_url" not in cols:
             conn.execute("ALTER TABLE inventory ADD COLUMN stubhub_url TEXT")
+        vg_cols = {row["name"] for row in conn.execute("PRAGMA table_info(viagogo_listings)").fetchall()}
+        if "published" not in vg_cols:
+            conn.execute("ALTER TABLE viagogo_listings ADD COLUMN published INTEGER")
+        if "list_state" not in vg_cols:
+            conn.execute("ALTER TABLE viagogo_listings ADD COLUMN list_state TEXT")
         ls_cols = {row["name"] for row in conn.execute("PRAGMA table_info(lysted_sales)").fetchall()}
         if "cost" not in ls_cols:
             conn.execute("ALTER TABLE lysted_sales ADD COLUMN cost REAL")
@@ -1114,12 +1121,14 @@ def upsert_viagogo(rows, now_iso):
                                               event_date_iso, venue, section,
                                               ticket_type, visibility,
                                               face_value, price, proceeds,
-                                              available, sold, last_seen_at)
+                                              available, sold, published,
+                                              list_state, last_seen_at)
                 VALUES (:id, :event_id, :event_name, :event_date,
                         :event_date_iso, :venue, :section,
                         :ticket_type, :visibility,
                         :face_value, :price, :proceeds,
-                        :available, :sold, :last_seen_at)
+                        :available, :sold, :published,
+                        :list_state, :last_seen_at)
                 ON CONFLICT(id) DO UPDATE SET
                     event_id=excluded.event_id,
                     event_name=excluded.event_name,
@@ -1134,6 +1143,8 @@ def upsert_viagogo(rows, now_iso):
                     proceeds=excluded.proceeds,
                     available=excluded.available,
                     sold=excluded.sold,
+                    published=excluded.published,
+                    list_state=excluded.list_state,
                     last_seen_at=excluded.last_seen_at
                 """,
                 {**r, "last_seen_at": now_iso},

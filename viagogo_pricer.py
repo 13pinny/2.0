@@ -788,6 +788,23 @@ def run_pricer_tick(dry_run=None):
                               "detail": "listing not on inv Listings page"})
                     counters["skipped"] += 1
                     continue
+                # Nothing to price on a listing that can't sell: fully sold
+                # (available 0 — viagogo auto-unpublishes it) or deactivated by
+                # hand (list_state 'inactive', red toggle). Skip rather than
+                # disable so the config survives a relist.
+                state = (row.get("list_state") or "").lower()
+                if not (row.get("available") or 0):
+                    _log({"listing_id": lid, "event_id": row.get("event_id"),
+                          "section": row.get("section"), "action": "skip_sold_out",
+                          "detail": f"fully sold ({row.get('sold') or 0} sold)"})
+                    counters["skipped"] += 1
+                    continue
+                if state == "inactive" or row.get("published") == 0:
+                    _log({"listing_id": lid, "event_id": row.get("event_id"),
+                          "section": row.get("section"), "action": "skip_unlisted",
+                          "detail": "listing is deactivated on inv.viagogo"})
+                    counters["skipped"] += 1
+                    continue
                 last_set = cfg.get("last_set_price")
                 if last_set is not None and abs(row["price"] - last_set) >= PRICE_EPSILON:
                     if manual_change_mode() == "pause":

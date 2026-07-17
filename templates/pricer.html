@@ -56,6 +56,11 @@
   .status.active { color: var(--green); border-color: var(--green); }
   .status.paused { color: var(--amber); border-color: var(--amber); }
   .status.dry { color: var(--purple); border-color: var(--purple); }
+  .status.deact { color: var(--red); border-color: var(--red); }
+  /* deactivated on inv = red tint; fully sold = greyed out */
+  tr.row-deact td { background: #fdecea; }
+  tr.row-deact:hover td { background: #fbdbd7; }
+  tr.row-gone td { opacity: 0.55; }
   .empty { color: var(--muted); padding: 28px; text-align: center; font-size: 12px; }
   .act-lower { color: var(--green); }
   .act-dry { color: var(--purple); }
@@ -197,6 +202,7 @@
     </select>
   </label>
   <label><input type="checkbox" id="p-onlyauto"> auto-priced only</label>
+  <label title="Fully-sold and deactivated (red toggle on inv.viagogo) listings are hidden by default — there's nothing to price on them"><input type="checkbox" id="p-showgone"> show sold out + deactivated</label>
 </div>
 <div class="tablewrap">
 <table>
@@ -258,6 +264,14 @@ function isIsrael(r) {
   return new RegExp("[\\u0590-\\u05FF]").test(hay) || _IL_PLACES.test(hay);
 }
 
+// inv.viagogo auto-unpublishes a listing the moment it fully sells, so
+// published=false alone does NOT mean "deactivated" — list_state is the real
+// signal (active / soldout / stale / inactive). A partly-sold listing (2 of 4
+// gone) stays active with available=2 and is still worth pricing.
+const isSoldOut = (r) => !(r.available > 0);
+const isDeactivated = (r) => !isSoldOut(r) &&
+  (((r.list_state || "").toLowerCase() === "inactive") || r.published === 0);
+
 function _isPast(iso) {
   if (!iso) return false;                    // unknown date — keep it visible
   const d = new Date(iso);
@@ -269,6 +283,7 @@ function renderListings() {
   const search = (document.getElementById("p-search").value || "").toLowerCase();
   const onlyAuto = document.getElementById("p-onlyauto").checked;
   const region = document.getElementById("p-region").value;
+  const showGone = document.getElementById("p-showgone").checked;
   // The scrape mirror never forgets: listings deleted on inv.viagogo keep
   // their last-seen row forever (history feeds /sources totals). Only show
   // rows seen by a recent read — within 3h of the freshest row, so a
@@ -281,8 +296,10 @@ function renderListings() {
     if (_isPast(r.event_date_iso)) return false;   // past events can't sell
     if (onlyAuto && !r.pricer_enabled && !r.pricer_paused) return false;
     if (region !== "all") { const il = isIsrael(r); if (region === "il" && !il) return false; if (region === "row" && il) return false; }
-    // pricing only matters for listings with tickets to sell
-    if (!(r.available > 0) && !r.pricer_enabled && !r.pricer_paused) return false;
+    // Nothing to price once it's fully sold or switched off on inv — hide both
+    // unless you ask to see them. (Previously sold-out rows lingered forever
+    // whenever the pricer was still enabled on them.)
+    if (!showGone && (isSoldOut(r) || isDeactivated(r))) return false;
     if (search && !((r.event_name||"") + " " + (r.venue||"") + " " + (r.section||"")).toLowerCase().includes(search)) return false;
     return true;
   }).sort((a,b) => {
@@ -294,8 +311,13 @@ function renderListings() {
   const tbody = document.getElementById("ptbody");
   tbody.innerHTML = "";
   for (const r of rows) {
+    const gone = isSoldOut(r), deact = isDeactivated(r);
     let chip;
-    if (r.pricer_paused) {
+    if (deact) {
+      chip = `<span class="status deact" title="Deactivated on inv.viagogo — the red toggle is off, so it isn't listed for sale">deactivated</span>`;
+    } else if (gone) {
+      chip = `<span class="status">sold out</span>`;
+    } else if (r.pricer_paused) {
       chip = `<span class="status paused">paused${r.pricer_paused_reason === "manual_change" ? ": manual" : ""}</span> <a href="#" class="p-resume" data-id="${esc(r.id)}" style="color:var(--accent); font-size:10px;">resume</a>`;
     } else if (r.pricer_enabled) {
       chip = `<span class="status active">active</span>`;
@@ -303,6 +325,8 @@ function renderListings() {
       chip = `<span class="status">off</span>`;
     }
     const tr = document.createElement("tr");
+    if (deact) tr.className = "row-deact";
+    else if (gone) tr.className = "row-gone";
     tr.innerHTML = `
       <td class="c-wide">${esc(r.event_name)}<div style="color:var(--muted); font-size:10px;">${esc(r.venue)}<span class="only-mobile"> · ${esc(r.event_date)}</span></div></td>
       <td class="only-desktop">${esc(r.event_date)}</td>
@@ -314,7 +338,7 @@ function renderListings() {
         if (nExc) bits.push(`−${nExc}`);
         return bits.length ? `<span class="vschip" title="${esc((r.pricer_compete_sections||[]).join(", "))}">vs ${bits.join(" ")}</span>` : "";
       })()}</td>
-      <td class="num" data-label="avail">${r.available ?? ""}</td>
+      <td class="num" data-label="avail">${r.available ?? ""}${r.sold ? `<div style="color:var(--muted); font-size:10px;">${r.sold} sold</div>` : ""}</td>
       <td class="num" data-label="cost /ea" style="color:var(--amber);">${money(r.face_value)}</td>
       <td class="num" data-label="price">${money(r.price)}</td>
       <td class="num" data-label="proceeds">${money(r.proceeds)}</td>
@@ -716,7 +740,7 @@ document.getElementById("p-run").addEventListener("click", async (e) => {
   await fetch("/api/pricer/run-now", { method: "POST" });
   setTimeout(() => { btn.disabled = false; btn.textContent = "Run pricer now"; loadAll(); }, 6000);
 });
-for (const id of ["p-search", "p-onlyauto", "p-region"]) {
+for (const id of ["p-search", "p-onlyauto", "p-region", "p-showgone"]) {
   document.getElementById(id).addEventListener("input", renderListings);
   document.getElementById(id).addEventListener("change", renderListings);
 }

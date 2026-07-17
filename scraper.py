@@ -785,6 +785,13 @@ VIAGOGO_EXTRACT_JS = r"""
     for (const tr of next.querySelectorAll('tr[data-id]')) {
       const tds = tr.querySelectorAll('td');
       const txt = (i) => tds[i]?.innerText?.trim() ?? null;
+      // The red/green toggle in publishedCol is viagogo's "listed" switch, and
+      // statusIconCol carries the real state. They disagree on purpose: a fully
+      // sold listing auto-unpublishes, so published=false alone does NOT mean
+      // the seller deactivated it — list_state does (active/soldout/stale/inactive).
+      const pubCb = tr.querySelector('td.publishedCol input[type=checkbox]');
+      const stEl = tr.querySelector('td.statusIconCol .statusIconContainer');
+      const stCls = stEl ? (stEl.className.match(/list-state-(\w+)/) || [])[1] : null;
       listings.push({
         listing_id: tr.getAttribute('data-id'),
         quantity: tr.getAttribute('data-quantity'),
@@ -796,6 +803,8 @@ VIAGOGO_EXTRACT_JS = r"""
         proceeds: txt(6),
         available: txt(7),
         sold: txt(8),
+        published: pubCb ? pubCb.checked : null,
+        list_state: stCls || null,
       });
     }
   }
@@ -858,6 +867,8 @@ def _extract_viagogo_rows(page):
                 "proceeds": _parse_money(L.get("proceeds")),
                 "available": _parse_int(L.get("available")),
                 "sold": _parse_int(L.get("sold")),
+                "published": None if L.get("published") is None else int(bool(L.get("published"))),
+                "list_state": L.get("list_state"),
             })
     return out
 
