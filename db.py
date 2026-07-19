@@ -1,3 +1,4 @@
+import datetime as _dt
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -459,6 +460,18 @@ CREATE TABLE IF NOT EXISTS tm_drops (
     notify_result TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tm_drops_watcher ON tm_drops(watcher_id, detected_at DESC);
+-- Per-seat notification cool-down. Some venues (kupat VIP seats especially)
+-- flap a hot seat in and out of the buyable feed every few minutes as it
+-- cycles through carts/holds, so the plain add/remove diff would re-ping the
+-- same seat all day. We stamp the last time each (watcher, seat) actually
+-- pinged and suppress re-pings inside the cool-down window. Physical seats
+-- only — status pseudo-seats (GA/festival flips) are never cooled down.
+CREATE TABLE IF NOT EXISTS tm_seat_cooldown (
+    watcher_id TEXT NOT NULL,
+    seat_key TEXT NOT NULL,
+    last_notified_at TEXT NOT NULL,
+    PRIMARY KEY (watcher_id, seat_key)
+);
 -- Periodic snapshots of GA / count-tracked events' availability (tickchak
 -- festival hub events AND kupat GA events). Lets the Festival / GA Tracker
 -- pages compute "sold in the last hour / 6h / 24h / 3d / 7d" as deltas in
@@ -2363,6 +2376,61 @@ def tm_delete_watcher(id_):
         conn.execute("DELETE FROM tm_watchers WHERE id = ?", (id_,))
         conn.execute("DELETE FROM tm_seat_state WHERE watcher_id = ?", (id_,))
         conn.execute("DELETE FROM tm_drops WHERE watcher_id = ?", (id_,))
+        conn.execute("DELETE FROM tm_seat_cooldown WHERE watcher_id = ?", (id_,))
+
+
+def tm_seat_cooldown_active(watcher_id, seat_keys, window_seconds, now_iso):
+    """Of the given seat_keys, return the set still inside their per-seat
+    cool-down window — i.e. notified within the last `window_seconds`.
+
+    A non-positive window disables cool-down (returns empty set). Rows whose
+    timestamp is older than the window are pruned opportunistically so the
+    table stays small.
+    """
+    if not seat_keys or not window_seconds or window_seconds <= 0:
+        return set()
+    try:
+        now = _dt.datetime.fromisoformat(now_iso)
+    except (TypeError, ValueError):
+        now = _dt.datetime.now(_dt.timezone.utc)
+    active = set()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT seat_key, last_notified_at FROM tm_seat_cooldown WHERE watcher_id = ?",
+            (watcher_id,),
+        ).fetchall()
+        stale = []
+        wanted = set(seat_keys)
+        for r in rows:
+            try:
+                age = (now - _dt.datetime.fromisoformat(r["last_notified_at"])).total_seconds()
+            except (TypeError, ValueError):
+                continue
+            if age < 0 or age <= window_seconds:
+                if r["seat_key"] in wanted:
+                    active.add(r["seat_key"])
+            elif age > window_seconds * 4:
+                # Long past the window and not refreshed — safe to prune.
+                stale.append(r["seat_key"])
+        for k in stale:
+            conn.execute(
+                "DELETE FROM tm_seat_cooldown WHERE watcher_id = ? AND seat_key = ?",
+                (watcher_id, k),
+            )
+    return active
+
+
+def tm_seat_cooldown_mark(watcher_id, seat_keys, now_iso):
+    """Stamp `now_iso` as the last-notified time for each seat_key (upsert)."""
+    if not seat_keys:
+        return
+    with connect() as conn:
+        conn.executemany(
+            "INSERT INTO tm_seat_cooldown (watcher_id, seat_key, last_notified_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(watcher_id, seat_key) "
+            "DO UPDATE SET last_notified_at = excluded.last_notified_at",
+            [(watcher_id, k, now_iso) for k in seat_keys],
+        )
 
 
 def tm_get_seat_keys(watcher_id):

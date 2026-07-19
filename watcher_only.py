@@ -44,6 +44,10 @@ SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
 
 import os
 INTERVAL = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
+# Per-seat notification cool-down (minutes) — a flapping seat that cycles in
+# and out of the buyable feed would otherwise re-ping every few minutes.
+# 0 disables. (Keep in sync with app.py.)
+SEAT_COOLDOWN_SECONDS = int(os.getenv("KARTIS_SEAT_COOLDOWN_MINUTES") or 30) * 60
 
 _lock = threading.Lock()
 _state = {"at": None, "checked": 0, "drops": 0, "errors": 0}
@@ -128,6 +132,15 @@ def check_one(w, now_iso):
         # (Keep in sync with app.py._check_one_watcher.)
         if any(not (s.get("festival") or s.get("ga")) for s in seats):
             matched = [s for s in matched if not s.get("ga")]
+        # Per-seat cool-down: drop physical seats that already pinged inside
+        # the window so a flapping VIP seat can't re-ping all day. Status
+        # pseudo-seats are never cooled. (Keep in sync with app.py.)
+        if matched and SEAT_COOLDOWN_SECONDS > 0:
+            phys_keys = [key_fn(s) for s in matched if not (s.get("festival") or s.get("ga"))]
+            cooled = db.tm_seat_cooldown_active(wid, phys_keys, SEAT_COOLDOWN_SECONDS, now_iso)
+            if cooled:
+                matched = [s for s in matched
+                           if (s.get("festival") or s.get("ga")) or key_fn(s) not in cooled]
         master_muted = db.setting_get_bool("master_muted", default=False)
         watcher_muted = bool(w.get("muted"))
         channels_csv = (w.get("notify_channels") or "discord,email").strip().lower()
@@ -167,6 +180,13 @@ def check_one(w, now_iso):
                 headline=headline,
                 discord_override=discord_bot.webhook_for(w.get("discord_channel")),
             )
+            # Stamp the physical seats we just pinged so they cool down.
+            if SEAT_COOLDOWN_SECONDS > 0:
+                db.tm_seat_cooldown_mark(
+                    wid,
+                    [key_fn(s) for s in matched if not (s.get("festival") or s.get("ga"))],
+                    now_iso,
+                )
         elif not matched:
             result = {"discord": "skipped (filtered)", "email": "skipped (filtered)"}
         else:

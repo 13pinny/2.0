@@ -124,6 +124,12 @@ _last_pricer = {"at": None, "changed": 0, "paused": 0, "skipped": 0,
 _pricer_lock = threading.Lock()
 PRICER_INTERVAL_MINUTES = int(os.getenv("KARTIS_PRICER_INTERVAL_MINUTES") or 15)
 TM_CHECK_INTERVAL_SECONDS = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
+# Per-seat notification cool-down (minutes). A hot seat that flaps in and out
+# of the buyable feed — kupat VIP seats cycling through carts/holds — would
+# otherwise re-ping every few minutes; after a seat pings we suppress further
+# pings of that exact seat for this long. 0 disables. (Keep in sync with
+# watcher_only.py.)
+SEAT_COOLDOWN_SECONDS = int(os.getenv("KARTIS_SEAT_COOLDOWN_MINUTES") or 30) * 60
 # DICE restock-snipe fast poll: while a dice watcher is SOLD OUT we poll it
 # every few seconds so a restock is caught in seconds, not up to a minute.
 # Only sold-out dice watchers are fetched (usually 1-2), keeping the
@@ -4180,6 +4186,16 @@ def _check_one_watcher(w, now_iso):
         if any(not (s.get("festival") or s.get("ga")) for s in seats):
             matched = [s for s in matched if not s.get("ga")]
 
+        # Per-seat cool-down: drop physical seats that already pinged inside
+        # the window, so a flapping VIP seat doesn't re-ping all day. Status
+        # pseudo-seats (GA/festival flips) are never cooled. (Sync w/ watcher_only.)
+        if matched and SEAT_COOLDOWN_SECONDS > 0:
+            phys_keys = [key_fn(s) for s in matched if not (s.get("festival") or s.get("ga"))]
+            cooled = db.tm_seat_cooldown_active(wid, phys_keys, SEAT_COOLDOWN_SECONDS, now_iso)
+            if cooled:
+                matched = [s for s in matched
+                           if (s.get("festival") or s.get("ga")) or key_fn(s) not in cooled]
+
         master_muted = db.setting_get_bool("master_muted", default=False)
         watcher_muted = bool(w.get("muted"))
         channels_csv = (w.get("notify_channels") or "discord,email").strip().lower()
@@ -4224,6 +4240,13 @@ def _check_one_watcher(w, now_iso):
                 headline=headline,
                 discord_override=discord_bot.webhook_for(w.get("discord_channel")),
             )
+            # Stamp the physical seats we just pinged so they cool down.
+            if SEAT_COOLDOWN_SECONDS > 0:
+                db.tm_seat_cooldown_mark(
+                    wid,
+                    [key_fn(s) for s in matched if not (s.get("festival") or s.get("ga"))],
+                    now_iso,
+                )
         elif not matched and added:
             # All new seats filtered out — record the drop so the user sees
             # the filter is working, but skip the notification.

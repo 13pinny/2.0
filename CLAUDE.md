@@ -67,7 +67,9 @@ URL → source detection lives in `_detect_source` in `app.py:43` and `add_watch
 
 The per-watcher diff-and-notify cycle is implemented twice — once in `app.py` (as `_check_one_watcher` / `run_tm_check`) and once in `watcher_only.py` (`check_one` / `tick`). Logic is intentionally parallel: fetch seats, diff against `tm_seat_state` rows in the DB, store new state, apply user filters via `filters.py`, notify via `notify.py`, log a drop row. Baseline ticks (first check ever for a watcher) suppress notifications. **If you change the tick logic, update both implementations.**
 
-Notification gating order (both implementations): per-watcher `paused` skips entirely → `master_paused` global skips entirely → filters (`filters.apply`) drop unmatched seats → `master_muted` / per-watcher `muted` / empty `notify_channels` skip sending but still log to `tm_drops`.
+Notification gating order (both implementations): per-watcher `paused` skips entirely → `master_paused` global skips entirely → filters (`filters.apply`) drop unmatched seats → per-seat cool-down drops recently-pinged physical seats → `master_muted` / per-watcher `muted` / empty `notify_channels` skip sending but still log to `tm_drops`.
+
+Per-seat cool-down: some venues (kupat VIP seats especially) flap a hot seat in and out of the buyable feed every few minutes as it cycles through carts/holds, so the plain add/remove diff would re-ping the same seat all day. After a physical seat pings we stamp `(watcher, seat_key)` in `tm_seat_cooldown` and suppress further pings of that exact seat for `KARTIS_SEAT_COOLDOWN_MINUTES` (default 30; 0 disables). Status pseudo-seats (GA/festival/DICE flips) are never cooled down. The window is anchored to the last *actual* ping, so a seat that keeps flapping pings at most once per window. Cool-down can only remove seats from a notification, never add — worst case it's a no-op. (Implemented in both `app.py._check_one_watcher` and `watcher_only.py.check_one`; helpers `db.tm_seat_cooldown_active` / `tm_seat_cooldown_mark`.)
 
 ### Lysted / Viagogo / CrowdVolt scraping (full mode only)
 
