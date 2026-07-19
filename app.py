@@ -406,6 +406,11 @@ def run_il_events():
                         except Exception as e:
                             print(f"[il-events] {source} check_on_sale({ev['event_key']}) failed: {e}")
                             ev["on_sale"] = True if old is None else bool(old["on_sale"])
+                # Sale-opened is a one-way latch: a show dropping off the
+                # kupat homepage (rotation, hiccup) or a TM status blip must
+                # not re-arm the 'onsale' ping and fire again on its return.
+                if old is not None and old["on_sale"] and not ev["on_sale"]:
+                    ev["on_sale"] = True
                 if baseline:
                     continue
                 if old is None:

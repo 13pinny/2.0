@@ -775,10 +775,12 @@ def notify_site_event(kind, ev, old=None):
     Discord-only — fires up to every 10 minutes and speed matters more than
     a paper trail. `kind` is 'new' (event just appeared on the site's
     listing feed) or 'onsale' (a listed-but-not-selling event's sale
-    opened; TM only — kupat has no pre-sale listing state). `ev` is a
-    normalized dict from kupat_events/tm_events fetch_events(); `old` is
-    the previously stored DB row (unused, kept for parity with
-    notify_pacha_event)."""
+    opened — for kupat that means the show got PROMOTED TO THE
+    kupat.co.il HOMEPAGE, the site's "officially on sale" moment). `ev` is
+    a normalized dict from kupat_events/tm_events fetch_events(); an
+    `image` URL, when present (kupat homepage banner), is attached as the
+    embed graphic. `old` is the previously stored DB row (unused, kept
+    for parity with notify_pacha_event)."""
     discord_url = _discord_webhook("new_events")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
@@ -794,13 +796,17 @@ def notify_site_event(kind, ev, old=None):
         lines.append(f"From {ev['price_text']}")
 
     if kind == "onsale":
-        title = f"🎟️ {label}: {name} is now ON SALE"
+        if ev.get("source") == "kupat":
+            title = f"🏠 Kupat: {name} is now on the homepage — sale is official"
+        else:
+            title = f"🎟️ {label}: {name} is now ON SALE"
         color = 0x56D364
     else:
         title = f"🎫 New {label} event — {name}"
         color = 0xE91E63
         if ev.get("on_sale") is False:
-            lines.append("⏳ Not on sale yet — listed only.")
+            lines.append("⏳ Not on sale yet — listed only." +
+                         (" Watch for the homepage ping." if ev.get("source") == "kupat" else ""))
 
     embed = {
         "title": title[:250],
@@ -808,6 +814,8 @@ def notify_site_event(kind, ev, old=None):
         "url": ev.get("url") or "",
         "color": color,
     }
+    if ev.get("image"):
+        embed["image"] = {"url": ev["image"]}
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
