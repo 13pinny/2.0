@@ -4842,6 +4842,7 @@ def api_dice_purchase_listed(purchase_id):
     {"viagogo": 2, "crowdvolt": 4, "other": 0} — zero/missing platforms are
     dropped; all zeros clears the marker. Counts are a user note, not
     inventory math, so the only hard rule is non-negative ints."""
+    from flask import request
     body = request.get_json(silent=True) or {}
     listed = {}
     for plat in DICE_LISTED_PLATFORMS:
@@ -4874,6 +4875,7 @@ def api_dice_sale_candidates():
 def api_dice_link_sale(purchase_id):
     """Attach a scraped sale to a purchase. Body: {"source": "viagogo",
     "sale_id": "...", "qty": 2}. avail on the page becomes qty − Σ linked."""
+    from flask import request
     body = request.get_json(silent=True) or {}
     source = (body.get("source") or "").strip().lower()
     sale_id = (body.get("sale_id") or "").strip()
