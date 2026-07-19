@@ -4801,6 +4801,35 @@ def api_dice_purchases():
     })
 
 
+DICE_LISTED_PLATFORMS = ("viagogo", "crowdvolt", "other")
+
+
+@app.route("/api/dice/purchases/<purchase_id>/listed", methods=["POST"])
+def api_dice_purchase_listed(purchase_id):
+    """Record where a purchase's tickets are listed for resale. Body:
+    {"viagogo": 2, "crowdvolt": 4, "other": 0} — zero/missing platforms are
+    dropped; all zeros clears the marker. Counts are a user note, not
+    inventory math, so the only hard rule is non-negative ints."""
+    body = request.get_json(silent=True) or {}
+    listed = {}
+    for plat in DICE_LISTED_PLATFORMS:
+        v = body.get(plat)
+        if v in (None, "", 0, "0"):
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return jsonify({"error": f"{plat} must be a whole number"}), 400
+        if n < 0:
+            return jsonify({"error": f"{plat} must be ≥ 0"}), 400
+        if n:
+            listed[plat] = n
+    payload = json.dumps(listed) if listed else None
+    if not db.dice_purchase_set_listed(purchase_id, payload):
+        return jsonify({"error": "no such purchase"}), 404
+    return jsonify({"ok": True, "listed": listed})
+
+
 @app.route("/api/market")
 def api_market():
     """Every tracked market row + its sold-per-window velocity. One bulk

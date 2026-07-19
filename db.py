@@ -970,6 +970,11 @@ def init():
         # source_ref (the rewards order number) so re-polls don't duplicate
         # them. Manual entries leave it NULL; the partial unique index ignores
         # NULLs so it never conflicts with hand-added rows.
+        # Where each DICE purchase's tickets are listed for resale — JSON
+        # {"viagogo": 2, "crowdvolt": 4, "other": 0}, user-edited on /dice.
+        dp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dice_purchases)").fetchall()}
+        if "listed_json" not in dp_cols:
+            conn.execute("ALTER TABLE dice_purchases ADD COLUMN listed_json TEXT")
         cb_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cashback_entries)").fetchall()}
         if "source_ref" not in cb_cols:
             conn.execute("ALTER TABLE cashback_entries ADD COLUMN source_ref TEXT")
@@ -1102,6 +1107,18 @@ def dice_purchases_open(account_email):
             ((account_email or "").lower(),),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def dice_purchase_set_listed(purchase_id, listed_json):
+    """listed_json is a pre-validated JSON string like
+    '{"viagogo": 2, "crowdvolt": 4}' (or None to clear). Returns True if a
+    row was updated."""
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE dice_purchases SET listed_json = ? WHERE id = ?",
+            (listed_json, purchase_id),
+        )
+        return cur.rowcount > 0
 
 
 def dice_purchase_add_transferred(purchase_id, n):

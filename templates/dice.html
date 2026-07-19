@@ -364,6 +364,54 @@ function acctShort(a){
   return `<b>${short}</b> <span style="color:var(--muted);font-size:10px">(${bits.join(' · ')})</span>`;
 }
 
+// ---- "listed on" marker: per-purchase qty split across resale platforms.
+const LISTED_PLATFORMS = [['viagogo','VG'], ['crowdvolt','CV'], ['other','other']];
+const listedOpen = new Set();   // purchase ids with the editor open
+
+function listedChip(p){
+  let listed = {};
+  try { listed = JSON.parse(p.listed_json || '{}') || {}; } catch (e) {}
+  if (listedOpen.has(p.id)){
+    const inputs = LISTED_PLATFORMS.map(([k, lbl]) =>
+      `<label style="margin-right:6px">${lbl} <input type="number" min="0" data-plat="${k}" value="${listed[k]||0}" style="width:42px"></label>`
+    ).join('');
+    return `<span class="listedbox" data-id="${escape(p.id)}">${inputs}<button class="lsave">save</button> <a href="#" class="lcancel">cancel</a></span>`;
+  }
+  const parts = LISTED_PLATFORMS.filter(([k]) => listed[k] > 0)
+    .map(([k, lbl]) => `${lbl} ${listed[k]}`);
+  const sum = LISTED_PLATFORMS.reduce((a, [k]) => a + (listed[k]||0), 0);
+  const off = parts.length && sum !== p.held
+    ? ` <span style="color:var(--amber)" title="listed count ≠ held count">⚠</span>` : '';
+  const text = parts.length ? `listed: ${parts.join(' · ')}${off}`
+                            : `<span style="color:var(--muted)">listed?</span>`;
+  return `<a href="#" class="listededit" data-id="${escape(p.id)}" style="text-decoration:none;color:inherit" title="set where these tickets are listed">${text}</a>`;
+}
+
+function wireListed(){
+  document.querySelectorAll('.listededit').forEach(a => a.onclick = ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    listedOpen.add(a.dataset.id); renderPurchases();
+  });
+  document.querySelectorAll('.listedbox').forEach(box => {
+    box.onclick = ev => ev.stopPropagation();   // don't collapse the event row
+    const id = box.dataset.id;
+    box.querySelector('.lcancel').onclick = ev => {
+      ev.preventDefault(); listedOpen.delete(id); renderPurchases();
+    };
+    box.querySelector('.lsave').onclick = async () => {
+      const body = {};
+      box.querySelectorAll('input[data-plat]').forEach(i => body[i.dataset.plat] = Number(i.value)||0);
+      try {
+        const r = await fetch(`/api/dice/purchases/${encodeURIComponent(id)}/listed`, {
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        listedOpen.delete(id);
+        await loadPurchases();
+      } catch (e) { alert('save failed: ' + e.message); }
+    };
+  });
+}
+
 function renderPurchases(){
   if (!PDATA) return;
   const evs = PDATA.events || [];
@@ -398,7 +446,7 @@ function renderPurchases(){
     if (opened){
       const rows = g.purchases.map(p => {
         const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
-        return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_total, p.currency||'USD')} · transferred ${fmt(p.qty_transferred)} · <span class="${p.held>0?'on':'off'}">held ${fmt(p.held)}</span>${warn}</div>`;
+        return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_total, p.currency||'USD')} · transferred ${fmt(p.qty_transferred)} · <span class="${p.held>0?'on':'off'}">held ${fmt(p.held)}</span>${warn} · ${listedChip(p)}</div>`;
       }).join('');
       html += `<tr class="detail"><td colspan="8">${rows}</td></tr>`;
     }
@@ -409,6 +457,7 @@ function renderPurchases(){
     popen.has(id) ? popen.delete(id) : popen.add(id);
     renderPurchases();
   });
+  wireListed();
 }
 
 function renderTransfers(){
