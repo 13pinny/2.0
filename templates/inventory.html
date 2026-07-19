@@ -508,9 +508,14 @@ async function load() {
   document.getElementById("s-cost").textContent = money(t.total_cost);
   const cbs = t.cost_by_source || {};
   const srcAbbr = { lysted: "L", viagogo: "V", jerujam: "J", manual: "M", dice: "D" };
+  const ls = t.lysted_split || {};
   document.getElementById("s-cost-by").textContent = Object.entries(cbs)
     .sort((a, b) => b[1] - a[1])
-    .map(([s, c]) => `${srcAbbr[s] || s} ${money(c)}`)
+    .map(([s, c]) => {
+      if (s === "lysted" && ls.unlisted > 0)
+        return `L ${money(ls.listed)} +${money(ls.unlisted)} unlisted`;
+      return `${srcAbbr[s] || s} ${money(c)}`;
+    })
     .join(" · ");
   const bs = t.by_source || {};
   document.getElementById("s-lysted").textContent = bs.lysted || 0;

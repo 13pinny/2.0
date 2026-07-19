@@ -1788,11 +1788,23 @@ def api_inventory_all():
     if dice_tickets:
         cost_by_source["dice"] = dice_cost
     cost_by_source = {k: round(v, 2) for k, v in cost_by_source.items()}
+    # Split lysted into listed (status Active — this is the number Lysted's own
+    # dashboard shows) vs unlisted (Ready/Hold purchase orders: cash already
+    # spent that Lysted doesn't count as inventory value).
+    lysted_listed = sum(
+        r["cost"] or 0 for r in rows
+        if r["source"] == "lysted" and (r.get("status") or "").strip().lower() == "active"
+    )
+    lysted_split = {
+        "listed": round(lysted_listed, 2),
+        "unlisted": round(cost_by_source.get("lysted", 0) - lysted_listed, 2),
+    }
     totals = {
         "rows": len(rows),
         "tickets": sum(r["qty_unsold"] for r in rows) + dice_tickets,
         "total_cost": round(sum(r["cost"] or 0 for r in rows) + dice_cost, 2),
         "cost_by_source": cost_by_source,
+        "lysted_split": lysted_split,
         "dice_tickets": dice_tickets,
         "by_source": by_source,
         "jerujam_skipped_dedupe": skipped,
