@@ -4867,8 +4867,32 @@ def api_dice_purchase_listed(purchase_id):
 def api_dice_sale_candidates():
     """Recent scraped sales (viagogo / lysted / crowdvolt) for the /dice
     match-a-sale picker, each with qty_linked showing how much of it is
-    already attached to a purchase."""
-    return jsonify({"sales": db.dice_sale_candidates()})
+    already attached to a purchase. With ?event_name=<dice event> the list
+    is ranked by fuzzy name similarity (same normalization the DICE
+    transfer matcher uses) so the right sale is on top."""
+    from flask import request
+    sales = db.dice_sale_candidates()
+    target = (request.args.get("event_name") or "").strip()
+    if target:
+        from difflib import SequenceMatcher
+        import dice_email
+        nt = dice_email._norm_name(target)
+        def score(s):
+            ns = dice_email._norm_name(s.get("event_name") or "")
+            if not nt or not ns:
+                return 0.0
+            if nt == ns:
+                return 1.0
+            base = SequenceMatcher(None, nt, ns).ratio()
+            # Containment (either direction) is a strong signal — resale
+            # listings often add venue/tour suffixes around the artist name.
+            if nt in ns or ns in nt:
+                base = max(base, 0.9)
+            return base
+        for s in sales:
+            s["score"] = round(score(s), 3)
+        sales.sort(key=lambda s: (-s["score"], s.get("sale_date_iso") or ""))
+    return jsonify({"sales": sales})
 
 
 @app.route("/api/dice/purchases/<purchase_id>/link-sale", methods=["POST"])

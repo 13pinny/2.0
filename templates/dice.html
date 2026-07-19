@@ -435,7 +435,8 @@ function wireListed(){
 // ---- match-a-sale: attach scraped viagogo/lysted/crowdvolt sales to a
 // purchase; avail = qty − Σ linked sold qty (transfers stay out of it).
 const saleOpen = new Set();
-let SALES = null;          // candidate cache, fetched on first open
+const SALES_BY_EV = {};    // event_name -> ranked candidates ('' key = unranked)
+let SALES = null;          // candidates for the currently open picker
 const SRC_LBL = {viagogo:'VG', lysted:'LY', crowdvolt:'CV'};
 
 function saleChip(p){
@@ -445,7 +446,8 @@ function saleChip(p){
   if (saleOpen.has(p.id)){
     const opts = (SALES || []).map((s, i) => {
       const left = (s.qty||0) - (s.qty_linked||0);
-      const bits = [SRC_LBL[s.source]||s.source, s.event_name,
+      const match = s.score >= 0.9 ? '★ ' : s.score >= 0.6 ? '≈ ' : '';
+      const bits = [match + (SRC_LBL[s.source]||s.source), s.event_name,
         `${fmt(s.qty)}×${left < (s.qty||0) ? ` (${left} unmatched)` : ''}`,
         s.sale_price != null ? '$' + s.sale_price : '', s.sale_date_iso || '',
         s.order_id ? '#' + s.order_id : ''].filter(Boolean);
@@ -458,23 +460,29 @@ function saleChip(p){
          <button class="slink">attach</button>`;
     return `${links ? links + ' · ' : ''}<span class="salebox" data-id="${escape(p.id)}">${body} <a href="#" class="scancel">cancel</a></span>`;
   }
-  return `${links ? links + ' · ' : ''}<a href="#" class="saleadd" data-id="${escape(p.id)}" style="color:var(--muted);text-decoration:none" title="match a scraped resale-platform sale to this purchase">+ sale</a>`;
+  return `${links ? links + ' · ' : ''}<a href="#" class="saleadd" data-id="${escape(p.id)}" data-ev="${escape(p.event_name||'')}" style="color:var(--muted);text-decoration:none" title="match a scraped resale-platform sale to this purchase">+ sale</a>`;
 }
 
-async function ensureSales(){
-  if (SALES !== null) return;
+async function ensureSales(evName){
+  // Ranked per dice event (server scores by artist-name similarity) and
+  // cached per event name so reopening a picker is instant.
+  const key = evName || '';
+  if (SALES_BY_EV[key]) { SALES = SALES_BY_EV[key]; return; }
   try {
-    const r = await fetch('/api/dice/sale-candidates', {cache:'no-store'});
-    SALES = r.ok ? ((await r.json()).sales || []) : [];
-  } catch (e) { SALES = []; }
+    const q = key ? '?event_name=' + encodeURIComponent(key) : '';
+    const r = await fetch('/api/dice/sale-candidates' + q, {cache:'no-store'});
+    SALES_BY_EV[key] = r.ok ? ((await r.json()).sales || []) : [];
+  } catch (e) { SALES_BY_EV[key] = []; }
+  SALES = SALES_BY_EV[key];
 }
 
 function wireSales(){
   document.querySelectorAll('.saleadd').forEach(a => a.onclick = async ev => {
     ev.preventDefault(); ev.stopPropagation();
     saleOpen.add(a.dataset.id);
+    SALES = null;
     renderPurchases();          // shows "loading sales…" if not cached yet
-    await ensureSales();
+    await ensureSales(a.dataset.ev);
     renderPurchases();
   });
   document.querySelectorAll('.sunlink').forEach(a => a.onclick = async ev => {
@@ -504,6 +512,7 @@ function wireSales(){
         if (!r.ok) throw new Error((await r.json()).error || ('HTTP ' + r.status));
         saleOpen.delete(id);
         SALES = null;           // refresh qty_linked next open
+        Object.keys(SALES_BY_EV).forEach(k => delete SALES_BY_EV[k]);
         await loadPurchases();
       } catch (e) { alert('attach failed: ' + e.message); }
     };
