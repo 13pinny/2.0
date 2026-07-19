@@ -370,32 +370,55 @@ function acctShort(a){
 const LISTED_PLATFORMS = [['viagogo','VG'], ['crowdvolt','CV'], ['other','other']];
 const listedOpen = new Set();   // purchase ids with the editor open
 
+function _listedParsed(p){
+  try { return JSON.parse(p.listed_json || '{}') || {}; } catch (e) { return {}; }
+}
+
 function listedChip(p){
-  let listed = {};
-  try { listed = JSON.parse(p.listed_json || '{}') || {}; } catch (e) {}
-  if (listedOpen.has(p.id)){
-    const inputs = LISTED_PLATFORMS.map(([k, lbl]) =>
-      `<label style="margin-right:6px">${lbl} <input type="number" min="0" data-plat="${k}" value="${listed[k]||0}" style="width:42px"></label>`
-    ).join('');
-    return `<span class="listedbox" data-id="${escape(p.id)}">${inputs}<button class="lsave">save</button> <a href="#" class="lcancel">cancel</a></span>`;
-  }
-  const parts = LISTED_PLATFORMS.filter(([k]) => listed[k] > 0)
-    .map(([k, lbl]) => `${lbl} ${listed[k]}`);
+  const listed = _listedParsed(p);
+  const on = LISTED_PLATFORMS.filter(([k]) => listed[k] > 0);
+  // Dropdown value: one platform when the whole allocation is on it,
+  // 'mixed' when split across platforms, '' when unset.
+  const value = on.length === 0 ? '' : on.length === 1 ? on[0][0] : 'mixed';
+  const opts = [['', '— listed on —'], ...LISTED_PLATFORMS.map(([k, lbl]) => [k, lbl]),
+                ['mixed', 'mixed…']]
+    .map(([v, lbl]) => `<option value="${v}"${v === value ? ' selected' : ''}>${lbl}</option>`)
+    .join('');
   const sum = LISTED_PLATFORMS.reduce((a, [k]) => a + (listed[k]||0), 0);
-  const off = parts.length && sum !== p.held
-    ? ` <span style="color:var(--amber)" title="listed count ≠ held count">⚠</span>` : '';
-  const text = parts.length ? `listed: ${parts.join(' · ')}${off}`
-                            : `<span style="color:var(--muted)">listed?</span>`;
-  return `<a href="#" class="listededit" data-id="${escape(p.id)}" style="text-decoration:none;color:inherit" title="set where these tickets are listed">${text}</a>`;
+  const detail = on.length > 1 ? ` <span style="color:var(--muted);font-size:10px">${on.map(([k, lbl]) => `${lbl} ${listed[k]}`).join(' · ')}</span>` : '';
+  const off = on.length && sum !== p.avail && sum !== p.qty
+    ? ` <span style="color:var(--amber)" title="listed count (${sum}) ≠ avail (${fmt(p.avail)})">⚠</span>` : '';
+  const editor = listedOpen.has(p.id)
+    ? ` <span class="listedbox" data-id="${escape(p.id)}">${LISTED_PLATFORMS.map(([k, lbl]) =>
+        `<label style="margin-right:6px">${lbl} <input type="number" min="0" data-plat="${k}" value="${listed[k]||0}" style="width:42px"></label>`).join('')}<button class="lsave">save</button> <a href="#" class="lcancel">cancel</a></span>`
+    : '';
+  return `<select class="lsel" data-id="${escape(p.id)}" data-qty="${p.avail!=null?p.avail:(p.qty||0)}" style="font:inherit;font-size:10px;background:var(--bg-2);color:var(--text);border:1px solid var(--line-2);border-radius:5px;padding:2px 4px">${opts}</select>${detail}${off}${editor}`;
+}
+
+async function _saveListed(id, body){
+  const r = await fetch(`/api/dice/purchases/${encodeURIComponent(id)}/listed`, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  listedOpen.delete(id);
+  await loadPurchases();
 }
 
 function wireListed(){
-  document.querySelectorAll('.listededit').forEach(a => a.onclick = ev => {
-    ev.preventDefault(); ev.stopPropagation();
-    listedOpen.add(a.dataset.id); renderPurchases();
+  document.querySelectorAll('.lsel').forEach(sel => {
+    sel.onclick = ev => ev.stopPropagation();   // don't collapse the event row
+    sel.onchange = async ev => {
+      ev.stopPropagation();
+      const id = sel.dataset.id, v = sel.value;
+      if (v === 'mixed'){ listedOpen.add(id); renderPurchases(); return; }
+      listedOpen.delete(id);
+      const body = {};
+      if (v) body[v] = Number(sel.dataset.qty) || 0;   // whole row on one platform
+      try { await _saveListed(id, body); }
+      catch (e) { alert('save failed: ' + e.message); renderPurchases(); }
+    };
   });
   document.querySelectorAll('.listedbox').forEach(box => {
-    box.onclick = ev => ev.stopPropagation();   // don't collapse the event row
+    box.onclick = ev => ev.stopPropagation();
     const id = box.dataset.id;
     box.querySelector('.lcancel').onclick = ev => {
       ev.preventDefault(); listedOpen.delete(id); renderPurchases();
@@ -403,13 +426,8 @@ function wireListed(){
     box.querySelector('.lsave').onclick = async () => {
       const body = {};
       box.querySelectorAll('input[data-plat]').forEach(i => body[i.dataset.plat] = Number(i.value)||0);
-      try {
-        const r = await fetch(`/api/dice/purchases/${encodeURIComponent(id)}/listed`, {
-          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        listedOpen.delete(id);
-        await loadPurchases();
-      } catch (e) { alert('save failed: ' + e.message); }
+      try { await _saveListed(id, body); }
+      catch (e) { alert('save failed: ' + e.message); }
     };
   });
 }
