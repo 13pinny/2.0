@@ -110,10 +110,10 @@
   <table>
     <thead><tr>
       <th>Event</th><th>Venue</th><th>Date</th>
-      <th class="num">Bought</th><th class="num">Transferred</th><th class="num">Held</th>
-      <th class="num">Spend</th><th></th>
+      <th class="num">Bought</th><th class="num">Transferred</th><th class="num">Sold</th>
+      <th class="num">Avail</th><th class="num">Spend</th><th></th>
     </tr></thead>
-    <tbody id="prows"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+    <tbody id="prows"><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
   </table>
   </div>
   <p class="sub"><a href="#" id="xferToggle" style="color:var(--accent);text-decoration:none">Show transfer log</a></p>
@@ -414,12 +414,97 @@ function wireListed(){
   });
 }
 
+// ---- match-a-sale: attach scraped viagogo/lysted/crowdvolt sales to a
+// purchase; avail = qty − Σ linked sold qty (transfers stay out of it).
+const saleOpen = new Set();
+let SALES = null;          // candidate cache, fetched on first open
+const SRC_LBL = {viagogo:'VG', lysted:'LY', crowdvolt:'CV'};
+
+function saleChip(p){
+  const links = (p.sale_links || []).map(l =>
+    `<span style="white-space:nowrap">${SRC_LBL[l.sale_source]||l.sale_source} ${fmt(l.qty)}${l.order_id ? ' #' + escape(l.order_id) : ''}<a href="#" class="sunlink" data-id="${escape(l.id)}" title="unlink this sale" style="color:var(--red);margin-left:3px;text-decoration:none">✕</a></span>`
+  ).join(' · ');
+  if (saleOpen.has(p.id)){
+    const opts = (SALES || []).map((s, i) => {
+      const left = (s.qty||0) - (s.qty_linked||0);
+      const bits = [SRC_LBL[s.source]||s.source, s.event_name,
+        `${fmt(s.qty)}×${left < (s.qty||0) ? ` (${left} unmatched)` : ''}`,
+        s.sale_price != null ? '$' + s.sale_price : '', s.sale_date_iso || '',
+        s.order_id ? '#' + s.order_id : ''].filter(Boolean);
+      return `<option value="${i}">${escape(bits.join(' · '))}</option>`;
+    }).join('');
+    const body = SALES === null ? 'loading sales…'
+      : !SALES.length ? 'no scraped sales found (last 180d)'
+      : `<select class="ssel" style="max-width:340px">${opts}</select>
+         qty <input type="number" class="sqty" min="1" value="1" style="width:42px">
+         <button class="slink">attach</button>`;
+    return `${links ? links + ' · ' : ''}<span class="salebox" data-id="${escape(p.id)}">${body} <a href="#" class="scancel">cancel</a></span>`;
+  }
+  return `${links ? links + ' · ' : ''}<a href="#" class="saleadd" data-id="${escape(p.id)}" style="color:var(--muted);text-decoration:none" title="match a scraped resale-platform sale to this purchase">+ sale</a>`;
+}
+
+async function ensureSales(){
+  if (SALES !== null) return;
+  try {
+    const r = await fetch('/api/dice/sale-candidates', {cache:'no-store'});
+    SALES = r.ok ? ((await r.json()).sales || []) : [];
+  } catch (e) { SALES = []; }
+}
+
+function wireSales(){
+  document.querySelectorAll('.saleadd').forEach(a => a.onclick = async ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    saleOpen.add(a.dataset.id);
+    renderPurchases();          // shows "loading sales…" if not cached yet
+    await ensureSales();
+    renderPurchases();
+  });
+  document.querySelectorAll('.sunlink').forEach(a => a.onclick = async ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    if (!confirm('Unlink this sale?')) return;
+    try {
+      const r = await fetch(`/api/dice/sale-links/${encodeURIComponent(a.dataset.id)}/delete`, {method:'POST'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      await loadPurchases();
+    } catch (e) { alert('unlink failed: ' + e.message); }
+  });
+  document.querySelectorAll('.salebox').forEach(box => {
+    box.onclick = ev => ev.stopPropagation();
+    const id = box.dataset.id;
+    box.querySelector('.scancel').onclick = ev => {
+      ev.preventDefault(); saleOpen.delete(id); renderPurchases();
+    };
+    const btn = box.querySelector('.slink');
+    if (btn) btn.onclick = async () => {
+      const s = (SALES || [])[Number(box.querySelector('.ssel').value)];
+      if (!s) return;
+      const qty = Number(box.querySelector('.sqty').value) || 0;
+      try {
+        const r = await fetch(`/api/dice/purchases/${encodeURIComponent(id)}/link-sale`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({source: s.source, sale_id: s.id, qty})});
+        if (!r.ok) throw new Error((await r.json()).error || ('HTTP ' + r.status));
+        saleOpen.delete(id);
+        SALES = null;           // refresh qty_linked next open
+        await loadPurchases();
+      } catch (e) { alert('attach failed: ' + e.message); }
+    };
+    // Preselect the qty of the chosen sale for one-click attaches.
+    const sel = box.querySelector('.ssel');
+    if (sel) sel.onchange = () => {
+      const s = (SALES || [])[Number(sel.value)];
+      if (s) box.querySelector('.sqty').value = Math.max(1, (s.qty||1) - (s.qty_linked||0));
+    };
+  });
+}
+
 function renderPurchases(){
   if (!PDATA) return;
   const evs = PDATA.events || [];
   const tiles = [
     ['Events held', evs.filter(g => g.held > 0).length, ''],
-    ['Tickets held', evs.reduce((a,g) => a + g.held, 0), 'bought − transferred'],
+    ['Tickets avail', evs.reduce((a,g) => a + (g.avail||0), 0), 'bought − sold'],
+    ['Tickets sold', evs.reduce((a,g) => a + (g.sold||0), 0), 'matched resale sales'],
     ['Tickets transferred', evs.reduce((a,g) => a + g.transferred, 0), ''],
     ['Σ spend', '$' + evs.reduce((a,g) => a + g.spend, 0).toLocaleString(undefined,{maximumFractionDigits:0}), 'all recorded purchases'],
     ['Transfers needing review', PDATA.problem_count || 0, 'unmatched / overflow'],
@@ -428,29 +513,30 @@ function renderPurchases(){
     `<div class="stat"><div class="label">${l}</div><div class="value${l.startsWith('Transfers') && v ? '' : v ? '' : ' zero'}"${l.startsWith('Transfers') && v ? ' style="color:var(--red)"' : ''}>${typeof v === 'number' ? fmt(v) : v}</div>${h ? `<div class="hint">${h}</div>` : ''}</div>`
   ).join('');
   if (!evs.length){
-    $('prows').innerHTML = '<tr><td colspan="8" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
+    $('prows').innerHTML = '<tr><td colspan="9" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
     return;
   }
   $('prows').innerHTML = evs.map(g => {
     const key = g.event_slug || g.event_name;
     const opened = popen.has(key);
-    const heldCls = g.held > 0 ? 'style="color:var(--green);font-weight:600"' : 'style="color:var(--muted)"';
+    const availCls = g.avail > 0 ? 'style="color:var(--green);font-weight:600"' : 'style="color:var(--muted)"';
     let html = `<tr class="ev" data-pid="${escape(key)}">
       <td><b>${escape(g.event_name)}</b></td>
       <td>${escape(g.venue||'')}</td>
       <td class="when">${escape(g.event_date_iso||'')}</td>
       <td class="num">${fmt(g.qty)}</td>
       <td class="num">${fmt(g.transferred)}</td>
-      <td class="num" ${heldCls}>${fmt(g.held)}</td>
+      <td class="num">${fmt(g.sold||0)}</td>
+      <td class="num" ${availCls}>${fmt(g.avail!=null?g.avail:g.qty)}</td>
       <td class="num">${money(g.spend, 'USD')}</td>
       <td>${g.url ? `<a class="buy" href="${escape(g.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">DICE</a>` : ''}</td>
     </tr>`;
     if (opened){
       const rows = g.purchases.map(p => {
         const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
-        return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_total, p.currency||'USD')} · transferred ${fmt(p.qty_transferred)} · <span class="${p.held>0?'on':'off'}">held ${fmt(p.held)}</span>${warn} · ${listedChip(p)}</div>`;
+        return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_total, p.currency||'USD')} · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
       }).join('');
-      html += `<tr class="detail"><td colspan="8">${rows}</td></tr>`;
+      html += `<tr class="detail"><td colspan="9">${rows}</td></tr>`;
     }
     return html;
   }).join('');
@@ -460,6 +546,7 @@ function renderPurchases(){
     renderPurchases();
   });
   wireListed();
+  wireSales();
 }
 
 function renderTransfers(){

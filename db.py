@@ -822,6 +822,22 @@ CREATE INDEX IF NOT EXISTS idx_dice_purchases_acct ON dice_purchases(account_ema
 -- DICE transfer-out confirmations ("Ticket sent to <name>"). purchase_id
 -- points at the (first) matched purchase; match_status records how the
 -- FIFO matcher fared: matched / unmatched / overflow.
+-- Scraped resale-platform sales matched to DICE purchases by the user on
+-- /dice ("this viagogo order sold tickets from that purchase"). avail on
+-- the page = purchase qty - SUM(linked qty); transfers deliberately play
+-- no part in that math (delivery info is often missing). sale_source +
+-- sale_id point into viagogo_sales / lysted_sales / crowdvolt_sales.
+CREATE TABLE IF NOT EXISTS dice_sale_links (
+    id           TEXT PRIMARY KEY,             -- dsl-<hex>
+    purchase_id  TEXT NOT NULL,
+    sale_source  TEXT NOT NULL,
+    sale_id      TEXT NOT NULL,
+    qty          INTEGER NOT NULL,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dice_sale_links_purchase ON dice_sale_links(purchase_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dice_sale_links_sale
+    ON dice_sale_links(sale_source, sale_id, purchase_id);
 CREATE TABLE IF NOT EXISTS dice_transfers (
     id             TEXT PRIMARY KEY,           -- dct-<hex>
     message_id     TEXT UNIQUE,
@@ -1120,6 +1136,76 @@ def dice_purchases_open(account_email):
             ((account_email or "").lower(),),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+_DICE_SALE_TABLES = {
+    "viagogo": "viagogo_sales",
+    "lysted": "lysted_sales",
+    "crowdvolt": "crowdvolt_sales",
+}
+
+
+def dice_sale_candidates(days=180):
+    """Recent scraped sales from every resale platform, newest first, for
+    the /dice match-a-sale picker. Sales already fully linked still appear
+    (the UI shows how much of them is used) — qty bookkeeping is the user's
+    call, matching is just a pointer."""
+    cutoff = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)).date().isoformat()
+    out = []
+    with connect() as conn:
+        for source, table in _DICE_SALE_TABLES.items():
+            for r in conn.execute(
+                f"SELECT id, order_id, event_name, event_date_iso, qty, "
+                f"sale_price, sale_date_iso FROM {table} "
+                f"WHERE COALESCE(sale_date_iso, '') = '' OR sale_date_iso >= ? "
+                f"ORDER BY sale_date_iso DESC", (cutoff,)
+            ):
+                out.append({**dict(r), "source": source})
+        linked = {}
+        for r in conn.execute(
+            "SELECT sale_source, sale_id, SUM(qty) AS n FROM dice_sale_links "
+            "GROUP BY sale_source, sale_id"
+        ):
+            linked[(r["sale_source"], r["sale_id"])] = r["n"]
+    for s in out:
+        s["qty_linked"] = linked.get((s["source"], s["id"]), 0)
+    out.sort(key=lambda s: s.get("sale_date_iso") or "", reverse=True)
+    return out
+
+
+def dice_sale_links_by_purchase():
+    """{purchase_id: [link rows + sale detail]} for the /dice page."""
+    out = {}
+    with connect() as conn:
+        links = [dict(r) for r in conn.execute(
+            "SELECT * FROM dice_sale_links ORDER BY created_at")]
+        for l in links:
+            table = _DICE_SALE_TABLES.get(l["sale_source"])
+            if table:
+                sale = conn.execute(
+                    f"SELECT order_id, event_name, sale_price, sale_date_iso "
+                    f"FROM {table} WHERE id = ?", (l["sale_id"],)
+                ).fetchone()
+                if sale:
+                    l.update(dict(sale))
+            out.setdefault(l["purchase_id"], []).append(l)
+    return out
+
+
+def dice_sale_link_add(purchase_id, sale_source, sale_id, qty, now_iso):
+    import uuid
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO dice_sale_links (id, purchase_id, sale_source, sale_id, qty, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("dsl-" + uuid.uuid4().hex[:12], purchase_id, sale_source, sale_id, qty, now_iso),
+        )
+
+
+def dice_sale_link_delete(link_id):
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM dice_sale_links WHERE id = ?", (link_id,))
+        return cur.rowcount > 0
 
 
 def dice_purchase_set_listed(purchase_id, listed_json):

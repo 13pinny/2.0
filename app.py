@@ -4789,6 +4789,7 @@ def api_dice_purchases():
     Rows are written by mail_intake's dice branch — this is read-only."""
     purchases = db.dice_purchases_all()
     transfers = db.dice_transfers_all()
+    sale_links = db.dice_sale_links_by_purchase()
     groups = {}
     for p in purchases:
         key = p.get("event_slug") or ("name:" + (p.get("event_name") or "").lower())
@@ -4802,10 +4803,18 @@ def api_dice_purchases():
             "qty": 0, "transferred": 0, "held": 0, "spend": 0.0,
         })
         held = (p.get("qty") or 0) - (p.get("qty_transferred") or 0)
-        g["purchases"].append({**p, "held": held})
+        links = sale_links.get(p["id"], [])
+        sold = sum(l.get("qty") or 0 for l in links)
+        # avail deliberately ignores transfers — delivery info is unreliable,
+        # so sold (user-matched resale-platform sales) is the deduction.
+        avail = (p.get("qty") or 0) - sold
+        g["purchases"].append({**p, "held": held, "sold": sold, "avail": avail,
+                               "sale_links": links})
         g["qty"] += p.get("qty") or 0
         g["transferred"] += p.get("qty_transferred") or 0
         g["held"] += held
+        g["sold"] = g.get("sold", 0) + sold
+        g["avail"] = g.get("avail", 0) + avail
         g["spend"] += p.get("price_total") or 0.0
         # Prefer a dated/venued row's metadata over an undated one's.
         if not g["event_date_iso"] and p.get("event_date_iso"):
@@ -4851,6 +4860,44 @@ def api_dice_purchase_listed(purchase_id):
     if not db.dice_purchase_set_listed(purchase_id, payload):
         return jsonify({"error": "no such purchase"}), 404
     return jsonify({"ok": True, "listed": listed})
+
+
+@app.route("/api/dice/sale-candidates")
+def api_dice_sale_candidates():
+    """Recent scraped sales (viagogo / lysted / crowdvolt) for the /dice
+    match-a-sale picker, each with qty_linked showing how much of it is
+    already attached to a purchase."""
+    return jsonify({"sales": db.dice_sale_candidates()})
+
+
+@app.route("/api/dice/purchases/<purchase_id>/link-sale", methods=["POST"])
+def api_dice_link_sale(purchase_id):
+    """Attach a scraped sale to a purchase. Body: {"source": "viagogo",
+    "sale_id": "...", "qty": 2}. avail on the page becomes qty − Σ linked."""
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip().lower()
+    sale_id = (body.get("sale_id") or "").strip()
+    if source not in db._DICE_SALE_TABLES or not sale_id:
+        return jsonify({"error": "source (viagogo/lysted/crowdvolt) and sale_id required"}), 400
+    try:
+        qty = int(body.get("qty"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "qty must be a whole number"}), 400
+    if qty <= 0:
+        return jsonify({"error": "qty must be ≥ 1"}), 400
+    try:
+        db.dice_sale_link_add(purchase_id, source, sale_id, qty,
+                              datetime.now(timezone.utc).isoformat())
+    except Exception as e:
+        return jsonify({"error": f"already linked? {type(e).__name__}"}), 409
+    return jsonify({"ok": True})
+
+
+@app.route("/api/dice/sale-links/<link_id>/delete", methods=["POST"])
+def api_dice_unlink_sale(link_id):
+    if not db.dice_sale_link_delete(link_id):
+        return jsonify({"error": "no such link"}), 404
+    return jsonify({"ok": True})
 
 
 @app.route("/api/market")
