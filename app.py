@@ -1139,6 +1139,14 @@ def _build_unified_inventory():
         qty_remaining = max(0, qty_full - consumed - auto_consumed)
         if qty_remaining <= 0:
             continue
+        # Prorate cost to the unsold qty — a partially-sold purchase order
+        # shouldn't count its full purchase cost as cash still tied up.
+        cost_full = r.get("total_cost") or 0
+        if qty_remaining < qty_full and qty_full:
+            cpu = r.get("cost_per_unit")
+            cost = round(cpu * qty_remaining if cpu else cost_full * qty_remaining / qty_full, 2)
+        else:
+            cost = cost_full
         rows.append({
             "source": "lysted",
             "source_id": r.get("id"),
@@ -1150,7 +1158,7 @@ def _build_unified_inventory():
             "row": r.get("row_label"),
             "seats": r.get("seats"),
             "qty_unsold": qty_remaining,
-            "cost": r.get("total_cost") or 0,
+            "cost": cost,
             "cost_per_unit": r.get("cost_per_unit"),
             "delivery_type": r.get("delivery_type"),
             "list_price": None,
@@ -1756,10 +1764,33 @@ def api_inventory_all():
         if r.get("source") == "manual":
             r["attachments"] = atts_by_owner.get(str(r.get("source_id")), [])
         by_source[r["source"]] = by_source.get(r["source"], 0) + 1
+    cost_by_source = {}
+    for r in rows:
+        cost_by_source[r["source"]] = cost_by_source.get(r["source"], 0) + (r["cost"] or 0)
+    # DICE holdings aren't unified-inventory rows (they live on /dice), but
+    # they're still cash tied up: avail = qty - user-matched resale sales
+    # (transfers deliberately ignored, same as api_dice_purchases).
+    dice_links = db.dice_sale_links_by_purchase()
+    dice_cost = 0.0
+    dice_tickets = 0
+    for p in db.dice_purchases_all():
+        qty = p.get("qty") or 0
+        sold = sum(l.get("qty") or 0 for l in dice_links.get(p["id"], []))
+        avail = max(0, qty - sold)
+        if avail <= 0:
+            continue
+        ppu = p.get("price_per_unit")
+        dice_cost += ppu * avail if ppu else (p.get("price_total") or 0) * (avail / qty if qty else 0)
+        dice_tickets += avail
+    if dice_tickets:
+        cost_by_source["dice"] = dice_cost
+    cost_by_source = {k: round(v, 2) for k, v in cost_by_source.items()}
     totals = {
         "rows": len(rows),
-        "tickets": sum(r["qty_unsold"] for r in rows),
-        "total_cost": round(sum(r["cost"] or 0 for r in rows), 2),
+        "tickets": sum(r["qty_unsold"] for r in rows) + dice_tickets,
+        "total_cost": round(sum(r["cost"] or 0 for r in rows) + dice_cost, 2),
+        "cost_by_source": cost_by_source,
+        "dice_tickets": dice_tickets,
         "by_source": by_source,
         "jerujam_skipped_dedupe": skipped,
         "auto_matched": len(db.all_matches()),

@@ -40,6 +40,7 @@
   .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
   .stat.amber .value { color: var(--amber); }
   .stat.green .value { color: var(--green); }
+  .stat .sub { font-size: 10px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: 0.5px; }
   .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
   input, select, button, a.btn { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
   input:focus, select:focus { outline: none; border-color: var(--accent); }
@@ -168,7 +169,7 @@
   <div class="stats">
     <div class="stat"><div class="label">Unsold</div><div class="value" id="s-tickets">0</div></div>
     <div class="stat"><div class="label">Listings</div><div class="value" id="s-rows">0</div></div>
-    <div class="stat amber"><div class="label">Cash Tied</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat amber"><div class="label">Cash Tied</div><div class="value" id="s-cost">$0</div><div class="sub" id="s-cost-by"></div></div>
     <div class="stat"><div class="label">Lysted</div><div class="value" id="s-lysted">0</div></div>
     <div class="stat"><div class="label">Viagogo</div><div class="value" id="s-viagogo">0</div></div>
     <div class="stat"><div class="label">JeruJam</div><div class="value" id="s-jerujam">0</div></div>
@@ -505,6 +506,12 @@ async function load() {
   document.getElementById("s-tickets").textContent = t.tickets ?? 0;
   document.getElementById("s-rows").textContent = t.rows ?? 0;
   document.getElementById("s-cost").textContent = money(t.total_cost);
+  const cbs = t.cost_by_source || {};
+  const srcAbbr = { lysted: "L", viagogo: "V", jerujam: "J", manual: "M", dice: "D" };
+  document.getElementById("s-cost-by").textContent = Object.entries(cbs)
+    .sort((a, b) => b[1] - a[1])
+    .map(([s, c]) => `${srcAbbr[s] || s} ${money(c)}`)
+    .join(" · ");
   const bs = t.by_source || {};
   document.getElementById("s-lysted").textContent = bs.lysted || 0;
   document.getElementById("s-viagogo").textContent = bs.viagogo || 0;
