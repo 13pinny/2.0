@@ -552,7 +552,7 @@ function renderPurchases(){
     if (opened){
       const rows = g.purchases.map(p => {
         const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
-        return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_total, p.currency||'USD')} · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
+        return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total), p.currency||'USD')}/tkt · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
       }).join('');
       html += `<tr class="detail"><td colspan="9">${rows}</td></tr>`;
     }
