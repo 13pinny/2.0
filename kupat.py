@@ -92,6 +92,48 @@ SOURCE_NAME = "kupat"
 # a threshold since kupat has no "last tickets" signal of its own.
 GA_LOW_THRESHOLD = int(os.getenv("KARTIS_KUPAT_GA_LOW") or 25)
 
+# A presentation that has ever served per-seat rows is SEATED, permanently.
+# The in-page capture occasionally misses XHRs (12s poll race); without this
+# sticky memory a miss degrades the watcher to the GA pseudo-seat (when the
+# seatplan capture missed too, the GA classifier sees an empty seatplan) or
+# to an empty seat list — either way the representation flips, phantom
+# remove/re-add diffs fire, and Discord gets "GA available" + repeated
+# same-seat pings (Eden/Eyal Menorah, Peer Tasi Caesarea, 2026-07-19). A
+# capture miss on a known-seated show must FAIL the tick (state preserved,
+# retry next minute), never re-classify it.
+_SEATED_FILE = CACHE_DIR / "kupat_seated.json"
+_seated_presentations = None  # {"feature/presentation": 1}
+
+
+def _load_seated():
+    global _seated_presentations
+    if _seated_presentations is None:
+        try:
+            _seated_presentations = json.loads(_SEATED_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            _seated_presentations = {}
+    return _seated_presentations
+
+
+def _seated_key(feature_id, presentation_id):
+    return f"{feature_id}/{presentation_id}"
+
+
+def _is_known_seated(feature_id, presentation_id):
+    return _seated_key(feature_id, presentation_id) in _load_seated()
+
+
+def _remember_seated(feature_id, presentation_id):
+    seated = _load_seated()
+    key = _seated_key(feature_id, presentation_id)
+    if key not in seated:
+        seated[key] = 1
+        try:
+            CACHE_DIR.mkdir(exist_ok=True)
+            _SEATED_FILE.write_text(json.dumps(seated), encoding="utf-8")
+        except OSError:
+            pass
+
 
 def _has_seated_capacity(presentation, seatplan):
     """True when this presentation's venue has a real per-seat map.
@@ -402,15 +444,40 @@ def fetch_selectable_seats(feature_id, presentation_id):
             "raw": s,
         })
     if out:
+        _remember_seated(feature_id, presentation_id)
         return out
-    # No buyable per-seat rows. This is either a GA (standing) event — which
-    # has no seat map at all, only a tickets-left count — or a seated event
-    # with nothing currently available. kupat's `isGA` field is NOT a boolean
-    # (it carries small ints like 1/2/24 on ordinary seated events), so we
-    # decide GA the way the venue itself does: a GA event has no seated
-    # sections in its seatplan. Track it as one status-encoded seat so the
-    # diff fires on every sold-out / last-tickets / available-again
-    # transition (mirrors the tickchak festival model).
+
+    # No per-seat rows this tick. Distinguish "the seats XHR fired and
+    # genuinely returned zero rows" from "the capture missed it" — a miss
+    # must never be read as a sellout or a GA re-classification, or the
+    # representation flips and the diff phantom-removes (then re-pings)
+    # everything. When in doubt, raise: a failed tick preserves state and
+    # retries in a minute.
+    missing = set(captured.get("_missing") or [])
+
+    if _is_known_seated(feature_id, presentation_id):
+        if "seats" in missing:
+            raise KupatError(
+                f"seats-status capture missed for seated show "
+                f"{feature_id}/{presentation_id} — keeping previous state"
+            )
+        return []  # fired empty: genuinely nothing buyable right now
+
+    if missing & {"presentation", "seatplan"}:
+        # Can't classify GA vs seated without them.
+        raise KupatError(
+            f"capture incomplete for {feature_id}/{presentation_id} "
+            f"(missing {sorted(missing)}) — keeping previous state"
+        )
+
+    # This is either a GA (standing) event — which has no seat map at all,
+    # only a tickets-left count — or a seated event with nothing currently
+    # available. kupat's `isGA` field is NOT a boolean (it carries small
+    # ints like 1/2/24 on ordinary seated events), so we decide GA the way
+    # the venue itself does: a GA event has no seated sections in its
+    # seatplan. Track it as one status-encoded seat so the diff fires on
+    # every sold-out / last-tickets / available-again transition (mirrors
+    # the tickchak festival model).
     if not _has_seated_capacity(presentation, seatplan):
         status = _ga_status(presentation)
         label = {"available": "GA available", "lasttickets": "GA last tickets",
@@ -421,7 +488,15 @@ def fetch_selectable_seats(feature_id, presentation_id):
             "qty_available": presentation.get("availSeats"),
             "price": None,
         }]
-    return out
+
+    # Seated per the seatplan, but the seats XHR never fired — a race, not
+    # an empty map.
+    if "seats" in missing:
+        raise KupatError(
+            f"seats-status capture missed for {feature_id}/{presentation_id} "
+            f"(seated venue) — keeping previous state"
+        )
+    return []
 
 
 def seat_key(seat):
