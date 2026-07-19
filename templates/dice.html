@@ -102,7 +102,9 @@
   <div class="stats" id="totals"></div>
   <p class="sub" id="statusline">DICE publishes no ticket counts — the tier/price change log below is the demand signal. History accrues from the hourly market sweep and manual refreshes.</p>
 
-  <h2>Purchases &amp; Holdings <span style="font-size:10px;color:var(--muted)">(auto-recorded from forwarded DICE emails · click an event for per-account rows)</span></h2>
+  <h2>Purchases &amp; Holdings <span style="font-size:10px;color:var(--muted)">(auto-recorded from forwarded DICE emails · click an event for per-account rows)</span>
+    <button class="act" id="pollBtn" style="margin-left:10px">Poll inbox now</button>
+    <span id="pollNote" style="font-size:10px;color:var(--muted)"></span></h2>
   <div class="stats" id="ptotals"></div>
   <div class="tablewrap">
   <table>
@@ -496,6 +498,34 @@ $('xferToggle').onclick = ev => {
 
 $('q').addEventListener('input', render);
 $('refreshBtn').onclick = () => load(true);
+
+// Poll-inbox-now: kicks the shared mail-intake run (async on the server),
+// watches last_intake until it finishes, then reloads the purchases table.
+$('pollBtn').onclick = async () => {
+  const btn = $('pollBtn'), note = $('pollNote');
+  btn.disabled = true; note.textContent = 'polling inbox…';
+  try {
+    const r = await fetch('/api/pending-intake/poll', {method:'POST'});
+    if (r.status === 429) { note.textContent = 'already running — waiting…'; }
+    else if (!r.ok) throw new Error('HTTP ' + r.status);
+    for (let i = 0; i < 60; i++) {
+      await new Promise(res => setTimeout(res, 2000));
+      const s = await fetch('/api/pending-intake', {cache:'no-store'});
+      if (!s.ok) continue;
+      const li = (await s.json()).last_intake || {};
+      if (!li.running && li.at) {
+        note.textContent = li.error
+          ? 'intake error: ' + li.error
+          : `done — ${li.dice_purchases_saved||0} purchases, ${li.dice_transfers_saved||0} transfers saved`;
+        await loadPurchases();
+        btn.disabled = false;
+        return;
+      }
+    }
+    note.textContent = 'still running — check back shortly';
+  } catch (e) { note.textContent = 'poll failed: ' + e.message; }
+  btn.disabled = false;
+};
 $('addBtn').onclick = addManual;
 $('addUrl').addEventListener('keydown', e => { if (e.key === 'Enter') addManual(); });
 load(false);
