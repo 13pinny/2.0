@@ -1254,7 +1254,10 @@ def _build_unified_inventory():
             "row": "",
             "seats": r.get("ticket_type"),
             "qty_unsold": avail_remaining,
-            "cost": r.get("cost") or 0,
+            # face_value × remaining, so manual matches ("Mark as Loss" etc.)
+            # release their share of cash tied — viagogo's own sales are
+            # already excluded because the scrape's `available` drops on sale.
+            "cost": round((r.get("face_value") or 0) * avail_remaining, 2),
             "cost_per_unit": r.get("face_value"),
             "delivery_type": r.get("ticket_type"),
             "list_price": (r.get("price") or 0) * avail_remaining,
