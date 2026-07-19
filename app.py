@@ -4731,6 +4731,33 @@ def api_dice_refresh():
     return jsonify(_dice_payload(force=True))
 
 
+def _dice_vault_accounts():
+    """DICE identifies accounts by buyer name + phone, not email, so the
+    /dice page enriches each account_email with the matching vault entry's
+    plaintext label + phone last-4 (vault rows whose platform mentions dice,
+    keyed by username == the account's email). Secrets stay PIN-gated —
+    only the non-secret columns are read here."""
+    out = {}
+    try:
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT label, username, phone FROM vault_accounts "
+                "WHERE lower(platform) LIKE '%dice%'"
+            ).fetchall()
+    except Exception:
+        return out
+    for r in rows:
+        email = (r["username"] or "").strip().lower()
+        if not email:
+            continue
+        digits = re.sub(r"\D", "", r["phone"] or "")
+        out[email] = {
+            "name": (r["label"] or "").strip(),
+            "phone_last4": digits[-4:] if len(digits) >= 4 else "",
+        }
+    return out
+
+
 @app.route("/api/dice/purchases")
 def api_dice_purchases():
     """The /dice page's Purchases & Holdings section: every auto-recorded
@@ -4768,6 +4795,7 @@ def api_dice_purchases():
     return jsonify({
         "events": events,
         "transfers": transfers,
+        "accounts": _dice_vault_accounts(),
         "problem_count": len(problem_transfers),
         "now": datetime.now(timezone.utc).isoformat(),
     })

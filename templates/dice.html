@@ -354,7 +354,15 @@ async function addManual(){
 let PDATA = null;
 const popen = new Set();
 
-function acctShort(a){ return escape((a||'?').replace(/@gmail\.com$/i, '')); }
+function acctShort(a){
+  // DICE accounts are really name+phone identities — append the vault
+  // entry's buyer name and phone last-4 (matched by email) when known.
+  const short = escape((a||'?').replace(/@gmail\.com$/i, ''));
+  const v = (PDATA && PDATA.accounts || {})[(a||'').toLowerCase()];
+  if (!v || (!v.name && !v.phone_last4)) return `<b>${short}</b>`;
+  const bits = [v.name, v.phone_last4 ? '…' + v.phone_last4 : ''].filter(Boolean).map(escape);
+  return `<b>${short}</b> <span style="color:var(--muted);font-size:10px">(${bits.join(' · ')})</span>`;
+}
 
 function renderPurchases(){
   if (!PDATA) return;
@@ -390,7 +398,7 @@ function renderPurchases(){
     if (opened){
       const rows = g.purchases.map(p => {
         const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
-        return `<div class="ty"><b>${acctShort(p.account_email)}</b> — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_total, p.currency||'USD')} · transferred ${fmt(p.qty_transferred)} · <span class="${p.held>0?'on':'off'}">held ${fmt(p.held)}</span>${warn}</div>`;
+        return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_total, p.currency||'USD')} · transferred ${fmt(p.qty_transferred)} · <span class="${p.held>0?'on':'off'}">held ${fmt(p.held)}</span>${warn}</div>`;
       }).join('');
       html += `<tr class="detail"><td colspan="8">${rows}</td></tr>`;
     }
