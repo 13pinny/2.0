@@ -175,7 +175,7 @@ PACHA_LOW_STOCK_THRESHOLD = int(os.getenv("KARTIS_PACHA_LOW_STOCK_THRESHOLD") or
 # run dashboard sets KARTIS_IL_EVENTS_ENABLED=0 or Discord double-pings.
 IL_EVENT_SOURCES = {"kupat": kupat_events, "tm": tm_events, "barby": barby_events}
 _last_il_events = {"at": None, "events": {}, "new": 0, "onsale": 0,
-                   "notified": 0, "baseline": [], "errors": {},
+                   "newdate": 0, "notified": 0, "baseline": [], "errors": {},
                    "error": None, "running": False}
 _il_events_lock = threading.Lock()
 IL_EVENTS_INTERVAL_MINUTES = int(os.getenv("KARTIS_IL_EVENTS_INTERVAL_MINUTES") or 10)
@@ -395,6 +395,17 @@ def run_il_events():
             except Exception as e:
                 errors[source] = f"{type(e).__name__}: {e}"
                 continue
+            # Kupat only: the site-wide presentations catalog gives per-date
+            # visibility, so a new show added under an EXISTING event page
+            # (same feature id, so invisible to the /api/features diff)
+            # pings as 'newdate'. On fetch failure the perf diff is skipped
+            # this tick — stored perfs_json state is never touched.
+            perf_map = None
+            if source == "kupat":
+                try:
+                    perf_map = mod.fetch_presentations()
+                except Exception as e:
+                    print(f"[il-events] kupat presentations fetch failed (perf diff skipped): {e}")
             seen = db.site_events_all_seen(source)
             baseline = not seen
             if baseline:
@@ -417,6 +428,22 @@ def run_il_events():
                 # not re-arm the 'onsale' ping and fire again on its return.
                 if old is not None and old["on_sale"] and not ev["on_sale"]:
                     ev["on_sale"] = True
+                if perf_map is not None:
+                    cur_keys = {p["perf_key"] for p in perf_map.get(ev["event_key"], [])}
+                    known_json = old.get("perfs_json") if old else None
+                    if old is None or baseline or not known_json:
+                        # brand-new event / first tick with perf data: store
+                        # a silent baseline (the 'new' ping already covers a
+                        # brand-new event's dates).
+                        ev["_perf_union"] = cur_keys
+                    else:
+                        known = set(json.loads(known_json))
+                        added = [p for p in perf_map.get(ev["event_key"], [])
+                                 if p["perf_key"] not in known]
+                        if added:
+                            ev["new_perfs"] = added
+                            pings.append(("newdate", ev, old))
+                        ev["_perf_union"] = known | cur_keys
                 if baseline:
                     continue
                 if old is None:
@@ -426,6 +453,8 @@ def run_il_events():
 
             for ev in events:
                 db.site_events_upsert_seen(source, ev, now_iso)
+                if ev.get("_perf_union") is not None:
+                    db.site_events_set_perfs(source, ev["event_key"], ev["_perf_union"])
             if baseline:
                 print(f"[il-events] {source} baseline stored: {len(events)} events, no pings")
 
@@ -445,6 +474,7 @@ def run_il_events():
                    if len(errors) == len(IL_EVENT_SOURCES) else None),
             new=sum(1 for k, _, _ in pings if k == "new"),
             onsale=sum(1 for k, _, _ in pings if k == "onsale"),
+            newdate=sum(1 for k, _, _ in pings if k == "newdate"),
             notified=notified,
         )
     except Exception as e:

@@ -42,6 +42,10 @@ import kupat
 
 SOURCE_NAME = "kupat"
 FEATURES_URL = kupat.API_BASE + "/features"
+# Site-wide per-performance catalog — the same endpoint market.py reaches
+# through a BrowserSession, but it answers plain urllib too (verified
+# 2026-07). ~1 MB gzipped; feeds the "new date under a known event" diff.
+PRESENTATIONS_URL = kupat.API_BASE + "/presentations/?locationId=0&isHold=0"
 HOME_URL = "https://www.kupat.co.il/"
 
 _TILE_SLUG_RE = re.compile(r'href="https://www\.kupat\.co\.il/show/([a-z0-9_\-]+)"', re.IGNORECASE)
@@ -54,10 +58,10 @@ class KupatEventsError(RuntimeError):
     pass
 
 
-def _get(url):
+def _get(url, timeout=None):
     req = urllib.request.Request(url, headers=kupat.REQUEST_HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=kupat.REQUEST_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or kupat.REQUEST_TIMEOUT) as resp:
             raw = resp.read()
             if resp.headers.get("Content-Encoding") == "gzip":
                 raw = gzip.decompress(raw)
@@ -161,6 +165,40 @@ def fetch_events():
     return events
 
 
+def fetch_presentations():
+    """Every presentation (event date) on the site, grouped by feature id:
+    ``{feature_id: [{perf_key, date_text, venue, soldout, min_price}, …]}``
+    sorted by date. Powers the "new date added under a known event" ping in
+    run_il_events — the /api/features catalog only carries the CLOSEST date
+    per event, so an extra show added to an existing page is invisible
+    there. Raises on network trouble or a zero-row parse (an API change
+    must read as a fetch failure, never as 'all dates removed')."""
+    raw = _get(PRESENTATIONS_URL, timeout=60)
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise KupatEventsError("non-JSON from /api/presentations — API change?") from e
+    rows = body.get("presentations") if isinstance(body, dict) else None
+    if not rows:
+        raise KupatEventsError("presentations endpoint parsed to 0 rows — API change?")
+    by_feature = {}
+    for p in rows:
+        if not isinstance(p, dict) or p.get("id") is None or p.get("featureId") is None:
+            continue
+        venue = ", ".join(x for x in ((p.get("venueName") or "").strip(),
+                                      (p.get("venueCity") or "").strip()) if x)
+        by_feature.setdefault(str(p["featureId"]), []).append({
+            "perf_key": str(p["id"]),
+            "date_text": (p.get("dateTime") or "").strip(),
+            "venue": venue,
+            "soldout": bool(p.get("soldout")),
+            "min_price": p.get("minPrice"),
+        })
+    for perfs in by_feature.values():
+        perfs.sort(key=lambda x: x["date_text"])
+    return by_feature
+
+
 def check_on_sale(ev):
     """Called by the diff loop only when fetch_events returned on_sale=None
     (homepage fetch failed). Raising makes the loop fall back to each
@@ -170,6 +208,23 @@ def check_on_sale(ev):
 
 def main(argv):
     sys.stdout.reconfigure(encoding="utf-8")
+    if "--perfs" in argv:
+        want = next((a for a in argv if a.isdigit()), None)
+        perfs = fetch_presentations()
+        if "--json" in argv:
+            print(json.dumps({want: perfs[want]} if want else perfs,
+                             indent=1, ensure_ascii=False))
+            return 0
+        total = sum(len(v) for v in perfs.values())
+        print(f"{total} presentations across {len(perfs)} features on {PRESENTATIONS_URL}\n")
+        for fid in sorted(perfs, key=int):
+            if want and fid != want:
+                continue
+            for p in perfs[fid]:
+                so = "SOLDOUT" if p["soldout"] else "       "
+                price = f"₪{p['min_price']:g}" if p.get("min_price") else ""
+                print(f"  {fid:>6}/{p['perf_key']:<6} {so} {p['date_text']:<17} {price:<8} {p['venue']}")
+        return 0
     events = fetch_events()
     if "--json" in argv:
         print(json.dumps(events, indent=1, ensure_ascii=False))

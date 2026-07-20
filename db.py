@@ -575,6 +575,11 @@ CREATE TABLE IF NOT EXISTS site_seen_events (
     url           TEXT,
     first_seen_at TEXT NOT NULL,
     last_seen_at  TEXT NOT NULL,
+    -- JSON list of every performance/date key ever seen under this event
+    -- (kupat only; NULL elsewhere). Grows monotonically — a new key under
+    -- a known event is the 'newdate' ping. NULL = no baseline yet, so the
+    -- first tick after deploy stores silently instead of ping-flooding.
+    perfs_json    TEXT,
     PRIMARY KEY (source, event_key)
 );
 -- Market-wide tracker (market.py + app.py run_market_sweep). One row per
@@ -936,6 +941,9 @@ def init():
             conn.execute("ALTER TABLE tm_drops ADD COLUMN notify_count INTEGER")
         # Pricer cross-section competition: JSON array of normalized section
         # names this listing undercuts. NULL = same-section only.
+        sse_cols = {row["name"] for row in conn.execute("PRAGMA table_info(site_seen_events)").fetchall()}
+        if "perfs_json" not in sse_cols:
+            conn.execute("ALTER TABLE site_seen_events ADD COLUMN perfs_json TEXT")
         pc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(viagogo_pricer_config)").fetchall()}
         if "compete_sections" not in pc_cols:
             conn.execute("ALTER TABLE viagogo_pricer_config ADD COLUMN compete_sections TEXT")
@@ -2784,6 +2792,18 @@ def site_events_upsert_seen(source, ev, now_iso):
             (source, ev["event_key"], ev.get("name"), ev.get("venue"),
              ev.get("date_text"), ev.get("first_date_ms"),
              1 if ev.get("on_sale") else 0, ev.get("url"), now_iso, now_iso),
+        )
+
+
+def site_events_set_perfs(source, event_key, perf_keys):
+    """Persist the known-performance set for one event (kupat 'new date'
+    diff). Callers pass the UNION of stored + current keys — the set only
+    ever grows, so a perf dropping off the feed can't re-ping on return.
+    The upsert path never touches perfs_json, so tm/barby rows stay NULL."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE site_seen_events SET perfs_json = ? WHERE source = ? AND event_key = ?",
+            (json.dumps(sorted(perf_keys)), source, event_key),
         )
 
 
