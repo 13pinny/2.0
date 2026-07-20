@@ -5068,6 +5068,7 @@ def api_market():
             "available": avail, "min_price": r.get("min_price"),
             "currency": r.get("currency") or "ILS",
             "manual": bool(r.get("manual")),
+            "watched": _watched(r),
             "windows": windows,
             "tracking_since": earliest_t.isoformat() if earliest_t else None,
             "last_seen_at": r.get("last_seen_at"),
