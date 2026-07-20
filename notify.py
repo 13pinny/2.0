@@ -143,7 +143,8 @@ def _format_seat_lines(seats, limit=40, labels=None):
                 if shown >= limit:
                     lines.append(f"... +{len(seats) - shown} more")
                     return lines
-                lines.append(f"• row {_seat_row(seat)}, seat {_seat_num(seat)}")
+                mark = " ⚠️" if seat.get("unconfirmed") else ""
+                lines.append(f"• row {_seat_row(seat)}, seat {_seat_num(seat)}{mark}")
                 shown += 1
     return lines
 
@@ -184,7 +185,8 @@ def _seat_content_summary(seats, labels=None, when=None, max_seat_lines=14):
             if shown >= max_seat_lines:
                 lines.append(f"… +{len(real) - shown} more")
                 return "\n".join(lines)
-            lines.append(f"row {_seat_row(s)} seat {_seat_num(s)}")
+            lines.append(f"row {_seat_row(s)} seat {_seat_num(s)}"
+                         + (" ⚠️ unconfirmed" if s.get("unconfirmed") else ""))
             shown += 1
     return "\n".join(lines)
 
@@ -297,7 +299,18 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
 
     n_added = len(added_seats)
     is_festival = bool(added_seats) and all(s.get("festival") or s.get("ga") for s in added_seats)
+    # Unconfirmed drops: seats that surfaced in the raw feed of a perf TM
+    # still marks SOLD OUT (the status endpoint is server-side cached and
+    # lags). Often returns about to be released — worth checking NOW, but
+    # not yet proven buyable, so the ping says so explicitly.
+    real_seats = [s for s in added_seats if not (s.get("festival") or s.get("ga"))]
+    n_unconf = sum(1 for s in real_seats if s.get("unconfirmed"))
+    all_unconf = bool(real_seats) and n_unconf == len(real_seats)
     seat_lines = _format_seat_lines(added_seats, labels=labels)
+    if n_unconf:
+        seat_lines.append(
+            "⚠️ = perf still shows SOLD OUT on TM — seats surfaced in the raw "
+            "seat feed (often returns about to open; status lags). Check the page now.")
     seat_block = "\n".join(seat_lines)
     meta = ((labels or {}).get("meta")) or {}
     event_name = meta.get("eventName") or ""
@@ -320,14 +333,18 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
         if headline:
             title_bits.append(headline)
         if not is_festival:
-            title_bits.append(f"🎟️ {n_added} new seat{'s' if n_added != 1 else ''} dropped")
+            if all_unconf:
+                title_bits.append(
+                    f"🕵️ {n_added} seat{'s' if n_added != 1 else ''} surfaced — perf marked SOLD OUT")
+            else:
+                title_bits.append(f"🎟️ {n_added} new seat{'s' if n_added != 1 else ''} dropped")
         if event_name and not (is_festival and headline and event_name in headline):
             title_bits.append(f"— {event_name}")
         embed = {
             "title": " ".join(title_bits)[:256],  # Discord embed title limit
             "description": seat_block[:4000] if seat_block else "(empty)",
             "url": perf_url,
-            "color": 0x57F287,
+            "color": 0xFAA61A if all_unconf else 0x57F287,
             "fields": [
                 {"name": "Watcher", "value": label or "(unnamed)", "inline": True},
             ],
@@ -354,7 +371,10 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
         if headline:
             subj_bits.append(headline)
         if not is_festival:
-            subj_bits.append(f"{n_added} new seat{'s' if n_added != 1 else ''}")
+            if all_unconf:
+                subj_bits.append(f"{n_added} seat{'s' if n_added != 1 else ''} surfaced (perf marked sold out)")
+            else:
+                subj_bits.append(f"{n_added} new seat{'s' if n_added != 1 else ''}")
         if event_name and not (is_festival and headline and event_name in headline):
             subj_bits.append(f"— {event_name}")
         subject = " ".join(subj_bits)[:200]

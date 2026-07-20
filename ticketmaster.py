@@ -303,6 +303,10 @@ def list_performances(event_code):
     return data
 
 
+# Sold-out perf "unconfirmed drop" radar (see fetch_event_seats docstring).
+UNCONFIRMED_ENABLED = (os.getenv("KARTIS_TM_UNCONFIRMED") or "1").strip().lower() not in (
+    "0", "false", "no", "off")
+
 # How long after showtime a perf is still worth polling. Late drops matter
 # right up to (and a bit past) doors; after this the perf is over.
 PAST_PERF_GRACE_MS = 6 * 3600 * 1000
@@ -407,6 +411,19 @@ def fetch_event_seats(event_code):
         seat-level rows, so the watcher records buyable drops and not
         phantom closed-sale seats.
 
+    Sold-out perfs get an extra "unconfirmed drop" radar (KARTIS_TM_UNCONFIRMED,
+    default on): the raw seat feed is fetched anyway and its seats are included
+    flagged `unconfirmed=True` with a "U|"-prefixed dedup key. The perf-list
+    status is server-side cached (/bxcached/), so returns released on a
+    sold-out show can appear — and sell — before the status ever flips to
+    on-sale for us. A NEW seat appearing in the sold-out raw feed is the
+    earliest observable signal of that. The tick loops suppress the first
+    batch per perf (the standing unsold-seat set is not a drop) via the
+    per-perf `_tracking` sentinel; only additions after that ping. If the
+    sold-out feed fetch fails, the perf's sentinel AND seats are omitted, so
+    the tracking baseline self-resets on recovery instead of re-pinging the
+    whole standing set.
+
     Perfs past showtime (plus a grace window) are dropped entirely.
 
     Raises TicketmasterError if the perf list itself can't be fetched, or
@@ -432,6 +449,20 @@ def fetch_event_seats(event_code):
         state = _perf_sale_state(p)
         seats.append(_perf_status_seat(p, state))
         if state != "available":
+            if state == "soldout" and UNCONFIRMED_ENABLED:
+                try:
+                    ps = fetch_selectable_seats(event_code, perf_code)
+                except Exception as e:
+                    per_perf_errors[perf_code] = f"unconfirmed seats: {type(e).__name__}: {e}"
+                else:
+                    seats.append({
+                        "_perf": perf_code, "unconfirmed": True, "_tracking": True,
+                        "block": "#tracking", "row": "", "seat": "",
+                    })
+                    for s in ps:
+                        s["_perf"] = perf_code
+                        s["unconfirmed"] = True
+                    seats.extend(ps)
             continue
         attempted += 1
         try:
@@ -458,8 +489,14 @@ def seat_key(seat):
 
 def event_seat_key(seat):
     """Event-level dedup key — prefixes with `_perf` so identical seat ids
-    from different performances don't collide in the watcher's seat-state set."""
-    return f"{seat.get('_perf','')}|{seat_key(seat)}"
+    from different performances don't collide in the watcher's seat-state set.
+    Unconfirmed (sold-out-perf) seats get an extra "U|" prefix so the same
+    physical seat re-pings as a CONFIRMED drop when the perf status finally
+    flips to on-sale. Must stay in sync with db.tm_replace_seat_state."""
+    key = f"{seat.get('_perf','')}|{seat_key(seat)}"
+    if seat.get("unconfirmed"):
+        key = "U|" + key
+    return key
 
 
 def format_seat(seat):

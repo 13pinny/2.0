@@ -95,6 +95,16 @@ def check_one(w, now_iso):
     was_empty = (w.get("last_seat_count") or 0) == 0
     added, removed = _diff_seats_set(prev_keys, seats, key_fn)
     db.tm_replace_seat_state(wid, seats)
+    # Unconfirmed (sold-out perf) seats: only perfs already under tracking may
+    # ping — the tick that STARTS tracking a perf sees its whole standing
+    # unsold-seat set as "added", which is inventory, not a drop. The per-perf
+    # `_tracking` sentinel in prev state marks tracking as established.
+    # (Keep in sync with app.py._check_one_watcher.)
+    if any(s.get("unconfirmed") for s in added):
+        _tracked = {k.split("|", 2)[1] for k in prev_keys if k.startswith("U|")}
+        added = [s for s in added
+                 if not s.get("_tracking")
+                 and (not s.get("unconfirmed") or (s.get("_perf") or "") in _tracked)]
     db.tm_update_watcher(wid, {
         "last_check_at": now_iso,
         "last_check_error": None,

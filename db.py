@@ -2547,6 +2547,10 @@ def tm_replace_seat_state(watcher_id, seats):
             key = f"{block}|{row}|{num}"
             if s.get("_perf"):
                 key = f"{s['_perf']}|{key}"
+            # Unconfirmed sold-out-perf seats: mirror ticketmaster.event_seat_key's
+            # "U|" prefix or every such seat re-reports as added on every tick.
+            if s.get("unconfirmed"):
+                key = "U|" + key
             if key in seen:
                 continue
             seen.add(key)
