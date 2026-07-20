@@ -79,6 +79,12 @@
   .vel.zero { color: var(--muted); }
   .vel.hot { color: var(--green); font-weight: 600; }
   .vel .star { color: var(--amber); }
+  button.watchbtn { background: var(--bg-2); border: 1px solid var(--accent); color: var(--accent); font: inherit; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; padding: 2px 10px; border-radius: 10px; cursor: pointer; white-space: nowrap; }
+  button.watchbtn:hover { background: var(--accent); color: #fff; }
+  button.watchbtn:disabled { opacity: .5; cursor: wait; }
+  button.watchbtn.failed { border-color: var(--red); color: var(--red); }
+  a.watchon { color: var(--green); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; text-decoration: none; white-space: nowrap; }
+  a.watchon:hover { text-decoration: underline; }
   .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
   .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
   .note { font-size: 11px; color: var(--muted); }
@@ -169,7 +175,10 @@ const COLS = [
   { key:'w7d',   label:'+7d', num:true },
   { key:'scum',  label:'Σ Sold', num:true },
   { key:'price', label:'Min', num:true },
+  { key:'watch', label:'' },
 ];
+// Sources that have a drop-checker module — the WATCH button shows for these.
+const WATCHABLE = new Set(['ticketmaster','kupat','tickchak','dice']);
 
 function fmtAgo(iso){
   if (!iso) return '';
@@ -185,6 +194,14 @@ function velCell(wv){
   const cls = wv.sold > 0 ? 'vel hot' : 'vel zero';
   const star = wv.partial ? '<span class="star" title="limited history — tracked for less than this window">*</span>' : '';
   return `<td class="num ${cls}">${fmt(wv.sold)}${star}</td>`;
+}
+
+function watchCell(s){
+  if (s.watched)
+    return '<td><a class="watchon" href="/watchers" title="already on the watchers page">✓ watching</a></td>';
+  if (!WATCHABLE.has(s.source)) return '<td></td>';
+  const tip = s.source === 'ticketmaster' ? 'watch all dates of this event for drops' : 'watch this event for drops';
+  return `<td><button class="watchbtn" data-src="${escape(s.source)}" data-code="${escape(s.event_code)}" data-perf="${escape(s.perf_code)}" title="${tip}">watch</button></td>`;
 }
 
 function sortVal(s, key){
@@ -203,6 +220,7 @@ function sortVal(s, key){
     case 'w7d': return w('7d');
     case 'scum': return s.sold_cum == null ? -1 : s.sold_cum;
     case 'price': return s.min_price == null ? Infinity : s.min_price;
+    case 'watch': return s.watched ? 1 : 0;
     default: return 0;
   }
 }
@@ -260,6 +278,7 @@ function render(){
       ${velCell((s.windows||{})['7d'])}
       <td class="num"${s.tracked_from ? ` title="sold since tracking began ${escape(s.tracked_from.slice(0,10))}"` : ''}>${s.sold_cum != null ? fmt(s.sold_cum) : '—'}</td>
       <td class="num">${s.min_price != null ? (CUR_SYMBOLS[s.currency] || '₪') + fmt(s.min_price) : '—'}</td>
+      ${watchCell(s)}
     </tr>`;
   }).join('');
 }
@@ -399,6 +418,31 @@ async function load(){
   renderHidden();
   render();
 }
+
+$('rows').addEventListener('click', async ev => {
+  const b = ev.target.closest('button.watchbtn');
+  if (!b) return;
+  b.disabled = true;
+  b.textContent = 'adding…';
+  try {
+    const r = await fetch('/api/market/watch', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({source: b.dataset.src, event_code: b.dataset.code, perf_code: b.dataset.perf})});
+    const d = await r.json();
+    if (!r.ok && r.status !== 409) {   // 409 = already watching — treat as success
+      b.textContent = 'failed';
+      b.classList.add('failed');
+      b.title = d.error || ('HTTP ' + r.status);
+      b.disabled = false;
+      return;
+    }
+    await load();   // re-render; the row now shows "✓ watching"
+  } catch (e) {
+    b.textContent = 'failed';
+    b.classList.add('failed');
+    b.title = String(e);
+    b.disabled = false;
+  }
+});
 
 $('q').addEventListener('input', render);
 $('addBtn').addEventListener('click', addManual);

@@ -395,17 +395,20 @@ def run_il_events():
             except Exception as e:
                 errors[source] = f"{type(e).__name__}: {e}"
                 continue
-            # Kupat only: the site-wide presentations catalog gives per-date
+            # Sources exposing fetch_presentations (kupat: one site-wide
+            # catalog call; tm: one perf-list request per event) get per-date
             # visibility, so a new show added under an EXISTING event page
-            # (same feature id, so invisible to the /api/features diff)
-            # pings as 'newdate'. On fetch failure the perf diff is skipped
-            # this tick — stored perfs_json state is never touched.
+            # (same event key, so invisible to the listing-feed diff) pings
+            # as 'newdate'. On fetch failure the perf diff is skipped this
+            # tick — stored perfs_json state is never touched. An event_key
+            # ABSENT from the map means "no data this tick" and is likewise
+            # skipped (never treated as an empty date list).
             perf_map = None
-            if source == "kupat":
+            if hasattr(mod, "fetch_presentations"):
                 try:
-                    perf_map = mod.fetch_presentations()
+                    perf_map = mod.fetch_presentations(events)
                 except Exception as e:
-                    print(f"[il-events] kupat presentations fetch failed (perf diff skipped): {e}")
+                    print(f"[il-events] {source} presentations fetch failed (perf diff skipped): {e}")
             seen = db.site_events_all_seen(source)
             baseline = not seen
             if baseline:
@@ -428,18 +431,18 @@ def run_il_events():
                 # not re-arm the 'onsale' ping and fire again on its return.
                 if old is not None and old["on_sale"] and not ev["on_sale"]:
                     ev["on_sale"] = True
-                if perf_map is not None:
-                    cur_keys = {p["perf_key"] for p in perf_map.get(ev["event_key"], [])}
+                if perf_map is not None and ev["event_key"] in perf_map:
+                    cur = perf_map[ev["event_key"]]
+                    cur_keys = {p["perf_key"] for p in cur}
                     known_json = old.get("perfs_json") if old else None
-                    if old is None or baseline or not known_json:
+                    if old is None or baseline or known_json is None:
                         # brand-new event / first tick with perf data: store
                         # a silent baseline (the 'new' ping already covers a
                         # brand-new event's dates).
                         ev["_perf_union"] = cur_keys
                     else:
                         known = set(json.loads(known_json))
-                        added = [p for p in perf_map.get(ev["event_key"], [])
-                                 if p["perf_key"] not in known]
+                        added = [p for p in cur if p["perf_key"] not in known]
                         if added:
                             ev["new_perfs"] = added
                             pings.append(("newdate", ev, old))
@@ -5026,6 +5029,24 @@ def api_market():
     # and totals, returned separately so the page can list/unhide them.
     hidden_rows = db.market_hidden_active(now.isoformat())
     hidden_keys = {(h["source"], h["event_code"]) for h in hidden_rows}
+    # Existing drop watchers, so each row can show WATCH vs already-watching.
+    watcher_keys = {
+        (wt.get("source") or "ticketmaster", wt["event_code"], str(wt["perf_code"]))
+        for wt in db.tm_all_watchers()
+    }
+
+    def _watched(r):
+        if (r["source"], r["event_code"], str(r["perf_code"])) in watcher_keys:
+            return True
+        # TM event-level watchers (perf 'ALL') cover every perf of the event;
+        # tickchak/dice market rows use perf '0' while their watchers may
+        # carry a different perf code — match those on event alone.
+        if r["source"] == "ticketmaster":
+            return ("ticketmaster", r["event_code"], "ALL") in watcher_keys
+        if r["source"] in ("tickchak", "dice"):
+            return any(k[0] == r["source"] and k[1] == r["event_code"] for k in watcher_keys)
+        return False
+
     shows = []
     for r in db.market_all():
         if (r["source"], r["event_code"]) in hidden_keys:
@@ -5067,6 +5088,39 @@ _MARKET_HIDE_DURATIONS = {
     "1m": timedelta(days=30),
     "always": None,
 }
+
+
+@app.route("/api/market/watch", methods=["POST"])
+def api_market_watch():
+    """One-click drop watcher from a /market row. Body: {"source",
+    "event_code", "perf_code"?}. TM rows become EVENT-LEVEL watchers
+    (all dates + the sold-out radar); kupat rows watch that presentation;
+    tickchak/dice rows watch the event. zappa/pacha have no watcher source.
+    Reuses _add_one_watcher via each source's shorthand, so labels, default
+    filters, per-event Discord channels, and the baseline tick all apply."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    source = (body.get("source") or "").strip()
+    event_code = str(body.get("event_code") or "").strip()
+    perf_code = str(body.get("perf_code") or "").strip()
+    if not source or not event_code:
+        return jsonify({"error": "source and event_code are required"}), 400
+    if source == "ticketmaster":
+        shorthand = f"{event_code}/ALL"
+    elif source == "kupat":
+        if not perf_code or perf_code == "0":
+            return jsonify({"error": "kupat rows need a perf_code"}), 400
+        shorthand = f"{event_code}/{perf_code}"
+    elif source in ("tickchak", "dice"):
+        shorthand = event_code
+    else:
+        return jsonify({"error": f"{source} has no drop-checker source to watch with"}), 400
+    try:
+        w, warning = _add_one_watcher(shorthand)
+    except ValueError as e:
+        msg = str(e)
+        return jsonify({"error": msg}), (409 if "already watching" in msg else 400)
+    return jsonify({"ok": True, "id": w["id"], "label": w.get("label"), "warning": warning})
 
 
 @app.route("/api/market/hide", methods=["POST"])
