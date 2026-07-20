@@ -143,6 +143,56 @@ def fetch_events():
     return list(events.values())
 
 
+def fetch_presentations(events):
+    """Per-performance lists for the fetched homepage events, keyed like
+    ``{event_key: [{perf_key, date_text, venue, soldout, min_price}, …]}``
+    — powers the same "new date added under a known event" ping as kupat's
+    site-wide catalog. TM has no one-call catalog, so this costs one
+    getPerformanceList request per EVENT row (~1-2s/event with the pacing
+    sleep). GROUP rows are skipped — their member events appear as their
+    own EVENT rows.
+
+    Failure semantics matter: an event whose perf list errors is OMITTED
+    from the result (the diff loop then skips it, leaving stored state
+    untouched) — it must never come back as an empty list, or a transient
+    error would store an empty baseline and every date would ping as "new"
+    next tick. "no performances" (listed pre-schedule) IS a real empty
+    list, so dates appearing later ping."""
+    out = {}
+    for ev in events:
+        key = ev["event_key"]
+        if not key.startswith("ev:"):
+            continue
+        code = key.split(":", 1)[1]
+        try:
+            perfs = ticketmaster.list_performances(code)
+        except ticketmaster.TicketmasterError as e:
+            if "no performances" in str(e):
+                out[key] = []
+            else:
+                print(f"[tm_events] getPerformanceList({code}) failed (perf diff skipped): {e}")
+            time.sleep(0.15)
+            continue
+        except Exception as e:
+            print(f"[tm_events] getPerformanceList({code}) failed (perf diff skipped): {e}")
+            time.sleep(0.15)
+            continue
+        rows = []
+        for p in sorted(perfs, key=lambda x: x.get("performanceDate") or 0):
+            if not isinstance(p, dict) or not p.get("performanceCode"):
+                continue
+            rows.append({
+                "perf_key": str(p["performanceCode"]),
+                "date_text": _date_text(p.get("performanceDate")),
+                "venue": (p.get("venueName") or "").strip(),
+                "soldout": (p.get("status") or "") == "s02_soldout",
+                "min_price": None,  # perf list carries no prices
+            })
+        out[key] = rows
+        time.sleep(0.15)
+    return out
+
+
 def check_on_sale(ev):
     """Resolve whether one fetched event is currently buyable. Costs one
     request; the caller only asks for events not already known to be on sale.
@@ -167,6 +217,22 @@ def main(argv):
     as_json = "--json" in argv
     resolve = "--onsale" in argv
     events = fetch_events()
+    if "--perfs" in argv:
+        want = next((a.upper() for a in argv if a not in ("--perfs", "--json")
+                     and not a.startswith("--")), None)
+        if want:
+            events = [ev for ev in events if ev["event_key"] == "ev:" + want]
+        perfs = fetch_presentations(events)
+        if as_json:
+            print(json.dumps(perfs, indent=1, ensure_ascii=False))
+            return 0
+        total = sum(len(v) for v in perfs.values())
+        print(f"{total} performances across {len(perfs)} events\n")
+        for key, rows in sorted(perfs.items()):
+            for p in rows:
+                so = "SOLDOUT" if p["soldout"] else "       "
+                print(f"  {key:<12}/{p['perf_key']:<6} {so} {p['date_text']:<18} {p['venue']}")
+        return 0
     if resolve:
         for ev in events:
             try:

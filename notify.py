@@ -794,7 +794,7 @@ def notify_site_event(kind, ev, old=None):
     """Israeli-sites event-monitor ping (kupat.co.il / ticketmaster.co.il).
     Discord-only — fires up to every 10 minutes and speed matters more than
     a paper trail. `kind` is 'new' (event just appeared on the site's
-    listing feed), 'newdate' (kupat only — a new performance appeared
+    listing feed), 'newdate' (kupat/tm — a new performance appeared
     under an already-known event page; ev['new_perfs'] lists the added
     dates) or 'onsale' (a listed-but-not-selling event's sale
     opened — for kupat that means the show got PROMOTED TO THE
@@ -819,7 +819,7 @@ def notify_site_event(kind, ev, old=None):
 
     if kind == "newdate":
         # A new performance appeared under an already-known event page
-        # (kupat only) — for sold-out artists this is the highest-value
+        # (kupat/tm) — for sold-out artists this is the highest-value
         # ping there is. `ev['new_perfs']` carries just the added dates.
         added = ev.get("new_perfs") or []
         n = len(added)

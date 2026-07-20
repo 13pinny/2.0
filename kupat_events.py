@@ -165,14 +165,18 @@ def fetch_events():
     return events
 
 
-def fetch_presentations():
+def fetch_presentations(events=None):
     """Every presentation (event date) on the site, grouped by feature id:
     ``{feature_id: [{perf_key, date_text, venue, soldout, min_price}, …]}``
     sorted by date. Powers the "new date added under a known event" ping in
     run_il_events — the /api/features catalog only carries the CLOSEST date
     per event, so an extra show added to an existing page is invisible
-    there. Raises on network trouble or a zero-row parse (an API change
-    must read as a fetch failure, never as 'all dates removed')."""
+    there. `events` is ignored (uniform signature with tm_events — kupat
+    has one site-wide catalog call). A feature id absent from the result
+    means "no dates known this tick"; the diff loop skips it rather than
+    treating it as empty. Raises on network trouble or a zero-row parse
+    (an API change must read as a fetch failure, never as 'all dates
+    removed')."""
     raw = _get(PRESENTATIONS_URL, timeout=60)
     try:
         body = json.loads(raw)
