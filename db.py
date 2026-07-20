@@ -662,7 +662,9 @@ CREATE TABLE IF NOT EXISTS tm_accounts (
     proxy_provider TEXT DEFAULT '',
     proxy_enc      TEXT DEFAULT '',        -- host:port:user:pass etc.
     card_provider  TEXT DEFAULT '',
-    cc_enc         TEXT DEFAULT '',
+    cc_enc         TEXT DEFAULT '',        -- card number
+    cc_exp_enc     TEXT DEFAULT '',        -- mm/yy
+    cc_cvv_enc     TEXT DEFAULT '',
     address_enc    TEXT DEFAULT '',
     notes          TEXT DEFAULT '',
     created_at     TEXT,
@@ -900,6 +902,10 @@ def init():
         va_cols = {row["name"] for row in conn.execute("PRAGMA table_info(vault_accounts)").fetchall()}
         if "phone" not in va_cols:
             conn.execute("ALTER TABLE vault_accounts ADD COLUMN phone TEXT DEFAULT ''")
+        tma_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tm_accounts)").fetchall()}
+        for _c in ("cc_exp_enc", "cc_cvv_enc"):
+            if _c not in tma_cols:
+                conn.execute(f"ALTER TABLE tm_accounts ADD COLUMN {_c} TEXT DEFAULT ''")
         mi_cols = {row["name"] for row in conn.execute("PRAGMA table_info(manual_inventory)").fetchall()}
         if "email" not in mi_cols:
             conn.execute("ALTER TABLE manual_inventory ADD COLUMN email TEXT")

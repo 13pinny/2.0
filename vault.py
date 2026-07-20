@@ -209,7 +209,7 @@ def delete_account(id_):
 
 # ------------------------------------------------ TM accounts (/tm page)
 
-TM_SECRET_FIELDS = ("password", "proxy", "cc", "address")
+TM_SECRET_FIELDS = ("password", "proxy", "cc", "cc_exp", "cc_cvv", "address")
 _TM_PLAIN = ("account_no", "email", "acct_source", "proxy_provider",
              "card_provider", "notes")
 
@@ -248,9 +248,9 @@ def tm_add(fields, now_iso):
         cur = conn.execute(
             """INSERT INTO tm_accounts
                (account_no, email, acct_source, proxy_provider, card_provider,
-                notes, password_enc, proxy_enc, cc_enc, address_enc,
-                created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                notes, password_enc, proxy_enc, cc_enc, cc_exp_enc,
+                cc_cvv_enc, address_enc, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             tuple((fields.get(c) or "").strip() for c in _TM_PLAIN)
             + tuple(encrypt(fields.get(f, "")) for f in TM_SECRET_FIELDS)
             + (now_iso, now_iso),

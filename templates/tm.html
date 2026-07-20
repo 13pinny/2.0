@@ -105,7 +105,7 @@
     </div>
     <div id="bulkPanel" style="display:none;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px">
       <p class="sub" style="margin-top:0">One account per line, columns separated by <b>tabs</b> (paste straight from Google Sheets) or commas, in this order:</p>
-      <p class="sub" style="font-family:Consolas,monospace;font-size:11px">account # → email → password → account source → proxy provider → proxy → card provider → cc details → address → notes</p>
+      <p class="sub" style="font-family:Consolas,monospace;font-size:11px">account # → email → password → account source → proxy provider → proxy → card provider → card number → exp (mm/yy) → cvv → address → notes</p>
       <p class="sub">Leave trailing columns off if you don't have them. Rows missing both email and password are skipped.</p>
       <textarea id="bulkText" style="width:100%;min-height:130px;font-family:Consolas,monospace;font-size:11px" placeholder="1&#9;tm1@gmail.com&#9;pass123&#9;self&#9;Oxylabs&#9;1.2.3.4:8080:u:p&#9;Visa&#9;4111.../09-28/123&#9;123 Main St NYC"></textarea>
       <div style="display:flex;gap:10px;align-items:center;margin-top:10px">
@@ -202,7 +202,7 @@ function render() {
       <td>${esc(a.acct_source) || "—"}</td>
       <td>${esc(a.proxy_provider) || "—"}</td>
       <td data-cell="proxy-${a.id}">${secretCell(a, "proxy")}</td>
-      <td>${esc(a.card_provider)}${a.card_provider && a.has_cc ? " " : ""}${a.has_cc ? `<button class="mini" data-copysecret="${a.id}" data-f="cc">copy</button>` : (a.card_provider ? "" : "—")}</td>
+      <td data-cell="card-${a.id}">${esc(a.card_provider)}${a.card_provider ? " " : ""}${a.has_cc ? `<button class="mini" data-copysecret="${a.id}" data-f="cc" title="copies card number only">copy #</button>` : ""}${a.has_cc || a.has_cc_exp || a.has_cc_cvv ? ` <button class="mini" data-cardpeek="${a.id}">👁</button><span class="dots"></span>` : (a.card_provider ? "" : "—")}</td>
       <td>${a.has_address ? `<button class="mini" data-copysecret="${a.id}" data-f="address">copy</button>` : "—"}</td>
       <td style="white-space:normal;max-width:180px;font-size:11px;color:var(--muted)">${esc(a.notes)}</td>
       <td><button class="mini" data-edit="${a.id}">edit</button></td>
@@ -224,7 +224,9 @@ function editorHtml(a) {
     <label>Proxy provider <input id="f_proxy_provider" value="${esc(v.proxy_provider || "")}" placeholder="Oxylabs / Smartproxy / …" /></label>
     <label>Proxy <input id="f_proxy" placeholder="host:port:user:pass" /></label>
     <label>Card provider <input id="f_card_provider" value="${esc(v.card_provider || "")}" placeholder="Visa / Amex / bank…" /></label>
-    <label>CC details <textarea id="f_cc" placeholder="number / exp / cvv"></textarea></label>
+    <label>Card number <input id="f_cc" inputmode="numeric" placeholder="${a && a.has_cc ? "(loading…)" : "4111 1111 1111 1111"}" /></label>
+    <label>Expiration (mm/yy) <input id="f_cc_exp" placeholder="09/28" style="max-width:110px" /></label>
+    <label>CVV <input id="f_cc_cvv" inputmode="numeric" maxlength="4" placeholder="123" style="max-width:90px" /></label>
     <label>Address <textarea id="f_address"></textarea></label>
     <label>Notes <textarea id="f_notes">${esc(v.notes || "")}</textarea></label>
     <div class="buttons">
@@ -256,6 +258,16 @@ function wire() {
       dots.textContent = j[b.dataset.f]; dots.dataset.shown = "1";
     } catch (e) { err(String(e.message || e)); }
   });
+  document.querySelectorAll("[data-cardpeek]").forEach(b => b.onclick = async () => {
+    const cell = document.querySelector(`[data-cell="card-${b.dataset.cardpeek}"]`);
+    const dots = cell.querySelector(".dots");
+    if (dots.dataset.shown) { dots.textContent = ""; delete dots.dataset.shown; return; }
+    try {
+      const j = await api("/api/tm/secret?id=" + b.dataset.cardpeek);
+      dots.textContent = " " + [j.cc, j.cc_exp, j.cc_cvv].filter(Boolean).join(" · ");
+      dots.dataset.shown = "1";
+    } catch (e) { err(String(e.message || e)); }
+  });
   document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(Number(b.dataset.edit)));
   const form = document.querySelector("[data-form]");
   if (form) wireForm(form);
@@ -271,6 +283,9 @@ async function openEdit(id) {
     form.querySelector("#f_password").placeholder = "";
     form.querySelector("#f_proxy").value = j.proxy;
     form.querySelector("#f_cc").value = j.cc;
+    form.querySelector("#f_cc").placeholder = "";
+    form.querySelector("#f_cc_exp").value = j.cc_exp;
+    form.querySelector("#f_cc_cvv").value = j.cc_cvv;
     form.querySelector("#f_address").value = j.address;
   } catch (e) { err(String(e.message || e)); }
 }
@@ -280,7 +295,7 @@ function wireForm(form) {
   form.querySelector("#f_cancel").onclick = () => { openEditor = null; render(); };
   form.querySelector("#f_save").onclick = async () => {
     const body = {};
-    for (const f of ["account_no", "email", "password", "acct_source", "proxy_provider", "proxy", "card_provider", "cc", "address", "notes"])
+    for (const f of ["account_no", "email", "password", "acct_source", "proxy_provider", "proxy", "card_provider", "cc", "cc_exp", "cc_cvv", "address", "notes"])
       body[f] = form.querySelector("#f_" + f).value;
     err("");
     try {
@@ -298,7 +313,7 @@ function wireForm(form) {
 }
 
 /* ---------------- bulk add ---------------- */
-const BULK_COLS = ["account_no", "email", "password", "acct_source", "proxy_provider", "proxy", "card_provider", "cc", "address", "notes"];
+const BULK_COLS = ["account_no", "email", "password", "acct_source", "proxy_provider", "proxy", "card_provider", "cc", "cc_exp", "cc_cvv", "address", "notes"];
 
 function parseBulk(text) {
   const rows = [];
