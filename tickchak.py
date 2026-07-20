@@ -603,6 +603,17 @@ def _festival_status(ev_info, public_available, have_counts):
     return "available"
 
 
+def _read_cached_festival(event_code, lang):
+    """Last written festival labels payload from the on-disk cache, or None.
+    Used as the fallback state when the feed or the per-type counts hiccup —
+    surviving restarts, unlike the in-memory snapshot cache."""
+    try:
+        cached = json.loads(_cache_path(event_code, lang).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return cached if isinstance(cached, dict) and cached.get("festival") else None
+
+
 def _festival_stub(event_code, slug, lang):
     """Minimal festival payload for when the feed is unreachable and we
     have no cached snapshot yet. Status defaults to 'available' so the
@@ -639,10 +650,13 @@ def _festival_snapshot(event_code, lang="iw"):
         feed = _fetch_festival_feed(slug)
     except TickchakError:
         # Known festival event but the feed is momentarily unreachable —
-        # return stale data if we have it, else a minimal stub. Never fall
-        # back to the legacy event-page path (it redirects to the hub and
-        # yields the wrong event).
-        return hit[1] if hit else _festival_stub(ev, slug, lang)
+        # return stale data (memory, then the on-disk labels cache — a
+        # restart empties memory and the stub would otherwise fake an
+        # 'available' flip on a sold-out show), else a minimal stub. Never
+        # fall back to the legacy event-page path (it redirects to the hub
+        # and yields the wrong event).
+        stale = hit[1] if hit else _read_cached_festival(ev, lang)
+        return stale if stale is not None else _festival_stub(ev, slug, lang)
 
     ev_info = (feed.get("events") or {}).get(ev) or {}
     event_hash = (feed.get("hash_map") or {}).get(ev)
@@ -651,6 +665,20 @@ def _festival_snapshot(event_code, lang="iw"):
     total_capacity = 0
     total_available = 0
     init = _fetch_form_init(ev, event_hash) if event_hash else None
+    if not (init and isinstance(init.get("tickets"), list)):
+        # /ajax/form/init (or the feed's hash blob) hiccuped this tick. The
+        # hub's own soldOut/lastTickets flags are NOT a trustworthy
+        # substitute — they lie in both directions (see _festival_status) —
+        # so an event we've been judging by live counts must not be
+        # re-judged by flags: that exact downgrade pinged 'sold out' on all
+        # three watched Chutzot shows in one tick and 'available again' four
+        # minutes later (2026-07-20 11:16→11:20). Reuse the last
+        # counts-based snapshot instead; counts return next tick. Events
+        # never seen with counts still fall through to flag-based status.
+        prev = hit[1] if hit else _read_cached_festival(ev, lang)
+        if prev is not None and (prev.get("meta") or {}).get("availSeats") is not None:
+            _fest_snap_cache[ev] = (time.time(), prev)
+            return prev
     have_counts = bool(init and isinstance(init.get("tickets"), list))
     if have_counts:
         types, total_capacity, total_available = _normalize_form_init_tickets(init)
