@@ -70,9 +70,11 @@ def _exclusive_browser(timeout=180, category="listing"):
         raise ViagogoListingError(
             f"timed out waiting for another viagogo {category} operation to finish"
         )
+    scraper.viagogo_op_started()   # shields our tabs from stray-tab cleanup
     try:
         yield
     finally:
+        scraper.viagogo_op_finished()
         _BROWSER_LOCKS[category].release()
 
 # Empirically confirmed from two real listings on this account (Caesarea
@@ -196,8 +198,9 @@ def search_event(query, limit=10):
     Returns up to `limit` candidate dicts: {event_id, event_name, venue,
     city, weekday, date, time}. Read-only — opens its own page, never
     creates or modifies anything, and closes the page before returning.
+    Fail-fast lock: this is interactive (the UI retries), so don't queue long.
     """
-    with _exclusive_browser(), sync_playwright() as p:
+    with _exclusive_browser(timeout=60), sync_playwright() as p:
         page = _open_listings_page(p)
         try:
             _open_new_listing_modal(page)
@@ -342,9 +345,9 @@ def fetch_sections(event_id, search_query, ticket_type="E-Tickets"):
     Navigates to the New Listing modal, picks the event row and ticket-type
     tile, reads the Listing.Section <select> options, then closes the page.
     Takes ~10 s (drives the live browser). Results should be cached by the
-    caller — nothing is written.
+    caller — nothing is written. Fail-fast lock: interactive, the UI retries.
     """
-    with _exclusive_browser(), sync_playwright() as p:
+    with _exclusive_browser(timeout=60), sync_playwright() as p:
         page = _open_listings_page(p)
         try:
             _open_new_listing_modal(page)
@@ -1074,8 +1077,13 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
 
     Caller is responsible for getting explicit user approval before calling
     this — this function actually saves the listing (as a draft).
+
+    Long lock timeout: an approve is the one flow that must not die in the
+    queue — section fetches from the UI can stack up in front of it (each
+    ~40s), which is exactly how the 2026-07-20 Eden Ben Zaken approve
+    timed out at the old 180s.
     """
-    with _exclusive_browser(), sync_playwright() as p:
+    with _exclusive_browser(timeout=600), sync_playwright() as p:
         page = _open_listings_page(p)
         try:
             _open_new_listing_modal(page)

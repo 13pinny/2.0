@@ -1073,6 +1073,29 @@ def _parse_int(text):
 # before connecting. The noVNC "open-logins" button reopens them on demand.
 _CDP_STRAY_HOSTS = ("lysted.com", "automatiq.com", "crowdvolt.com", "viagogo.com")
 
+# Live viagogo browser operations (viagogo_listing/pricer/vgsales lanes).
+# While any is active, pre-connect cleanup must NOT close inv.viagogo.com
+# tabs — with the listing/pricing lock lanes running concurrently, another
+# lane's WORKING page matches the "viagogo.com" stray host and closing it
+# kills that flow mid-run (seen live 2026-07-20: a sections fetch closed the
+# vgsales tick's page -> TargetClosedError). Login-ish strays on the other
+# hosts still get closed.
+import threading as _threading
+_viagogo_ops_lock = _threading.Lock()
+_viagogo_ops_active = 0
+
+
+def viagogo_op_started():
+    global _viagogo_ops_active
+    with _viagogo_ops_lock:
+        _viagogo_ops_active += 1
+
+
+def viagogo_op_finished():
+    global _viagogo_ops_active
+    with _viagogo_ops_lock:
+        _viagogo_ops_active = max(0, _viagogo_ops_active - 1)
+
 
 def _close_stray_cdp_pages(cdp_url):
     """Best-effort: close leftover ticketing login tabs via the CDP HTTP API so
@@ -1090,6 +1113,9 @@ def _close_stray_cdp_pages(cdp_url):
     pages = [t for t in targets if t.get("type") == "page"]
     strays = [t for t in pages if t.get("id")
               and any(h in (t.get("url") or "").lower() for h in _CDP_STRAY_HOSTS)]
+    if _viagogo_ops_active > 0:
+        strays = [t for t in strays
+                  if "inv.viagogo.com" not in (t.get("url") or "").lower()]
     if not strays:
         return
     # Closing the last remaining page makes Chrome quit (no windows left) ->
