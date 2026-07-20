@@ -67,6 +67,12 @@
   .sw-row { display: flex; align-items: center; gap: 8px; }
   .sw-note { font-size: 10px; color: var(--muted); }
 
+  /* listing-note / restriction checkbox rows */
+  .opt-row { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+  .opt-row label.opt { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text);
+                       text-transform: none; letter-spacing: 0; cursor: pointer; user-select: none; }
+  .opt-row label.opt input { width: auto; cursor: pointer; accent-color: var(--accent); }
+
   /* compete-sections picker (popup with big clickable chips, like /pricer) */
   #cs-overlay { display: none; position: fixed; inset: 0; background: rgba(15,23,32,0.45); z-index: 40; }
   #cs-panel { display: none; position: fixed; top: 8vh; left: 50%; transform: translateX(-50%);
@@ -254,6 +260,26 @@ function renderCards(rows) {
         <label>Face value $/ea</label><input data-f="face_value" type="number" step="0.01" value="${r.cost_usd_per_ticket ?? ""}">
         <label>Row</label><input data-f="row" type="text" value="${esc(r.row_label || "")}">
         <label>Seats (kupat)</label><input type="text" value="${esc(r.seats || "")}" readonly style="opacity:0.6;">
+        <label title="Viagogo listing notes — can only be set before tickets are uploaded, so pick them here">Notes</label>
+        <div class="opt-row">
+          <label class="opt"><input type="checkbox" data-f="note_standing">Standing Only</label>
+          <label class="opt"><input type="checkbox" data-f="note_aisle">Aisle seat</label>
+          <label class="opt"><input type="checkbox" data-f="note_row1">Actual 1st row of section</label>
+          <label class="opt"><input type="checkbox" data-f="note_row2">Actual 2nd row of section</label>
+        </div>
+        <label title="Viagogo 'Restrictions on Use'">Restrictions</label>
+        <div class="opt-row">
+          <label class="opt"><input type="checkbox" data-f="restrict_21">21 and over Ticket</label>
+          <label class="opt"><input type="checkbox" data-f="restrict_18">Over 18 Ticket</label>
+        </div>
+        <label title="Viagogo 'Ticket Separation' — how the listing may be split between buyers. Auto: numbered rows avoid leaving one or three; GA/no row = Any.">Separation</label>
+        <select data-f="split_preference" style="grid-column: 2 / -1;">
+          <option value="Any">Any</option>
+          <option value="None">None (sell together)</option>
+          <option value="AvoidOne">Avoid leaving one ticket</option>
+          <option value="AvoidOneAndThree">Avoid leaving one or three tickets</option>
+          <option value="Pairs">Avoid odd numbers</option>
+        </select>
         <label title="Attach the e-ticket PDFs to this listing right after it's created. Turn off to list now and upload tickets yourself later.">Upload tickets</label>
         <div class="sw-row">
           <label class="sw"><input data-f="upload_tickets" type="checkbox" ${r.ticket_url ? "checked" : "disabled"}><span class="track"></span></label>
@@ -281,6 +307,20 @@ function renderCards(rows) {
       </div>
     `;
     container.appendChild(card);
+
+    // Ticket-separation smart default: numbered row → avoid leaving one or
+    // three; blank/GA-like row → Any. Re-derived when Row changes, until the
+    // user touches the dropdown themselves.
+    const GA_ROW_RE = /^\s*(ga|gen(eral)?\s*adm(ission)?|standing|עמידה|כללי)?\s*$/i;
+    const rowInput = card.querySelector("input[data-f='row']");
+    const splitSel = card.querySelector("select[data-f='split_preference']");
+    const deriveSplit = () => {
+      if (splitSel.dataset.dirty) return;
+      splitSel.value = GA_ROW_RE.test(rowInput.value) ? "Any" : "AvoidOneAndThree";
+    };
+    splitSel.addEventListener("change", () => { splitSel.dataset.dirty = "1"; });
+    rowInput.addEventListener("input", deriveSplit);
+    deriveSplit();
 
     // Wire event + ticket-type dropdowns to reload the section list
     const eventSel = card.querySelector("select[data-f='event_id']");
@@ -503,6 +543,12 @@ async function approveCard(card, publish) {
   };
   const upEl = card.querySelector("input[data-f='upload_tickets']");
   body.upload_tickets = !!(upEl && upEl.checked && !upEl.disabled);
+  // Notes + restrictions are one checkbox pool on viagogo's form; the
+  // generic [data-f] collector above read .value — checkboxes need .checked.
+  body.listing_notes = ["note_standing", "note_aisle", "note_row1", "note_row2",
+                        "restrict_21", "restrict_18"]
+    .filter(k => !!card.querySelector(`input[data-f='${k}']`)?.checked);
+  body.split_preference = f.split_preference || "Any";
   const pricerOn = !!card.querySelector("input[data-f='pricer_enabled']")?.checked;
   if (pricerOn) {
     const floor = parseFloat(f.pricer_floor || "0");
@@ -517,7 +563,14 @@ async function approveCard(card, publish) {
   const upTxt = upEl && !upEl.disabled
     ? (body.upload_tickets ? " E-tickets will be attached." : " ⚠ Tickets will NOT be uploaded — attach them yourself before it sells.")
     : "";
-  if (!confirm(`Create a ${kind} — ${body.available_tickets} × $${price.toFixed(2)}/ea (you net $${proceeds.toFixed(2)}/ea) in "${body.section}"?${upTxt}${pricerTxt}`)) return;
+  const NOTE_LABELS = {note_standing: "Standing Only", note_aisle: "Aisle seat",
+                       note_row1: "1st row", note_row2: "2nd row",
+                       restrict_21: "21+", restrict_18: "18+"};
+  const SPLIT_LABELS = {Any: "any split", None: "sell together", AvoidOne: "avoid leaving 1",
+                        AvoidOneAndThree: "avoid leaving 1 or 3", Pairs: "avoid odd numbers"};
+  const optTxt = ` Separation: ${SPLIT_LABELS[body.split_preference] || body.split_preference}.`
+    + (body.listing_notes.length ? ` Notes: ${body.listing_notes.map(k => NOTE_LABELS[k] || k).join(", ")}.` : "");
+  if (!confirm(`Create a ${kind} — ${body.available_tickets} × $${price.toFixed(2)}/ea (you net $${proceeds.toFixed(2)}/ea) in "${body.section}"?${optTxt}${upTxt}${pricerTxt}`)) return;
   const res = await fetch("/api/viagogo-push/approve", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
   if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Approve failed: " + (e.error || res.status)); return; }
   await load();

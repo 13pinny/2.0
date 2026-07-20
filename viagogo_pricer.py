@@ -378,8 +378,9 @@ def listing_section_set(cfg, row):
 def refresh_market_snapshot(event_id):
     """On-demand MarketDataV3 fetch for the /pricer market panel's Refresh
     button. Opens its own warmed page (~30s), persists the snapshot, and
-    returns the parsed rows. Serialized with ticks via _exclusive_browser."""
-    with _exclusive_browser(), sync_playwright() as p:
+    returns the parsed rows. Serialized with ticks via _exclusive_browser
+    (the "pricing" lane — never blocks or waits on listing/upload flows)."""
+    with _exclusive_browser(category="pricing"), sync_playwright() as p:
         page = viagogo_listing._open_listings_page(p)
         try:
             rows = fetch_market_listings(page, event_id)
@@ -751,7 +752,7 @@ def run_pricer_tick(dry_run=None):
     raise_global = allow_raise_global()
     now = _now_iso()
 
-    with _exclusive_browser(), sync_playwright() as p:
+    with _exclusive_browser(category="pricing"), sync_playwright() as p:
         page = viagogo_listing._open_listings_page(p)
         context = page.context
         try:

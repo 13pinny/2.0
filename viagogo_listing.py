@@ -17,6 +17,22 @@ create_draft_listing() defaults to forcing the Publish toggle OFF before
 saving (draft) — the form defaults it on, and an accidental live listing is
 the one mistake this module must never make. Pass publish=True to explicitly
 go live; the toggle state is then asserted rather than assumed.
+
+Listing notes / restrictions / split (probed 2026-07-20 via
+scripts/probe_viagogo_listing_options.py against a real New Listing form):
+  - Listing notes AND "Restrictions on Use" are one flat pool of checkboxes,
+    all named Listing.ListingNoteIds with ids Listing_ListingNote<N>. The
+    numeric note ids are global viagogo constants, not per-event: Standing
+    Only=72, Aisle seat=10 (a second 'Aisle seat' exists as 2024), Actual
+    1st row of the section=811, Actual 2nd row of section=810, 21 and over
+    Ticket=71, Over 18 Ticket=74.
+  - Ticket separation is select[name="Listing.SplitType"]
+    (id Listing_SplitType); options Any / None / AvoidOne /
+    AvoidOneAndThree / Pairs. The form defaults to Any.
+  - These can only be set at creation (or pre-upload edit) — once tickets
+    are uploaded viagogo locks them, which is why they're set here.
+Failures applying any of them are downgraded to entries in the returned
+option_warnings list — a note that didn't stick must never abort a listing.
 """
 import random
 import re
@@ -33,28 +49,52 @@ LISTINGS_URL = "https://inv.viagogo.com/Listings"
 NAV_TIMEOUT_MS = 30000
 MODAL_TIMEOUT_MS = 15000
 
-# One modal flow at a time: every function here drives the same CDP Chrome,
-# and a section-fetch racing an approve (or two approves) trips over the
-# shared #modal state. Threads queue here instead of failing flaky.
-_BROWSER_LOCK = threading.Lock()
+# Two lock lanes instead of one global mutex. Every flow opens its OWN tab
+# in the shared CDP Chrome, so different-tab flows don't share DOM state and
+# can run side by side (user-confirmed 2026-07-20: two inv.viagogo tabs work
+# fine together — a pricer tick was blocking ticket uploads for its whole
+# run). What must stay serialized is flows WITHIN a lane:
+#   "listing" — New Listing modal flows (a section-fetch racing an approve,
+#               or two approves, trip over the shared #modal state).
+#   "pricing" — pricer ticks + vgsales MarketDataV3 fetches (a full tick
+#               reads then edits prices; two at once would double-write).
+_BROWSER_LOCKS = {
+    "listing": threading.Lock(),
+    "pricing": threading.Lock(),
+}
 
 
 @contextmanager
-def _exclusive_browser(timeout=180):
-    if not _BROWSER_LOCK.acquire(timeout=timeout):
+def _exclusive_browser(timeout=180, category="listing"):
+    if not _BROWSER_LOCKS[category].acquire(timeout=timeout):
         raise ViagogoListingError(
-            "timed out waiting for another viagogo browser operation to finish"
+            f"timed out waiting for another viagogo {category} operation to finish"
         )
     try:
         yield
     finally:
-        _BROWSER_LOCK.release()
+        _BROWSER_LOCKS[category].release()
 
 # Empirically confirmed from two real listings on this account (Caesarea
 # Orchestra: $232 -> $208.80 proceeds; Middle Tier 1: $200 -> $180 proceeds) —
 # viagogo takes a flat 10% seller commission. We compute Proceeds ourselves
 # rather than rely on uncertain page auto-calc JS.
 PROCEEDS_RATE = 0.90
+
+# UI key -> candidate Listing_ListingNote<N> checkbox ids on the New Listing
+# form, most-preferred first (see module docstring; 'aisle' has a legacy and
+# a newer duplicate note). The label is the fallback lookup if the ids drift.
+LISTING_NOTE_OPTIONS = {
+    "note_standing": {"ids": [72], "label": "Standing Only"},
+    "note_aisle": {"ids": [10, 2024], "label": "Aisle seat"},
+    "note_row1": {"ids": [811], "label": "Actual 1st row of the section"},
+    "note_row2": {"ids": [810], "label": "Actual 2nd row of section"},
+    "restrict_21": {"ids": [71], "label": "21 and over Ticket"},
+    "restrict_18": {"ids": [74], "label": "Over 18 Ticket"},
+}
+
+# Values for select[name="Listing.SplitType"] on the New Listing form.
+SPLIT_TYPES = {"Any", "None", "AvoidOne", "AvoidOneAndThree", "Pairs"}
 
 
 class ViagogoListingError(RuntimeError):
@@ -67,16 +107,29 @@ def _open_listings_page(p):
     The inv.viagogo.com SPA goes stale: deep-loading /Listings on a session
     that's been sitting often never renders its data. The manual remedy is
     always "close the tab, open inv.viagogo.com, then click through to
-    Listings" — so replicate it: land on the root first, then navigate to
-    Listings, verify the page chrome actually rendered (the New Listing
-    button), and reload once if it didn't.
+    Listings" — so replicate it: land on the root first, then CLICK through
+    to Listings via the site's own nav (user-confirmed 2026-07-20: the in-SPA
+    logo→Listings click path renders reliably where a hard /Listings deep
+    load lags), verify the page chrome actually rendered (the New Listing
+    button), and reload once if it didn't. If the nav link can't be found,
+    fall back to the old hard navigation.
     """
     browser = scraper._connect_over_cdp(p, scraper.CDP_URL_VIAGOGO)
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     page = context.new_page()
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
     page.wait_for_timeout(800)
-    page.goto(LISTINGS_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+    clicked = False
+    try:
+        nav = page.locator('a[href="/Listings"], a[href*="/Listings"]').first
+        nav.wait_for(state="visible", timeout=5000)
+        nav.click()
+        page.wait_for_url("**/Listings*", timeout=MODAL_TIMEOUT_MS)
+        clicked = True
+    except Exception:
+        pass
+    if not clicked:
+        page.goto(LISTINGS_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
     try:
         page.wait_for_selector('text="New Listing"', timeout=MODAL_TIMEOUT_MS)
     except Exception:
@@ -176,6 +229,69 @@ def _fill_row(page, row_value):
             text_input.first.fill(str(row_value))
     except Exception:
         pass
+
+
+def _check_listing_note(page, key):
+    """Tick one LISTING_NOTE_OPTIONS checkbox on the New Listing form.
+
+    Styled checkboxes here may be visually hidden behind their label (same
+    as #IsPublishToViagogo), so click the label[for=...] and assert state on
+    the input. Raises if the note can't be found or won't stick.
+    """
+    opt = LISTING_NOTE_OPTIONS[key]
+    box = None
+    for note_id in opt["ids"]:
+        cand = page.locator(f"#Listing_ListingNote{note_id}")
+        if cand.count():
+            box = cand.first
+            break
+    if box is None:
+        # ids drifted — fall back to matching the label text
+        lab = page.locator("label", has_text=opt["label"]).first
+        if not lab.count():
+            raise ViagogoListingError(f"note checkbox not found: {opt['label']!r}")
+        for_id = lab.get_attribute("for")
+        if not for_id:
+            raise ViagogoListingError(f"note label has no target: {opt['label']!r}")
+        box = page.locator(f"#{for_id}")
+    if box.is_checked():
+        return
+    box_id = box.get_attribute("id")
+    label = page.locator(f'label[for="{box_id}"]').first
+    if label.count():
+        label.click()
+    else:
+        box.click()
+    if not box.is_checked():
+        raise ViagogoListingError(f"note did not stick: {opt['label']!r}")
+
+
+def _apply_listing_options(page, listing_notes, split_preference):
+    """Best-effort: tick the requested note/restriction checkboxes and set
+    the SplitType dropdown on the New Listing form. Returns a list of
+    human-readable warnings for anything that failed — never raises, the
+    listing must still be created."""
+    warnings = []
+    for key in listing_notes or []:
+        if key not in LISTING_NOTE_OPTIONS:
+            warnings.append(f"unknown listing note {key!r} — skipped")
+            continue
+        try:
+            _check_listing_note(page, key)
+        except Exception as e:
+            warnings.append(
+                f"couldn't set note {LISTING_NOTE_OPTIONS[key]['label']!r}: {e}")
+    if split_preference:
+        try:
+            if split_preference not in SPLIT_TYPES:
+                raise ViagogoListingError(f"unknown split type {split_preference!r}")
+            sel = page.locator('select[name="Listing.SplitType"]')
+            sel.select_option(split_preference)
+            if sel.input_value() != split_preference:
+                raise ViagogoListingError("select did not take the value")
+        except Exception as e:
+            warnings.append(f"couldn't set ticket separation {split_preference!r}: {e}")
+    return warnings
 
 
 def _click_event_row(page, event_id, match_row=None):
@@ -937,7 +1053,8 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
                           available_tickets, website_price, face_value,
                           currency="USD", proceeds=None, row=None,
                           seat_from=None, seat_to=None, max_display_quantity=None,
-                          ticket_pdfs=None, publish=False):
+                          ticket_pdfs=None, publish=False,
+                          listing_notes=None, split_preference=None):
     """Creates a viagogo listing in DRAFT (unpublished) state and saves it.
 
     event_id      — numeric viagogo event id from a prior search_event() call.
@@ -948,6 +1065,12 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
                     dropdown (see db.viagogo_section_map_get for the Kupat ->
                     viagogo section-name translation).
     proceeds      — defaults to website_price * PROCEEDS_RATE if not given.
+    listing_notes — iterable of LISTING_NOTE_OPTIONS keys to tick (listing
+                    notes + restrictions-on-use share one checkbox pool).
+    split_preference — a SPLIT_TYPES value for the Ticket Separation
+                    dropdown (None leaves viagogo's default, "Any").
+    Failures applying notes/split are returned in option_warnings, never
+    raised — the listing is created regardless.
 
     Caller is responsible for getting explicit user approval before calling
     this — this function actually saves the listing (as a draft).
@@ -982,6 +1105,9 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
             page.fill('input[name="Listing.FaceValue"]', f"{face_value:.2f}")
             if max_display_quantity is not None:
                 page.fill('input[name="Listing.MaxDisplayQuantity"]', str(max_display_quantity))
+
+            option_warnings = _apply_listing_options(
+                page, listing_notes, split_preference)
 
             # Drive the Publish toggle to the requested state and ASSERT it —
             # never assume. The real checkbox is visually hidden behind a
@@ -1047,6 +1173,7 @@ def create_draft_listing(event_id, search_query, ticket_type, section,
                 "listing_id": listing_id,
                 "tickets_uploaded": tickets_uploaded,
                 "ticket_upload_error": ticket_upload_error,
+                "option_warnings": option_warnings,
             }
         finally:
             try:

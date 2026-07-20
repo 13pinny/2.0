@@ -230,7 +230,8 @@ def fetch_one(event_id, write=True, lock_timeout=180):
     by the /api/vgsales/watch inline first fetch (short lock_timeout so a
     busy pricer tick fails the request fast instead of hanging it) and the
     CLI. Raises on any failure."""
-    with viagogo_listing._exclusive_browser(timeout=lock_timeout), \
+    with viagogo_listing._exclusive_browser(timeout=lock_timeout,
+                                            category="pricing"), \
             sync_playwright() as p:
         page = viagogo_listing._open_listings_page(p)
         try:
@@ -302,7 +303,8 @@ def run_sales_tick(force=False, write=True):
         due = due[:MAX_EVENTS_PER_TICK]
 
     if due:
-        with viagogo_listing._exclusive_browser(), sync_playwright() as p:
+        with viagogo_listing._exclusive_browser(category="pricing"), \
+                sync_playwright() as p:
             page = viagogo_listing._open_listings_page(p)
             try:
                 for _, eid in due:

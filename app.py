@@ -2483,7 +2483,8 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
                           available_tickets, website_price, face_value, row,
                           seat_from, seat_to, venue_for_map, kupat_section,
                           ticket_url=None, publish=False, proceeds=None,
-                          pricer=None, upload_tickets=True):
+                          pricer=None, upload_tickets=True,
+                          listing_notes=None, split_preference=None):
     now = lambda: datetime.now(timezone.utc).isoformat()
     db.viagogo_push_update(push_id, {"status": "creating"}, now())
     try:
@@ -2514,6 +2515,7 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
             website_price=website_price, face_value=face_value, proceeds=proceeds,
             row=row, seat_from=seat_from, seat_to=seat_to,
             ticket_pdfs=ticket_pdfs, publish=publish,
+            listing_notes=listing_notes, split_preference=split_preference,
         )
         if ticket_pdfs and not result.get("tickets_uploaded"):
             ticket_problem = (f"ticket upload failed: "
@@ -2562,6 +2564,10 @@ def _run_viagogo_approve(push_id, event_id, search_query, ticket_type, section,
             notes.append("tickets not uploaded by choice — attach them before it sells")
         if pricer_note:
             notes.append(pricer_note)
+        # Notes/split that didn't stick are warnings, not failures — the
+        # listing exists; fix them on inv.viagogo before uploading tickets.
+        for w in result.get("option_warnings") or []:
+            notes.append(f"OPTION NOT APPLIED — {w}")
         db.viagogo_push_update(push_id, {
             "status": "listed" if publish else "created",
             "viagogo_section": section,
@@ -2708,6 +2714,16 @@ def api_viagogo_push_approve():
             return jsonify({"error": "compete_sections must be a list"}), 400
         pricer_opts = {"enabled": True, "floor_price": _floor,
                        "compete_sections": [str(s) for s in _secs]}
+    _notes_in = body.get("listing_notes") or []
+    if not isinstance(_notes_in, list):
+        return jsonify({"error": "listing_notes must be a list"}), 400
+    listing_notes = [str(n) for n in _notes_in]
+    _bad = [n for n in listing_notes if n not in viagogo_listing.LISTING_NOTE_OPTIONS]
+    if _bad:
+        return jsonify({"error": f"unknown listing notes: {_bad}"}), 400
+    split_preference = (body.get("split_preference") or "").strip() or None
+    if split_preference and split_preference not in viagogo_listing.SPLIT_TYPES:
+        return jsonify({"error": f"unknown split_preference '{split_preference}'"}), 400
     row = (body.get("row") or push.get("row_label") or "").strip() or None
     seat_from = (body.get("seat_from") or "").strip() or None
     seat_to = (body.get("seat_to") or "").strip() or None
@@ -2725,6 +2741,8 @@ def api_viagogo_push_approve():
         args=(push_id, event_id, search_query, ticket_type, section, available_tickets,
               website_price, face_value, row, seat_from, seat_to, venue_for_map, kupat_section,
               ticket_url, publish, proceeds, pricer_opts, upload_tickets),
+        kwargs={"listing_notes": listing_notes,
+                "split_preference": split_preference},
         daemon=True,
     ).start()
     return jsonify({"ok": True, "status": "creating"})
