@@ -177,7 +177,9 @@ def fetch_presentations(events=None):
     treating it as empty. Raises on network trouble or a zero-row parse
     (an API change must read as a fetch failure, never as 'all dates
     removed')."""
-    raw = _get(PRESENTATIONS_URL, timeout=60)
+    # The endpoint streams the whole ~1 MB catalog slowly — 60s was hit on
+    # the VPS (2026-07-20); 120s has headroom without stalling the tick.
+    raw = _get(PRESENTATIONS_URL, timeout=120)
     try:
         body = json.loads(raw)
     except json.JSONDecodeError as e:
