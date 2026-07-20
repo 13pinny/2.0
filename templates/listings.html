@@ -80,7 +80,14 @@
               background: var(--bg-2); border: 1px solid var(--line-2); box-shadow: 0 12px 40px rgba(0,0,0,0.25); }
   #cs-panel .cs-head { padding: 14px 18px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; }
   #cs-panel .cs-sub { padding: 0 18px 10px; font-size: 11px; color: var(--muted); }
-  #cs-chips { display: flex; flex-wrap: wrap; gap: 10px; padding: 6px 18px 16px; }
+  #cs-chips { padding: 6px 18px 16px; }
+  .cs-group { margin-bottom: 12px; }
+  .cs-group-head { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; margin-bottom: 8px;
+                   border: 1px dashed var(--line-2); background: var(--bg-2); font-size: 11px; font-weight: 600;
+                   text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; user-select: none; border-radius: 4px; }
+  .cs-group-head:hover { border-color: var(--accent); }
+  .cs-group-head .cnt { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .cs-group-chips { display: flex; flex-wrap: wrap; gap: 10px; }
   .cs-chip { padding: 10px 16px; border: 1px solid var(--line-2); background: var(--bg-3);
              font-size: 13px; cursor: pointer; user-select: none; border-radius: 4px; }
   .cs-chip.sel { border-color: var(--accent); background: #dbeafe; color: var(--accent); font-weight: 600; }
@@ -513,8 +520,28 @@ function openCompetePicker(card) {
   _csCard = card;
   const chosen = new Set(JSON.parse(card.dataset.competeSelected || "[]"));
   $("cs-title").textContent = "Compete against which sections?";
-  $("cs-chips").innerHTML = sections.map(s =>
-    `<div class="cs-chip ${chosen.has(s) ? "sel" : ""}" data-sec="${esc(s)}">${esc(s)}</div>`).join("");
+  // Group by the section's category — the name minus its number ("Hall 9" →
+  // "Hall", "Upper Tier 12" → "Upper Tier"). Clicking a category header
+  // bulk-toggles every section in it (same idea as /pricer's section-head
+  // checkboxes). Groups keep the section list's original order.
+  const groups = new Map();
+  for (const s of sections) {
+    const cat = s.replace(/\d+/g, " ").replace(/\s+/g, " ").trim() || s;
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(s);
+  }
+  const chip = s =>
+    `<div class="cs-chip ${chosen.has(s) ? "sel" : ""}" data-sec="${esc(s)}">${esc(s)}</div>`;
+  $("cs-chips").innerHTML = [...groups.entries()].map(([cat, secs]) =>
+    secs.length > 1
+      ? `<div class="cs-group">
+           <div class="cs-group-head" data-group="${esc(cat)}" title="click to select/unselect all ${secs.length}">
+             ${esc(cat)} <span class="cnt">· all ${secs.length}</span>
+           </div>
+           <div class="cs-group-chips">${secs.map(chip).join("")}</div>
+         </div>`
+      : `<div class="cs-group"><div class="cs-group-chips">${secs.map(chip).join("")}</div></div>`
+  ).join("");
   $("cs-overlay").style.display = "block";
   $("cs-panel").style.display = "block";
 }
@@ -531,6 +558,14 @@ function closeCompetePicker(save) {
 }
 
 document.getElementById("cs-chips").addEventListener("click", (e) => {
+  const head = e.target.closest(".cs-group-head");
+  if (head) {
+    // Bulk-toggle the category: all on unless every chip is already on.
+    const chips = [...head.parentElement.querySelectorAll(".cs-chip")];
+    const allOn = chips.every(c => c.classList.contains("sel"));
+    chips.forEach(c => c.classList.toggle("sel", !allOn));
+    return;
+  }
   const chip = e.target.closest(".cs-chip");
   if (chip) chip.classList.toggle("sel");
 });
