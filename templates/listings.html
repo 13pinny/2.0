@@ -397,11 +397,32 @@ function guessSection(sections, suggested, kupatSection) {
   // 1. A previously learned venue+section mapping is authoritative.
   if (suggested && sections.includes(suggested)) return {value: suggested, source: "learned"};
   const k = String(kupatSection || "").trim();
-  // 2. A number carried over from the Kupat section (e.g. "אולם 3" → "…3").
+  // Hebrew tier keyword → ranked English keywords (Menorah-arena convention,
+  // user-confirmed 2026-07-20): אולם = the lower bowl, יציע = the upper
+  // tier; when viagogo offers both wordings prefer "Hall" over "Lower" and
+  // "Gallery" over "Upper".
+  let prefs = null;
+  if (/אולם/.test(k)) prefs = ["hall", "lower", "floor"];
+  else if (/יציע/.test(k)) prefs = ["gallery", "upper", "balcony"];
+  const rank = s => {
+    if (!prefs) return 0;
+    const i = prefs.findIndex(p => s.toLowerCase().includes(p));
+    return i === -1 ? prefs.length : i;
+  };
+  // 2. A number carried over from the Kupat section (e.g. "אולם 3" → "…3");
+  // among same-number sections the tier keyword breaks the tie.
   const nums = k.match(/\d+/g) || [];
   for (const n of nums) {
     const rx = new RegExp("(^|\\D)" + n + "(\\D|$)");
-    const hit = sections.find(s => rx.test(s));
+    const hits = sections.filter(s => rx.test(s));
+    if (hits.length) {
+      hits.sort((a, b) => rank(a) - rank(b));
+      return {value: hits[0], source: "guess"};
+    }
+  }
+  // 2b. No number matched — fall back to the tier keyword alone.
+  if (prefs) {
+    const hit = prefs.map(p => sections.find(s => s.toLowerCase().includes(p))).find(Boolean);
     if (hit) return {value: hit, source: "guess"};
   }
   // 3. Case-insensitive substring match either direction.
