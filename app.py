@@ -44,6 +44,7 @@ import vault
 import viagogo_listing
 import viagogo_market_sales
 import viagogo_pricer
+import crowdvolt_pricer
 
 # Drop-checker sources keyed by the value stored in tm_watchers.source.
 # Each module exposes parse_url, perf_url, fetch_selectable_seats,
@@ -123,6 +124,13 @@ _last_pricer = {"at": None, "changed": 0, "paused": 0, "skipped": 0,
                 "running": False}
 _pricer_lock = threading.Lock()
 PRICER_INTERVAL_MINUTES = int(os.getenv("KARTIS_PRICER_INTERVAL_MINUTES") or 15)
+
+# CrowdVolt auto-pricer — same rules, CV's JSON APIs through the CDP Chrome.
+_last_cv_pricer = {"at": None, "changed": 0, "paused": 0, "skipped": 0,
+                   "errors": 0, "eligible": 0, "listings": 0, "dry_run": None,
+                   "error": None, "running": False}
+_cv_pricer_lock = threading.Lock()
+CV_PRICER_INTERVAL_MINUTES = int(os.getenv("KARTIS_CV_PRICER_INTERVAL_MINUTES") or 15)
 TM_CHECK_INTERVAL_SECONDS = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
 # Per-seat notification cool-down (minutes). A hot seat that flaps in and out
 # of the buyable feed — kupat VIP seats cycling through carts/holds — would
@@ -709,6 +717,28 @@ def run_pricer():
     finally:
         _last_pricer["running"] = False
         _pricer_lock.release()
+
+
+def run_cv_pricer():
+    if not _cv_pricer_lock.acquire(blocking=False):
+        return
+    _last_cv_pricer["running"] = True
+    try:
+        counters = crowdvolt_pricer.run_cv_pricer_tick()
+        _last_cv_pricer.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=None,
+            **counters,
+        )
+    except Exception as e:
+        _last_cv_pricer.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_cv_pricer["running"] = False
+        _cv_pricer_lock.release()
 
 
 def _enrich(rows):
@@ -1808,6 +1838,11 @@ def dashboard():
 @app.route("/pricer")
 def pricer_page():
     return render_template("pricer.html")
+
+
+@app.route("/cvpricer")
+def cvpricer_page():
+    return render_template("cvpricer.html")
 
 
 @app.route("/sales")
@@ -6319,6 +6354,153 @@ def api_pricer_market_refresh(event_id):
                     "rows": rows})
 
 
+# --- CrowdVolt auto-pricer API --------------------------------------------
+
+@app.route("/api/cvpricer/status")
+def api_cvpricer_status():
+    rows = db.cv_listings_all()
+    cfgs = db.cv_pricer_config_all()
+    for r in rows:
+        cfg = cfgs.get(r["ask_uqid"]) or {}
+        r["pricer_enabled"] = bool(cfg.get("enabled"))
+        r["pricer_floor"] = cfg.get("floor_price")
+        r["pricer_paused"] = bool(cfg.get("paused"))
+        r["pricer_paused_reason"] = cfg.get("paused_reason")
+        r["pricer_last_set_price"] = cfg.get("last_set_price")
+        r["pricer_no_drop_cap"] = bool(cfg.get("no_drop_cap"))
+    return jsonify({
+        "last": _last_cv_pricer,
+        "master_enabled": crowdvolt_pricer.master_enabled(),
+        "dry_run": crowdvolt_pricer.dry_run_enabled(),
+        "undercut": crowdvolt_pricer.undercut_amount(),
+        "max_drop_pct": crowdvolt_pricer.max_drop_pct(),
+        "drop_window_hours": crowdvolt_pricer.drop_window_hours(),
+        "drop_cap_enabled": crowdvolt_pricer.drop_cap_enabled(),
+        "ignore_singles": crowdvolt_pricer.ignore_single_competitors(),
+        "interval_minutes": CV_PRICER_INTERVAL_MINUTES,
+        "rows": rows,
+        "configs": cfgs,
+        "log": db.cv_pricer_log_recent(50),
+    })
+
+
+@app.route("/api/cvpricer/config", methods=["POST"])
+def api_cvpricer_config():
+    """Per-ask pricer config. Body: {ask_uqid, enabled?, floor_price?,
+    resume?, no_drop_cap?}. Enabling requires a floor (set now or before)."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    ask_uqid = str(body.get("ask_uqid") or "").strip()
+    if not ask_uqid:
+        return jsonify({"error": "ask_uqid required"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    fields = {}
+    if "floor_price" in body:
+        try:
+            floor = float(body["floor_price"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "floor_price must be a number"}), 400
+        if floor <= 0:
+            return jsonify({"error": "floor_price must be positive"}), 400
+        fields["floor_price"] = floor
+    if "enabled" in body:
+        enabled = bool(body["enabled"])
+        if enabled:
+            existing = db.cv_pricer_config_get(ask_uqid) or {}
+            if not (fields.get("floor_price") or existing.get("floor_price")):
+                return jsonify({"error": "set a floor price before enabling"}), 400
+        fields["enabled"] = 1 if enabled else 0
+    if body.get("resume"):
+        fields.update(paused=0, paused_reason=None, paused_at=None)
+    if "no_drop_cap" in body:
+        fields["no_drop_cap"] = 1 if body["no_drop_cap"] else 0
+    if not fields:
+        return jsonify({"error": "nothing to update"}), 400
+    db.cv_pricer_config_set(ask_uqid, fields, now_iso)
+    return jsonify({"ok": True, "config": db.cv_pricer_config_get(ask_uqid)})
+
+
+@app.route("/api/cvpricer/settings", methods=["POST"])
+def api_cvpricer_settings():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    out = {}
+    if "master_enabled" in body:
+        v = "true" if body.get("master_enabled") else "false"
+        db.setting_set("cv_pricer_master_enabled", v, now_iso)
+        out["master_enabled"] = v
+    if "dry_run" in body:
+        v = "true" if body.get("dry_run") else "false"
+        db.setting_set("cv_pricer_dry_run", v, now_iso)
+        out["dry_run"] = v
+    if "undercut" in body:
+        try:
+            u = float(body["undercut"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "undercut must be a number"}), 400
+        if not (0 < u <= 50):
+            return jsonify({"error": "undercut must be between 0 and 50"}), 400
+        db.setting_set("cv_pricer_undercut", f"{u:.2f}", now_iso)
+        out["undercut"] = u
+    if "ignore_singles" in body:
+        v = "true" if body.get("ignore_singles") else "false"
+        db.setting_set("cv_pricer_ignore_singles", v, now_iso)
+        out["ignore_singles"] = v
+    if "max_drop_pct" in body:
+        try:
+            pct = float(body["max_drop_pct"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "max_drop_pct must be a number"}), 400
+        if not (1 <= pct <= 90):
+            return jsonify({"error": "max_drop_pct must be between 1 and 90"}), 400
+        db.setting_set("cv_pricer_max_drop_pct", f"{pct:g}", now_iso)
+        out["max_drop_pct"] = pct
+    if "drop_cap_enabled" in body:
+        v = "true" if body.get("drop_cap_enabled") else "false"
+        db.setting_set("cv_pricer_drop_cap_enabled", v, now_iso)
+        out["drop_cap_enabled"] = v
+    if not out:
+        return jsonify({"error": "nothing to update"}), 400
+    return jsonify({"ok": True, **out})
+
+
+@app.route("/api/cvpricer/run-now", methods=["POST"])
+def api_cvpricer_run_now():
+    if _last_cv_pricer["running"]:
+        return jsonify({"error": "cv pricer already running"}), 429
+    threading.Thread(target=run_cv_pricer, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/cvpricer/market/<event_uqid>")
+def api_cvpricer_market(event_uqid):
+    """Last book snapshot for an event (written by every tick)."""
+    snap = db.cv_market_snapshot_get(event_uqid)
+    if not snap:
+        return jsonify({"event_uqid": event_uqid, "fetched_at": None, "rows": []})
+    try:
+        rows = json.loads(snap["rows_json"])
+    except (TypeError, ValueError):
+        rows = []
+    return jsonify({"event_uqid": event_uqid, "fetched_at": snap["fetched_at"],
+                    "rows": rows})
+
+
+@app.route("/api/cvpricer/market/<event_uqid>/refresh", methods=["POST"])
+def api_cvpricer_market_refresh(event_uqid):
+    """Live book fetch (~10s, needs the CDP Chrome)."""
+    if _last_cv_pricer["running"]:
+        return jsonify({"error": "cv pricer tick running — try again in a minute"}), 429
+    try:
+        rows = crowdvolt_pricer.refresh_book_snapshot(event_uqid)
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 502
+    return jsonify({"event_uqid": event_uqid,
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "rows": rows})
+
+
 @app.route("/api/pacha-events/status")
 def api_pacha_events_status():
     return jsonify({
@@ -6480,6 +6662,12 @@ scheduler.add_job(run_sales_sync, "interval", minutes=FESTIVAL_SYNC_MINUTES,
 scheduler.add_job(_fresh_thread_job(run_pricer), "interval", minutes=PRICER_INTERVAL_MINUTES,
                   id="pricer",
                   start_date=datetime.now() + timedelta(minutes=7))
+# CrowdVolt pricer: also drives the CDP Chrome (its own tab) — offset clear
+# of scrape (t+0) / pricer (t+7). Cheap no-op while its master switch is off
+# (still refreshes the /cvpricer listings mirror).
+scheduler.add_job(_fresh_thread_job(run_cv_pricer), "interval", minutes=CV_PRICER_INTERVAL_MINUTES,
+                  id="cv_pricer",
+                  start_date=datetime.now() + timedelta(minutes=10))
 if MARKET_ENABLED:
     # Market-wide availability sweep. Offset well clear of the hourly scrape
     # (t+0) and the pricer (t+7) — this one also launches a Chromium.

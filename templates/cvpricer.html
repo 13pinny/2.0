@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — CV Pricer</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 24px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .warn { background: #fbf3d9; border: 1px solid var(--amber); color: var(--amber); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  .bar.boxed { border: 1px solid var(--line); padding: 10px 12px; }
+  .bar label { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line-2); color: var(--muted); border-radius: 1px; letter-spacing: 1px; text-transform: uppercase; white-space: nowrap; }
+  .status.active { color: var(--green); border-color: var(--green); }
+  .status.paused { color: var(--amber); border-color: var(--amber); }
+  .status.dry { color: var(--purple); border-color: var(--purple); }
+  tr.row-gone td { opacity: 0.55; }
+  .empty { color: var(--muted); padding: 28px; text-align: center; font-size: 12px; }
+  .act-lower { color: var(--green); }
+  .act-dry { color: var(--purple); }
+  .act-pause { color: var(--amber); }
+  .act-err { color: var(--red); }
+  .act-skip { color: var(--muted); }
+  .tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tablewrap table { min-width: 760px; }
+  .seclink { color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
+  #mpanel-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 50; }
+  #mpanel { position: fixed; top: 5vh; left: 50%; transform: translateX(-50%); width: min(560px, 94vw); max-height: 88vh; overflow-y: auto; background: var(--bg-2); border: 1px solid var(--line-2); z-index: 51; padding: 16px; }
+  #mpanel h3 { margin: 0 0 2px; font-size: 14px; }
+  #mpanel .sub { color: var(--muted); font-size: 11px; margin-bottom: 12px; }
+  #mpanel .sec { border: 1px solid var(--line); margin-bottom: 8px; }
+  #mpanel .sec-head { display: flex; align-items: center; gap: 10px; padding: 9px 10px; background: var(--bg-3); font-weight: 700; }
+  #mpanel .sec-head .cheap { color: var(--muted); font-size: 11px; font-weight: 400; margin-left: auto; }
+  #mpanel .mrow { display: flex; justify-content: space-between; padding: 4px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
+  #mpanel .mrow.owned { color: var(--green); }
+  #mpanel .mrow.owned::after { content: "YOURS"; font-size: 9px; letter-spacing: 1px; border: 1px solid var(--green); padding: 0 4px; margin-left: 8px; }
+  #mpanel .actions { display: flex; gap: 10px; margin-top: 14px; }
+  .only-mobile { display: none; }
+  @media (max-width: 700px) {
+    header { display: block; padding: 10px 14px 8px; padding-top: calc(10px + env(safe-area-inset-top)); }
+    header .left { justify-content: space-between; display: flex; }
+    header .nav { display: flex; overflow-x: auto; white-space: nowrap; margin-top: 8px; padding-bottom: 2px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    header .nav::-webkit-scrollbar { display: none; }
+    header .nav a { margin-left: 0; margin-right: 16px; font-size: 12px; padding: 6px 0; }
+    main { padding: 12px 12px calc(40px + env(safe-area-inset-bottom)); }
+    .stats { grid-template-columns: repeat(3, 1fr); }
+    .stat { padding: 8px 10px; }
+    .stat .value { font-size: 17px; }
+    .stat .label { font-size: 9px; letter-spacing: 1px; }
+    input, select, button { font-size: 16px; }
+    input[type="checkbox"] { width: 22px; height: 22px; }
+    button { padding: 12px 14px; }
+    #p-run { width: 100%; }
+    .tablewrap { overflow-x: visible; }
+    .tablewrap table { min-width: 0; width: 100%; }
+    .tablewrap thead { display: none; }
+    .tablewrap tr { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 12px; padding: 12px 10px; border-bottom: 1px solid var(--line-2); }
+    .tablewrap td { display: block; padding: 0; border: none; text-align: left; }
+    .tablewrap td.num { text-align: left; }
+    .tablewrap td::before { content: attr(data-label); display: block; font-size: 9px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 2px; }
+    .tablewrap td:not([data-label])::before { content: none; }
+    .tablewrap td.c-wide { grid-column: 1 / -1; }
+    .tablewrap td:empty { display: none; }
+    .only-desktop { display: none !important; }
+    .only-mobile { display: inline; }
+    .p-floor { width: 100% !important; }
+    #mpanel { top: 0; left: 0; transform: none; width: 100vw; max-height: 100vh; height: 100vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>CV PRICER</h1>
+    <span class="meta" id="p-status">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/cvpricer" class="active">CV PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+  </nav>
+</header>
+<main>
+<div id="errbox" class="err" style="display:none"></div>
+<div id="drywarn" class="warn" style="display:none">DRY RUN is on — the pricer logs and pings what it <b>would</b> do, but never touches CrowdVolt. Untick it below to go live.</div>
+
+<div class="stats">
+  <div class="stat"><div class="label">Active Asks</div><div class="value" id="s-listings">0</div></div>
+  <div class="stat"><div class="label">Auto Priced</div><div class="value" id="s-enabled">0</div></div>
+  <div class="stat green"><div class="label">Changed Last Tick</div><div class="value" id="s-changed">0</div></div>
+  <div class="stat"><div class="label">Skipped Last Tick</div><div class="value" id="s-skipped">0</div></div>
+  <div class="stat red"><div class="label">Errors Last Tick</div><div class="value" id="s-errors">0</div></div>
+</div>
+
+<div class="bar boxed">
+  <button id="p-master" title="Global kill switch — nothing runs while this is off" style="font-weight:700; letter-spacing:1px; min-width:150px;">CV PRICER: …</button>
+  <label title="Log + notify what would change, without touching CrowdVolt"><input type="checkbox" id="p-dryrun"> dry run</label>
+  <label title="How far below the cheapest competitor's seller price to go, in USD. Buyers see whole-dollar all-in prices, so $1 is the safe minimum to actually show up cheaper.">undercut $<input type="number" inputmode="decimal" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
+  <label title="Hard brake: never drop an ask more than this inside the sliding window"><input type="checkbox" id="p-dropcap"> max drop <input type="number" inputmode="numeric" id="p-maxdrop" step="1" min="1" max="90" style="width:58px; padding:4px 6px;">%<span id="p-dropwin" style="color:var(--muted);">/12h</span></label>
+  <label title="Don't chase asks that only have 1 ticket"><input type="checkbox" id="p-nosingles"> ignore 1-ticket rivals</label>
+  <button id="p-run">Run pricer now</button>
+</div>
+
+<h2>ACTIVE ASKS</h2>
+<div class="bar">
+  <input type="search" id="p-search" placeholder="search event venue type" style="flex:1; min-width:200px;">
+  <label><input type="checkbox" id="p-onlyauto"> auto-priced only</label>
+</div>
+<div class="tablewrap">
+<table>
+  <thead><tr>
+    <th>EVENT</th><th>DATE</th><th>TYPE</th>
+    <th class="num">QTY</th>
+    <th class="num" title="Your seller price per ticket">PRICE</th>
+    <th title="Auto-pricer on/off — set a floor first">AUTO</th>
+    <th class="num" title="Never price below this (USD, seller price)">FLOOR</th>
+    <th>STATE</th><th class="num" title="Last price the pricer set">LAST SET</th>
+  </tr></thead>
+  <tbody id="ptbody"></tbody>
+</table>
+</div>
+<div id="pempty" class="empty" style="display:none">no active CrowdVolt asks — hit Run pricer now to refresh (needs the logged-in Chrome)</div>
+
+<h2>ACTIVITY</h2>
+<div class="tablewrap">
+<table>
+  <thead><tr>
+    <th>EVENT / WHEN</th><th>TYPE</th><th>ACTION</th>
+    <th class="num">OLD</th><th class="num">NEW</th><th class="num">COMPETITOR</th><th>DETAIL</th>
+  </tr></thead>
+  <tbody id="plogbody"></tbody>
+</table>
+</div>
+<div id="plogempty" class="empty" style="display:none">no pricer activity yet</div>
+
+<div id="mpanel-overlay"></div>
+<div id="mpanel" style="display:none">
+  <h3 id="mp-title">—</h3>
+  <div class="sub" id="mp-sub">—</div>
+  <div id="mp-sections"></div>
+  <div class="actions">
+    <button id="mp-refresh" title="Live fetch from CrowdVolt (~10s)">Refresh market</button>
+    <button id="mp-close">Close</button>
+  </div>
+</div>
+</main>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+let _rows = [];
+let _byId = {};
+
+function renderListings() {
+  const search = (document.getElementById("p-search").value || "").toLowerCase();
+  const onlyAuto = document.getElementById("p-onlyauto").checked;
+  // The mirror never forgets: asks sold/deleted on CV keep their last-seen
+  // row. Only show rows seen by a recent tick (within 3h of the freshest).
+  const seenMs = (r) => { const d = new Date(r.last_seen_at || 0); return isNaN(d) ? 0 : d.getTime(); };
+  const freshestMs = _rows.reduce((m, r) => Math.max(m, seenMs(r)), 0);
+  const seenCutoffMs = freshestMs ? freshestMs - 3 * 3600 * 1000 : null;
+  const rows = _rows.filter(r => {
+    if (seenCutoffMs && seenMs(r) < seenCutoffMs) return false;
+    if (onlyAuto && !r.pricer_enabled && !r.pricer_paused) return false;
+    if (search && !((r.event_name||"") + " " + (r.event_location||"") + " " + (r.ticket_type||"")).toLowerCase().includes(search)) return false;
+    return true;
+  });
+  const tbody = document.getElementById("ptbody");
+  tbody.innerHTML = "";
+  for (const r of rows) {
+    let chip;
+    if (r.pricer_paused) {
+      chip = `<span class="status paused">paused</span> <a href="#" class="p-resume" data-id="${esc(r.ask_uqid)}" style="color:var(--accent); font-size:10px;">resume</a>`;
+    } else if (r.pricer_enabled) {
+      chip = `<span class="status active">active</span>`;
+    } else {
+      chip = `<span class="status">off</span>`;
+    }
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="c-wide">${esc(r.event_name)}<div style="color:var(--muted); font-size:10px;">${esc(r.event_location)}<span class="only-mobile"> · ${esc(r.event_date)}</span></div></td>
+      <td class="only-desktop">${esc(r.event_date)}</td>
+      <td data-label="type"><span class="seclink" data-id="${esc(r.ask_uqid)}" title="Open the order book — every ask on this event">${esc(r.ticket_type)}</span></td>
+      <td class="num" data-label="qty">${r.qty ?? ""}</td>
+      <td class="num" data-label="price">${money(r.price)}</td>
+      <td data-label="auto"><input type="checkbox" class="p-auto" data-id="${esc(r.ask_uqid)}" ${r.pricer_enabled ? "checked" : ""}></td>
+      <td class="num" data-label="floor $"><input type="number" inputmode="decimal" class="p-floor" data-id="${esc(r.ask_uqid)}" step="0.01" min="0" value="${r.pricer_floor ?? ""}" placeholder="—" style="width:74px; padding:3px 6px;"></td>
+      <td data-label="state">${chip}</td>
+      <td class="num" data-label="last set">${r.pricer_last_set_price != null ? money(r.pricer_last_set_price) : "—"}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("pempty").style.display = rows.length ? "none" : "block";
+
+  tbody.querySelectorAll(".p-auto").forEach(cb => cb.addEventListener("change", async (e) => {
+    const id = e.target.dataset.id;
+    const floorInput = tbody.querySelector(`.p-floor[data-id="${CSS.escape(id)}"]`);
+    const floor = parseFloat(floorInput?.value);
+    if (e.target.checked && (!floor || floor <= 0)) {
+      alert("Set a floor price (USD) before enabling auto-pricing on an ask.");
+      e.target.checked = false;
+      return;
+    }
+    const body = { ask_uqid: id, enabled: e.target.checked };
+    if (floor > 0) body.floor_price = floor;
+    const res = await fetch("/api/cvpricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+    if (!res.ok) { alert((await res.json()).error || "failed"); e.target.checked = !e.target.checked; return; }
+    loadAll();
+  }));
+  tbody.querySelectorAll(".p-floor").forEach(inp => inp.addEventListener("change", async (e) => {
+    const floor = parseFloat(e.target.value);
+    if (!floor || floor <= 0) return;
+    await fetch("/api/cvpricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ ask_uqid: e.target.dataset.id, floor_price: floor }) });
+  }));
+  tbody.querySelectorAll(".p-resume").forEach(a => a.addEventListener("click", async (e) => {
+    e.preventDefault();
+    await fetch("/api/cvpricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ ask_uqid: e.target.dataset.id, resume: true }) });
+    loadAll();
+  }));
+  tbody.querySelectorAll(".seclink").forEach(el => el.addEventListener("click", (e) => {
+    openMarketPanel(e.target.dataset.id);
+  }));
+}
+
+// ---- read-only order-book panel ----
+let _mpListing = null;
+
+async function fetchJsonSafe(url, opts) {
+  try {
+    const res = await fetch(url, opts);
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (e) { /* HTML error page */ }
+    return { ok: res.ok, status: res.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: null, neterr: String(e) };
+  }
+}
+
+async function openMarketPanel(askUqid, forceRefresh = false) {
+  const row = _byId[String(askUqid)];
+  if (!row) return;
+  _mpListing = row;
+  document.getElementById("mpanel-overlay").style.display = "block";
+  document.getElementById("mpanel").style.display = "block";
+  document.getElementById("mp-title").textContent = row.event_name + " — order book";
+  const sub = document.getElementById("mp-sub");
+  sub.textContent = "loading book...";
+  document.getElementById("mp-sections").innerHTML = "";
+  const base = `/api/cvpricer/market/${encodeURIComponent(row.event_uqid)}`;
+  const r = forceRefresh
+    ? await fetchJsonSafe(base + "/refresh", { method: "POST" })
+    : await fetchJsonSafe(base);
+  if (!r.ok || !r.data) {
+    sub.textContent = "// load failed: " + ((r.data || {}).error || r.status || r.neterr);
+    return;
+  }
+  renderMarketPanel(row, r.data);
+}
+
+function renderMarketPanel(row, data) {
+  const sub = document.getElementById("mp-sub");
+  if (!data.rows || !data.rows.length) {
+    sub.textContent = "// no book snapshot yet — hit Refresh market (~10s), or wait for the next tick";
+    return;
+  }
+  const age = data.fetched_at ? Math.round((Date.now() - new Date(data.fetched_at)) / 60000) : null;
+  sub.textContent = `${data.rows.length} asks // fetched ${age != null ? age + "m ago" : "?"} — the pricer competes within your ticket type only`;
+  // group asks by ticket type, cheapest first
+  const groups = new Map();
+  for (const a of data.rows) {
+    const key = (a.ticket_type || "?").trim();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(a);
+  }
+  const wrap = document.getElementById("mp-sections");
+  wrap.innerHTML = "";
+  const sorted = [...groups.entries()].sort((x, y) => {
+    const fx = Math.min(...x[1].map(a => a.price ?? 1e9));
+    const fy = Math.min(...y[1].map(a => a.price ?? 1e9));
+    return fx - fy;
+  });
+  for (const [type, asks] of sorted) {
+    const cheapest = Math.min(...asks.map(a => a.price ?? 1e9));
+    const div = document.createElement("div");
+    div.className = "sec";
+    div.innerHTML = `
+      <div class="sec-head"><span>${esc(type)}${type.trim().toLowerCase() === (row.ticket_type||"").trim().toLowerCase() ? ' <span style="color:var(--muted); font-weight:400; font-size:10px;">(your type)</span>' : ""}</span>
+        <span class="cheap">${asks.length}× · from ${cheapest < 1e9 ? money(cheapest) : "—"}</span></div>
+      ${asks.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)).map(a => `
+        <div class="mrow${a.is_ours ? " owned" : ""}">
+          <span>${a.qty ?? "?"} ticket${a.qty === 1 ? "" : "s"}${a.seller && !a.is_ours ? " · " + esc(a.seller) : ""}</span>
+          <span>${a.price != null ? money(a.price) : "—"}<span style="color:var(--muted); font-size:10px;"> · all-in ${a.all_in_price != null ? money(a.all_in_price) : "—"}</span></span>
+        </div>`).join("")}
+    `;
+    wrap.appendChild(div);
+  }
+}
+
+function closeMarketPanel() {
+  document.getElementById("mpanel").style.display = "none";
+  document.getElementById("mpanel-overlay").style.display = "none";
+  _mpListing = null;
+}
+document.getElementById("mp-close").addEventListener("click", closeMarketPanel);
+document.getElementById("mpanel-overlay").addEventListener("click", closeMarketPanel);
+document.getElementById("mp-refresh").addEventListener("click", async (e) => {
+  if (!_mpListing) return;
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "refreshing... (~10s)";
+  try { await openMarketPanel(_mpListing.ask_uqid, true); }
+  finally { btn.disabled = false; btn.textContent = "Refresh market"; }
+});
+
+function renderLog(log) {
+  const tbody = document.getElementById("plogbody");
+  tbody.innerHTML = "";
+  const cls = (a) => a === "lower" || a === "floor_clamp" || a === "rate_clamp" ? "act-lower"
+    : a === "dry_run" ? "act-dry"
+    : a === "manual_adopt" ? "act-pause"
+    : a === "error" || a === "fetch_failed" ? "act-err" : "act-skip";
+  for (const e of log) {
+    const row = _byId[e.ask_uqid] || {};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="c-wide"><b>${esc(row.event_name || e.event_uqid || e.ask_uqid)}</b><div style="color:var(--muted); font-size:10px;">${e.created_at ? new Date(e.created_at).toLocaleString() : ""}<span class="only-mobile"> · ${esc(e.ticket_type || "")}</span></div></td>
+      <td class="only-desktop">${esc(e.ticket_type || "")}</td>
+      <td data-label="action" class="${cls(e.action)}">${esc(e.action)}${e.dry_run ? ' <span class="status dry">dry</span>' : ""}</td>
+      <td class="num" data-label="old">${e.old_price != null ? money(e.old_price) : "—"}</td>
+      <td class="num" data-label="new">${e.new_price != null ? money(e.new_price) : "—"}</td>
+      <td class="num" data-label="competitor">${e.competitor_price != null ? money(e.competitor_price) : "—"}</td>
+      <td class="c-wide" data-label="detail" style="color:var(--muted);">${esc(e.detail || "")}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("plogempty").style.display = log.length ? "none" : "block";
+}
+
+async function loadAll() {
+  const err = document.getElementById("errbox");
+  try {
+    const res = await fetch("/api/cvpricer/status");
+    const s = await res.json();
+    _rows = s.rows || [];
+    _byId = Object.fromEntries(_rows.map(r => [String(r.ask_uqid), r]));
+
+    _masterOn = !!s.master_enabled;
+    const master = document.getElementById("p-master");
+    master.textContent = _masterOn ? "CV PRICER: ON" : "CV PRICER: OFF";
+    master.style.color = _masterOn ? "var(--green)" : "var(--red)";
+    master.style.borderColor = _masterOn ? "var(--green)" : "var(--red)";
+    const dryrun = document.getElementById("p-dryrun");
+    const undercut = document.getElementById("p-undercut");
+    const maxdrop = document.getElementById("p-maxdrop");
+    if (document.activeElement !== dryrun) dryrun.checked = !!s.dry_run;
+    if (document.activeElement !== undercut) undercut.value = s.undercut;
+    if (document.activeElement !== maxdrop) maxdrop.value = s.max_drop_pct;
+    document.getElementById("p-dropwin").textContent = "/" + (s.drop_window_hours ?? 12) + "h";
+    const dropcap = document.getElementById("p-dropcap");
+    if (document.activeElement !== dropcap) dropcap.checked = !!s.drop_cap_enabled;
+    maxdrop.disabled = !s.drop_cap_enabled;
+    const nosingles = document.getElementById("p-nosingles");
+    if (document.activeElement !== nosingles) nosingles.checked = !!s.ignore_singles;
+    document.getElementById("drywarn").style.display = (s.master_enabled && s.dry_run) ? "block" : "none";
+
+    const cfgs = Object.values(s.configs || {});
+    document.getElementById("s-listings").textContent = _rows.length;
+    document.getElementById("s-enabled").textContent = cfgs.filter(c => c.enabled && !c.paused).length;
+    const L = s.last || {};
+    document.getElementById("s-changed").textContent = L.changed ?? 0;
+    document.getElementById("s-skipped").textContent = L.skipped ?? 0;
+    document.getElementById("s-errors").textContent = L.errors ?? 0;
+
+    const bits = [];
+    if (!s.master_enabled) bits.push("MASTER OFF");
+    if (L.running) bits.push("running...");
+    else if (L.at) bits.push("last_tick=" + new Date(L.at).toLocaleString());
+    else bits.push("not_run_yet");
+    if (L.dry_run != null && L.at) bits.push(L.dry_run ? "dry_run" : "LIVE");
+    bits.push(`every ${s.interval_minutes}m`);
+    document.getElementById("p-status").textContent = bits.join(" // ");
+
+    if (L.error) { err.style.display = "block"; err.textContent = "// cv pricer error: " + L.error; }
+    else err.style.display = "none";
+
+    renderListings();
+    renderLog(s.log || []);
+  } catch (e) {
+    err.style.display = "block";
+    err.textContent = "// failed to load: " + e;
+  }
+}
+
+let _masterOn = false;
+document.getElementById("p-master").addEventListener("click", async () => {
+  await fetch("/api/cvpricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ master_enabled: !_masterOn }) });
+  loadAll();
+});
+document.getElementById("p-dryrun").addEventListener("change", async (e) => {
+  if (!e.target.checked && !confirm("Turn OFF dry run? The pricer will start making real price changes on CrowdVolt.")) {
+    e.target.checked = true;
+    return;
+  }
+  await fetch("/api/cvpricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ dry_run: e.target.checked }) });
+  loadAll();
+});
+document.getElementById("p-undercut").addEventListener("change", async (e) => {
+  const u = parseFloat(e.target.value);
+  if (!u || u <= 0) return;
+  await fetch("/api/cvpricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ undercut: u }) });
+});
+document.getElementById("p-dropcap").addEventListener("change", async (e) => {
+  if (!e.target.checked && !confirm("Turn OFF the drop cap for ALL asks? They may follow the market straight down to their floors.")) {
+    e.target.checked = true;
+    return;
+  }
+  await fetch("/api/cvpricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ drop_cap_enabled: e.target.checked }) });
+  loadAll();
+});
+document.getElementById("p-maxdrop").addEventListener("change", async (e) => {
+  const pct = parseFloat(e.target.value);
+  if (!pct || pct < 1 || pct > 90) return;
+  await fetch("/api/cvpricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ max_drop_pct: pct }) });
+});
+document.getElementById("p-nosingles").addEventListener("change", async (e) => {
+  await fetch("/api/cvpricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ ignore_singles: e.target.checked }) });
+  loadAll();
+});
+document.getElementById("p-run").addEventListener("click", async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "running...";
+  await fetch("/api/cvpricer/run-now", { method: "POST" });
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Run pricer now"; loadAll(); }, 8000);
+});
+for (const id of ["p-search", "p-onlyauto"]) {
+  document.getElementById(id).addEventListener("input", renderListings);
+  document.getElementById(id).addEventListener("change", renderListings);
+}
+loadAll();
+setInterval(loadAll, 15000);
+</script>
+</body>
+</html>

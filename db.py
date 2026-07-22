@@ -859,6 +859,55 @@ CREATE TABLE IF NOT EXISTS dice_transfers (
     email_date     TEXT,
     created_at     TEXT NOT NULL
 );
+-- CrowdVolt auto-pricer (crowdvolt_pricer.py). Mirrors the viagogo pricer
+-- trio: a mirror of our active asks (rewritten every tick from the sell_active
+-- API), per-ask config, and an audit log. ask_uqid is CrowdVolt's listing
+-- id; "section" duty is played by ticket_type (CV has no seat map).
+CREATE TABLE IF NOT EXISTS cv_active_listings (
+    ask_uqid       TEXT PRIMARY KEY,
+    event_uqid     TEXT NOT NULL,
+    event_name     TEXT,
+    event_date     TEXT,
+    event_location TEXT,
+    ticket_type    TEXT,
+    price          REAL,
+    qty            INTEGER,
+    all_in_price   REAL,
+    last_seen_at   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cv_pricer_config (
+    ask_uqid       TEXT PRIMARY KEY,
+    enabled        INTEGER NOT NULL DEFAULT 0,
+    floor_price    REAL,
+    allow_raise    INTEGER NOT NULL DEFAULT 0,
+    paused         INTEGER NOT NULL DEFAULT 0,
+    paused_reason  TEXT,
+    paused_at      TEXT,
+    last_set_price REAL,
+    last_set_at    TEXT,
+    no_drop_cap    INTEGER NOT NULL DEFAULT 0,
+    updated_at     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cv_pricer_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ask_uqid TEXT NOT NULL,
+    event_uqid TEXT,
+    ticket_type TEXT,
+    old_price REAL,
+    new_price REAL,
+    competitor_price REAL,
+    action TEXT NOT NULL,
+    detail TEXT,
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cv_pricer_log_ask
+    ON cv_pricer_log(ask_uqid, created_at);
+CREATE TABLE IF NOT EXISTS cv_market_snapshots (
+    event_uqid TEXT PRIMARY KEY,
+    fetched_at TEXT NOT NULL,
+    rows_json  TEXT NOT NULL
+);
 """
 
 
@@ -3590,3 +3639,157 @@ def suggestion_active_dismissals(today_iso):
             (today_iso,),
         ).fetchall()
     return {r["suggestion_key"]: r["dismissed_until"] for r in rows}
+
+
+# --- CrowdVolt auto-pricer -------------------------------------------------
+# Same shape as the viagogo pricer helpers above; ask_uqid plays listing_id
+# and ticket_type plays section.
+
+def cv_listings_upsert(rows, now_iso):
+    """Rewrite the active-asks mirror from a sell_active fetch. Rows not in
+    `rows` keep their old last_seen_at (sold/deleted asks age out in the UI
+    the same way viagogo_listings rows do)."""
+    with connect() as conn:
+        for r in rows:
+            conn.execute(
+                """
+                INSERT INTO cv_active_listings (ask_uqid, event_uqid, event_name,
+                    event_date, event_location, ticket_type, price, qty,
+                    all_in_price, last_seen_at)
+                VALUES (:ask_uqid, :event_uqid, :event_name, :event_date,
+                        :event_location, :ticket_type, :price, :qty,
+                        :all_in_price, :last_seen_at)
+                ON CONFLICT(ask_uqid) DO UPDATE SET
+                    event_uqid = excluded.event_uqid,
+                    event_name = excluded.event_name,
+                    event_date = excluded.event_date,
+                    event_location = excluded.event_location,
+                    ticket_type = excluded.ticket_type,
+                    price = excluded.price,
+                    qty = excluded.qty,
+                    all_in_price = excluded.all_in_price,
+                    last_seen_at = excluded.last_seen_at
+                """,
+                {**r, "last_seen_at": now_iso},
+            )
+
+
+def cv_listings_all():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM cv_active_listings ORDER BY event_date"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def cv_pricer_config_get(ask_uqid):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM cv_pricer_config WHERE ask_uqid = ?",
+            (str(ask_uqid),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def cv_pricer_config_all():
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM cv_pricer_config").fetchall()
+    return {r["ask_uqid"]: dict(r) for r in rows}
+
+
+_CV_PRICER_CONFIG_FIELDS = (
+    "enabled", "floor_price", "allow_raise", "paused", "paused_reason",
+    "paused_at", "last_set_price", "last_set_at", "no_drop_cap",
+)
+
+
+def cv_pricer_config_set(ask_uqid, fields, now_iso):
+    fields = {k: v for k, v in fields.items() if k in _CV_PRICER_CONFIG_FIELDS}
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT ask_uqid FROM cv_pricer_config WHERE ask_uqid = ?",
+            (str(ask_uqid),),
+        ).fetchone()
+        if existing:
+            sets = ", ".join(f"{k} = :{k}" for k in fields)
+            conn.execute(
+                f"UPDATE cv_pricer_config SET {sets}, updated_at = :updated_at "
+                "WHERE ask_uqid = :ask_uqid",
+                {**fields, "updated_at": now_iso, "ask_uqid": str(ask_uqid)},
+            )
+        else:
+            cols = ["ask_uqid", *fields.keys(), "updated_at"]
+            conn.execute(
+                f"INSERT INTO cv_pricer_config ({', '.join(cols)}) "
+                f"VALUES ({', '.join(':' + c for c in cols)})",
+                {**fields, "ask_uqid": str(ask_uqid), "updated_at": now_iso},
+            )
+
+
+def cv_pricer_log_add(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO cv_pricer_log (ask_uqid, event_uqid, ticket_type,
+                                       old_price, new_price, competitor_price,
+                                       action, detail, dry_run, created_at)
+            VALUES (:ask_uqid, :event_uqid, :ticket_type,
+                    :old_price, :new_price, :competitor_price,
+                    :action, :detail, :dry_run, :created_at)
+            """,
+            {
+                "event_uqid": None, "ticket_type": None, "old_price": None,
+                "new_price": None, "competitor_price": None, "detail": None,
+                "dry_run": 0,
+                **row,
+                "created_at": now_iso,
+            },
+        )
+
+
+def cv_pricer_writes_since(ask_uqid, since_iso):
+    """Real price changes since `since_iso`, oldest first — the drop guard's
+    window reconstruction (see pricer_writes_since)."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT action, old_price, new_price, created_at FROM cv_pricer_log "
+            "WHERE ask_uqid = ? AND dry_run = 0 "
+            "AND action IN ('lower', 'floor_clamp', 'rate_clamp', 'raise', 'manual_adopt') "
+            "AND created_at >= ? ORDER BY id",
+            (str(ask_uqid), since_iso),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def cv_pricer_log_recent(limit=100, ask_uqid=None):
+    with connect() as conn:
+        if ask_uqid:
+            rows = conn.execute(
+                "SELECT * FROM cv_pricer_log WHERE ask_uqid = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (str(ask_uqid), limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM cv_pricer_log ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def cv_market_snapshot_set(event_uqid, rows_json, now_iso):
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO cv_market_snapshots "
+            "(event_uqid, fetched_at, rows_json) VALUES (?, ?, ?)",
+            (str(event_uqid), now_iso, rows_json),
+        )
+
+
+def cv_market_snapshot_get(event_uqid):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM cv_market_snapshots WHERE event_uqid = ?",
+            (str(event_uqid),),
+        ).fetchone()
+    return dict(row) if row else None
