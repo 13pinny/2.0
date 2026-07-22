@@ -1378,6 +1378,43 @@ def _build_unified_inventory():
             "status": "pending",
         })
 
+    # DICE holdings — auto-recorded per account from forwarded DICE purchase
+    # emails (dice_purchases). "Sold" here = qty linked to a Viagogo/CrowdVolt/
+    # Lysted sale on the /dice page; transfers are deliberately excluded (a
+    # resale-platform sale is the sale, even before the DICE transfer goes
+    # out). Unsold = qty - linked-sold - any cross-source match. Costs are USD,
+    # which the page already renders with '$'.
+    dice_linked = db.dice_linked_qty_by_purchase()
+    for p in db.dice_purchases_all():
+        if ("dice", str(p.get("id"))) in hidden:
+            continue
+        qty = p.get("qty") or 0
+        if qty <= 0:
+            continue
+        sold = dice_linked.get(p.get("id"), 0)
+        consumed = matched_qty.get(("dice", str(p.get("id"))), 0)
+        remaining = max(0, qty - sold - consumed)
+        if remaining <= 0:
+            continue  # fully sold via linked resale-platform sales
+        cost_per = p.get("price_per_unit")
+        rows.append({
+            "source": "dice",
+            "source_id": str(p.get("id")),
+            "event_name": p.get("event_name"),
+            "event_date": p.get("event_date_iso"),
+            "event_date_iso": p.get("event_date_iso"),
+            "venue": p.get("venue"),
+            "section": p.get("ticket_type") or "",
+            "row": "",
+            "seats": "",
+            "qty_unsold": remaining,
+            "cost": round((cost_per or 0) * remaining, 2) if cost_per else 0,
+            "cost_per_unit": cost_per,
+            "delivery_type": p.get("account_email") or "DICE",
+            "list_price": None,
+            "status": "dice",
+        })
+
     inv_overrides = db.all_inv_overrides()
     seats_sold_map = db.seats_sold_by_inv()
     for r in rows:

@@ -1187,6 +1187,19 @@ def dice_sale_candidates(days=180):
     return out
 
 
+def dice_linked_qty_by_purchase():
+    """{purchase_id: total qty linked to resale-platform sales}. This is the
+    "sold" count for a DICE holding on the inventory page: a linked
+    Viagogo/CrowdVolt/Lysted sale IS the sale, even before the DICE transfer
+    goes out — so transfers deliberately play no part here (same rule the
+    /dice availability math uses)."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT purchase_id, SUM(qty) AS n FROM dice_sale_links GROUP BY purchase_id"
+        ).fetchall()
+    return {r["purchase_id"]: (r["n"] or 0) for r in rows}
+
+
 def dice_sale_links_by_purchase():
     """{purchase_id: [link rows + sale detail]} for the /dice page."""
     out = {}
