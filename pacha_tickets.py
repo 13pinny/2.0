@@ -37,6 +37,8 @@ import imaplib
 import io
 import os
 import re
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from datetime import date as _date, datetime, timedelta, timezone
@@ -84,6 +86,9 @@ _DOWNLOAD_URL_RX = re.compile(
     r"https://[^\s\"'<>]*fourvenues\.com/[^\s\"'<>]*?entradas-[A-Za-z0-9]+\.pdf", re.I
 )
 _UA = "Mozilla/5.0 (Kartis pacha_tickets)"
+# Pause between successful PDF downloads so a 15-ticket order doesn't trip
+# FourVenues' rate limit (HTTP 429) in the first place.
+_DOWNLOAD_SPACING_SECONDS = float(os.getenv("KARTIS_PACHA_DOWNLOAD_SPACING") or 3)
 # Files this tool owns, so a re-run can clear stale numbering before rewriting.
 _OWNED_FILE_RX = re.compile(r"^Pacha ticket \d+ of \d+ - .*\.pdf$", re.I)
 
@@ -206,6 +211,22 @@ def parse_meta(msg, attachment_name=""):
     return {"event": event, "code": code, "date_iso": date_iso}
 
 
+def _order_code_from_msg(msg):
+    """The authoritative order code is the one in the PDF filename
+    (entradas-<CODE>.pdf), from the attachment name or the download link.
+    The 'Your ticket for <event>: <code>' subject line is ambiguous — events
+    whose own name contains a colon (e.g. 'SOFI TUKKER Presents: ANIMAL')
+    make the regex read the subtitle as the code, which is identical across
+    every ticket in the order and collapses them all in the dedupe."""
+    fname, _ = _first_pdf_attachment(msg)
+    for candidate in (fname, find_download_url(msg)):
+        if candidate:
+            m = _ATTACH_CODE_RX.search(candidate)
+            if m:
+                return m.group(1)
+    return None
+
+
 def _first_pdf_attachment(msg):
     """Return (filename, bytes) of the first PDF attachment, or (None, None)."""
     for fname, ctype, payload in _extract_attachments(msg):
@@ -238,9 +259,21 @@ def find_download_url(msg):
 
 
 def _download_pdf(url, timeout=30):
+    """Download one ticket PDF. FourVenues rate-limits the connector service
+    (HTTP 429) when a big order pulls dozens of PDFs back-to-back, so space
+    requests out and back off + retry on 429."""
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    delays = (15, 45, 90)
+    for attempt in range(len(delays) + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = r.read()
+            time.sleep(_DOWNLOAD_SPACING_SECONDS)
+            return data
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == len(delays):
+                raise
+            time.sleep(delays[attempt])
 
 
 def get_ticket_pdf(msg):
@@ -299,6 +332,15 @@ def collect(days=DEFAULT_LOOKBACK_DAYS, folder=DEFAULT_FOLDER):
     for uid, msg, received in fetch_pacha_messages(days, folder=folder):
         # Parse first (cheap) so we can dedupe before any download.
         meta = parse_meta(msg)
+        # Prefer the per-ticket code from the entradas-<CODE>.pdf filename; the
+        # subject-line "code" is really whatever follows the last colon, which
+        # for events with a colon in their name is the event subtitle — shared
+        # by the whole order. Fold that subtitle back into the event name.
+        real_code = _order_code_from_msg(msg)
+        if real_code and meta["code"] != real_code:
+            if meta["code"] and meta["event"]:
+                meta["event"] = f"{meta['event']}: {meta['code']}"
+            meta["code"] = real_code
         label = meta["code"] or (uid.decode() if isinstance(uid, bytes) else str(uid))
         if not meta["event"]:
             skipped.append(f"{label}: could not read event name")
