@@ -698,6 +698,21 @@ def _pacha_tier_lines(ev, limit=5):
     return out
 
 
+def _pacha_available_at_price(ev, price, vip=False):
+    """Tickets buyable right now at exactly `price` — the size of the cheap
+    batch a shock ping is announcing. Sums across (non-)VIP tiers at that
+    price; None when no tier with a count sits there. The VIP/non-VIP split
+    mirrors _pick_ga_tier's name test in pacha_events."""
+    total, seen = 0, False
+    for t in (ev.get("tiers") or []):
+        if vip != ("vip" in (t.get("name") or "").lower()):
+            continue
+        if t.get("price") == price and t.get("available") is not None:
+            total += t["available"]
+            seen = True
+    return total if seen else None
+
+
 def notify_pacha_event(kind, ev, old=None):
     """Pacha NYC event-monitor ping. Discord-only — fires up to every
     minute and speed matters more than a paper trail. `kind` is one of
@@ -742,9 +757,13 @@ def notify_pacha_event(kind, ev, old=None):
         old_vip = (old or {}).get("vip_price")
         drops = []
         if old_ga and ga and ga < old_ga:
-            drops.append(f"GA ${old_ga:,.0f} → ${ga:,.0f}")
+            n = _pacha_available_at_price(ev, ga)
+            drops.append(f"GA ${old_ga:,.0f} → ${ga:,.0f}"
+                         + (f" ({n} left)" if n is not None else ""))
         if old_vip and vip and vip < old_vip:
-            drops.append(f"VIP ${old_vip:,.0f} → ${vip:,.0f}")
+            n = _pacha_available_at_price(ev, vip, vip=True)
+            drops.append(f"VIP ${old_vip:,.0f} → ${vip:,.0f}"
+                         + (f" ({n} left)" if n is not None else ""))
         title = f"⚡ Pacha NYC: {name} {' · '.join(drops) or 'price DROPPED'}"
         color = 0x00B0F4
         lines.append("Price DROPPED — cheaper tickets just appeared "
