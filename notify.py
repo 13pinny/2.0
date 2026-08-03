@@ -909,6 +909,11 @@ def notify_site_event(kind, ev, old=None):
         else:
             title = f"🎟️ {label}: {name} is now ON SALE"
         color = 0x56D364
+    elif ev.get("homepage_teaser"):
+        title = f"🖼️ Kupat homepage: new show graphic — {name}"
+        color = 0xB57EDC
+        lines.append("Announced on the homepage, but no ticket link in the "
+                     "catalog yet — sale likely opens soon.")
     else:
         title = f"🎫 New {label} event — {name}"
         color = 0xE91E63

@@ -78,34 +78,61 @@ def _norm(s):
     return re.sub(r"[\W_]+", "", str(s or "").lower(), flags=re.UNICODE)
 
 
+def _tokens(s):
+    """Word tokens for fuzzy name matching (lowercased, punctuation-free)."""
+    return {t for t in re.split(r"[\W_]+", str(s or "").lower(), flags=re.UNICODE)
+            if len(t) > 1}
+
+
+def _tokens_subsume(a, b):
+    """True when one token set contains the other (both non-empty) — matches
+    'ששון שאולוב' to 'ששון איפרם שאולוב' and 'ECHOES' to
+    'ECHOES - PINK FLOYD THE WALL LIVE'."""
+    return bool(a) and bool(b) and (a <= b or b <= a)
+
+
+_TILE_TITLE_RE = re.compile(r'<h2[^>]+class="[^"]*item-title[^"]*"[^>]*>\s*<span>([^<]*)</span>',
+                            re.IGNORECASE)
+
+
 def fetch_homepage_tiles():
-    """Parse the kupat.co.il homepage into
-    ``{match_key: image_url}`` — one entry per normalized slug / artist
-    class / aria-label of every promoted show tile. Raises on network
-    trouble or when a 200 page parses to zero tiles (a site redesign must
-    read as a fetch failure, never as 'nothing is promoted')."""
+    """Parse the kupat.co.il homepage into a list of show tiles:
+    ``[{"slug", "name", "image", "keys"}]`` — ``keys`` is the set of
+    normalized match keys (slug, show_artist class, aria-label). Raises on
+    network trouble or when a 200 page parses to zero tiles (a site
+    redesign must read as a fetch failure, never as 'nothing is
+    promoted')."""
     html = _get(HOME_URL).decode("utf-8", errors="replace")
-    # The tile's own <article> block ends before the img on some layouts —
-    # scan a window past the match so the banner img is always in scope.
-    keys = {}
-    tiles = 0
-    for m in re.finditer(r'<article[^>]+class="[^"]*item-show[^"]*"[^>]*>', html):
-        block = html[m.start(): m.start() + 2500]
+    tiles = []
+    seen_slugs = set()
+    starts = [m.start() for m in re.finditer(r'<article[^>]+class="[^"]*item-show[^"]*"[^>]*>', html)]
+    for i, start in enumerate(starts):
+        # Bound each tile at the next <article> so aria/title/img regexes
+        # can't bleed into the neighbouring tile.
+        end = starts[i + 1] if i + 1 < len(starts) else min(len(html), start + 4000)
+        block = html[start:end]
         slug_m = _TILE_SLUG_RE.search(block)
         if not slug_m:
             continue
-        tiles += 1
+        slug = slug_m.group(1)
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
         img_m = _TILE_IMG_RE.search(block)
-        img = img_m.group(1) if img_m else ""
-        for key_m in (slug_m.group(1),
-                      *( [a.group(1)] if (a := _TILE_ARTIST_RE.search(block)) else [] ),
-                      *( [l.group(1)] if (l := _ARIA_RE.search(block)) else [] )):
-            k = _norm(key_m)
-            if k and (k not in keys or img):
-                keys[k] = img
+        aria = _ARIA_RE.search(block)
+        title = _TILE_TITLE_RE.search(block)
+        name = ((aria.group(1) if aria else "") or (title.group(1) if title else "")).strip()
+        artist_m = _TILE_ARTIST_RE.search(block)
+        keys = {k for k in (
+            _norm(slug),
+            _norm(artist_m.group(1)) if artist_m else "",
+            _norm(name),
+        ) if k}
+        tiles.append({"slug": slug, "name": name,
+                      "image": img_m.group(1) if img_m else "", "keys": keys})
     if not tiles:
         raise KupatEventsError("homepage parsed to 0 show tiles — layout change?")
-    return keys
+    return tiles
 
 
 def fetch_events():
@@ -123,12 +150,12 @@ def fetch_events():
         raise KupatEventsError("unexpected /api/features shape — API change?")
 
     try:
-        home = fetch_homepage_tiles()
+        tiles = fetch_homepage_tiles()
     except Exception as e:
         print(f"[kupat_events] homepage fetch failed (catalog ok): {e}")
-        home = None
+        tiles = None
 
-    events = []
+    rows = []  # (feature_dict, event_dict) so the match passes can annotate
     for f in feats:
         if not isinstance(f, dict) or f.get("id") is None:
             continue
@@ -138,16 +165,7 @@ def fetch_events():
         if extra:
             name = f"{name} — {extra}" if name else extra
         dt = (f.get("closestPresentationDateTime") or "").strip()
-
-        if home is None:
-            on_sale, image = None, ""
-        else:
-            match = next((k for k in (_norm(f.get("urlName")), _norm(f.get("name")))
-                          if k and k in home), None)
-            on_sale = match is not None
-            image = home.get(match, "") if match else ""
-
-        events.append({
+        rows.append((f, {
             "source": SOURCE_NAME,
             "event_key": fid,
             "name": name,
@@ -156,12 +174,102 @@ def fetch_events():
             "first_date_ms": None,
             # True = promoted on the kupat.co.il homepage (officially on
             # sale); False = catalog-only so far; None = homepage unknown.
-            "on_sale": on_sale,
-            "image": image,
+            "on_sale": None if tiles is None else False,
+            "image": "",
             "url": f"{kupat.SITE_BASE}/booking/features/{fid}",
-        })
-    if not events:
+        }))
+    if not rows:
         raise KupatEventsError("features endpoint parsed to 0 events — API change?")
+    events = [ev for _, ev in rows]
+
+    if tiles is not None:
+        matched_tiles = set()
+        key_to_tile = {}
+        for idx, t in enumerate(tiles):
+            for k in t["keys"]:
+                if k not in key_to_tile or t["image"]:
+                    key_to_tile[k] = idx
+
+        def _mark(ev, idx):
+            matched_tiles.add(idx)
+            ev["on_sale"] = True
+            ev["image"] = tiles[idx]["image"]
+
+        # Pass 1 — exact normalized-key match (urlName/name vs slug/artist/
+        # aria-label). Handles similar-name pairs correctly ("ריטה" vs
+        # "ריטה ושירי מימון" each hit their own tile).
+        pending = []
+        for f, ev in rows:
+            keys = {k for k in (_norm(f.get("urlName")), _norm(f.get("name"))) if k}
+            idx = next((key_to_tile[k] for k in keys if k in key_to_tile), None)
+            if idx is not None:
+                _mark(ev, idx)
+            else:
+                pending.append((f, ev))
+
+        # Pass 2 — fuzzy token-subset match for the leftovers, against
+        # still-unmatched tiles only ('ששון שאולוב' tile ↔ 'ששון איפרם
+        # שאולוב' feature; urlName 'BRAVO' ↔ 'BRAVO CIRCUS הרפתקאות היער
+        # האבוד' tile). A single-token set only matches when the token is
+        # ≥5 chars ('echoes', 'bravo') so a short bare artist name can't
+        # swallow an unrelated longer title.
+        def _fuzzy_ok(a, b):
+            if a == b and a:
+                return True
+            small = min(len(a), len(b))
+            if small >= 2:
+                return _tokens_subsume(a, b)
+            if small == 1:
+                return _tokens_subsume(a, b) and all(
+                    len(t) >= 5 for t in (a if len(a) == 1 else b))
+            return False
+
+        for f, ev in pending:
+            ftoks = [t for t in (_tokens(f.get("name")), _tokens(f.get("urlName")))
+                     if t]
+            idx = next((i for i, t in enumerate(tiles)
+                        if i not in matched_tiles and any(
+                            _fuzzy_ok(ft, _tokens(t["name"])) for ft in ftoks)), None)
+            if idx is not None:
+                _mark(ev, idx)
+
+        # Pass 3 — teaser suppression: a still-unmatched tile whose name
+        # fuzzy-matches ANY catalog feature (matched or not) has a ticket
+        # link somewhere, so it isn't a teaser — kupat sometimes gives
+        # multi-show festivals sloppy urlNames ('RITA' on 'פסטיבל באר
+        # טוביה - ריטה') that exact-match the wrong tile in pass 1 and
+        # would otherwise strand the festival's own tile as a false teaser.
+        all_ftoks = []
+        for f, _ev in rows:
+            all_ftoks.extend(t for t in (_tokens(f.get("name")), _tokens(f.get("urlName"))) if t)
+        for idx, t in enumerate(tiles):
+            if idx in matched_tiles:
+                continue
+            ttoks = _tokens(t["name"])
+            if any(_fuzzy_ok(ft, ttoks) for ft in all_ftoks):
+                matched_tiles.add(idx)
+
+        # Teaser graphics: homepage tiles matching NO catalog feature — the
+        # show is announced (graphic up) but its ticket link doesn't exist
+        # yet (or sale opens later / sells elsewhere). Emit each as a
+        # pseudo-event keyed home:<slug> so the standard diff pings its
+        # first appearance; when the catalog entry shows up later it pings
+        # 'new' under its own feature id as usual.
+        for idx, t in enumerate(tiles):
+            if idx in matched_tiles:
+                continue
+            events.append({
+                "source": SOURCE_NAME,
+                "event_key": f"home:{t['slug']}",
+                "name": t["name"] or t["slug"],
+                "venue": "",
+                "date_text": "",
+                "first_date_ms": None,
+                "on_sale": True,   # promoted by definition; never flips
+                "image": t["image"],
+                "homepage_teaser": True,
+                "url": f"https://www.kupat.co.il/show/{t['slug']}",
+            })
     return events
 
 
@@ -235,12 +343,21 @@ def main(argv):
     if "--json" in argv:
         print(json.dumps(events, indent=1, ensure_ascii=False))
         return 0
-    n_home = sum(1 for e in events if e["on_sale"])
-    print(f"{len(events)} features on {FEATURES_URL} — {n_home} promoted on the homepage\n")
+    n_home = sum(1 for e in events if e["on_sale"] and not e.get("homepage_teaser"))
+    n_teaser = sum(1 for e in events if e.get("homepage_teaser"))
+    print(f"{len(events)} entries — {n_home} catalog features promoted on the "
+          f"homepage, {n_teaser} teaser graphics without a catalog link\n")
     for ev in events:
-        mark = "HOME" if ev["on_sale"] else ("?   " if ev["on_sale"] is None else "    ")
+        if ev.get("homepage_teaser"):
+            mark = "TEASER"
+        elif ev["on_sale"]:
+            mark = "HOME  "
+        elif ev["on_sale"] is None:
+            mark = "?     "
+        else:
+            mark = "      "
         img = "img" if ev.get("image") else "   "
-        print(f"  {mark} {img} {ev['event_key']:>6}  {ev['name']:<45.45} {ev['date_text']}")
+        print(f"  {mark} {img} {ev['event_key']:>14}  {ev['name']:<42.42} {ev['date_text']}")
     return 0
 
 
