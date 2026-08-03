@@ -517,7 +517,9 @@ CREATE TABLE IF NOT EXISTS pacha_seen_events (
                                       -- ticks (release flips add inventory and
                                       -- are clamped out, same as _sales_windows)
     sold_cum_since TEXT,
-    tiers_json   TEXT                 -- current tier breakdown as of last tick
+    tiers_json   TEXT,                -- current tier breakdown as of last tick
+    vip_price    REAL                 -- headline VIP price (price-drop shocks
+                                      -- diff it alongside ga_price)
 );
 -- One row per release (ticket tier) per pacha event, from first sighting to
 -- sell-out/removal — the supply-side history the live page discards. Keyed
@@ -1052,6 +1054,11 @@ def init():
             conn.execute("ALTER TABLE pacha_seen_events ADD COLUMN sold_cum_since TEXT")
         if "tiers_json" not in pe_cols:
             conn.execute("ALTER TABLE pacha_seen_events ADD COLUMN tiers_json TEXT")
+        # Price-drop shocks diff the VIP headline too, so it's now persisted
+        # alongside ga_price (NULL until the first post-deploy tick = silent
+        # VIP baseline, same as GA's truthiness guard).
+        if "vip_price" not in pe_cols:
+            conn.execute("ALTER TABLE pacha_seen_events ADD COLUMN vip_price REAL")
         # Maaser tax-deductible flag — existing rows default to 0 (not
         # claimed) which is a safe default; user can edit any back-history
         # entries to flip them on.
@@ -2682,8 +2689,8 @@ def pacha_upsert_seen(ev, now_iso):
                    start_date, on_sale, ga_price, ga_sold_out, buy_url,
                    first_seen_at, last_seen_at, ga_release, ga_available,
                    ga_quantity, total_available, sold_cum, sold_cum_since,
-                   tiers_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   tiers_json, vip_price)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(event_id) DO UPDATE SET
                    name = excluded.name, slug = excluded.slug,
                    date_text = excluded.date_text, start_date = excluded.start_date,
@@ -2696,13 +2703,15 @@ def pacha_upsert_seen(ev, now_iso):
                    total_available = excluded.total_available,
                    sold_cum = excluded.sold_cum,
                    sold_cum_since = excluded.sold_cum_since,
-                   tiers_json = excluded.tiers_json""",
+                   tiers_json = excluded.tiers_json,
+                   vip_price = excluded.vip_price""",
             (ev["event_id"], ev.get("name"), ev.get("slug"), ev.get("date_text"),
              ev.get("start_date"), 1 if ev.get("on_sale") else 0, ev.get("ga_price"),
              1 if ev.get("ga_sold_out") else 0, ev.get("buy_url"), now_iso, now_iso,
              ev.get("ga_release"), ev.get("ga_available"), ev.get("ga_quantity"),
              ev.get("total_available"), ev.get("sold_cum"), ev.get("sold_cum_since"),
-             json.dumps(ev["tiers"], ensure_ascii=False) if ev.get("tiers") else None),
+             json.dumps(ev["tiers"], ensure_ascii=False) if ev.get("tiers") else None,
+             ev.get("vip_price")),
         )
 
 

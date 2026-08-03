@@ -5,10 +5,13 @@ Reads credentials from the environment:
                          integrations page. Every category lands here unless
                          it has its own webhook below.
   DISCORD_WEBHOOK_DROPS / DISCORD_WEBHOOK_STATUS / DISCORD_WEBHOOK_NEW_EVENTS
-  / DISCORD_WEBHOOK_PRICER / DISCORD_WEBHOOK_LISTINGS / DISCORD_WEBHOOK_TODOS
+  / DISCORD_WEBHOOK_JUMPS / DISCORD_WEBHOOK_SHOCKS / DISCORD_WEBHOOK_PRICER
+  / DISCORD_WEBHOOK_LISTINGS / DISCORD_WEBHOOK_TODOS
                        — optional per-category webhooks (one Discord channel
                          each). Unset categories fall back to
-                         DISCORD_WEBHOOK_URL, never to silence.
+                         DISCORD_WEBHOOK_URL, never to silence. (shocks has
+                         one extra hop: if unset, the Discord bot auto-creates
+                         a #pacha-shocks channel before falling back.)
   GMAIL_USER           — Gmail address to send from
   GMAIL_APP_PASSWORD   — 16-char app password (NOT the regular Gmail password)
   NOTIFY_EMAIL_TO      — destination address (defaults to GMAIL_USER if unset)
@@ -42,6 +45,7 @@ _WEBHOOK_ENV = {
     "status":     "DISCORD_WEBHOOK_STATUS",      # sold-out / last-tickets signals (notify_drop)
     "new_events": "DISCORD_WEBHOOK_NEW_EVENTS",  # genuinely-new events + on-sale flips (pacha/kupat/TM-IL/barby/zappa)
     "jumps":      "DISCORD_WEBHOOK_JUMPS",       # pacha tier/price jumps + low-stock (price about to jump)
+    "shocks":     "DISCORD_WEBHOOK_SHOCKS",      # pacha price DROPS (returns / cheaper re-release — buy NOW)
     "pricer":     "DISCORD_WEBHOOK_PRICER",      # auto-pricer changes/pauses/caps
     "listings":   "DISCORD_WEBHOOK_LISTINGS",    # intake→viagogo push pipeline
     "todos":      "DISCORD_WEBHOOK_TODOS",       # daily to-do digest
@@ -53,6 +57,26 @@ def _discord_webhook(category=None):
     var = _WEBHOOK_ENV.get(category)
     url = os.environ.get(var, "").strip() if var else ""
     return url or os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+
+
+def _pacha_shocks_webhook():
+    """Webhook for pacha price-DROP shocks. Resolution order: an explicit
+    DISCORD_WEBHOOK_SHOCKS pins a channel; otherwise the Discord bot creates
+    (or reuses) a #pacha-shocks channel on first ping — zero manual setup,
+    cached in discord_event_channels; otherwise the usual category fallback
+    to DISCORD_WEBHOOK_URL, so a shock is never silently dropped. The name
+    must stay pre-slugged lowercase: Discord rewrites spaces to dashes on
+    create, which would break webhook_for's reuse-by-name lookup."""
+    url = os.environ.get("DISCORD_WEBHOOK_SHOCKS", "").strip()
+    if url:
+        return url
+    try:
+        import discord_bot  # local import — keeps notify.py free of the db dep
+        url = discord_bot.webhook_for("pacha-shocks") or ""
+    except Exception as e:
+        print(f"[notify] pacha-shocks bot channel failed: {e}")
+        url = ""
+    return url or _discord_webhook("shocks")
 
 
 def _seat_block(seat):
@@ -675,20 +699,26 @@ def _pacha_tier_lines(ev, limit=5):
 
 
 def notify_pacha_event(kind, ev, old=None):
-    """Pacha NYC event-monitor ping. Discord-only — fires up to every 10
-    minutes and speed matters more than a paper trail. `kind` is one of
+    """Pacha NYC event-monitor ping. Discord-only — fires up to every
+    minute and speed matters more than a paper trail. `kind` is one of
     'new' (event just appeared on pacha-nyc.com/events), 'onsale'
     (waitlist/hidden-GA event became buyable), 'price_up' (headline GA
-    price climbed a release), 'low_stock' (the GA release's tickets-left
-    count crossed below the alert threshold — the price is about to jump).
+    price climbed a release), 'price_down' (GA or VIP got CHEAPER — a
+    return or an earlier/cheaper release re-opened; the time-critical
+    buy-now shock), 'low_stock' (the GA release's tickets-left count
+    crossed below the alert threshold — the price is about to jump).
     `ev` is a normalized dict from pacha_events.fetch_events(); `old` is
-    the previously stored DB row (price_up uses its old price, low_stock
-    its old count).
+    the previously stored DB row (the price kinds use its old prices,
+    low_stock its old count).
 
     Routing: 'price_up' and 'low_stock' are demand signals about an event
     we already know, not new inventory — they go to the 'jumps' channel;
+    'price_down' goes to #pacha-shocks (see _pacha_shocks_webhook);
     'new' and 'onsale' stay in 'new_events'."""
-    discord_url = _discord_webhook("jumps" if kind in ("price_up", "low_stock") else "new_events")
+    if kind == "price_down":
+        discord_url = _pacha_shocks_webhook()
+    else:
+        discord_url = _discord_webhook("jumps" if kind in ("price_up", "low_stock") else "new_events")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
 
@@ -707,6 +737,19 @@ def notify_pacha_event(kind, ev, old=None):
         title = f"📈 Pacha NYC: {name} GA ${old_price:,.0f} → ${ga:,.0f}"
         color = 0xFAA61A
         lines.append("Selling through — price climbs with each release.")
+    elif kind == "price_down":
+        old_ga = (old or {}).get("ga_price")
+        old_vip = (old or {}).get("vip_price")
+        drops = []
+        if old_ga and ga and ga < old_ga:
+            drops.append(f"GA ${old_ga:,.0f} → ${ga:,.0f}")
+        if old_vip and vip and vip < old_vip:
+            drops.append(f"VIP ${old_vip:,.0f} → ${vip:,.0f}")
+        title = f"⚡ Pacha NYC: {name} {' · '.join(drops) or 'price DROPPED'}"
+        color = 0x00B0F4
+        lines.append("Price DROPPED — cheaper tickets just appeared "
+                     "(a return, or an earlier release re-opened). They "
+                     "usually go fast.")
     elif kind == "low_stock":
         left = ev.get("ga_available")
         release = ev.get("ga_release") or "current GA release"
@@ -739,7 +782,12 @@ def notify_pacha_event(kind, ev, old=None):
         "url": ev.get("page_url") or "https://pacha-nyc.com/events",
         "color": color,
     }
-    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+    payload = {"embeds": [embed]}
+    if kind == "price_down":
+        # Discord's phone push previews only `content`, not the embed — put
+        # the prices on the lock screen for the time-critical shock ping.
+        payload["content"] = title[:1990]
+    return {"discord": _post_discord(discord_url, payload)}
 
 
 def notify_dice(kind, info):

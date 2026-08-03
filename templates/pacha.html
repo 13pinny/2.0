@@ -278,7 +278,7 @@ function renderTotals(){
   ).join('');
   const s = DATA.status || {};
   $('statusline').textContent = `Monitor: ${s.enabled ? 'on' : 'OFF'} · every ${s.interval_minutes} min · last check ${fmtAgo(s.at)}` +
-    (s.error ? ` · ⚠ ${s.error}` : '') + ` · pings last tick: ${['new','onsale','price_up','low_stock'].map(k => `${k} ${s[k]??0}`).join(', ')}`;
+    (s.error ? ` · ⚠ ${s.error}` : '') + ` · pings last tick: ${['new','onsale','price_up','price_down','low_stock'].map(k => `${k} ${s[k]??0}`).join(', ')}`;
   $('meta').textContent = `${evs.length} events`;
   $('footnote').textContent = 'Counts are per-release (a new release adds inventory at a higher price). +1h/+6h/… = actual tickets sold in that window; * = limited history. Σ Sold = everything sold since tracking began. Release history logs every release from first sighting (releases already open when logging started show that date). BUY opens the event page\'s tickets section (the FourVenues iframe checkout adds tax).';
 }

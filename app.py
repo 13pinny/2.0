@@ -159,15 +159,20 @@ _last_todo_remind = {"at": None, "sent_count": 0, "due_today": 0, "overdue": 0,
 _todo_remind_lock = threading.Lock()
 
 # Pacha NYC new-event monitor — polls pacha-nyc.com/events and pings Discord
-# on new events / waitlist→on-sale flips / GA price climbs. Pure HTTP (no
-# Chrome), so it could run anywhere — but only ONE machine may have it
-# enabled or Discord gets double pings. Prod = the VPS; a locally-run
-# dashboard sets KARTIS_PACHA_MONITOR_ENABLED=0 (same idea as TM_CHECK_ENABLED).
+# on new events / waitlist→on-sale flips / GA price climbs / GA-or-VIP price
+# DROPS (returns or a cheaper release re-opening — the "pacha shocks"
+# channel). Pure HTTP (no Chrome), so it could run anywhere — but only ONE
+# machine may have it enabled or Discord gets double pings. Prod = the VPS; a
+# locally-run dashboard sets KARTIS_PACHA_MONITOR_ENABLED=0 (same idea as
+# TM_CHECK_ENABLED).
 _last_pacha_events = {"at": None, "events": 0, "new": 0, "onsale": 0,
-                      "price_up": 0, "low_stock": 0, "notified": 0,
-                      "baseline": False, "error": None, "running": False}
+                      "price_up": 0, "price_down": 0, "low_stock": 0,
+                      "notified": 0, "baseline": False, "error": None,
+                      "running": False}
 _pacha_events_lock = threading.Lock()
-PACHA_MONITOR_INTERVAL_MINUTES = int(os.getenv("KARTIS_PACHA_MONITOR_INTERVAL_MINUTES") or 10)
+# 1-minute default: a price dip (someone returns tickets) can sell out again
+# in minutes, so the shock ping is only useful if the poll catches the dip.
+PACHA_MONITOR_INTERVAL_MINUTES = int(os.getenv("KARTIS_PACHA_MONITOR_INTERVAL_MINUTES") or 1)
 PACHA_MONITOR_ENABLED = (os.getenv("KARTIS_PACHA_MONITOR_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 # One tick can't spam more pings than this — a parser anomaly that makes
 # every event look "new" should hit the cap, not flood the channel.
@@ -175,6 +180,12 @@ PACHA_MAX_PINGS_PER_TICK = 12
 # Low-stock alert: ping once when the GA release's tickets-left count
 # crosses at/below this (re-armed by the next release).
 PACHA_LOW_STOCK_THRESHOLD = int(os.getenv("KARTIS_PACHA_LOW_STOCK_THRESHOLD") or 20)
+# The /market feed (market_events row + availability snapshot per event) keeps
+# its old ~10-min cadence even though the tick now runs every minute —
+# snapshots are inserts, and 1-min inserts would grow the series 10x for no
+# extra velocity resolution.
+PACHA_MARKET_SNAPSHOT_MINUTES = int(os.getenv("KARTIS_PACHA_MARKET_SNAPSHOT_MINUTES") or 10)
+_pacha_last_market_at = None
 
 # Israeli-sites new-event monitor — polls the kupat.co.il and
 # ticketmaster.co.il listing feeds (kupat_events.py / tm_events.py, pure
@@ -274,11 +285,14 @@ def _pacha_market_rows(events, now_iso):
 def run_pacha_events():
     """One tick of the Pacha NYC new-event monitor. Fetch the current event
     list, diff against pacha_seen_events, ping Discord for: brand-new
-    events, waitlist→on-sale flips, GA price climbs (both prices > 0), and
-    the GA release's tickets-left count crossing below
-    PACHA_LOW_STOCK_THRESHOLD (early warning that the price will jump).
-    Every tick also feeds the /market page (market_events row + availability
-    snapshot per event, source='pacha').
+    events, waitlist→on-sale flips, GA price climbs (both prices > 0), GA or
+    VIP price DROPS (a return / a cheaper earlier release re-opening — the
+    time-critical "shock" ping, routed to #pacha-shocks), and the GA
+    release's tickets-left count crossing below PACHA_LOW_STOCK_THRESHOLD
+    (early warning that the price will jump). The /market feed (market_events
+    row + availability snapshot per event, source='pacha') rides the tick too
+    but is throttled to PACHA_MARKET_SNAPSHOT_MINUTES so the 1-min poll
+    doesn't inflate the snapshot series.
 
     Gating mirrors the drop checker: the very first tick ever (empty seen
     table) is a baseline — store everything, ping nothing. master_paused
@@ -318,6 +332,21 @@ def run_pacha_events():
                         and old["ga_available"] > PACHA_LOW_STOCK_THRESHOLD
                         and ev["ga_available"] <= PACHA_LOW_STOCK_THRESHOLD):
                     pings.append(("low_stock", ev, old))
+                # Shock: GA or VIP got CHEAPER — a return or an earlier/
+                # cheaper release re-opened. Truthiness guards mirror the
+                # climb check (None/0 on either side never fires), so the
+                # first tick after the vip_price migration baselines VIP
+                # silently. Independent of the chain above: a GA climb + VIP
+                # drop in one tick correctly emits both pings.
+                old_vip, new_vip = old.get("vip_price"), ev.get("vip_price")
+                if ((old_ga and new_ga and new_ga < old_ga)
+                        or (old_vip and new_vip and new_vip < old_vip)):
+                    pings.append(("price_down", ev, old))
+
+        # Shocks are the perishable ones (the cheap tickets are selling right
+        # now) — send them first so a burst of "new" pings can't starve them
+        # out of the per-tick cap.
+        pings.sort(key=lambda p: p[0] != "price_down")
 
         notified = 0
         if not muted:
@@ -343,13 +372,20 @@ def run_pacha_events():
         for ev in events:
             db.pacha_upsert_seen(ev, now_iso)
             db.pacha_release_sync(ev["event_id"], ev.get("tiers"), now_iso)
-        _pacha_market_rows(events, now_iso)
+        global _pacha_last_market_at
+        now_dt = datetime.now(timezone.utc)
+        if (_pacha_last_market_at is None
+                or now_dt - _pacha_last_market_at
+                >= timedelta(minutes=PACHA_MARKET_SNAPSHOT_MINUTES)):
+            _pacha_market_rows(events, now_iso)
+            _pacha_last_market_at = now_dt
 
         _last_pacha_events.update(
             at=now_iso, error=None, events=len(events), baseline=baseline,
             new=sum(1 for k, _, _ in pings if k == "new"),
             onsale=sum(1 for k, _, _ in pings if k == "onsale"),
             price_up=sum(1 for k, _, _ in pings if k == "price_up"),
+            price_down=sum(1 for k, _, _ in pings if k == "price_down"),
             low_stock=sum(1 for k, _, _ in pings if k == "low_stock"),
             notified=notified,
         )
