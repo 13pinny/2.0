@@ -29,6 +29,7 @@ import db
 import dice
 import discord_bot
 import filters as watcher_filters
+import haku
 import kupat
 import notify
 import tickchak
@@ -40,7 +41,7 @@ load_dotenv(Path(__file__).parent / ".env")
 db.init()
 
 SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
-           "barby": barby, "dice": dice}
+           "barby": barby, "dice": dice, "haku": haku}
 
 import os
 INTERVAL = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
@@ -182,6 +183,14 @@ def check_one(w, now_iso):
         if src_name == "dice" and matched:
             _dnm = ((lbls or {}).get("meta") or {}).get("eventName") or label or w["event_code"]
             headline = f"🎯 BUY NOW — {_dnm}" + (" · restocked" if was_empty else "")
+        # haku: every ping is registration news — spots back at a charity or
+        # the sold-out prose changing. (Keep in sync with app.py.)
+        if src_name == "haku" and matched:
+            _hnm = ((lbls or {}).get("meta") or {}).get("eventName") or label or w["event_code"]
+            if any(s.get("kind") == "rfar" for s in matched):
+                headline = f"🏃 Charity entries — {_hnm}"
+            else:
+                headline = f"🏃 Registration update — {_hnm}"
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,

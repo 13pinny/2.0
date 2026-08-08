@@ -22,6 +22,7 @@ import barby_events
 import db
 import discord_bot
 import filters as watcher_filters
+import haku
 import import_jerujam
 import kupat
 import kupat_credits
@@ -56,6 +57,7 @@ WATCHER_SOURCES = {
     "tickchak": tickchak,
     "barby": barby,
     "dice": dice,
+    "haku": haku,
 }
 
 
@@ -71,6 +73,10 @@ def _detect_source(url):
         return "barby", barby
     if "dice.fm" in s:
         return "dice", dice
+    # haku race registration (Houston Marathon): the platform's own hosts
+    # plus the marathon site, whose URLs parse_url maps to the known key.
+    if "hakuapp.com" in s or "haku.ly" in s or "houstonmarathon" in s:
+        return "haku", haku
     if "tickchak.co.il" in s:
         return "tickchak", tickchak
     if "kupat.co.il" in s:
@@ -83,6 +89,9 @@ def _detect_source(url):
     # the tickchak bare-slug rule, which would also match it).
     if re.fullmatch(r"\s*[a-f0-9]{24}\s*", s or ""):
         return "dice", dice
+    # Bare 20-hex is a haku event key (also before the tickchak slug rule).
+    if re.fullmatch(r"\s*[a-f0-9]{20}\s*", s or ""):
+        return "haku", haku
     # Bare slug shorthand with no slash, scheme, or query string — most
     # likely a tickchak event slug (e.g. "mada26", "103350").
     if re.fullmatch(r"\s*[a-z0-9_\-]{2,}\s*", s or "") and "/" not in s and "?" not in s:
@@ -4445,6 +4454,15 @@ def _check_one_watcher(w, now_iso):
         if src_name == "dice" and matched:
             _dnm = ((labels or {}).get("meta") or {}).get("eventName") or label or w["event_code"]
             headline = f"🎯 BUY NOW — {_dnm}" + (" · restocked" if was_empty else "")
+
+        # haku: every ping is registration news — spots back at a charity or
+        # the sold-out prose changing. Say so instead of "N new seats".
+        if src_name == "haku" and matched:
+            _hnm = ((labels or {}).get("meta") or {}).get("eventName") or label or w["event_code"]
+            if any(s.get("kind") == "rfar" for s in matched):
+                headline = f"🏃 Charity entries — {_hnm}"
+            else:
+                headline = f"🏃 Registration update — {_hnm}"
 
         if enabled and matched:
             result = notify.notify_drop(

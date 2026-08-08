@@ -20,6 +20,7 @@ import barby
 import db
 import dice
 import discord_bot
+import haku
 import kupat
 import tickchak
 import ticketmaster
@@ -28,7 +29,7 @@ load_dotenv()
 db.init()
 
 SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
-           "barby": barby, "dice": dice}
+           "barby": barby, "dice": dice, "haku": haku}
 
 
 def detect_source(url):
@@ -37,6 +38,11 @@ def detect_source(url):
         return "barby", barby
     if "dice.fm" in s or re.fullmatch(r"\s*[a-f0-9]{24}\s*", s or ""):
         return "dice", dice
+    # haku race registration (Houston Marathon) — platform hosts, the
+    # marathon's own site, or a bare 20-hex event key. (Sync w/ app.py.)
+    if ("hakuapp.com" in s or "haku.ly" in s or "houstonmarathon" in s
+            or re.fullmatch(r"\s*[a-f0-9]{20}\s*", s or "")):
+        return "haku", haku
     if "tickchak.co.il" in s:
         return "tickchak", tickchak
     if "kupat.co.il" in s:
