@@ -188,6 +188,7 @@ class CvSession:
         self.page = context.new_page()
         self.page.goto(HOME_URL, wait_until="domcontentloaded", timeout=45000)
         self.page.wait_for_timeout(3000)
+        _settle_challenge(self.page)
 
     def api(self, url, method="GET", body=None):
         try:
@@ -276,12 +277,48 @@ class CvSession:
         return data
 
 
+def _looks_challenged(page):
+    """True while the tab is sitting on Cloudflare's interstitial."""
+    try:
+        title = (page.title() or "").strip().lower()
+    except Exception:
+        return False
+    return "just a moment" in title or "attention required" in title
+
+
+def _settle_challenge(page):
+    """A managed CF challenge usually clears itself in the real browser
+    within a few seconds — give it that chance, then one reload. An
+    interactive Turnstile never auto-clears; that needs a human in noVNC,
+    so fail the tick with instructions instead of hammering or wedging."""
+    if not _looks_challenged(page):
+        return
+    page.wait_for_timeout(8000)
+    if not _looks_challenged(page):
+        return
+    try:
+        page.reload(wait_until="domcontentloaded", timeout=45000)
+    except Exception:
+        pass
+    page.wait_for_timeout(8000)
+    if _looks_challenged(page):
+        raise CvPricerError(
+            "cloudflare challenge on crowdvolt.com — open noVNC, click "
+            "through the check in the CrowdVolt tab, then sign in if needed")
+
+
 def open_session(p):
-    browser = p.chromium.connect_over_cdp(CDP_URL)
+    # scraper's hardened connect: pre-closes stray ticketing tabs (a parked
+    # tab stuck on a CF challenge has a self-navigating iframe that can
+    # crash or WEDGE the attach — the 2026-08-12 outage), real timeout,
+    # retries. Lazy import keeps the CLI dry-run light.
+    import scraper
+    browser = scraper._connect_over_cdp(p, CDP_URL)
     context = browser.contexts[0]
     page = context.new_page()
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=45000)
     page.wait_for_timeout(3000)
+    _settle_challenge(page)
     return CvSession(page)
 
 

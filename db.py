@@ -915,8 +915,21 @@ CREATE TABLE IF NOT EXISTS cv_market_snapshots (
 
 @contextmanager
 def connect():
-    conn = sqlite3.connect(DB_PATH)
+    # timeout: with many writers (60s watcher tick, 1-min pacha, pricers,
+    # user requests) the sqlite default of 5s loses races against a big
+    # commit and surfaces as "database is locked" 500s (2026-08-12 outage).
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    try:
+        # WAL lets readers and writers proceed concurrently instead of
+        # queueing on one rollback-journal lock. Persistent in the DB file —
+        # after the first flip this pragma is a cheap no-op read.
+        # synchronous=NORMAL is the recommended WAL pairing (durable through
+        # app crashes; only an OS crash can lose the last commits).
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError:
+        pass  # flipping WAL needs a quiet instant; reads still work — retry next connect
     try:
         yield conn
         conn.commit()

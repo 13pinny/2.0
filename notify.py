@@ -1030,6 +1030,29 @@ def notify_pricer_rate_limited(info):
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
+def notify_cv_pricer_down(error_text, streak):
+    """CrowdVolt pricer tick has failed `streak` times in a row — usually a
+    Cloudflare challenge on the parked tab or an expired CrowdVolt login,
+    both of which need a human in noVNC. Throttled by the caller."""
+    discord_url = _discord_webhook("pricer")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+    lines = [
+        f"{streak} ticks in a row have failed. Last error:",
+        f"```{(error_text or '')[:500]}```",
+        "If it mentions Cloudflare or a missing login: open "
+        "[noVNC](https://vnc.kartis.homes/vnc.html?autoconnect=true&resize=remote&reconnect=true), "
+        "pass the check in the CrowdVolt tab, and sign in again.",
+    ]
+    embed = {
+        "title": "🔴 CrowdVolt pricer is down",
+        "description": "\n".join(lines)[:4000],
+        "url": "https://kartis.homes/cvpricer",
+        "color": 0xF85149,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()

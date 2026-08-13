@@ -764,6 +764,38 @@ def run_pricer():
         _pricer_lock.release()
 
 
+# Consecutive-failure alerting for the CV pricer: the tick runs unattended
+# every 15 min, and a persistent failure (Cloudflare challenge on the parked
+# tab, expired CrowdVolt login) otherwise sits invisible until the user
+# happens to open /cvpricer — seen 2026-08-13, down for a day+ behind a
+# Turnstile. One ping when a streak takes hold, then a reminder every 6h
+# while it lasts. Streak of 2 so a one-off blip (SPA closed our tab, Chrome
+# restarting) stays silent.
+_CV_PRICER_ALERT_STREAK = 2
+_CV_PRICER_ALERT_REMIND_HOURS = 6
+_cv_pricer_alert = {"streak": 0, "last_ping": None}
+
+
+def _cv_pricer_maybe_alert(error_text):
+    st = _cv_pricer_alert
+    if not error_text:
+        st["streak"] = 0
+        st["last_ping"] = None
+        return
+    st["streak"] += 1
+    if st["streak"] < _CV_PRICER_ALERT_STREAK:
+        return
+    now = datetime.now(timezone.utc)
+    if st["last_ping"] is not None and \
+            (now - st["last_ping"]) < timedelta(hours=_CV_PRICER_ALERT_REMIND_HOURS):
+        return
+    st["last_ping"] = now
+    try:
+        notify.notify_cv_pricer_down(error_text, st["streak"])
+    except Exception:
+        traceback.print_exc()
+
+
 def run_cv_pricer():
     if not _cv_pricer_lock.acquire(blocking=False):
         return
@@ -775,12 +807,14 @@ def run_cv_pricer():
             error=None,
             **counters,
         )
+        _cv_pricer_maybe_alert(None)
     except Exception as e:
         _last_cv_pricer.update(
             at=datetime.now(timezone.utc).isoformat(),
             error=f"{type(e).__name__}: {e}",
         )
         traceback.print_exc()
+        _cv_pricer_maybe_alert(f"{type(e).__name__}: {e}")
     finally:
         _last_cv_pricer["running"] = False
         _cv_pricer_lock.release()
@@ -6681,7 +6715,10 @@ scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(_fresh_thread_job(run_scraper), "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
 if TM_CHECK_ENABLED:
-    scheduler.add_job(run_tm_check, "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
+    # Fresh thread: kupat watchers ride sync_playwright (in-page harvest), so
+    # an unwrapped tick inherits any poisoned pool thread — seen 2026-08-12,
+    # every kupat check failing "Sync API inside the asyncio loop" for a day.
+    scheduler.add_job(_fresh_thread_job(run_tm_check), "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
     if DICE_SNIPER_ENABLED:
         scheduler.add_job(run_dice_sniper, "interval", seconds=DICE_SNIPER_SECONDS,
                           id="dice_sniper", max_instances=1)
@@ -6708,7 +6745,8 @@ scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
 # Festival/GA sales snapshots — fire one immediately (next_run_time) so the
 # Festival / GA Tracker pages have a baseline right after a restart, then
 # every N minutes.
-scheduler.add_job(run_sales_sync, "interval", minutes=FESTIVAL_SYNC_MINUTES,
+# Fresh thread: kupat GA label refreshes ride sync_playwright too.
+scheduler.add_job(_fresh_thread_job(run_sales_sync), "interval", minutes=FESTIVAL_SYNC_MINUTES,
                   id="sales_sync", next_run_time=datetime.now())
 # Auto-pricer: offset from the top of the hour (start_date pushes the first
 # run out) so its browser use doesn't collide with the hourly scrape. Cheap
