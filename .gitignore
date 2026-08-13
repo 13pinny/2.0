@@ -2,6 +2,9 @@
 .env
 auth.json
 user_data/
+user_data_cv/
+user_data_viagogo/
+.env.cvproxy
 
 # Python
 __pycache__/

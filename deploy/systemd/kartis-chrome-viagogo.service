@@ -10,12 +10,13 @@ Group=kartis
 WorkingDirectory=/opt/kartis
 Environment=DISPLAY=:99
 # Phase 2 only. Enable when Phase 1 still 403s on Viagogo.
-# Set the proxy in the EnvironmentFile so creds aren't committed:
-#   /etc/kartis/viagogo-proxy.env should contain:
-#     PROXY_URL=http://user:pass@residential-proxy-host:port
+# NEVER-DEPLOYED DRAFT — port moved 9223 -> 9224 (9223 is now the live
+# CrowdVolt Chrome, kartis-chrome-cv). Also note --proxy-server silently
+# drops user:pass — if this is ever enabled, chain through a cvproxy.py-
+# style local forwarder instead of PROXY_URL credentials.
 EnvironmentFile=/etc/kartis/viagogo-proxy.env
 ExecStart=/usr/bin/chromium \
-    --remote-debugging-port=9223 \
+    --remote-debugging-port=9224 \
     --remote-allow-origins=* \
     --user-data-dir=/opt/kartis/user_data_viagogo \
     --proxy-server=${PROXY_URL} \

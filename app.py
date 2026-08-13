@@ -5913,7 +5913,11 @@ def api_chrome_open_logins():
     from urllib.parse import urlparse
     import login as login_mod
 
-    cdp = os.getenv("KARTIS_CDP_URL", "http://localhost:9222")
+    cdp_main = os.getenv("KARTIS_CDP_URL", "http://localhost:9222")
+    # CrowdVolt lives in its own Chrome when configured (kartis-chrome-cv,
+    # residential proxy) — its login tab must open THERE or the session
+    # lands in the wrong profile.
+    cdp_cv = os.getenv("KARTIS_CDP_URL_CROWDVOLT", "").strip() or cdp_main
     if not login_mod.is_chrome_running():
         return jsonify({"error": "Chrome isn't running — click Restart Chrome first."}), 503
 
@@ -5922,23 +5926,31 @@ def api_chrome_open_logins():
         parts = (host or "").split(".")
         return ".".join(parts[-2:]) if len(parts) >= 2 else (host or "")
 
-    # Domains already open, so we don't reopen a source the user is on/into.
-    open_domains = set()
-    try:
-        with urllib.request.urlopen(f"{cdp}/json/list", timeout=8) as r:
-            for t in json.load(r):
-                if t.get("type") == "page":
-                    open_domains.add(base_domain(t.get("url", "")))
-    except Exception:
-        pass
+    def cdp_for(url):
+        return cdp_cv if base_domain(url) == "crowdvolt.com" else cdp_main
+
+    # Domains already open per browser, so we don't reopen a source the
+    # user is on/into.
+    open_domains = {}
+    for endpoint in {cdp_main, cdp_cv}:
+        found = set()
+        try:
+            with urllib.request.urlopen(f"{endpoint}/json/list", timeout=8) as r:
+                for t in json.load(r):
+                    if t.get("type") == "page":
+                        found.add(base_domain(t.get("url", "")))
+        except Exception:
+            pass
+        open_domains[endpoint] = found
 
     opened, skipped, errors = [], [], []
     for url in login_mod.DEFAULT_URLS:
-        if base_domain(url) in open_domains:
+        endpoint = cdp_for(url)
+        if base_domain(url) in open_domains[endpoint]:
             skipped.append(url)
             continue
         try:
-            req = urllib.request.Request(f"{cdp}/json/new?{url}", method="PUT")
+            req = urllib.request.Request(f"{endpoint}/json/new?{url}", method="PUT")
             with urllib.request.urlopen(req, timeout=8) as r:
                 (opened if r.status == 200 else errors).append(url)
         except Exception as e:

@@ -57,7 +57,11 @@ from patchright.sync_api import sync_playwright
 import db
 import notify
 
-CDP_URL = os.environ.get("KARTIS_CDP_URL", "http://localhost:9222")
+# When the dedicated CrowdVolt Chrome exists (kartis-chrome-cv on :9223,
+# all traffic via the residential proxy — see deploy/systemd/), point the
+# pricer at it with KARTIS_CDP_URL_CROWDVOLT. Unset = main Chrome.
+CDP_URL = (os.environ.get("KARTIS_CDP_URL_CROWDVOLT", "").strip()
+           or os.environ.get("KARTIS_CDP_URL", "http://localhost:9222"))
 HOME_URL = "https://www.crowdvolt.com/"
 API = "https://api.crowdvolt.com"
 WHAT = "https://what.crowdvolt.com"
