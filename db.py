@@ -540,6 +540,74 @@ CREATE TABLE IF NOT EXISTS pacha_release_log (
                                        -- then means removed, not sold out)
     UNIQUE(event_id, tier_name)
 );
+-- US EDM single-event trackers (posh_events / leap_events / eventim_events
+-- + app.py run_edm_events). Pacha watches a whole venue catalog; these
+-- watch NAMED EVENTS on three ticketing platforms, so the set of things to
+-- poll is explicit data rather than "whatever the listing page shows".
+-- One row per tracked event; delete a row to stop polling it.
+CREATE TABLE IF NOT EXISTS edm_tracked_events (
+    event_id  TEXT PRIMARY KEY,      -- "<source>:<event_key>"
+    source    TEXT NOT NULL,         -- posh | leap | eventim
+    event_key TEXT NOT NULL,         -- the source's own id (eventim's keeps
+                                     -- its affiliate key — it is load-bearing)
+    url       TEXT,                  -- the URL as originally supplied
+    label     TEXT,                  -- optional human note
+    paused    INTEGER NOT NULL DEFAULT 0,
+    added_at  TEXT NOT NULL
+);
+-- Latest observed state per tracked EDM event — the row the tick diffs
+-- against. Rows persist after an event is untracked (history).
+-- NOTE on counts: only posh publishes real inventory. leap publishes none
+-- and eventim only leaks a tail count; total_available/lead_available stay
+-- NULL there, and NULL must keep meaning "unknown", never "sold out".
+CREATE TABLE IF NOT EXISTS edm_seen_events (
+    event_id     TEXT PRIMARY KEY,
+    source       TEXT NOT NULL,
+    event_key    TEXT NOT NULL,
+    name         TEXT,
+    venue        TEXT,
+    date_text    TEXT,
+    start_date   TEXT,
+    page_url     TEXT,
+    currency     TEXT DEFAULT 'USD',
+    on_sale      INTEGER,
+    sold_out     INTEGER,
+    min_price    REAL,               -- cheapest buyable all-in price
+    lead_tier    TEXT,               -- cheapest buyable tier = "current release"
+    lead_price   REAL,
+    lead_available INTEGER,
+    total_available INTEGER,
+    total_quantity  INTEGER,
+    total_sold   INTEGER,            -- site-published sold counter (posh only)
+    sold_cum     INTEGER,            -- lifetime sold SINCE sold_cum_since,
+                                     -- accumulated availability drops between
+                                     -- ticks (new tiers add inventory and are
+                                     -- clamped out, same as pacha's sold_cum)
+    sold_cum_since TEXT,
+    tiers_json   TEXT,               -- tier breakdown as of the last tick
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL,
+    last_error   TEXT                -- last fetch failure (NULL once it recovers)
+);
+-- One row per tier/wave/release per tracked EDM event, from first sighting
+-- to sell-out or removal — the supply-side history the live pages discard.
+-- Keyed on the tier NAME, which is what carries the wave number
+-- ("Wave 2", "GA Floor Tier 3").
+CREATE TABLE IF NOT EXISTS edm_release_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id     TEXT NOT NULL,
+    tier_name    TEXT NOT NULL,
+    tier_group   TEXT,
+    price        REAL,               -- latest all-in price seen
+    face_price   REAL,
+    quantity     INTEGER,
+    available_last INTEGER,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL,
+    sold_out_at  TEXT,               -- first tick it read sold out, or when the
+                                     -- tier vanished from the page
+    UNIQUE(event_id, tier_name)
+);
 -- DICE.fm tier/price change log (dice.py + market.py sweep + /dice page).
 -- Append-only: one row per STATE a ticket type has been in (tier index,
 -- price, status). A new row is inserted only when the state differs from
@@ -1253,6 +1321,28 @@ def dice_sale_candidates(days=180):
     for s in out:
         s["qty_linked"] = linked.get((s["source"], s["id"]), 0)
     out.sort(key=lambda s: s.get("sale_date_iso") or "", reverse=True)
+    return out
+
+
+def dice_cost_by_sale():
+    """{(sale_source, sale_id): cost} for every resale-platform sale linked
+    to a DICE purchase on the /dice page. Cost = linked qty x the purchase's
+    per-ticket price (USD), so the sales page needs no manual cost entry for
+    CV/viagogo sales of DICE holdings."""
+    out = {}
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT l.sale_source, l.sale_id, l.qty, p.price_per_unit, "
+            "       p.price_total, p.qty AS p_qty "
+            "FROM dice_sale_links l JOIN dice_purchases p ON p.id = l.purchase_id"
+        ).fetchall()
+    for r in rows:
+        ppu = r["price_per_unit"]
+        if ppu is None and (r["p_qty"] or 0):
+            ppu = (r["price_total"] or 0) / r["p_qty"]
+        cost = round((ppu or 0) * (r["qty"] or 0), 2)
+        key = (r["sale_source"], str(r["sale_id"]))
+        out[key] = round(out.get(key, 0) + cost, 2)
     return out
 
 
@@ -2788,6 +2878,196 @@ def pacha_release_log_all():
     with connect() as conn:
         rows = conn.execute(
             "SELECT * FROM pacha_release_log ORDER BY first_seen_at, id"
+        ).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["event_id"], []).append(dict(r))
+    return out
+
+
+# ---------------------------------------------------------------- EDM trackers
+# posh / leap / eventim single-event monitors. Mirrors the pacha helpers
+# above, but the set of things to poll is an explicit table (edm_tracked_events)
+# instead of whatever a venue's listing page happens to show.
+
+def edm_tracked_all(include_paused=True):
+    """Tracked EDM events, oldest first."""
+    sql = "SELECT * FROM edm_tracked_events"
+    if not include_paused:
+        sql += " WHERE paused = 0"
+    sql += " ORDER BY added_at, event_id"
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql).fetchall()]
+
+
+def edm_tracked_add(source, event_key, url, now_iso, label=None):
+    """Track one event. Idempotent: re-adding refreshes the URL/label and
+    un-pauses, but keeps the original added_at."""
+    event_id = f"{source}:{event_key}"
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO edm_tracked_events (event_id, source, event_key,
+                   url, label, paused, added_at)
+               VALUES (?, ?, ?, ?, ?, 0, ?)
+               ON CONFLICT(event_id) DO UPDATE SET
+                   url = excluded.url,
+                   label = COALESCE(excluded.label, edm_tracked_events.label),
+                   paused = 0""",
+            (event_id, source, event_key, url, label, now_iso),
+        )
+    return event_id
+
+
+def edm_tracked_remove(event_id):
+    """Stop polling an event. The observed history in edm_seen_events /
+    edm_release_log is deliberately left behind."""
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM edm_tracked_events WHERE event_id = ?",
+                           (event_id,))
+    return cur.rowcount
+
+
+def edm_tracked_set_paused(event_id, paused):
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE edm_tracked_events SET paused = ? WHERE event_id = ?",
+            (1 if paused else 0, event_id))
+    return cur.rowcount
+
+
+def edm_seed_tracked(defaults, now_iso):
+    """Seed the initially-requested events on a fresh install. Guarded by a
+    one-way setting so removing them all doesn't resurrect them on the next
+    boot. `defaults` is a list of (source, event_key, url) tuples."""
+    if setting_get_bool("edm_tracked_seeded", default=False):
+        return 0
+    n = 0
+    for source, event_key, url in defaults:
+        edm_tracked_add(source, event_key, url, now_iso)
+        n += 1
+    setting_set("edm_tracked_seeded", "1", now_iso)
+    return n
+
+
+def edm_all_seen():
+    """Every EDM event ever observed, keyed by event_id."""
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM edm_seen_events").fetchall()
+    return {r["event_id"]: dict(r) for r in rows}
+
+
+def edm_upsert_seen(ev, now_iso):
+    """Insert or refresh one normalized event dict from a *_events fetcher.
+    first_seen_at is preserved on update; last_error is cleared, since
+    reaching this function means the fetch succeeded."""
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO edm_seen_events (event_id, source, event_key, name,
+                   venue, date_text, start_date, page_url, currency, on_sale,
+                   sold_out, min_price, lead_tier, lead_price, lead_available,
+                   total_available, total_quantity, total_sold, sold_cum,
+                   sold_cum_since, tiers_json, first_seen_at, last_seen_at,
+                   last_error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, NULL)
+               ON CONFLICT(event_id) DO UPDATE SET
+                   name = excluded.name, venue = excluded.venue,
+                   date_text = excluded.date_text,
+                   start_date = excluded.start_date,
+                   page_url = excluded.page_url,
+                   currency = excluded.currency,
+                   on_sale = excluded.on_sale, sold_out = excluded.sold_out,
+                   min_price = excluded.min_price,
+                   lead_tier = excluded.lead_tier,
+                   lead_price = excluded.lead_price,
+                   lead_available = excluded.lead_available,
+                   total_available = excluded.total_available,
+                   total_quantity = excluded.total_quantity,
+                   total_sold = excluded.total_sold,
+                   sold_cum = excluded.sold_cum,
+                   sold_cum_since = excluded.sold_cum_since,
+                   tiers_json = excluded.tiers_json,
+                   last_seen_at = excluded.last_seen_at,
+                   last_error = NULL""",
+            (ev["event_id"], ev["source"], ev["event_key"], ev.get("name"),
+             ev.get("venue"), ev.get("date_text"), ev.get("start_date"),
+             ev.get("page_url"), ev.get("currency") or "USD",
+             1 if ev.get("on_sale") else 0, 1 if ev.get("sold_out") else 0,
+             ev.get("min_price"), ev.get("lead_tier"), ev.get("lead_price"),
+             ev.get("lead_available"), ev.get("total_available"),
+             ev.get("total_quantity"), ev.get("total_sold"),
+             ev.get("sold_cum"), ev.get("sold_cum_since"),
+             json.dumps(ev["tiers"], ensure_ascii=False) if ev.get("tiers") else None,
+             now_iso, now_iso),
+        )
+
+
+def edm_mark_error(event_id, message, now_iso):
+    """Record a fetch failure without disturbing the last good state — the
+    dashboard shows it as stale-with-error rather than silently frozen."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE edm_seen_events SET last_error = ? WHERE event_id = ?",
+            (f"{message} @ {now_iso}", event_id))
+
+
+def edm_release_sync(event_id, tiers, now_iso):
+    """Reconcile one event's currently-listed tiers against its release log.
+    Same contract as pacha_release_sync: new tier name → new row; known tier
+    → refresh (+stamp sold_out_at the first tick it reads sold out); a
+    logged tier that vanished from the page → closed with sold_out_at=now.
+
+    A tier counts as sold out on its explicit flag OR a zero count — but
+    NOT on `available is None`, which for leap/eventim just means the site
+    publishes no number."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM edm_release_log WHERE event_id = ?", (event_id,)
+        ).fetchall()
+        logged = {r["tier_name"]: dict(r) for r in rows}
+        current = set()
+        for t in tiers or []:
+            name = (t.get("name") or "").strip()
+            if not name:
+                continue
+            current.add(name)
+            sold_out_now = bool(t.get("sold_out")) or t.get("available") == 0
+            if name not in logged:
+                conn.execute(
+                    """INSERT INTO edm_release_log (event_id, tier_name,
+                           tier_group, price, face_price, quantity,
+                           available_last, first_seen_at, last_seen_at,
+                           sold_out_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (event_id, name, t.get("group"), t.get("price"),
+                     t.get("face_price"), t.get("quantity"), t.get("available"),
+                     now_iso, now_iso, now_iso if sold_out_now else None),
+                )
+            else:
+                conn.execute(
+                    """UPDATE edm_release_log SET tier_group = ?, price = ?,
+                           face_price = ?, quantity = ?, available_last = ?,
+                           last_seen_at = ?,
+                           sold_out_at = COALESCE(sold_out_at, ?)
+                       WHERE event_id = ? AND tier_name = ?""",
+                    (t.get("group"), t.get("price"), t.get("face_price"),
+                     t.get("quantity"), t.get("available"), now_iso,
+                     now_iso if sold_out_now else None, event_id, name),
+                )
+        for name, old in logged.items():
+            if name not in current and not old.get("sold_out_at"):
+                conn.execute(
+                    "UPDATE edm_release_log SET sold_out_at = ? "
+                    "WHERE event_id = ? AND tier_name = ?",
+                    (now_iso, event_id, name),
+                )
+
+
+def edm_release_log_all():
+    """All EDM release-log rows grouped by event_id, oldest tier first."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM edm_release_log ORDER BY first_seen_at, id"
         ).fetchall()
     out = {}
     for r in rows:

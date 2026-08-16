@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — EDM Trackers</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+    --cyan: #0f766e; --pink: #e91e63;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--purple); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--purple); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.green { color: var(--green); }
+  .stat .value.red { color: var(--red); }
+  .stat .value.zero { color: var(--muted); }
+  .stat .hint { font-size: 9px; color: var(--muted); letter-spacing: 1px; margin-top: 3px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+  input[type=text] { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; width: 220px; }
+  input#addurl { width: 420px; max-width: 100%; }
+  button { font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 14px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--purple); border-color: var(--purple); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); white-space: nowrap; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr.ev { cursor: pointer; }
+  tbody tr.ev:hover td { background: var(--bg-3); }
+  tbody tr.lowrow td { background: rgba(209, 36, 47, 0.06); }
+  tbody tr.pausedrow td { opacity: .55; }
+  tr.tiers td { background: var(--bg-2); padding: 4px 10px 12px 26px; font-size: 11px; color: var(--muted); }
+  tr.tiers .tier { padding: 2px 0; }
+  tr.tiers .tier b { color: var(--text); }
+  tr.tiers .rh { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
+  tr.tiers .rh .rhh { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 3px; }
+  tr.tiers .rel-row { padding: 1px 0; }
+  tr.tiers .rel-row .so { color: var(--red); }
+  tr.tiers .rel-row .op { color: var(--green); }
+  tr.tiers .acts { margin-top: 10px; display: flex; gap: 8px; }
+  a.buy { color: #fff; background: var(--purple); text-decoration: none; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }
+  a.buy.off { background: var(--line-2); color: var(--muted); pointer-events: none; }
+  .when { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .badge.available { background: #16a34a; }
+  .badge.soldout { background: #dc2626; }
+  .badge.low { background: #d1242f; }
+  .badge.unknown { background: #6e7681; }
+  .badge.paused { background: #8250df; }
+  .src { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
+  .src.posh { background: #fde7f1; color: #b3115a; }
+  .src.leap { background: #e6f0fd; color: #0b4fa8; }
+  .src.eventim { background: #e8f5ec; color: #12662f; }
+  .rel { font-size: 10px; color: var(--muted); }
+  .vel { font-variant-numeric: tabular-nums; }
+  .vel.zero { color: var(--muted); }
+  .vel.hot { color: var(--green); font-weight: 600; }
+  .nocount { color: var(--muted); font-style: italic; font-size: 10px; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  .ok { background: #e8f5ec; border: 1px solid var(--green); color: var(--green); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  .rowerr { color: var(--red); font-size: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>EDM TRACKERS</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm" class="active">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+  <div class="ok" id="okbox"></div>
+
+  <div class="stats" id="totals"></div>
+  <p class="sub" id="statusline">—</p>
+
+  <h2>Add an event</h2>
+  <p class="sub">Paste a posh.vip, events.leapevents.com or wl.eventim.us event URL.
+     Keep the <code>?afflky=</code> parameter on Eventim links — without it the page lists no tickets.</p>
+  <div class="controls">
+    <input type="text" id="addurl" placeholder="https://posh.vip/e/… " />
+    <button class="primary" id="addbtn">Track</button>
+    <button id="runbtn">Run tick now</button>
+  </div>
+
+  <h2>Tracked events <span class="rel">(click a row for tiers &amp; release history)</span></h2>
+  <div class="controls"><input type="text" id="q" placeholder="filter…" /></div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr>
+      <th>Source</th><th>Event</th><th>When</th><th>Status</th>
+      <th class="num">From</th><th>Current release</th><th class="num">Left</th>
+      <th class="num">Sold</th><th class="num">24h</th><th></th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+  <p class="sub" id="footnote"></p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+const money = n => (n == null) ? '—' : '$' + n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+let DATA = null;
+const open = new Set();
+
+function flash(el, msg) {
+  el.textContent = msg; el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 6000);
+}
+
+async function load() {
+  const r = await fetch('/api/edm');
+  DATA = await r.json();
+  render();
+}
+
+function statusBadge(e) {
+  if (e.paused) return '<span class="badge paused">paused</span>';
+  if (e.tracked_only) return '<span class="badge unknown">pending</span>';
+  if (e.sold_out) return '<span class="badge soldout">sold out</span>';
+  if (e.on_sale) {
+    const lo = DATA.low_stock_threshold;
+    if (e.lead_available != null && e.lead_available <= lo)
+      return '<span class="badge low">' + e.lead_available + ' left</span>';
+    return '<span class="badge available">on sale</span>';
+  }
+  return '<span class="badge unknown">—</span>';
+}
+
+// Sold-in-window comes from the availability snapshot series, which only
+// exists for sources that publish counts (posh). Everywhere else show a
+// dash rather than a misleading 0.
+function vel(e) {
+  if (e.total_available == null) return '<span class="nocount">n/a</span>';
+  const w = (e.windows || {})['24h'];
+  if (w == null) return '—';
+  return '<span class="vel ' + (w > 0 ? 'hot' : 'zero') + '">' + fmt(w) + '</span>';
+}
+
+function render() {
+  const q = ($('q').value || '').toLowerCase();
+  const evs = (DATA.events || []).filter(e =>
+    !q || (e.name || '').toLowerCase().includes(q)
+       || (e.venue || '').toLowerCase().includes(q)
+       || (e.source || '').toLowerCase().includes(q));
+
+  const live = evs.filter(e => !e.paused);
+  const onSale = live.filter(e => e.on_sale).length;
+  const soldOut = live.filter(e => e.sold_out).length;
+  const prices = live.filter(e => e.min_price != null).map(e => e.min_price);
+  const sold = live.reduce((a, e) => a + (e.total_sold || 0), 0);
+  $('totals').innerHTML = [
+    ['Tracked', evs.length, ''],
+    ['On sale', onSale, 'at least one tier buyable', onSale ? 'green' : 'zero'],
+    ['Sold out', soldOut, '', soldOut ? 'red' : 'zero'],
+    ['Cheapest', prices.length ? money(Math.min(...prices)) : '—', 'across tracked events'],
+    ['Tickets sold', sold ? fmt(sold) : '—', 'where the site publishes it'],
+  ].map(([label, value, hint, cls]) =>
+    `<div class="stat"><div class="label">${label}</div>
+     <div class="value ${cls || ''}">${value}</div>
+     ${hint ? `<div class="hint">${hint}</div>` : ''}</div>`).join('');
+
+  const st = DATA.status || {};
+  const errs = Object.keys(st.errors || {}).length;
+  $('meta').textContent = (st.at ? 'last tick ' + new Date(st.at).toLocaleString() : 'no tick yet');
+  $('statusline').textContent =
+    `monitor ${st.enabled ? 'enabled' : 'DISABLED here'} · every ${st.interval_minutes}min · `
+    + `${st.events || 0}/${st.tracked || 0} fetched`
+    + (errs ? ` · ${errs} failing` : '')
+    + (st.error ? ` · ERROR ${st.error}` : '')
+    + ` · low-stock alert at ${DATA.low_stock_threshold}`;
+
+  if (!evs.length) {
+    $('rows').innerHTML = '<tr><td colspan="10" class="empty">No events tracked yet.</td></tr>';
+    return;
+  }
+
+  const out = [];
+  for (const e of evs) {
+    const cls = ['ev'];
+    if (e.paused) cls.push('pausedrow');
+    else if (e.lead_available != null && e.lead_available <= DATA.low_stock_threshold) cls.push('lowrow');
+    const left = e.lead_available != null ? fmt(e.lead_available)
+      : '<span class="nocount">n/a</span>';
+    out.push(`<tr class="${cls.join(' ')}" data-id="${esc(e.event_id)}">
+      <td><span class="src ${esc(e.source)}">${esc(e.source)}</span></td>
+      <td><b>${esc(e.name || e.event_key)}</b>
+          ${e.venue ? `<div class="rel">${esc(e.venue)}</div>` : ''}
+          ${e.last_error ? `<div class="rowerr">${esc(e.last_error)}</div>` : ''}</td>
+      <td class="when">${esc(e.date_text || '—')}</td>
+      <td>${statusBadge(e)}</td>
+      <td class="num">${money(e.min_price)}</td>
+      <td>${esc(e.lead_tier || '—')}</td>
+      <td class="num">${left}</td>
+      <td class="num">${fmt(e.total_sold)}</td>
+      <td class="num">${vel(e)}</td>
+      <td><a class="buy ${e.on_sale ? '' : 'off'}" target="_blank" rel="noopener"
+             href="${esc(e.page_url || '#')}">Buy</a></td>
+    </tr>`);
+    if (open.has(e.event_id)) out.push(detail(e));
+  }
+  $('rows').innerHTML = out.join('');
+  $('footnote').textContent =
+    'Only Posh publishes remaining ticket counts; Leap publishes none and Eventim '
+    + 'only reveals one once a type drops under its per-order limit — those show n/a, not 0.';
+
+  for (const tr of document.querySelectorAll('tr.ev')) {
+    tr.onclick = ev => {
+      if (ev.target.closest('a,button')) return;
+      const id = tr.dataset.id;
+      open.has(id) ? open.delete(id) : open.add(id);
+      render();
+    };
+  }
+  for (const b of document.querySelectorAll('button[data-remove]')) {
+    b.onclick = () => act('/api/edm/remove', {event_id: b.dataset.remove}, 'Removed');
+  }
+  for (const b of document.querySelectorAll('button[data-pause]')) {
+    b.onclick = () => act('/api/edm/pause',
+      {event_id: b.dataset.pause, paused: b.dataset.to === '1'}, 'Updated');
+  }
+}
+
+function detail(e) {
+  const tiers = (e.tiers || []).map(t => {
+    let state;
+    if (t.sold_out) state = '<span class="so">sold out</span>';
+    else if (t.closed) state = 'not on sale';
+    else if (t.available != null) state = '<b>' + fmt(t.available) + '</b> left';
+    else state = '<span class="op">on sale</span> <span class="nocount">(count not published)</span>';
+    const face = t.face_price != null && t.face_price !== t.price
+      ? ` <span class="rel">(face ${money(t.face_price)})</span>` : '';
+    return `<div class="tier">• <b>${esc(t.name)}</b> — ${money(t.price)}${face} · ${state}</div>`;
+  }).join('') || '<div class="tier">No tier data yet.</div>';
+
+  const rels = (e.releases || []).map(r =>
+    `<div class="rel-row">${esc(r.name)} — ${money(r.price)} ·
+      first seen ${r.first_seen_at ? new Date(r.first_seen_at).toLocaleDateString() : '—'} ·
+      ${r.sold_out_at
+        ? `<span class="so">closed ${new Date(r.sold_out_at).toLocaleDateString()}</span>`
+        : '<span class="op">open</span>'}</div>`).join('');
+
+  return `<tr class="tiers"><td colspan="10">
+    ${tiers}
+    ${rels ? `<div class="rh"><div class="rhh">Release history</div>${rels}</div>` : ''}
+    <div class="acts">
+      <button data-pause="${esc(e.event_id)}" data-to="${e.paused ? '0' : '1'}">
+        ${e.paused ? 'Resume' : 'Pause'}</button>
+      <button data-remove="${esc(e.event_id)}">Stop tracking</button>
+    </div>
+  </td></tr>`;
+}
+
+async function act(url, body, okMsg) {
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                             body: JSON.stringify(body)});
+  const j = await r.json();
+  if (!r.ok) return flash($('errbox'), j.error || 'failed');
+  flash($('okbox'), okMsg);
+  load();
+}
+
+$('addbtn').onclick = async () => {
+  const url = $('addurl').value.trim();
+  if (!url) return;
+  $('addbtn').disabled = true;
+  try {
+    const r = await fetch('/api/edm/add', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url})});
+    const j = await r.json();
+    if (!r.ok) flash($('errbox'), j.error || 'could not add');
+    else { flash($('okbox'), `Tracking ${j.name || j.event_id}`); $('addurl').value = ''; load(); }
+  } finally { $('addbtn').disabled = false; }
+};
+
+$('runbtn').onclick = async () => {
+  $('runbtn').disabled = true;
+  try {
+    const r = await fetch('/api/edm-events/run-now', {method: 'POST'});
+    const j = await r.json();
+    if (!r.ok) flash($('errbox'), j.error || 'tick failed');
+    else flash($('okbox'), `Tick done — ${j.events || 0} fetched, ${j.notified || 0} pinged`);
+    load();
+  } finally { $('runbtn').disabled = false; }
+};
+
+$('q').oninput = render;
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

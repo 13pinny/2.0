@@ -33,6 +33,7 @@ import mail_intake
 import market
 import matcher
 import notify
+import edm_events
 import pacha_events
 import pacha_tickets
 import scraper
@@ -106,6 +107,10 @@ app = Flask(__name__)
 # before our route handler can return a friendly error.
 app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024
 db.init()
+# Seed the three originally-requested EDM events on a fresh DB. One-way
+# latch inside the helper, so removing one doesn't resurrect it at boot.
+db.edm_seed_tracked(edm_events.DEFAULT_TRACKED,
+                    datetime.now(timezone.utc).isoformat())
 
 _last_run = {"at": None, "count": 0, "error": None, "running": False}
 _run_lock = threading.Lock()
@@ -195,6 +200,39 @@ PACHA_LOW_STOCK_THRESHOLD = int(os.getenv("KARTIS_PACHA_LOW_STOCK_THRESHOLD") or
 # extra velocity resolution.
 PACHA_MARKET_SNAPSHOT_MINUTES = int(os.getenv("KARTIS_PACHA_MARKET_SNAPSHOT_MINUTES") or 10)
 _pacha_last_market_at = None
+
+# US EDM single-event trackers — posh.vip, events.leapevents.com and
+# wl.eventim.us (edm_events.py + the three *_events fetchers). Same idea as
+# the Pacha monitor and the same ping vocabulary, but pointed at NAMED
+# events instead of a venue catalog: the poll list lives in
+# edm_tracked_events and is managed with `python edm_events.py --add <url>`
+# or POST /api/edm/add. Pure HTTP (no Chrome), so it can run on the VPS —
+# and, like pacha, exactly ONE machine may enable it or Discord double-pings.
+#
+# Counts are asymmetric across the three: only posh publishes remaining
+# inventory, so low_stock effectively only fires there. leap publishes none
+# at all and eventim only leaks a count once a type drops under its
+# per-order limit. Everywhere below, `None` means UNKNOWN and is never
+# treated as zero.
+_last_edm_events = {"at": None, "tracked": 0, "events": 0, "new": 0,
+                    "onsale": 0, "restock": 0, "soldout": 0, "new_tier": 0,
+                    "price_up": 0, "price_down": 0, "low_stock": 0,
+                    "notified": 0, "baseline": False, "errors": {},
+                    "error": None, "running": False}
+_edm_events_lock = threading.Lock()
+# 2 minutes: waves on these platforms sell out in minutes and a returned
+# ticket re-lists without warning, so the shock ping is only worth having
+# if the poll is tight. Still gentler than pacha's 1 min — there are three
+# hosts here and each tracked event is its own request.
+EDM_MONITOR_INTERVAL_MINUTES = int(os.getenv("KARTIS_EDM_MONITOR_INTERVAL_MINUTES") or 2)
+EDM_MONITOR_ENABLED = (os.getenv("KARTIS_EDM_MONITOR_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+EDM_MAX_PINGS_PER_TICK = 12
+# Low-stock alert: ping once when the current release's remaining count
+# crosses at/below this. Re-armed when the lead tier changes.
+EDM_LOW_STOCK_THRESHOLD = int(os.getenv("KARTIS_EDM_LOW_STOCK_THRESHOLD") or 20)
+# /market feed throttle, same reasoning as PACHA_MARKET_SNAPSHOT_MINUTES.
+EDM_MARKET_SNAPSHOT_MINUTES = int(os.getenv("KARTIS_EDM_MARKET_SNAPSHOT_MINUTES") or 10)
+_edm_last_market_at = None
 
 # Israeli-sites new-event monitor — polls the kupat.co.il and
 # ticketmaster.co.il listing feeds (kupat_events.py / tm_events.py, pure
@@ -409,6 +447,200 @@ def run_pacha_events():
     finally:
         _last_pacha_events["running"] = False
         _pacha_events_lock.release()
+
+
+def _edm_market_rows(events, now_iso):
+    """Feed the /market page from the EDM tick: one market_events row per
+    tracked event plus an availability snapshot so the velocity windows
+    work. Only posh publishes counts, so leap/eventim rows carry
+    available=None and simply have no velocity series — deliberately, since
+    inventing a number would poison the sold-per-window math."""
+    for ev in events:
+        if ev.get("sold_out"):
+            status = "soldout"
+        elif ev.get("on_sale"):
+            status = "available"
+        else:
+            status = "unknown"
+        first_ms = None
+        if ev.get("start_date"):
+            try:
+                first_ms = int(datetime.fromisoformat(
+                    str(ev["start_date"]).replace("Z", "+00:00")).timestamp() * 1000)
+            except ValueError:
+                pass
+        db.market_upsert({
+            "source": ev["source"], "event_code": ev["event_key"], "perf_code": "0",
+            "name": ev.get("name"), "venue": ev.get("venue"),
+            "date_text": ev.get("date_text"), "first_date_ms": first_ms,
+            "url": ev.get("page_url"), "status": status,
+            "capacity": None, "available": ev.get("total_available"),
+            "min_price": ev.get("min_price"), "currency": ev.get("currency") or "USD",
+            "manual": False, "last_error": None,
+        }, now_iso)
+        if ev.get("total_available") is not None:
+            db.sales_snapshot_insert(ev["source"], ev["event_key"], "0",
+                                     None, ev["total_available"], None, now_iso)
+
+
+def _edm_diff(ev, old):
+    """Ping kinds for one event given its previous edm_seen_events row.
+    Returns a list of kind strings (an event can legitimately emit several
+    in one tick — e.g. a new wave opening both adds a tier and moves the
+    price).
+
+    Every comparison is guarded on BOTH sides being known: leap and eventim
+    publish no counts, and a None on either side must never be read as a
+    change. Same for prices, so the first tick after an event goes on sale
+    can't fake a price move."""
+    kinds = []
+    was_on_sale = bool(old["on_sale"])
+    was_sold_out = bool(old["sold_out"])
+
+    if not was_on_sale and ev["on_sale"]:
+        # A sold-out event coming back is the perishable case and gets its
+        # own, louder kind.
+        kinds.append("restock" if was_sold_out else "onsale")
+    if not was_sold_out and ev["sold_out"]:
+        kinds.append("soldout")
+
+    old_names = set()
+    if old.get("tiers_json"):
+        try:
+            old_names = {(t.get("name") or "").strip()
+                         for t in json.loads(old["tiers_json"])}
+        except (ValueError, TypeError):
+            old_names = set()
+    if old_names:
+        # Only claim "new release" when we actually have a previous tier
+        # list to compare against — an unparseable/missing one would make
+        # every tier look brand new.
+        fresh = [t for t in ev["tiers"]
+                 if (t.get("name") or "").strip() not in old_names]
+        if fresh:
+            ev["_new_tiers"] = fresh
+            kinds.append("new_tier")
+
+    old_price, new_price = old.get("min_price"), ev.get("min_price")
+    if old_price is not None and new_price is not None:
+        if new_price > old_price:
+            kinds.append("price_up")
+        elif new_price < old_price:
+            kinds.append("price_down")
+
+    # Low stock: a crossing WITHIN the same release, so it pings once and a
+    # new release re-arms it. Needs real counts on both sides — i.e. posh.
+    old_left, new_left = old.get("lead_available"), ev.get("lead_available")
+    if (old_left is not None and new_left is not None
+            and old.get("lead_tier") == ev.get("lead_tier")
+            and old_left > EDM_LOW_STOCK_THRESHOLD
+            and new_left <= EDM_LOW_STOCK_THRESHOLD):
+        kinds.append("low_stock")
+    return kinds
+
+
+# Perishable first, so a burst of routine pings can't push a price drop or
+# a restock past the per-tick cap.
+_EDM_KIND_PRIORITY = {"price_down": 0, "restock": 1, "low_stock": 2,
+                      "new_tier": 3, "onsale": 4, "soldout": 5,
+                      "price_up": 6, "new": 7}
+
+
+def run_edm_events():
+    """One tick of the US EDM event trackers. Fetch every tracked event
+    (posh / leap / eventim), diff against edm_seen_events and ping Discord
+    for price drops, restocks, low stock, new releases, on-sale flips,
+    sell-outs and price climbs. The /market feed rides along, throttled to
+    EDM_MARKET_SNAPSHOT_MINUTES.
+
+    Gating mirrors the pacha monitor: the first tick for a given event
+    (no stored row) is a baseline — store it, send at most the informational
+    'new' ping. master_paused skips the tick entirely; master_muted keeps
+    state current but sends nothing. A per-event fetch failure is recorded
+    against that event and does NOT abort the others, and it leaves the
+    last good state alone — a blocked fetch must never read as 'sold out'."""
+    if not _edm_events_lock.acquire(blocking=False):
+        return
+    _last_edm_events["running"] = True
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if db.setting_get_bool("master_paused", default=False):
+            _last_edm_events.update(at=now_iso, error=None)
+            return
+
+        tracked = db.edm_tracked_all(include_paused=False)
+        events, errors = edm_events.fetch_tracked(tracked)
+        for event_id, msg in errors.items():
+            db.edm_mark_error(event_id, msg, now_iso)
+            print(f"[edm] fetch failed for {event_id}: {msg}")
+
+        seen = db.edm_all_seen()
+        muted = db.setting_get_bool("master_muted", default=False)
+
+        pings = []  # (kind, ev, old_row)
+        for ev in events:
+            old = seen.get(ev["event_id"])
+            if old is None:
+                # Newly tracked: baseline it. The 'new' ping is informational
+                # and carries the current price, so adding an event confirms
+                # in Discord that it's being watched.
+                pings.append(("new", ev, None))
+                continue
+            for kind in _edm_diff(ev, old):
+                pings.append((kind, ev, old))
+
+        pings.sort(key=lambda p: _EDM_KIND_PRIORITY.get(p[0], 9))
+
+        notified = 0
+        if not muted:
+            for kind, ev, old in pings[:EDM_MAX_PINGS_PER_TICK]:
+                res = notify.notify_edm_event(kind, ev, old)
+                print(f"[edm] {kind}: {ev['name']} ({ev['source']}) -> {res}")
+                notified += 1
+                time.sleep(0.5)
+            if len(pings) > EDM_MAX_PINGS_PER_TICK:
+                print(f"[edm] ping cap hit — {len(pings) - EDM_MAX_PINGS_PER_TICK} suppressed")
+
+        # Lifetime sold since tracking began: accumulate availability drops
+        # between ticks. A new release ADDS inventory, so increases are
+        # clamped to 0 exactly like pacha's sold_cum and _sales_windows.
+        for ev in events:
+            old = seen.get(ev["event_id"]) or {}
+            delta = 0
+            if (old.get("total_available") is not None
+                    and ev.get("total_available") is not None):
+                delta = max(0, old["total_available"] - ev["total_available"])
+            ev["sold_cum"] = (old.get("sold_cum") or 0) + delta
+            ev["sold_cum_since"] = old.get("sold_cum_since") or now_iso
+
+        for ev in events:
+            db.edm_upsert_seen(ev, now_iso)
+            db.edm_release_sync(ev["event_id"], ev.get("tiers"), now_iso)
+
+        global _edm_last_market_at
+        now_dt = datetime.now(timezone.utc)
+        if events and (_edm_last_market_at is None
+                       or now_dt - _edm_last_market_at
+                       >= timedelta(minutes=EDM_MARKET_SNAPSHOT_MINUTES)):
+            _edm_market_rows(events, now_iso)
+            _edm_last_market_at = now_dt
+
+        counts = {k: sum(1 for kk, _, _ in pings if kk == k)
+                  for k in ("new", "onsale", "restock", "soldout", "new_tier",
+                            "price_up", "price_down", "low_stock")}
+        _last_edm_events.update(
+            at=now_iso, error=None, tracked=len(tracked), events=len(events),
+            baseline=any(k == "new" for k, _, _ in pings),
+            errors=errors, notified=notified, **counts)
+    except Exception as e:
+        _last_edm_events.update(
+            at=datetime.now(timezone.utc).isoformat(),
+            error=f"{type(e).__name__}: {e}",
+        )
+        traceback.print_exc()
+    finally:
+        _last_edm_events["running"] = False
+        _edm_events_lock.release()
 
 
 def run_il_events():
@@ -1659,6 +1891,9 @@ def _build_combined_sales(only_canceled=False):
 
     j_tickets = {t["id"]: t for t in db.all_jerujam_tickets()}
     matches_idx = {(m["sale_source"], m["sale_id"]): m for m in db.all_matches()}
+    # Sales linked to a DICE purchase on the /dice page carry their cost from
+    # the purchase itself — no manual cost entry needed on this page.
+    dice_costs = db.dice_cost_by_sale()
     jerujam_keys = set()
     for s in db.all_jerujam_sales():
         t = j_tickets.get(s.get("ticket_id"), {})
@@ -1700,6 +1935,8 @@ def _build_combined_sales(only_canceled=False):
         qty = r.get("qty") or 0
         # Lysted's API returns cost directly — that's the source of truth.
         cost = r.get("cost")
+        if not cost:
+            cost = dice_costs.get(("lysted", str(r.get("id")))) or cost
         if cost is None:
             # Fallback chain for older rows that haven't been re-scraped yet.
             cost_per = None
@@ -1776,6 +2013,9 @@ def _build_combined_sales(only_canceled=False):
         cost_per = listing.get("face_value") if listing else None
         qty = r.get("qty") or 0
         cost = round((cost_per or 0) * qty, 2) if cost_per is not None else 0
+        dice_cost = dice_costs.get(("viagogo", str(r.get("id"))))
+        if dice_cost:
+            cost = dice_cost
         if cost == 0:
             mc = _matched_cost(matches_idx, j_tickets, "viagogo", r.get("id"), qty)
             if mc is not None:
@@ -1807,20 +2047,21 @@ def _build_combined_sales(only_canceled=False):
         qty = r.get("qty") or 0
         sale_price = r.get("sale_price") or 0
         key = (_norm(r.get("event_name")), (r.get("sale_date_iso") or "")[:10], qty, round(sale_price, 0))
-        cost = 0
+        cost = dice_costs.get(("crowdvolt", str(r.get("id")))) or 0
         # CrowdVolt is a last-minute dump for tickets bought via Lysted or
         # Viagogo. Pull cost from a matching purchase/listing in those tables.
         cv_event = r.get("event_name") or ""
         cv_section = r.get("ticket_type") or ""
         cv_qty = qty
-        for lp in db.all_lysted_purchases():
-            if not matcher._events_match(lp.get("event_name"), cv_event):
-                continue
-            if (lp.get("qty") or 0) != cv_qty:
-                continue
-            cost = lp.get("total_cost") or ((lp.get("cost_per_unit") or 0) * cv_qty)
-            if cost:
-                break
+        if not cost:
+            for lp in db.all_lysted_purchases():
+                if not matcher._events_match(lp.get("event_name"), cv_event):
+                    continue
+                if (lp.get("qty") or 0) != cv_qty:
+                    continue
+                cost = lp.get("total_cost") or ((lp.get("cost_per_unit") or 0) * cv_qty)
+                if cost:
+                    break
         if not cost:
             for vl in viagogo_listings:
                 if not matcher._events_match(vl.get("event_name"), cv_event):
@@ -4926,6 +5167,154 @@ def api_pacha():
     })
 
 
+@app.route("/edm")
+def edm_page():
+    return render_template("edm.html")
+
+
+@app.route("/api/edm")
+def api_edm():
+    """Everything the /edm page needs in one call: every tracked event's
+    latest state, its tier breakdown, its release history and (where the
+    site publishes counts) its sold-per-window velocity. Unlike /api/pacha
+    nothing is aged out — an event is here because it was explicitly
+    tracked, so it stays visible until it's removed."""
+    import json as _json
+    now = datetime.now(timezone.utc)
+    series_map = db.sales_snapshot_series_bulk((now - timedelta(days=7)).isoformat())
+    release_log = db.edm_release_log_all()
+    seen = db.edm_all_seen()
+    events = []
+    for t in db.edm_tracked_all():
+        r = seen.get(t["event_id"]) or {}
+        windows, _earliest = _sales_windows(
+            series_map.get((t["source"], t["event_key"], "0"), []), now)
+        tiers = []
+        if r.get("tiers_json"):
+            try:
+                tiers = _json.loads(r["tiers_json"])
+            except ValueError:
+                pass
+        events.append({
+            "event_id": t["event_id"], "source": t["source"],
+            "event_key": t["event_key"], "url": t.get("url"),
+            "label": t.get("label"), "paused": bool(t.get("paused")),
+            "added_at": t.get("added_at"),
+            "name": r.get("name"), "venue": r.get("venue"),
+            "date_text": r.get("date_text"), "start_date": r.get("start_date"),
+            "page_url": r.get("page_url") or t.get("url"),
+            "currency": r.get("currency") or "USD",
+            "on_sale": bool(r.get("on_sale")),
+            "sold_out": bool(r.get("sold_out")),
+            "min_price": r.get("min_price"),
+            "lead_tier": r.get("lead_tier"),
+            "lead_price": r.get("lead_price"),
+            "lead_available": r.get("lead_available"),
+            "total_available": r.get("total_available"),
+            "total_sold": r.get("total_sold"),
+            "sold_cum": r.get("sold_cum"),
+            "sold_cum_since": r.get("sold_cum_since"),
+            "tiers": tiers,
+            "releases": [
+                {"name": x["tier_name"], "group": x.get("tier_group"),
+                 "price": x.get("price"), "face_price": x.get("face_price"),
+                 "available_last": x.get("available_last"),
+                 "first_seen_at": x.get("first_seen_at"),
+                 "sold_out_at": x.get("sold_out_at")}
+                for x in release_log.get(t["event_id"], [])
+            ],
+            "windows": windows,
+            "first_seen_at": r.get("first_seen_at"),
+            "last_seen_at": r.get("last_seen_at"),
+            "last_error": r.get("last_error"),
+            "tracked_only": not r,   # added but not yet successfully fetched
+        })
+    events.sort(key=lambda e: (e.get("start_date") or "9999", e.get("name") or ""))
+    return jsonify({
+        "events": events,
+        "low_stock_threshold": EDM_LOW_STOCK_THRESHOLD,
+        "sources": sorted(edm_events.SOURCES),
+        "status": {**_last_edm_events,
+                   "enabled": EDM_MONITOR_ENABLED,
+                   "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES},
+        "windows": [k for k, _ in FESTIVAL_WINDOWS],
+        "now": now.isoformat(),
+    })
+
+
+@app.route("/api/edm/add", methods=["POST"])
+def api_edm_add():
+    """Track another posh / leap / eventim event URL. Validates by actually
+    fetching it, so a bad URL fails here instead of erroring every tick."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "url required"}), 400
+    try:
+        source, key = edm_events.parse_target(url)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        ev = edm_events.fetch_one(source, key)
+    except Exception as e:
+        return jsonify({"error": f"could not fetch that event: {e}"}), 502
+    event_id = db.edm_tracked_add(source, key, url,
+                                  datetime.now(timezone.utc).isoformat(),
+                                  label=(body.get("label") or "").strip() or None)
+    return jsonify({"event_id": event_id, "source": source,
+                    "name": ev.get("name"), "min_price": ev.get("min_price"),
+                    "on_sale": ev.get("on_sale")})
+
+
+@app.route("/api/edm/remove", methods=["POST"])
+def api_edm_remove():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    event_id = (body.get("event_id") or "").strip()
+    if not event_id:
+        return jsonify({"error": "event_id required"}), 400
+    n = db.edm_tracked_remove(event_id)
+    if not n:
+        return jsonify({"error": f"not tracked: {event_id}"}), 404
+    return jsonify({"removed": event_id})
+
+
+@app.route("/api/edm/pause", methods=["POST"])
+def api_edm_pause():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    event_id = (body.get("event_id") or "").strip()
+    if not event_id:
+        return jsonify({"error": "event_id required"}), 400
+    paused = bool(body.get("paused", True))
+    n = db.edm_tracked_set_paused(event_id, paused)
+    if not n:
+        return jsonify({"error": f"not tracked: {event_id}"}), 404
+    return jsonify({"event_id": event_id, "paused": paused})
+
+
+@app.route("/api/edm-events/status")
+def api_edm_events_status():
+    return jsonify({
+        **_last_edm_events,
+        "enabled": EDM_MONITOR_ENABLED,
+        "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES,
+        "low_stock_threshold": EDM_LOW_STOCK_THRESHOLD,
+        "tracked_total": len(db.edm_tracked_all()),
+    })
+
+
+@app.route("/api/edm-events/run-now", methods=["POST"])
+def api_edm_events_run_now():
+    """Manual tick — synchronous, so the response carries the diff summary.
+    Works even when the scheduled job is disabled on this machine."""
+    if _last_edm_events["running"]:
+        return jsonify({"error": "edm monitor already running"}), 429
+    run_edm_events()
+    return jsonify(dict(_last_edm_events))
+
+
 @app.route("/dice")
 def dice_page():
     return render_template("dice.html")
@@ -5203,6 +5592,7 @@ def api_market():
     # Pacha rows carry a lifetime sold-since-tracking counter (snapshots are
     # pruned at ~7d, so the windows can't provide this).
     pacha_seen = db.pacha_all_seen()
+    edm_seen = db.edm_all_seen()
     # User-snoozed noise events (water parks etc.) — filtered out of shows
     # and totals, returned separately so the page can list/unhide them.
     hidden_rows = db.market_hidden_active(now.isoformat())
@@ -5234,10 +5624,17 @@ def api_market():
         avail = r.get("available")
         if avail is None and series:
             avail = series[-1][1]
-        pacha_row = pacha_seen.get(r["event_code"]) if r["source"] == "pacha" else None
+        # sold_cum / tracked_from come from whichever monitor owns the row:
+        # pacha keys on its own event_id, the EDM trackers on "<source>:<key>".
+        if r["source"] == "pacha":
+            cum_row = pacha_seen.get(r["event_code"])
+        elif r["source"] in edm_events.SOURCES:
+            cum_row = edm_seen.get(f"{r['source']}:{r['event_code']}")
+        else:
+            cum_row = None
         shows.append({
-            "sold_cum": pacha_row.get("sold_cum") if pacha_row else None,
-            "tracked_from": pacha_row.get("sold_cum_since") if pacha_row else None,
+            "sold_cum": cum_row.get("sold_cum") if cum_row else None,
+            "tracked_from": cum_row.get("sold_cum_since") if cum_row else None,
             "source": r["source"], "event_code": r["event_code"],
             "perf_code": r["perf_code"], "name": r.get("name"),
             "venue": r.get("venue"), "date_text": r.get("date_text"),
@@ -6753,6 +7150,13 @@ if IL_EVENTS_ENABLED:
                       start_date=datetime.now() + timedelta(minutes=4))
 else:
     print("[il-events] disabled via KARTIS_IL_EVENTS_ENABLED=0 — the monitor runs elsewhere (e.g. the VPS)")
+if EDM_MONITOR_ENABLED:
+    # Offset again so pacha / il_events / edm first ticks don't collide.
+    scheduler.add_job(run_edm_events, "interval",
+                      minutes=EDM_MONITOR_INTERVAL_MINUTES, id="edm_events",
+                      start_date=datetime.now() + timedelta(minutes=3))
+else:
+    print("[edm] disabled via KARTIS_EDM_MONITOR_ENABLED=0 — the monitor runs elsewhere (e.g. the VPS)")
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
 # Festival/GA sales snapshots — fire one immediately (next_run_time) so the
 # Festival / GA Tracker pages have a baseline right after a restart, then

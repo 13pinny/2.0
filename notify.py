@@ -43,9 +43,9 @@ BASE_URL = (os.environ.get("KARTIS_BASE_URL") or "https://kartis.homes").rstrip(
 _WEBHOOK_ENV = {
     "drops":      "DISCORD_WEBHOOK_DROPS",       # buyable-seat alerts (notify_drop)
     "status":     "DISCORD_WEBHOOK_STATUS",      # sold-out / last-tickets signals (notify_drop)
-    "new_events": "DISCORD_WEBHOOK_NEW_EVENTS",  # genuinely-new events + on-sale flips (pacha/kupat/TM-IL/barby/zappa)
-    "jumps":      "DISCORD_WEBHOOK_JUMPS",       # pacha tier/price jumps + low-stock (price about to jump)
-    "shocks":     "DISCORD_WEBHOOK_SHOCKS",      # pacha price DROPS (returns / cheaper re-release — buy NOW)
+    "new_events": "DISCORD_WEBHOOK_NEW_EVENTS",  # genuinely-new events + on-sale flips (pacha/kupat/TM-IL/barby/zappa/EDM)
+    "jumps":      "DISCORD_WEBHOOK_JUMPS",       # pacha + EDM tier/price jumps and low-stock (price about to jump)
+    "shocks":     "DISCORD_WEBHOOK_SHOCKS",      # pacha + EDM price DROPS and restocks (returns / cheaper re-release — buy NOW)
     "pricer":     "DISCORD_WEBHOOK_PRICER",      # auto-pricer changes/pauses/caps
     "listings":   "DISCORD_WEBHOOK_LISTINGS",    # intake→viagogo push pipeline
     "todos":      "DISCORD_WEBHOOK_TODOS",       # daily to-do digest
@@ -805,6 +805,159 @@ def notify_pacha_event(kind, ev, old=None):
     if kind == "price_down":
         # Discord's phone push previews only `content`, not the embed — put
         # the prices on the lock screen for the time-critical shock ping.
+        payload["content"] = title[:1990]
+    return {"discord": _post_discord(discord_url, payload)}
+
+
+# US EDM single-event trackers (posh / leap / eventim). Same spirit as the
+# pacha monitor, but these watch named events on three platforms, and only
+# posh publishes remaining counts — every count here may be None, which
+# means UNKNOWN and must never render as "0 left".
+_EDM_SOURCE_LABEL = {
+    "posh": "Posh",
+    "leap": "Leap Events",
+    "eventim": "Eventim US",
+}
+
+
+def _edm_tier_lines(ev, limit=6):
+    """'• Wave 2 — $28.49 · 15 left' per tier, cheapest first. Sold-out
+    tiers are kept (they're the release history that makes the current
+    price legible) but struck through."""
+    tiers = ev.get("tiers") or []
+    out = []
+    for t in tiers[:limit]:
+        price = f" — ${t['price']:,.2f}" if t.get("price") is not None else ""
+        if t.get("sold_out"):
+            state = " · ~~sold out~~"
+        elif t.get("closed"):
+            state = " · not on sale"
+        elif t.get("available") is not None:
+            state = f" · **{t['available']}** left"
+        else:
+            state = ""
+        out.append(f"• {t.get('name') or 'Tickets'}{price}{state}")
+    if len(tiers) > limit:
+        out.append(f"…and {len(tiers) - limit} more tier(s)")
+    return out
+
+
+def notify_edm_event(kind, ev, old=None):
+    """US EDM event-tracker ping (posh / leap / eventim). Discord-only, like
+    the pacha monitor — these fire on a short poll and speed beats a paper
+    trail. `kind` is one of:
+
+      'new'        first successful fetch of a newly tracked event
+      'onsale'     nothing buyable → something buyable (a wave opened)
+      'restock'    was fully SOLD OUT and is buyable again — perishable
+      'soldout'    every tier is now sold out
+      'new_tier'   a wave/tier never listed before appeared (more inventory)
+      'price_up'   the cheapest buyable price climbed (a wave sold through)
+      'price_down' the cheapest buyable price DROPPED — a return or a
+                   cheaper wave re-opening; the buy-now shock
+      'low_stock'  the current release's remaining count crossed the alert
+                   threshold (posh only — the others publish no counts)
+
+    `ev` is a normalized dict from one of the *_events fetchers; `old` is
+    the previously stored edm_seen_events row.
+
+    Routing mirrors pacha's: the perishable kinds ('price_down', 'restock')
+    go to the shocks channel, demand signals ('price_up', 'low_stock') to
+    'jumps', a full sell-out to 'status', the rest to 'new_events'."""
+    if kind in ("price_down", "restock"):
+        discord_url = _pacha_shocks_webhook()
+    elif kind in ("price_up", "low_stock"):
+        discord_url = _discord_webhook("jumps")
+    elif kind == "soldout":
+        discord_url = _discord_webhook("status")
+    else:
+        discord_url = _discord_webhook("new_events")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    site = _EDM_SOURCE_LABEL.get(ev.get("source"),
+                                 (ev.get("source") or "EDM").title())
+    name = ev.get("name") or "(unknown event)"
+    price = ev.get("min_price")
+    old_price = (old or {}).get("min_price")
+    where = " · ".join(x for x in (ev.get("venue"), ev.get("date_text")) if x)
+    lines = [f"**{where}**"] if where else []
+
+    if kind == "onsale":
+        title = f"🎟️ {site}: {name} is ON SALE"
+        color = 0x56D364
+        if price is not None:
+            lines.append(f"From **${price:,.2f}**"
+                         + (f" ({ev['lead_tier']})" if ev.get("lead_tier") else ""))
+    elif kind == "restock":
+        title = f"⚡ {site}: {name} is BACK — tickets available again"
+        color = 0x00B0F4
+        if price is not None:
+            lines.append(f"From **${price:,.2f}**"
+                         + (f" ({ev['lead_tier']})" if ev.get("lead_tier") else ""))
+        lines.append("It was sold out — returns usually go fast.")
+    elif kind == "soldout":
+        title = f"🚫 {site}: {name} is SOLD OUT"
+        color = 0x99AAB5
+        if old_price is not None:
+            lines.append(f"Last price was ${old_price:,.2f}.")
+    elif kind == "new_tier":
+        added = ev.get("_new_tiers") or []
+        label = ", ".join(t.get("name") or "Tickets" for t in added[:3]) or "a new tier"
+        title = f"🆕 {site}: {name} — new release: {label}"
+        color = 0x9B59B6
+        lines.append("More inventory just went up.")
+    elif kind == "price_up":
+        title = (f"📈 {site}: {name} ${old_price:,.2f} → ${price:,.2f}"
+                 if old_price is not None and price is not None
+                 else f"📈 {site}: {name} price climbed")
+        color = 0xFAA61A
+        lines.append("A release sold through — the price steps up with each one.")
+    elif kind == "price_down":
+        title = (f"⚡ {site}: {name} ${old_price:,.2f} → ${price:,.2f}"
+                 if old_price is not None and price is not None
+                 else f"⚡ {site}: {name} price DROPPED")
+        color = 0x00B0F4
+        left = ev.get("lead_available")
+        lines.append("Price DROPPED — cheaper tickets just appeared (a return, "
+                     "or an earlier release re-opened)."
+                     + (f" **{left}** at this price." if left is not None else ""))
+    elif kind == "low_stock":
+        left = ev.get("lead_available")
+        release = ev.get("lead_tier") or "the current release"
+        title = f"⏳ {site}: {name} — only {left} left in {release}"
+        color = 0xED4245
+        was = (old or {}).get("lead_available")
+        if was is not None:
+            lines.append(f"Was {was} earlier — the next release usually costs more.")
+        else:
+            lines.append("The next release usually costs more.")
+    else:  # 'new'
+        title = f"🪩 Now tracking — {name} ({site})"
+        color = 0xE91E63
+        if price is not None:
+            lines.append(f"From **${price:,.2f}**"
+                         + (f" ({ev['lead_tier']})" if ev.get("lead_tier") else ""))
+        if ev.get("sold_out"):
+            lines.append("Currently sold out — you'll get a ping if it returns.")
+
+    if ev.get("total_sold") is not None:
+        lines.append(f"{ev['total_sold']:,} sold so far.")
+    lines.extend(_edm_tier_lines(ev))
+    if ev.get("page_url"):
+        lines.append(f"[Buy tickets]({ev['page_url']})")
+
+    embed = {
+        "title": title[:250],
+        "description": "\n".join(lines)[:4000],
+        "color": color,
+    }
+    if ev.get("page_url"):
+        embed["url"] = ev["page_url"]
+    payload = {"embeds": [embed]}
+    if kind in ("price_down", "restock", "low_stock"):
+        # Discord's phone push previews only `content`, not the embed — put
+        # the headline on the lock screen for the time-critical kinds.
         payload["content"] = title[:1990]
     return {"discord": _post_discord(discord_url, payload)}
 
