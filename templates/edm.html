@@ -78,6 +78,10 @@
   .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
   .ok { background: #e8f5ec; border: 1px solid var(--green); color: var(--green); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
   .rowerr { color: var(--red); font-size: 10px; }
+  tr.grp td { background: var(--bg-3); border-bottom: 1px solid var(--line-2); padding: 7px 10px; }
+  tr.grp .grp-host { font-size: 10px; color: var(--muted); margin-left: 8px; font-family: ui-monospace, Consolas, monospace; }
+  tr.grp .grp-meta { font-size: 10px; color: var(--text); margin-left: 12px; letter-spacing: .5px; }
+  tr.grp .grp-note { font-size: 10px; color: var(--muted); margin-left: 12px; font-style: italic; }
 </style>
 </head>
 <body>
@@ -146,6 +150,14 @@ const open = new Set();
 // Sources whose published price is pre-fee. Their numbers are honest but
 // not directly comparable with the all-in prices the others report.
 const FACE_SOURCES = ['shotgun'];
+// Platform display order + what each one publishes. `counts`: true = real
+// remaining inventory, 'partial' = only near sell-out, false = none at all.
+const SRC_META = {
+  posh:    {label: 'Posh',        host: 'posh.vip',                counts: true},
+  shotgun: {label: 'Shotgun',     host: 'shotgun.live',            counts: true},
+  eventim: {label: 'Eventim US',  host: 'wl.eventim.us',           counts: 'partial'},
+  leap:    {label: 'Leap Events', host: 'events.leapevents.com',   counts: false},
+};
 
 function flash(el, msg) {
   el.textContent = msg; el.style.display = 'block';
@@ -219,8 +231,36 @@ function render() {
     return;
   }
 
-  const out = [];
+  // Group under one heading per ticketing platform. SRC_META fixes the
+  // display order and the label/host text; anything not listed (a source
+  // added later) still gets its own heading, appended after the known ones.
+  const groups = new Map();
   for (const e of evs) {
+    if (!groups.has(e.source)) groups.set(e.source, []);
+    groups.get(e.source).push(e);
+  }
+  const order = [...Object.keys(SRC_META).filter(s => groups.has(s)),
+                 ...[...groups.keys()].filter(s => !SRC_META[s])];
+
+  const out = [];
+  for (const src of order) {
+    const list = groups.get(src);
+    const meta = SRC_META[src] || {label: src, host: '', counts: false};
+    const onSaleN = list.filter(e => !e.paused && e.on_sale).length;
+    const soldOutN = list.filter(e => !e.paused && e.sold_out).length;
+    const bits = [`${list.length} event${list.length === 1 ? '' : 's'}`];
+    if (onSaleN) bits.push(`${onSaleN} on sale`);
+    if (soldOutN) bits.push(`${soldOutN} sold out`);
+    out.push(`<tr class="grp"><td colspan="10">
+      <span class="src ${esc(src)}">${esc(meta.label)}</span>
+      ${meta.host ? `<span class="grp-host">${esc(meta.host)}</span>` : ''}
+      <span class="grp-meta">${bits.join(' · ')}</span>
+      <span class="grp-note">${meta.counts === false ? 'no ticket counts published'
+        : (meta.counts === 'partial' ? 'counts only near sell-out' : 'live ticket counts')}${
+        FACE_SOURCES.includes(src) ? ' · prices are face value' : ''}</span>
+    </td></tr>`);
+
+  for (const e of list) {
     const cls = ['ev'];
     if (e.paused) cls.push('pausedrow');
     else if (e.lead_available != null && e.lead_available <= DATA.low_stock_threshold) cls.push('lowrow');
@@ -242,6 +282,7 @@ function render() {
              href="${esc(e.page_url || '#')}">Buy</a></td>
     </tr>`);
     if (open.has(e.event_id)) out.push(detail(e));
+  }
   }
   $('rows').innerHTML = out.join('');
   $('footnote').innerHTML =
