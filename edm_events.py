@@ -1,13 +1,14 @@
 """US EDM event-tracker registry — source routing, the tracked-event list,
 and the CLI for managing it.
 
-The three fetchers (posh_events / leap_events / eventim_events) each watch
-ONE event and return the same normalized dict; this module decides which
+The per-platform fetchers (posh_events / leap_events / eventim_events /
+shotgun_events) each watch ONE event and return the same normalized dict
+(the contract is in edm_common.py); this module decides which
 fetcher a URL belongs to, keeps the list of events being polled in
 edm_tracked_events, and fetches them all for one tick of app.py's
 `run_edm_events`.
 
-Adding another event from any of the three platforms is data, not code:
+Adding another event from any supported platform is data, not code:
 
     python edm_events.py --add "https://posh.vip/e/some-slug"
     python edm_events.py --list
@@ -19,8 +20,9 @@ Adding another event from any of the three platforms is data, not code:
 unsupported URL fails at the prompt instead of silently erroring once a
 minute in the scheduler.
 
-To support a FOURTH platform, write a module with parse_url(url) /
-fetch_event(key) / SOURCE_NAME and add one row to SOURCES below.
+To support a NEW platform, write a module exposing SOURCE_NAME /
+parse_url(url) / fetch_event(key) and add one row to SOURCES plus one to
+_HOST_HINTS below — nothing else in the stack needs to change.
 """
 import argparse
 import json
@@ -32,12 +34,14 @@ import edm_common
 import eventim_events
 import leap_events
 import posh_events
+import shotgun_events
 from edm_common import EdmEventsError
 
 SOURCES = {
     posh_events.SOURCE_NAME: posh_events,
     leap_events.SOURCE_NAME: leap_events,
     eventim_events.SOURCE_NAME: eventim_events,
+    shotgun_events.SOURCE_NAME: shotgun_events,
 }
 
 # Host fragment → source. Checked before the parse_url fallback so a URL is
@@ -46,9 +50,10 @@ _HOST_HINTS = (
     ("posh.vip", "posh"),
     ("leapevents.com", "leap"),
     ("eventim.us", "eventim"),
+    ("shotgun.live", "shotgun"),
 )
 
-# The three events this tracker was originally built for. Seeded once, on a
+# The events this tracker was built for. Seeded once, on a
 # fresh DB only (db.edm_seed_tracked latches a setting), so removing one
 # doesn't bring it back on the next restart.
 DEFAULT_TRACKED = [
@@ -60,6 +65,8 @@ DEFAULT_TRACKED = [
      "https://wl.eventim.us/event/"
      "ISOxo-pres-Hardcore-Diva-Night-1-at-The-Concourse-Project/690917"
      "?afflky=TheConcourseProject"),
+    ("shotgun", "jigitz0912",
+     "https://shotgun.live/en/events/jigitz0912"),
 ]
 
 
@@ -90,7 +97,7 @@ def parse_target(url):
     if not source:
         raise ValueError(
             f"unsupported EDM event URL: {url!r} — expected posh.vip, "
-            "events.leapevents.com or wl.eventim.us")
+            "events.leapevents.com, wl.eventim.us or shotgun.live")
     return source, SOURCES[source].parse_url(s)
 
 

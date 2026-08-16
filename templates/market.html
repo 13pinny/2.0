@@ -70,6 +70,7 @@
   .src.posh { color: #b3115a; }
   .src.leap { color: #0b4fa8; }
   .src.eventim { color: #12662f; }
+  .src.shotgun { color: #7a3ecb; }
   .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; }
   .badge.available { background: #16a34a; }
   .badge.lasttickets { background: #d97706; }
@@ -156,7 +157,7 @@ const $ = id => document.getElementById(id);
 function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 const WIN_LABELS = { '1h':'Last hour', '6h':'Last 6 hours', '24h':'Last 24 hours', '3d':'Last 3 days', '7d':'Last 7 days' };
 const SRC_LABELS = { kupat:'Kupat', ticketmaster:'TM', tickchak:'Tickchak', zappa:'Zappa', pacha:'Pacha', dice:'DICE',
-                     posh:'Posh', leap:'Leap', eventim:'Eventim' };
+                     posh:'Posh', leap:'Leap', eventim:'Eventim', shotgun:'Shotgun' };
 const CUR_SYMBOLS = { ILS:'₪', USD:'$' };
 const fmt = n => (n == null) ? '—' : n.toLocaleString();
 const HOT_24H = 25;   // 24h-sold at/above this highlights the row

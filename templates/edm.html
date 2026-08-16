@@ -68,6 +68,7 @@
   .src.posh { background: #fde7f1; color: #b3115a; }
   .src.leap { background: #e6f0fd; color: #0b4fa8; }
   .src.eventim { background: #e8f5ec; color: #12662f; }
+  .src.shotgun { background: #f0e9fb; color: #5b2ea6; }
   .rel { font-size: 10px; color: var(--muted); }
   .vel { font-variant-numeric: tabular-nums; }
   .vel.zero { color: var(--muted); }
@@ -111,7 +112,7 @@
   <p class="sub" id="statusline">—</p>
 
   <h2>Add an event</h2>
-  <p class="sub">Paste a posh.vip, events.leapevents.com or wl.eventim.us event URL.
+  <p class="sub">Paste a posh.vip, events.leapevents.com, wl.eventim.us or shotgun.live event URL.
      Keep the <code>?afflky=</code> parameter on Eventim links — without it the page lists no tickets.</p>
   <div class="controls">
     <input type="text" id="addurl" placeholder="https://posh.vip/e/… " />
@@ -142,6 +143,9 @@ const money = n => (n == null) ? '—' : '$' + n.toLocaleString(undefined, {mini
 
 let DATA = null;
 const open = new Set();
+// Sources whose published price is pre-fee. Their numbers are honest but
+// not directly comparable with the all-in prices the others report.
+const FACE_SOURCES = ['shotgun'];
 
 function flash(el, msg) {
   el.textContent = msg; el.style.display = 'block';
@@ -229,7 +233,7 @@ function render() {
           ${e.last_error ? `<div class="rowerr">${esc(e.last_error)}</div>` : ''}</td>
       <td class="when">${esc(e.date_text || '—')}</td>
       <td>${statusBadge(e)}</td>
-      <td class="num">${money(e.min_price)}</td>
+      <td class="num">${money(e.min_price)}${FACE_SOURCES.includes(e.source) ? '<sup class="nocount" title="face value — this site adds a booking fee at checkout">f</sup>' : ''}</td>
       <td>${esc(e.lead_tier || '—')}</td>
       <td class="num">${left}</td>
       <td class="num">${fmt(e.total_sold)}</td>
@@ -240,9 +244,10 @@ function render() {
     if (open.has(e.event_id)) out.push(detail(e));
   }
   $('rows').innerHTML = out.join('');
-  $('footnote').textContent =
-    'Only Posh publishes remaining ticket counts; Leap publishes none and Eventim '
-    + 'only reveals one once a type drops under its per-order limit — those show n/a, not 0.';
+  $('footnote').innerHTML =
+    'Posh and Shotgun publish remaining ticket counts; Leap publishes none and Eventim '
+    + 'only reveals one once a type drops under its per-order limit — those show n/a, not 0. '
+    + 'Prices marked <sup class="nocount">f</sup> are face value; that site adds a booking fee at checkout.';
 
   for (const tr of document.querySelectorAll('tr.ev')) {
     tr.onclick = ev => {
