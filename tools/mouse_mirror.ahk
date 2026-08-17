@@ -10,10 +10,12 @@
 ;   Ctrl+Alt+M  — toggle mirroring ON/OFF (starts OFF)
 ;   Ctrl+Alt+Q  — quit
 ;
-; While mirroring is ON, every left-click you make in ANY window is replayed at the
-; same client-area coordinates in every tagged window (the window you clicked in is
-; skipped, so no double-click there). Windows should be the SAME SIZE and scrolled
-; the same, or the mirrored clicks will land on different things.
+; While mirroring is ON, every left-click AND every scroll-wheel notch you make in
+; ANY window is replayed at the same client-area coordinates in every tagged window
+; (the window you acted in is skipped, so no doubling there). Windows should be the
+; SAME SIZE and scrolled the same, or the mirrored actions will land on different
+; things. Note: scroll amounts can still drift apart if pages differ in length or a
+; window eats a notch — re-sync with Ctrl+Home style jumps (top of page) if needed.
 ;
 ; Notes:
 ;  - ControlClick posts the click without stealing focus, so the target windows
@@ -74,15 +76,16 @@ Tip(msg) {
 
 ^!q:: ExitApp()
 
-; ~ = let the real click through to the window you clicked in
-~LButton:: {
+; Replay a mouse action ("Left", "WheelUp", "WheelDown") at the cursor's
+; window-relative position in every tagged window except the one it happened in.
+Broadcast(button) {
     global targets, mirroring
     if !mirroring || !targets.Count
         return
     MouseGetPos &mx, &my, &srcHwnd
     srcHwnd := DllCall("GetAncestor", "ptr", srcHwnd, "uint", 2, "ptr")
 
-    ; screen coords -> client coords of the window that was actually clicked
+    ; screen coords -> client coords of the window the action happened in
     pt := Buffer(8)
     NumPut("int", mx, pt, 0), NumPut("int", my, pt, 4)
     DllCall("ScreenToClient", "ptr", srcHwnd, "ptr", pt)
@@ -96,8 +99,13 @@ Tip(msg) {
             dead.Push(hwnd)
             continue
         }
-        try ControlClick "x" cx " y" cy, hwnd,,,, "NA Pos"
+        try ControlClick "x" cx " y" cy, hwnd,, button,, "NA Pos"
     }
     for hwnd in dead
         targets.Delete(hwnd)
 }
+
+; ~ = let the real action through to the window it happened in
+~LButton::   Broadcast("Left")
+~WheelUp::   Broadcast("WheelUp")
+~WheelDown:: Broadcast("WheelDown")
