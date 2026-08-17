@@ -5,6 +5,8 @@
 ;
 ; Hotkeys:
 ;   Ctrl+Alt+T  — tag/untag the window UNDER YOUR MOUSE as a mirror target
+;   Ctrl+Alt+A  — tag EVERY open Chrome window in one shot (and untag closed ones)
+;   Ctrl+Alt+G  — tile all tagged windows into an equal grid (same size = clicks line up)
 ;   Ctrl+Alt+L  — show the list of tagged windows
 ;   Ctrl+Alt+C  — clear all tagged windows
 ;   Ctrl+Alt+M  — toggle mirroring ON/OFF (starts OFF)
@@ -50,6 +52,41 @@ Tip(msg) {
         targets[hwnd] := WinGetTitle(hwnd)
         Tip "Tagged (" targets.Count "): " targets[hwnd]
     }
+}
+
+; Tag every Chrome window at once (works for Edge/Brave too — same window class).
+^!a:: {
+    global targets
+    targets := Map()
+    for hwnd in WinGetList("ahk_class Chrome_WidgetWin_1") {
+        title := WinGetTitle(hwnd)
+        if title = ""                       ; skip hidden helper windows
+            continue
+        targets[hwnd] := title
+    }
+    Tip "Tagged " targets.Count " Chrome windows"
+}
+
+; Tile all tagged windows into an equal grid on the primary monitor.
+^!g:: {
+    global targets
+    n := targets.Count
+    if !n {
+        Tip "No windows tagged"
+        return
+    }
+    MonitorGetWorkArea , &wl, &wt, &wr, &wb
+    cols := Ceil(Sqrt(n)), rows := Ceil(n / cols)
+    w := (wr - wl) // cols, h := (wb - wt) // rows
+    i := 0
+    for hwnd in targets {
+        if !WinExist(hwnd)
+            continue
+        WinRestore hwnd                     ; un-maximize or WinMove is ignored
+        WinMove wl + Mod(i, cols) * w, wt + (i // cols) * h, w, h, hwnd
+        i++
+    }
+    Tip "Tiled " i " windows (" cols "x" rows ")"
 }
 
 ^!l:: {
