@@ -8,6 +8,7 @@
 ;   Ctrl+Alt+L  — show the list of tagged windows
 ;   Ctrl+Alt+C  — clear all tagged windows
 ;   Ctrl+Alt+M  — toggle mirroring ON/OFF (starts OFF)
+;   Ctrl+Alt+K  — toggle KEYBOARD mirroring ON/OFF (starts OFF; needs mirroring ON too)
 ;   Ctrl+Alt+Q  — quit
 ;
 ; While mirroring is ON, every left-click AND every scroll-wheel notch you make in
@@ -29,6 +30,7 @@ CoordMode "Mouse", "Screen"
 
 targets := Map()        ; hwnd -> title
 mirroring := false
+keyMirror := false
 
 Tip(msg) {
     ToolTip msg
@@ -109,3 +111,49 @@ Broadcast(button) {
 ~LButton::   Broadcast("Left")
 ~WheelUp::   Broadcast("WheelUp")
 ~WheelDown:: Broadcast("WheelDown")
+
+^!k:: {
+    global keyMirror
+    keyMirror := !keyMirror
+    Tip "Keyboard mirroring " (keyMirror ? "ON" : "OFF")
+}
+
+; ---- keyboard mirroring -------------------------------------------------
+; Replays keystrokes (with Shift/Ctrl held state) into every tagged window
+; except the ACTIVE one (where the real keystroke already lands).
+BroadcastKey(key, *) {
+    global targets, mirroring, keyMirror
+    if !mirroring || !keyMirror || !targets.Count
+        return
+    ; never mirror our own Ctrl+Alt hotkeys / AltGr combos
+    if GetKeyState("Alt", "P")
+        return
+    mods := (GetKeyState("Ctrl", "P") ? "^" : "") . (GetKeyState("Shift", "P") ? "+" : "")
+    srcHwnd := WinExist("A")
+    dead := []
+    for hwnd in targets {
+        if hwnd = srcHwnd
+            continue
+        if !WinExist(hwnd) {
+            dead.Push(hwnd)
+            continue
+        }
+        try ControlSend mods "{" key "}",, hwnd
+    }
+    for hwnd in dead
+        targets.Delete(hwnd)
+}
+
+; Register a pass-through wildcard hotkey for every key we mirror.
+mirrorKeys := []
+Loop 26                     ; a-z
+    mirrorKeys.Push(Chr(Ord("a") + A_Index - 1))
+Loop 10                     ; 0-9
+    mirrorKeys.Push(Chr(Ord("0") + A_Index - 1))
+for k in StrSplit("`` - = [ ] \ `; ' , . /", " ")   ; punctuation
+    mirrorKeys.Push(k)
+for k in ["Space", "Enter", "Backspace", "Tab", "Delete",
+          "Up", "Down", "Left", "Right", "Home", "End", "PgUp", "PgDn"]
+    mirrorKeys.Push(k)
+for k in mirrorKeys
+    Hotkey "~*" k, BroadcastKey.Bind(k)
