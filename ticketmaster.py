@@ -330,6 +330,89 @@ _SOLDOUT_STATUSES = {"s02_soldout"}
 # unknown) = not on sale online → treated as "closed".
 
 
+_TRACK_BLOCK_PREFIX = "#tracking:"
+
+
+def tracking_seat(perf_code, mode):
+    """Per-perf tracking sentinel.
+
+    One is emitted for every performance whose seat feed we fetched
+    successfully this tick, carrying the MODE the seats were fetched in
+    ('confirmed' = perf is on sale, 'unconfirmed' = perf still marked sold
+    out and we're reading the raw feed as a radar). It is stored in
+    `tm_seat_state` like any other seat, so the next tick can tell whether a
+    perf was already being tracked in the same mode.
+
+    Why the mode is part of the key: when a perf flips sold-out → on sale,
+    every one of its seats re-keys (the "U|" prefix drops off) and the whole
+    standing unsold-seat set — hundreds of seats — lands in `added`. Those
+    are inventory, not a drop: the ping would claim "460 new seats dropped"
+    when one seat actually moved. A mode change means the perf must be
+    re-baselined instead. Same for a perf we start tracking for the first
+    time, or one whose seat fetch errored last tick.
+    """
+    return {
+        "_perf": str(perf_code), "_tracking": True, "mode": mode,
+        "block": _TRACK_BLOCK_PREFIX + mode, "row": "", "seat": "",
+    }
+
+
+def tracked_perf_modes(prev_keys):
+    """{perf_code: mode} for every perf under tracking per the stored keys."""
+    out = {}
+    for k in prev_keys or ():
+        parts = str(k).split("|")
+        # Sentinel keys are "<perf>|#tracking:<mode>||" (never "U|"-prefixed).
+        if len(parts) >= 2 and parts[1].startswith(_TRACK_BLOCK_PREFIX):
+            out[parts[0]] = parts[1][len(_TRACK_BLOCK_PREFIX):]
+    return out
+
+
+def seat_mode(seat):
+    return "unconfirmed" if seat.get("unconfirmed") else "confirmed"
+
+
+def filter_baselined(added, prev_keys):
+    """Drop additions that are a new baseline rather than a real drop.
+
+    Removes the sentinels themselves, plus every physical seat belonging to a
+    performance that was NOT already tracked in that same mode on the previous
+    tick (new perf, sold-out ↔ on-sale flip, or recovery from a failed fetch).
+    Status pseudo-seats are never dropped — they carry the flip itself, so a
+    baselined perf still pings "on sale" / "sold out", just without the
+    hundreds of standing seats attached.
+
+    Shared by both tick implementations (app.py, watcher_only.py).
+    """
+    tracked = tracked_perf_modes(prev_keys)
+    out = []
+    for s in added:
+        if s.get("_tracking"):
+            continue
+        if s.get("festival") or s.get("ga"):
+            out.append(s)
+            continue
+        if tracked.get(str(s.get("_perf") or "")) != seat_mode(s):
+            continue
+        out.append(s)
+    return out
+
+
+def stale_perf_prefixes(per_perf_errors):
+    """Stored-key prefixes for perfs whose seat fetch failed this tick.
+
+    Their seats are missing from this tick's snapshot through no fault of the
+    venue, so the tick carries the previous keys forward instead of deleting
+    them — otherwise the perf drops out of state and its entire seat set
+    re-reports as "added" the moment the fetch recovers.
+    """
+    out = []
+    for pc in (per_perf_errors or {}):
+        out.append(f"{pc}|")
+        out.append(f"U|{pc}|")
+    return out
+
+
 def _perf_sale_state(p):
     """Classify a performance from its perf-list `status` string:
     returns one of 'available' (buyable online now), 'soldout', 'closed'."""
@@ -417,12 +500,20 @@ def fetch_event_seats(event_code):
     status is server-side cached (/bxcached/), so returns released on a
     sold-out show can appear — and sell — before the status ever flips to
     on-sale for us. A NEW seat appearing in the sold-out raw feed is the
-    earliest observable signal of that. The tick loops suppress the first
-    batch per perf (the standing unsold-seat set is not a drop) via the
-    per-perf `_tracking` sentinel; only additions after that ping. If the
-    sold-out feed fetch fails, the perf's sentinel AND seats are omitted, so
-    the tracking baseline self-resets on recovery instead of re-pinging the
-    whole standing set.
+    earliest observable signal of that.
+
+    Every perf whose seat feed we fetched gets a `tracking_seat` sentinel
+    stamped with the fetch MODE (confirmed / unconfirmed). The tick loops
+    feed it to `filter_baselined`, which suppresses per-seat additions for
+    any perf that wasn't already tracked in that same mode — a perf seen for
+    the first time, a perf that just flipped sold-out <-> on-sale (where
+    every seat re-keys at once), or a perf recovering from a failed fetch.
+    Without that, one seat genuinely moving reads as "460 new seats
+    dropped". The perf's status pseudo-seat still pings, so the flip itself
+    is never silent. On a failed fetch the sentinel and seats are both
+    omitted, and the caller carries the perf's previous keys forward (see
+    `stale_perf_prefixes`) so the outage neither empties the stored state nor
+    re-pings the standing set on recovery.
 
     Perfs past showtime (plus a grace window) are dropped entirely.
 
@@ -455,10 +546,7 @@ def fetch_event_seats(event_code):
                 except Exception as e:
                     per_perf_errors[perf_code] = f"unconfirmed seats: {type(e).__name__}: {e}"
                 else:
-                    seats.append({
-                        "_perf": perf_code, "unconfirmed": True, "_tracking": True,
-                        "block": "#tracking", "row": "", "seat": "",
-                    })
+                    seats.append(tracking_seat(perf_code, "unconfirmed"))
                     for s in ps:
                         s["_perf"] = perf_code
                         s["unconfirmed"] = True
@@ -469,6 +557,7 @@ def fetch_event_seats(event_code):
             ps = fetch_selectable_seats(event_code, perf_code)
             for s in ps:
                 s["_perf"] = perf_code
+            seats.append(tracking_seat(perf_code, "confirmed"))
             seats.extend(ps)
         except Exception as e:
             per_perf_errors[perf_code] = f"seats: {type(e).__name__}: {e}"

@@ -79,6 +79,7 @@ def check_one(w, now_iso):
         perf_url = src.perf_url(w["event_code"], w["perf_code"])
         key_fn = src.seat_key
 
+    perf_errors = {}
     try:
         if event_level:
             seats, perf_errors = ticketmaster.fetch_event_seats(w["event_code"])
@@ -95,17 +96,21 @@ def check_one(w, now_iso):
     is_baseline = not prev_keys and not w.get("last_check_at")
     was_empty = (w.get("last_seat_count") or 0) == 0
     added, removed = _diff_seats_set(prev_keys, seats, key_fn)
-    db.tm_replace_seat_state(wid, seats)
-    # Unconfirmed (sold-out perf) seats: only perfs already under tracking may
-    # ping — the tick that STARTS tracking a perf sees its whole standing
-    # unsold-seat set as "added", which is inventory, not a drop. The per-perf
-    # `_tracking` sentinel in prev state marks tracking as established.
+    # Perfs whose seat fetch failed keep their previous keys: their seats are
+    # missing from this snapshot for our reasons, not the venue's, so they
+    # neither count as removed nor re-report as added once the fetch recovers.
     # (Keep in sync with app.py._check_one_watcher.)
-    if any(s.get("unconfirmed") for s in added):
-        _tracked = {k.split("|", 2)[1] for k in prev_keys if k.startswith("U|")}
-        added = [s for s in added
-                 if not s.get("_tracking")
-                 and (not s.get("unconfirmed") or (s.get("_perf") or "") in _tracked)]
+    stale = tuple(ticketmaster.stale_perf_prefixes(perf_errors)) if event_level else ()
+    if stale:
+        removed = [k for k in removed if not str(k).startswith(stale)]
+    db.tm_replace_seat_state(wid, seats, keep_prefixes=stale)
+    if event_level:
+        # A perf that wasn't already tracked in this exact mode is baselined:
+        # its whole standing seat set is inventory, not a drop. Covers new
+        # perfs, sold-out ↔ on-sale flips (every seat re-keys at once), and
+        # recovery from a failed fetch. Status pseudo-seats still ping.
+        added = ticketmaster.filter_baselined(added, prev_keys)
+        seats = [s for s in seats if not s.get("_tracking")]
     db.tm_update_watcher(wid, {
         "last_check_at": now_iso,
         "last_check_error": None,

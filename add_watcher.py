@@ -100,11 +100,13 @@ def cmd_add(url):
     else:
         seats = src.fetch_selectable_seats(event_code, perf_code)
     db.tm_replace_seat_state(wid, seats)
+    # Per-perf tracking sentinels belong in the stored state but aren't seats.
+    real = [s for s in seats if not s.get("_tracking")]
     db.tm_update_watcher(wid, {
         "last_check_at": datetime.now(timezone.utc).isoformat(),
-        "last_seat_count": len(seats),
+        "last_seat_count": len(real),
     })
-    print(f"baseline: {len(seats)} selectable seats currently")
+    print(f"baseline: {len(real)} selectable seats currently")
 
 
 def cmd_list():

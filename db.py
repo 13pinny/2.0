@@ -2713,7 +2713,7 @@ def tm_get_seat_keys(watcher_id):
     return {r["seat_key"] for r in rows}
 
 
-def tm_replace_seat_state(watcher_id, seats):
+def tm_replace_seat_state(watcher_id, seats, keep_prefixes=None):
     """Atomically replace the watcher's known seat set. Seats must be in the
     normalized shape with `block`, `row`, `seat` keys (each source module
     produces this shape from its raw API response).
@@ -2722,8 +2722,24 @@ def tm_replace_seat_state(watcher_id, seats):
     stored key to match `ticketmaster.event_seat_key`, which the tick loops
     diff against — without it no stored key ever matches and every seat
     re-reports as "added" on every tick.
+
+    `keep_prefixes` — stored keys starting with any of these survive the
+    replace even though this tick's snapshot doesn't contain them. Used for
+    performances whose seat fetch errored (`ticketmaster.stale_perf_prefixes`):
+    dropping their rows would make the whole perf re-report as "added" on the
+    next successful fetch.
     """
+    keep_prefixes = tuple(keep_prefixes or ())
     with connect() as conn:
+        carried = []
+        if keep_prefixes:
+            carried = [
+                r for r in conn.execute(
+                    "SELECT seat_key, block, row_label, seat_num FROM tm_seat_state "
+                    "WHERE watcher_id = ?", (watcher_id,)
+                ).fetchall()
+                if str(r["seat_key"]).startswith(keep_prefixes)
+            ]
         conn.execute("DELETE FROM tm_seat_state WHERE watcher_id = ?", (watcher_id,))
         seen = set()
         for s in seats:
@@ -2744,6 +2760,15 @@ def tm_replace_seat_state(watcher_id, seats):
                 "INSERT INTO tm_seat_state (watcher_id, seat_key, block, row_label, seat_num) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (watcher_id, key, block, row, num),
+            )
+        for r in carried:
+            if r["seat_key"] in seen:
+                continue
+            seen.add(r["seat_key"])
+            conn.execute(
+                "INSERT INTO tm_seat_state (watcher_id, seat_key, block, row_label, seat_num) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (watcher_id, r["seat_key"], r["block"], r["row_label"], r["seat_num"]),
             )
 
 
