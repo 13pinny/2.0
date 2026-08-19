@@ -1,0 +1,40 @@
+# Secrets
+.env
+auth.json
+user_data/
+user_data_cv/
+user_data_viagogo/
+.env.cvproxy
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local database
+kartis.db
+*.db-journal
+backups/
+
+# Uploaded ticket attachments (PDFs etc. attached to pending tickets)
+attachments/
+
+# Claude Code local-only settings (project launch config is tracked, this is per-machine)
+.claude/settings.local.json
+
+# Exports
+*.xlsx
+
+# Playwright
+.playwright/
+
+# Scraper debug artifacts (screenshots + HTML dumps)
+debug/
+
+# Ticketmaster watcher cache (Hebrew labels + price metadata; refetched as needed)
+tm_cache/
+tm_probe/
+
+# Supervisor log (rolling output from start_supervised.bat)
+supervisor.log

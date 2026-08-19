@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Inventory</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
+    --pink: #f06595;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .meta .auth-warn { display: inline-block; margin-left: 10px; padding: 1px 8px; font-size: 10px; letter-spacing: 1.5px; color: var(--bg); background: var(--red); border: 1px solid var(--red); cursor: pointer; user-select: none; }
+  header .meta .auth-warn:hover { background: #ff6e64; }
+  header .meta .auth-warn.scraping { background: var(--amber); border-color: var(--amber); cursor: progress; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.amber .value { color: var(--amber); }
+  .stat.green .value { color: var(--green); }
+  .stat .sub { font-size: 10px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: 0.5px; }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, button, a.btn { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button, a.btn { cursor: pointer; text-decoration: none; display: inline-block; }
+  button:hover, a.btn:hover { background: #e9edf2; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .bar .label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); position: sticky; top: 60px; background: var(--bg); z-index: 1; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.group-hdr td { background: var(--bg-2); padding: 9px 12px; border-top: 1px solid var(--line); cursor: default; user-select: none; }
+  tr.group-hdr.has-sales td { cursor: pointer; }
+  tr.group-hdr.has-sales td:hover { background: #e7ebf0; }
+  tr.group-hdr .chev { display: inline-block; width: 12px; color: var(--muted); transition: transform 0.15s; }
+  tr.group-hdr.expanded .chev { transform: rotate(90deg); }
+  tr.group-hdr .evt-title { color: var(--text); font-weight: 700; letter-spacing: 0.5px; }
+  tr.group-hdr .evt-meta { color: var(--muted); margin-left: 8px; font-size: 11px; }
+  tr.group-hdr .evt-stats { float: right; color: var(--muted); font-size: 11px; }
+  tr.group-hdr .evt-stats .sold { color: var(--green); margin-left: 8px; }
+  tr.sale-row td { background: #f1f4f8; color: var(--muted); font-size: 12px; }
+  tr.sale-row .pill { padding: 1px 6px; border: 1px solid var(--green); color: var(--green); border-radius: 2px; font-size: 10px; letter-spacing: 1.5px; margin-left: 4px; }
+  tr.sale-hdr td { background: #eaeef3; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 12px; border-top: 1px dashed var(--line); }
+  .src { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
+  .src-lysted { color: var(--accent); border-color: var(--accent); }
+  .src-viagogo { color: var(--orange); border-color: var(--orange); }
+  .src-jerujam { color: var(--purple); border-color: var(--purple); }
+  .src-crowdvolt { color: var(--pink); border-color: var(--pink); }
+  .src-manual { color: var(--amber); border-color: var(--amber); }
+  .src-dice { color: #00a3d7; border-color: #00a3d7; }
+  .status.status-pending { color: var(--amber); border-color: var(--amber); background: rgba(210,153,34,0.06); }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line-2); color: var(--muted); border-radius: 1px; letter-spacing: 1px; text-transform: uppercase; }
+  .status.status-active, .status.status-lysted { color: var(--accent); border-color: var(--accent); }
+  .status.status-public, .status.status-visible { color: var(--green); border-color: var(--green); }
+  .status.status-partial { color: var(--amber); border-color: var(--amber); }
+  .status.status-sold { color: var(--green); border-color: var(--green); }
+  tbody tr:not(.group-hdr):not(.sale-hdr):not(.sale-row) { cursor: pointer; }
+  td.edited { background: rgba(88,166,255,0.06); }
+  td.edited::after { content: " ●"; color: var(--accent); font-size: 8px; vertical-align: super; }
+  /* edit modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 540px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal h3 .close:hover { color: var(--text); }
+  .modal h3 .src-tag { font-size: 10px; padding: 1px 6px; border: 1px solid; border-radius: 1px; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 110px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus, .modal-body select:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot button:hover { background: #e9edf2; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+  .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; }
+  .row-del { color: var(--red); }
+  .row-pair { color: var(--accent); }
+  tbody tr .row-pair:hover { opacity: 1; background: rgba(88,166,255,0.1); border-color: var(--accent); }
+  .row-sell { color: var(--green); }
+  tbody tr:hover .row-action { opacity: 0.7; }
+  tbody tr .row-del:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  tbody tr .row-sell:hover { opacity: 1; background: rgba(86,211,100,0.1); border-color: var(--green); }
+  .row-attach { color: var(--muted); }
+  .row-attach.has-files { color: var(--accent); opacity: 0.95 !important; }
+  tbody tr .row-attach:hover { opacity: 1; background: rgba(88,166,255,0.1); border-color: var(--accent); }
+  .row-mkt { color: var(--muted); font-weight: 600; font-size: 10px; letter-spacing: 0.5px; }
+  tbody tr .row-mkt:hover { opacity: 1; background: rgba(88,166,255,0.1); border-color: var(--accent); color: var(--accent); }
+  .att-list { padding: 12px 18px; border-bottom: 1px dashed var(--line); }
+  .att-list .att-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; }
+  .att-list .att-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .att-list .att-item .size { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+  .att-list .att-item a { color: var(--accent); text-decoration: none; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--line); padding: 3px 8px; }
+  .att-list .att-item a:hover { background: #e9edf2; }
+  .att-list .att-item button.del { background: transparent; color: var(--red); border: 1px solid var(--line); padding: 3px 8px; font-size: 11px; cursor: pointer; }
+  .att-list .att-item button.del:hover { background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .att-empty { color: var(--muted); font-size: 11px; padding: 6px 0; font-style: italic; }
+  .att-upload { padding: 12px 18px; display: flex; gap: 8px; align-items: center; }
+  .att-upload input[type="file"] { flex: 1; font-family: inherit; font-size: 11px; color: var(--text); }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); color: var(--text); border: 1px solid var(--line); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; z-index: 1000; letter-spacing: 0.5px; }
+  #toast button { margin-left: 12px; padding: 3px 10px; background: transparent; color: var(--amber); border: 1px solid var(--line-2); cursor: pointer; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
+  #toast button:hover { background: #e9edf2; }
+  #toast .kbd { color: var(--muted); margin-left: 8px; font-size: 10px; letter-spacing: 1px; }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>KARTIS</h1>
+    <span class="meta" id="lastrun">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/" class="active">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div id="errbox" class="err" style="display:none"></div>
+
+  <div style="margin-bottom:14px;font-size:11px;letter-spacing:1px;text-transform:uppercase;">
+    <a href="/" style="color:var(--accent);text-decoration:none;margin-right:14px;">All Inventory</a>
+    <a href="/pending" style="color:var(--muted);text-decoration:none;">Pending Only →</a>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="label">Unsold</div><div class="value" id="s-tickets">0</div></div>
+    <div class="stat"><div class="label">Listings</div><div class="value" id="s-rows">0</div></div>
+    <div class="stat amber"><div class="label">Cash Tied</div><div class="value" id="s-cost">$0</div><div class="sub" id="s-cost-by"></div></div>
+    <div class="stat"><div class="label">Lysted</div><div class="value" id="s-lysted">0</div></div>
+    <div class="stat"><div class="label">Viagogo</div><div class="value" id="s-viagogo">0</div></div>
+    <div class="stat"><div class="label">JeruJam</div><div class="value" id="s-jerujam">0</div></div>
+    <div class="stat"><div class="label">Deduped</div><div class="value" id="s-deduped">0</div></div>
+    <div class="stat green"><div class="label">Auto-Sold</div><div class="value" id="s-matched">0</div></div>
+  </div>
+
+  <div class="bar">
+    <button id="refresh">Refresh</button>
+    <button id="relogin" title="Open the box's Chrome (Lysted / Viagogo / CrowdVolt tabs) in a noVNC window so you can re-sign-in — no SSH">noVNC Login</button>
+    <button id="chrome-restart" title="After re-signing in, bounce the scraper's Chrome so it picks up the fresh session">Restart Chrome</button>
+    <button id="add-pending" title="Add a ticket I have but haven't listed yet">+ Pending</button>
+    <button id="open-stubhub" title="Open the exact StubHub page for every visible event, 20 tabs at a time. Allow pop-ups for this site once.">Open StubHub ×20</button>
+    <input type="search" id="q-search" placeholder="search event venue section" style="flex:1; min-width:200px;">
+    <select id="q-source"><option value="all">SRC: ALL</option><option value="lysted">LYSTED</option><option value="viagogo">VIAGOGO</option><option value="jerujam">JERUJAM</option><option value="dice">DICE</option></select>
+    <select id="q-sort">
+      <option value="date-asc">DATE ↑</option>
+      <option value="date-desc">DATE ↓</option>
+      <option value="name">NAME A–Z</option>
+      <option value="cost-desc">COST ↓</option>
+    </select>
+    <select id="q-range">
+      <option value="all">ALL DATES</option>
+      <option value="7">NEXT 7</option>
+      <option value="14">NEXT 14</option>
+      <option value="month">THIS MONTH</option>
+    </select>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>SRC</th><th>SECTION</th><th>ROW</th><th class="num">QTY</th><th>SEATS</th>
+      <th>DELIV</th><th class="num">COST</th><th class="num">/EA</th><th>STATUS</th><th></th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">no matches</div>
+</main>
+
+<div id="toast"><span id="toast-msg"></span><button id="toast-undo">Undo</button><span class="kbd">Ctrl+Z</span></div>
+
+<div id="pend-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>ADD PENDING TICKET</span><button class="close" id="pend-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Tickets you have but haven't listed yet — auto-clears once Lysted/Viagogo picks them up.</div>
+      <label>Event Name *</label><div style="position:relative">
+        <input id="pend-event_name" type="text" placeholder="required" autocomplete="off" style="width:100%;">
+        <ul id="pend-event-suggest" hidden style="position:absolute;top:100%;left:0;right:0;margin:0;padding:0;list-style:none;background:var(--bg-3);border:1px solid var(--line);max-height:220px;overflow-y:auto;z-index:200;font-size:12px;"></ul>
+      </div>
+      <label>Event Date</label><input id="pend-event_date" type="date">
+      <label>Venue</label><input id="pend-venue" type="text">
+      <label>Section</label><input id="pend-section" type="text">
+      <label>Row</label><input id="pend-row" type="text">
+      <label>Seats</label><input id="pend-seats" type="text" placeholder="e.g. 12, 13 or 12-15 (optional)">
+      <label>Qty *</label><input id="pend-qty" type="number" step="1" min="1" value="1">
+      <label>Cost / ticket</label><input id="pend-cost_per_unit" type="number" step="0.01" placeholder="enter either this...">
+      <label>Total cost</label><input id="pend-total_cost" type="number" step="0.01" placeholder="...or this — auto-syncs">
+      <label>Email</label><input id="pend-email" type="text" placeholder="which inbox (for your records)">
+      <label>Note</label><input id="pend-note" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <span class="muted" style="margin-right:auto;align-self:center;font-size:10px;letter-spacing:1px;">ctrl+enter saves</span>
+      <button id="pend-cancel">Cancel</button>
+      <button class="primary" id="pend-save">Add</button>
+    </div>
+  </div>
+</div>
+
+<div id="sell-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>RECORD SALE <span id="sell-src" class="src-tag"></span></span><button class="close" id="sell-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="sell-meta"></div>
+      <label id="sell-seats-label" style="align-self:start;">Seats sold</label>
+      <div id="sell-seats-wrap">
+        <div id="sell-seats-checks" style="display:flex;flex-wrap:wrap;gap:6px 12px;font-size:11px;"></div>
+        <input id="sell-seats-text" type="text" placeholder="optional — leave blank if you don't track seat numbers" style="font-family:inherit;font-size:12px;padding:7px 10px;background:var(--bg-3);color:var(--text);border:1px solid var(--line);width:100%;display:none;">
+      </div>
+      <label>Qty</label><input id="sell-qty" type="number" step="1" min="1">
+      <label>Sale Price</label><input id="sell-price" type="number" step="0.01" placeholder="leave blank for $0">
+      <label>Sale Date</label><input id="sell-date" type="date">
+      <label>Platform</label>
+      <select id="sell-platform">
+        <option value="lysted">Lysted</option>
+        <option value="viagogo">Viagogo</option>
+        <option value="crowdvolt">CrowdVolt</option>
+        <option value="jjt">JJT</option>
+        <option value="other">Other / Manual</option>
+        <option value="loss">Did not sell (loss)</option>
+      </select>
+      <label>Note</label><input id="sell-note" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <button id="sell-loss" style="color:var(--red);border-color:var(--red);" title="Mark as full loss">Mark Loss</button>
+      <span class="muted" style="margin-right:auto;align-self:center;font-size:10px;letter-spacing:1px;">cost auto-applied · ctrl+enter saves</span>
+      <button id="sell-cancel">Cancel</button>
+      <button class="primary" id="sell-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="att-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>ATTACHMENTS <span id="att-event" class="src-tag" style="border-color:var(--line);color:var(--muted);"></span></span><button class="close" id="att-close">×</button></h3>
+    <div class="att-list" id="att-list"></div>
+    <div class="att-upload">
+      <input type="file" id="att-file">
+      <button class="primary" id="att-upload" style="font-family:inherit;font-size:11px;padding:7px 14px;letter-spacing:1.5px;text-transform:uppercase;background:var(--accent);color:var(--bg);border:1px solid var(--accent);cursor:pointer;">Upload</button>
+    </div>
+    <div class="modal-foot">
+      <span class="muted" style="margin-right:auto;align-self:center;font-size:10px;letter-spacing:1px;">Files survive in OneDrive even if the ticket is deleted.</span>
+      <button id="att-done">Done</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>EDIT LISTING <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="m-event"></div>
+      <label>Section</label><input id="m-section" type="text">
+      <label>Row</label><input id="m-row" type="text">
+      <label>Qty</label><input id="m-qty_unsold" type="number" step="1">
+      <label>Seats</label><input id="m-seats" type="text">
+      <label>Delivery</label><input id="m-delivery_type" type="text">
+      <label>Cost</label><input id="m-cost" type="number" step="0.01">
+      <label>Cost/ea</label><input id="m-cost_per_unit" type="number" step="0.01">
+      <label>List Price</label><input id="m-list_price" type="number" step="0.01">
+      <label>Status</label><input id="m-status" type="text">
+      <label>Event Name</label><input id="m-event_name" type="text">
+      <label>Event Date</label><input id="m-event_date" type="date">
+      <label>Venue</label><input id="m-venue" type="text">
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="m-foot-note">Tip: clear a field to revert it to the scraped value</span>
+      <button id="m-cancel">Cancel</button>
+      <button class="primary" id="m-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="pair-bg" class="modal-bg">
+  <div class="modal" style="max-width:640px;">
+    <h3><span>PAIR WITH SALE <span id="pair-event" class="src-tag" style="border-color:var(--line);color:var(--muted);"></span></span><button class="close" id="pair-close">×</button></h3>
+    <div class="modal-body" style="display:block;">
+      <div class="meta-line" style="grid-column:unset;">Pick an unmatched sale to pair with this inventory row. Use this when the auto-matcher missed because of a section or row label mismatch.</div>
+      <div id="pair-list" style="margin-top:10px;font-size:12px;"></div>
+    </div>
+    <div class="modal-foot">
+      <span class="muted" style="margin-right:auto;align-self:center;font-size:10px;letter-spacing:1px;">Pairing hides this row and decrements its qty.</span>
+      <button id="pair-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+let _rows = [];
+let _salesByEvent = new Map();
+let _expanded = new Set();
+let _visibleGroups = [];
+
+function _eventKey(row) {
+  // Prefer the backend's fuzzy-grouped key (handles "Wit"/"With" etc.).
+  if (row && row.event_group) return row.event_group;
+  return ((row?.event_name || "") + "|" + (row?.event_date_iso || row?.event_date || "")).toLowerCase();
+}
+
+function _inRange(iso, range) {
+  if (range === "all") return true;
+  if (!iso) return false;
+  const d = new Date(iso);
+  const now = new Date(); now.setHours(0,0,0,0);
+  if (range === "7" || range === "14") {
+    const max = new Date(now); max.setDate(max.getDate() + Number(range));
+    return d >= now && d <= max;
+  }
+  if (range === "month") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  return true;
+}
+
+function _matches(q, ...fields) {
+  if (!q) return true;
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const nq = norm(q);
+  if (!nq) return true;
+  return fields.some(f => norm(f).includes(nq));
+}
+
+function _sortCmp(mode) {
+  const k = (r) => r.event_date_iso || "zzz";
+  if (mode === "date-desc") return (a,b) => k(b).localeCompare(k(a));
+  if (mode === "name") return (a,b) => (a.event_name || "").localeCompare(b.event_name || "");
+  if (mode === "cost-desc") return (a,b) => (b.cost || 0) - (a.cost || 0);
+  return (a,b) => k(a).localeCompare(k(b));
+}
+
+function render() {
+  const q = document.getElementById("q-search").value;
+  const src = document.getElementById("q-source").value;
+  const sort = document.getElementById("q-sort").value;
+  const range = document.getElementById("q-range").value;
+
+  const rows = _rows.filter(r => {
+    if (src !== "all" && r.source !== src) return false;
+    if (!_inRange(r.event_date_iso, range)) return false;
+    if (!_matches(q, r.event_name, r.venue, r.section)) return false;
+    return true;
+  });
+
+  const groups = new Map();
+  for (const r of rows) {
+    const key = _eventKey(r);
+    if (!groups.has(key)) {
+      groups.set(key, { key: key, event_name: r.event_name, event_date: r.event_date, event_date_iso: r.event_date_iso, venue: r.venue, rows: [] });
+    }
+    groups.get(key).rows.push(r);
+  }
+  const sorted = [...groups.values()].sort(_sortCmp(sort));
+
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  for (const g of sorted) {
+    const qty = g.rows.reduce((s,r) => s + (r.qty_unsold || 0), 0);
+    const cost = g.rows.reduce((s,r) => s + (r.cost || 0), 0);
+    const sales = _salesByEvent.get(g.key) || [];
+    const soldQty = sales.reduce((s,x) => s + (x.qty || 0), 0);
+    const soldRev = sales.reduce((s,x) => s + (x.sale_price || 0), 0);
+    const hasSales = sales.length > 0;
+    const expanded = _expanded.has(g.key);
+
+    const hdr = document.createElement("tr");
+    hdr.className = "group-hdr " + (hasSales ? "has-sales" : "no-sales") + (expanded ? " expanded" : "");
+    hdr.dataset.key = g.key;
+    hdr.innerHTML = `
+      <td colspan="10">
+        <span class="chev">${hasSales ? "▸" : ""}</span>
+        <span class="evt-title">${esc(g.event_name)}</span>
+        <span class="evt-meta">${esc(g.event_date)} · ${esc(g.venue)}</span>
+        <span class="evt-stats">${qty} unsold · ${money(cost)}${hasSales ? `<span class="sold">${soldQty} SOLD · ${money(soldRev)}</span>` : ""}</span>
+      </td>
+    `;
+    if (hasSales) {
+      hdr.addEventListener("click", () => {
+        if (_expanded.has(g.key)) _expanded.delete(g.key); else _expanded.add(g.key);
+        render();
+      });
+    }
+    tbody.appendChild(hdr);
+
+    for (const r of g.rows) {
+      const tr = document.createElement("tr");
+      const costPer = r.cost_per_unit != null ? r.cost_per_unit : (r.qty_unsold ? (r.cost || 0) / r.qty_unsold : null);
+      const statusClass = "status status-" + (r.status || "").toLowerCase().replace(/[^a-z0-9_]/g, "_");
+      const ed = (f) => (r._edited || []).includes(f) ? "edited" : "";
+      tr.title = "Double-click to edit";
+      tr.innerHTML = `
+        <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span></td>
+        <td class="${ed('section')}">${esc(r.section)}</td>
+        <td class="${ed('row')}">${esc(r.row)}</td>
+        <td class="num ${ed('qty_unsold')}">${r.qty_unsold ?? ""}</td>
+        <td class="${ed('seats')}">${esc(r.seats)}</td>
+        <td class="${ed('delivery_type')}">${esc(r.delivery_type)}</td>
+        <td class="num ${ed('cost')}">${money(r.cost)}</td>
+        <td class="num ${ed('cost_per_unit')}">${money(costPer)}</td>
+        <td class="${ed('status')}"><span class="${statusClass}">${esc(r.status)}</span></td>
+        <td style="white-space:nowrap;">
+          <button class="row-action row-mkt" data-mkt="stubhub" title="Search on StubHub">SH</button>
+          <button class="row-action row-mkt" data-mkt="seatgeek" title="Search on SeatGeek">SG</button>
+          ${r.source === "manual" ? `<button class="row-action row-attach ${(r.attachments||[]).length ? 'has-files' : ''}" title="Attach files (PDFs, etc.)">📎${(r.attachments||[]).length ? ` ${(r.attachments||[]).length}` : ''}</button>` : ''}
+          <button class="row-action row-sell" title="Record manual sale">$</button>
+          <button class="row-action row-pair" title="Pair with an unmatched sale">↔</button>
+          <button class="row-action row-del" title="Hide this listing" data-source="${esc(r.source)}" data-id="${esc(r.source_id)}">×</button>
+        </td>
+      `;
+      tr._row = r;
+      tbody.appendChild(tr);
+    }
+
+    if (expanded && hasSales) {
+      const subhdr = document.createElement("tr");
+      subhdr.className = "sale-hdr";
+      subhdr.innerHTML = `<td colspan="10">SOLD · ${sales.length} ${sales.length === 1 ? "sale" : "sales"}</td>`;
+      tbody.appendChild(subhdr);
+      const sortedSales = sales.slice().sort((a,b) => (b.sale_date || "").localeCompare(a.sale_date || ""));
+      for (const s of sortedSales) {
+        const sr = document.createElement("tr");
+        sr.className = "sale-row";
+        const net = s.sale_price == null ? null : (s.sale_price - (s.cost || 0));
+        const netColor = net == null ? "var(--muted)" : net >= 0 ? "var(--green)" : "var(--red)";
+        const costPer = s.qty ? (s.cost || 0) / s.qty : null;
+        sr.innerHTML = `
+          <td><span class="src src-${esc(s.source)}">${esc((s.source||"").toUpperCase())}</span><span class="pill">SOLD</span></td>
+          <td>${esc(s.section)}</td>
+          <td>${esc(s.row)}</td>
+          <td class="num">${s.qty ?? ""}</td>
+          <td>${esc(s.platform)}</td>
+          <td>${s.sale_date ? esc(s.sale_date) : ""}</td>
+          <td class="num">${money(s.cost)}</td>
+          <td class="num">${money(costPer)}</td>
+          <td class="num" style="color:${netColor};">${s.sale_price == null ? "—" : money(s.sale_price)}${net != null ? `<div style="font-size:10px;color:${netColor};letter-spacing:1px;">NET ${money(net)}</div>` : ""}</td>
+          <td></td>
+        `;
+        tbody.appendChild(sr);
+      }
+    }
+  }
+  document.getElementById("empty").style.display = sorted.length ? "none" : "block";
+
+  // Snapshot what's on screen (filtered + sorted, in display order) so the
+  // "Open StubHub ×20" button opens exactly these events. Filters changing
+  // re-renders and resets any in-progress batch run.
+  _visibleGroups = sorted;
+  const shBtn = document.getElementById("open-stubhub");
+  if (shBtn) { shBtn.textContent = "Open StubHub ×20"; shBtn.dataset.mode = ""; }
+}
+
+async function load() {
+  const [invR, salR] = await Promise.all([fetch("/api/inventory-all"), fetch("/api/sales-all")]);
+  const d = await invR.json();
+  const sd = await salR.json();
+  _rows = d.rows || [];
+  _salesByEvent = new Map();
+  for (const s of (sd.rows || [])) {
+    const key = _eventKey(s);
+    if (!_salesByEvent.has(key)) _salesByEvent.set(key, []);
+    _salesByEvent.get(key).push(s);
+  }
+  const t = d.totals || {};
+  document.getElementById("s-tickets").textContent = t.tickets ?? 0;
+  document.getElementById("s-rows").textContent = t.rows ?? 0;
+  document.getElementById("s-cost").textContent = money(t.total_cost);
+  const cbs = t.cost_by_source || {};
+  const srcAbbr = { lysted: "L", viagogo: "V", jerujam: "J", manual: "M", dice: "D" };
+  const ls = t.lysted_split || {};
+  document.getElementById("s-cost-by").textContent = Object.entries(cbs)
+    .sort((a, b) => b[1] - a[1])
+    .map(([s, c]) => {
+      if (s === "lysted" && ls.unlisted > 0)
+        return `L ${money(ls.listed)} +${money(ls.unlisted)} unlisted`;
+      return `${srcAbbr[s] || s} ${money(c)}`;
+    })
+    .join(" · ");
+  const bs = t.by_source || {};
+  document.getElementById("s-lysted").textContent = bs.lysted || 0;
+  document.getElementById("s-viagogo").textContent = bs.viagogo || 0;
+  document.getElementById("s-jerujam").textContent = bs.jerujam || 0;
+  document.getElementById("s-deduped").textContent = t.jerujam_skipped_dedupe || 0;
+  document.getElementById("s-matched").textContent = t.auto_matched || 0;
+
+  const lr = d.last_run || {};
+  const lb = d.last_backup || {};
+  const parts = [];
+  parts.push(lr.running ? "scraping..." : lr.at ? "last_scrape=" + new Date(lr.at).toLocaleString() : "no_scrape_yet");
+  if (lb.at) parts.push("last_backup=" + new Date(lb.at).toLocaleString());
+  // Surface session-expired sources from the last scrape so the user knows
+  // they need to re-log-in instead of staring at stale data wondering why.
+  // Click the badge → confirm → re-run the scraper.
+  const authErrors = (lr.count && lr.count.auth_errors) || [];
+  let metaHtml = parts.map(p => p.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))).join(" // ");
+  for (const src of authErrors) {
+    const safe = String(src).toUpperCase().replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+    const cls = (window._reauthRunning && window._reauthRunning.has(src)) ? "auth-warn scraping" : "auth-warn";
+    const label = (window._reauthRunning && window._reauthRunning.has(src)) ? `⏳ ${safe} RE-SCRAPING…` : `⚠ ${safe} LOGIN EXPIRED — click to retry`;
+    metaHtml += ` <span class="${cls}" data-auth-src="${safe.toLowerCase()}" title="Click after you've re-signed-in to ${safe} in the dedicated Chrome window. The scraper will run again immediately.">${label}</span>`;
+  }
+  document.getElementById("lastrun").innerHTML = metaHtml;
+
+  const err = document.getElementById("errbox");
+  if (lr.error) { err.style.display = "block"; err.textContent = "// scrape error: " + lr.error; }
+  else err.style.display = "none";
+
+  render();
+}
+
+document.getElementById("refresh").addEventListener("click", async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "refreshing...";
+  await fetch("/api/refresh", { method: "POST" });
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh"; load(); }, 4000);
+});
+
+// noVNC login window. autoconnect=true skips the manual Connect screen so it
+// lands straight on the box's desktop; resize fits it to the tab; reconnect
+// retries if the VNC server blips while Chrome is opening the tabs.
+const VNC_URL = "https://vnc.kartis.homes/vnc.html?autoconnect=true&resize=remote&reconnect=true&reconnect_delay=2000";
+document.getElementById("relogin").addEventListener("click", (e) => {
+  // Open the viewer synchronously inside the click gesture (dodges popup
+  // blockers), THEN tell the box to open the Lysted/Viagogo/CrowdVolt tabs —
+  // they pop in within ~1s and noVNC's autoconnect renders them.
+  window.open(VNC_URL, "_blank", "noopener");
+  const btn = e.currentTarget; btn.disabled = true; const orig = btn.textContent; btn.textContent = "opening…";
+  fetch("/api/chrome/open-logins", { method: "POST" })
+    .catch(() => {})
+    .finally(() => { btn.disabled = false; btn.textContent = orig; });
+});
+
+document.getElementById("chrome-restart").addEventListener("click", async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; const orig = btn.textContent; btn.textContent = "restarting…";
+  try {
+    const res = await fetch("/api/chrome/restart", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      btn.textContent = "✓ restarted";
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; load(); }, 3000);
+      return;
+    }
+    alert("Restart failed: " + (data.error || ("HTTP " + res.status)));
+  } catch (err) {
+    alert("Restart failed: " + err);
+  }
+  btn.disabled = false; btn.textContent = orig;
+});
+for (const id of ["q-search", "q-source", "q-sort", "q-range"]) {
+  document.getElementById(id).addEventListener("input", render);
+  document.getElementById(id).addEventListener("change", render);
+}
+
+// --- bulk "Open on StubHub" (exact event pages, 20 tabs per click) ---
+// Each click opens one batch so every window.open() fires inside a real user
+// gesture (browsers block bulk pop-ups otherwise). Events without an exact
+// StubHub link captured from Lysted are skipped and reported, not opened.
+const SH_BATCH = 20;
+let _shQueue = [];
+let _shSkipped = [];
+let _shIdx = 0;
+
+function _startStubhubRun() {
+  _shQueue = [];
+  _shSkipped = [];
+  _shIdx = 0;
+  for (const g of _visibleGroups) {
+    const r = (g.rows || []).find(x => x.stubhub_url);
+    if (r) _shQueue.push({ name: g.event_name, url: r.stubhub_url });
+    else _shSkipped.push(g.event_name);
+  }
+  if (!_shQueue.length) {
+    showToast(`// no StubHub links for the ${_visibleGroups.length} visible event(s) — run a scrape first`);
+    if (_shSkipped.length) console.log("[StubHub] no exact link for:\n" + _shSkipped.map(n => " • " + n).join("\n"));
+    return;
+  }
+  _openNextStubhubBatch();
+}
+
+function _openNextStubhubBatch() {
+  const btn = document.getElementById("open-stubhub");
+  const slice = _shQueue.slice(_shIdx, _shIdx + SH_BATCH);
+  let blocked = 0;
+  for (const item of slice) {
+    if (!window.open(item.url, "_blank", "noopener")) blocked++;
+  }
+  _shIdx += slice.length;
+  if (blocked) showToast(`// ${blocked} tab(s) blocked — allow pop-ups for this site, then click again`);
+
+  const remaining = _shQueue.length - _shIdx;
+  if (remaining > 0) {
+    btn.textContent = `Open next 20 (${remaining} left)`;
+    btn.dataset.mode = "continue";
+  } else {
+    btn.textContent = "Open StubHub ×20";
+    btn.dataset.mode = "";
+    const parts = [`opened ${_shQueue.length} StubHub tab(s)`];
+    if (_shSkipped.length) {
+      parts.push(`${_shSkipped.length} skipped (no link)`);
+      console.log("[StubHub] skipped — no exact link captured:\n" + _shSkipped.map(n => " • " + n).join("\n"));
+    }
+    showToast("// " + parts.join(" · "));
+  }
+}
+
+document.getElementById("open-stubhub").addEventListener("click", (e) => {
+  if (e.currentTarget.dataset.mode === "continue") _openNextStubhubBatch();
+  else _startStubhubRun();
+});
+
+// --- delete + undo ---
+const _undoStack = [];
+let _toastTimer = null;
+function showToast(msg) {
+  const toast = document.getElementById("toast");
+  document.getElementById("toast-msg").textContent = msg;
+  toast.style.display = "block";
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toast.style.display = "none"; }, 6000);
+}
+
+async function hideRow(row) {
+  const label = `${row.event_name || "?"} · ${row.section || ""}${row.row ? "/" + row.row : ""}${row.seats ? " · " + row.seats : ""}`;
+  if (!confirm(`Hide this listing?\n\n${label}\n\nQty ${row.qty_unsold} · ${row.cost ? "$" + Number(row.cost).toLocaleString() : ""}`)) return;
+  const res = await fetch("/api/inventory/hide", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source: row.source, source_id: row.source_id}),
+  });
+  if (!res.ok) { alert("Failed to hide"); return; }
+  const idx = _rows.findIndex(r => r.source === row.source && String(r.source_id) === String(row.source_id));
+  if (idx !== -1) _rows.splice(idx, 1);
+  _undoStack.push({source: row.source, source_id: row.source_id, label});
+  showToast(`hidden // ${label}`);
+  render();
+}
+
+async function undoLast() {
+  const last = _undoStack.pop();
+  if (!last) { showToast("// nothing to undo"); return; }
+  const res = await fetch("/api/inventory/unhide", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source: last.source, source_id: last.source_id}),
+  });
+  if (!res.ok) { alert("Failed to restore"); return; }
+  showToast(`restored // ${last.label}`);
+  await load();
+}
+
+document.getElementById("toast-undo").addEventListener("click", undoLast);
+
+document.addEventListener("click", (e) => {
+  const del = e.target.closest(".row-del");
+  if (del) {
+    e.stopPropagation();
+    const tr = del.closest("tr");
+    const row = tr && tr._row;
+    if (row) hideRow(row);
+    return;
+  }
+  const pair = e.target.closest(".row-pair");
+  if (pair) {
+    e.stopPropagation();
+    const tr = pair.closest("tr");
+    const row = tr && tr._row;
+    if (row) openPairModal(row);
+    return;
+  }
+  const mkt = e.target.closest(".row-mkt");
+  if (mkt) {
+    e.stopPropagation();
+    const tr = mkt.closest("tr");
+    const row = tr && tr._row;
+    if (!row) return;
+    const parts = [row.event_name, row.venue, row.event_date_iso].filter(Boolean);
+    const q = encodeURIComponent(parts.join(" "));
+    const url = mkt.dataset.mkt === "stubhub"
+      ? `https://www.stubhub.com/secure/search?q=${q}`
+      : `https://seatgeek.com/search?search=${q}`;
+    window.open(url, "_blank", "noopener");
+  }
+});
+
+// --- pair-with-sale fallback --------------------------------------------
+let _pairCurrent = null;
+
+function openPairModal(row) {
+  _pairCurrent = row;
+  const eventBadge = document.getElementById("pair-event");
+  const label = `${row.event_name || ""}${row.section ? " · " + row.section : ""}${row.row ? "/" + row.row : ""} · qty ${row.qty_unsold}`;
+  eventBadge.textContent = label;
+  const list = document.getElementById("pair-list");
+  list.innerHTML = '<div style="color:var(--muted);font-size:11px;">loading unmatched sales…</div>';
+  document.getElementById("pair-bg").classList.add("open");
+  fetch("/api/sales/unmatched?event=" + encodeURIComponent(row.event_name || ""))
+    .then(r => r.ok ? r.json() : {rows: []})
+    .then(d => renderPairList(d.rows || []))
+    .catch(() => { list.innerHTML = '<div style="color:var(--red);">failed to load unmatched sales</div>'; });
+}
+
+function renderPairList(rows) {
+  const list = document.getElementById("pair-list");
+  if (!rows.length) {
+    list.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px 0;">no unmatched sales for this event</div>';
+    return;
+  }
+  list.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr style="border-bottom:1px solid var(--line);color:var(--muted);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;">
+        <th style="text-align:left;padding:6px 8px;">SOURCE</th>
+        <th style="text-align:left;padding:6px 8px;">SOLD</th>
+        <th style="text-align:left;padding:6px 8px;">SECTION</th>
+        <th style="text-align:left;padding:6px 8px;">ROW</th>
+        <th style="text-align:right;padding:6px 8px;">QTY</th>
+        <th style="text-align:left;padding:6px 8px;">EVENT DATE</th>
+        <th></th>
+      </tr></thead>
+      <tbody>
+        ${rows.map((s, i) => `
+          <tr data-i="${i}" style="border-bottom:1px solid var(--line);">
+            <td style="padding:6px 8px;"><span class="src src-${esc(s.sale_source)}">${esc((s.sale_source||"").toUpperCase())}</span></td>
+            <td style="padding:6px 8px;">${esc((s.sale_date || "").slice(0,10))}</td>
+            <td style="padding:6px 8px;">${esc(s.section || "")}</td>
+            <td style="padding:6px 8px;">${esc(s.row || "")}</td>
+            <td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums;">${s.qty || 0}</td>
+            <td style="padding:6px 8px;">${esc(s.event_date_iso || "")}</td>
+            <td style="padding:6px 8px;text-align:right;"><button class="primary pair-go" data-i="${i}" style="font-family:inherit;font-size:11px;padding:5px 10px;letter-spacing:1.5px;text-transform:uppercase;background:var(--accent);color:var(--bg);border:1px solid var(--accent);cursor:pointer;">Pair</button></td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+  list._rows = rows;
+}
+
+async function confirmPair(saleRow) {
+  if (!_pairCurrent) return;
+  const inv = _pairCurrent;
+  const qty = Math.min(saleRow.qty || 0, inv.qty_unsold || 0);
+  if (qty <= 0) { alert("Sale qty exceeds inventory remaining"); return; }
+  const res = await fetch("/api/sales/pair", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      sale_source: saleRow.sale_source,
+      sale_id: saleRow.sale_id,
+      inv_source: inv.source,
+      inv_source_id: String(inv.source_id),
+      qty,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    alert("Pair failed: " + (e.error || res.status));
+    return;
+  }
+  closePairModal();
+  await load();
+}
+
+function closePairModal() {
+  document.getElementById("pair-bg").classList.remove("open");
+  _pairCurrent = null;
+}
+
+document.getElementById("pair-close").addEventListener("click", closePairModal);
+document.getElementById("pair-cancel").addEventListener("click", closePairModal);
+document.getElementById("pair-bg").addEventListener("click", (e) => {
+  if (e.target.id === "pair-bg") closePairModal();
+});
+document.getElementById("pair-list").addEventListener("click", (e) => {
+  const btn = e.target.closest("button.pair-go");
+  if (!btn) return;
+  const list = document.getElementById("pair-list");
+  const idx = parseInt(btn.dataset.i, 10);
+  const row = list._rows && list._rows[idx];
+  if (row) confirmPair(row);
+});
+
+// --- attachments ---------------------------------------------------------
+let _attCurrentTicket = null;
+
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function renderAttList(items) {
+  const list = document.getElementById("att-list");
+  if (!items || !items.length) {
+    list.innerHTML = '<div class="att-empty">no files attached yet</div>';
+    return;
+  }
+  list.innerHTML = items.map(a => `
+    <div class="att-item" data-id="${esc(a.id)}">
+      <span class="name" title="${esc(a.filename)}">${esc(a.filename)}</span>
+      <span class="size">${fmtBytes(a.size_bytes)}</span>
+      <a href="/api/attachments/${esc(a.id)}/download">Download</a>
+      <button class="del" data-id="${esc(a.id)}">×</button>
+    </div>
+  `).join("");
+}
+
+async function refreshAttModal() {
+  if (!_attCurrentTicket) return;
+  // Reload everything from /api/inventory-all so the badge counts stay
+  // consistent with what's open in the modal.
+  await load();
+  const row = _rows.find(r => r.source === "manual" && r.source_id === _attCurrentTicket);
+  renderAttList(row ? (row.attachments || []) : []);
+}
+
+function openAttModal(row) {
+  _attCurrentTicket = row.source_id;
+  document.getElementById("att-event").textContent = row.event_name || "";
+  renderAttList(row.attachments || []);
+  document.getElementById("att-file").value = "";
+  document.getElementById("att-bg").classList.add("open");
+}
+
+function closeAttModal() {
+  document.getElementById("att-bg").classList.remove("open");
+  _attCurrentTicket = null;
+}
+
+document.addEventListener("click", async (e) => {
+  const open = e.target.closest(".row-attach");
+  if (open) {
+    e.stopPropagation();
+    const tr = open.closest("tr");
+    const row = tr && tr._row;
+    if (row && row.source === "manual") openAttModal(row);
+    return;
+  }
+  if (e.target.id === "att-bg") { closeAttModal(); return; }
+  if (e.target.id === "att-close" || e.target.id === "att-done") { closeAttModal(); return; }
+  const del = e.target.closest("#att-list button.del");
+  if (del) {
+    e.stopPropagation();
+    if (!confirm("Delete this attachment?")) return;
+    const id = del.dataset.id;
+    const res = await fetch("/api/attachments/delete", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({id}),
+    });
+    if (!res.ok) { alert("Delete failed"); return; }
+    await refreshAttModal();
+    return;
+  }
+});
+
+document.getElementById("att-upload").addEventListener("click", async () => {
+  if (!_attCurrentTicket) return;
+  const input = document.getElementById("att-file");
+  const f = input.files && input.files[0];
+  if (!f) { alert("Pick a file first"); return; }
+  const fd = new FormData();
+  fd.append("ticket_id", _attCurrentTicket);
+  fd.append("file", f);
+  const btn = document.getElementById("att-upload");
+  btn.disabled = true; btn.textContent = "...";
+  try {
+    const res = await fetch("/api/inventory/manual-attach", {method: "POST", body: fd});
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      alert("Upload failed: " + (e.error || res.status));
+      return;
+    }
+    input.value = "";
+    await refreshAttModal();
+  } finally {
+    btn.disabled = false; btn.textContent = "Upload";
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z";
+  if (!isUndo) return;
+  const tag = (document.activeElement?.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+  if (document.activeElement?.isContentEditable) return;
+  e.preventDefault();
+  undoLast();
+});
+
+// --- row-level edit modal ---
+const INV_FIELDS = ["section","row","qty_unsold","seats","delivery_type","cost","cost_per_unit","list_price","status","event_name","venue"];
+const INV_NUMERIC = new Set(["qty_unsold","cost","cost_per_unit","list_price"]);
+let _modalRow = null;
+let _modalInitial = {};
+
+function openEditModal(row) {
+  _modalRow = row;
+  _modalInitial = {};
+  const sec = row.cost_per_unit != null
+    ? row.cost_per_unit
+    : (row.qty_unsold ? (row.cost || 0) / row.qty_unsold : null);
+  const computed = { ...row, cost_per_unit: sec };
+  for (const f of INV_FIELDS) {
+    const v = computed[f] ?? "";
+    document.getElementById("m-" + f).value = v;
+    _modalInitial[f] = String(v);
+  }
+  // Event date input is independent of INV_FIELDS — bound to event_date_iso
+  // since native date pickers need YYYY-MM-DD; on save we write both
+  // event_date_iso AND event_date so display + sort stay in sync.
+  const dateVal = row.event_date_iso || "";
+  document.getElementById("m-event_date").value = dateVal;
+  _modalInitial["event_date"] = String(dateVal);
+  document.getElementById("m-event").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.venue || ""}`;
+  document.getElementById("m-src").textContent = (row.source || "").toUpperCase();
+  document.getElementById("m-src").className = "src-tag src src-" + row.source;
+  document.getElementById("modal-bg").classList.add("open");
+  setTimeout(() => document.getElementById("m-section").focus(), 30);
+}
+function closeEditModal() {
+  document.getElementById("modal-bg").classList.remove("open");
+  _modalRow = null;
+}
+
+async function saveEditModal() {
+  if (!_modalRow) return;
+  const changes = [];
+  for (const f of INV_FIELDS) {
+    const newVal = document.getElementById("m-" + f).value.trim();
+    if (newVal !== _modalInitial[f]) {
+      let parsed = newVal;
+      if (INV_NUMERIC.has(f)) {
+        if (newVal === "") parsed = "";
+        else {
+          const n = parseFloat(newVal.replace(/[$,]/g, ""));
+          parsed = isNaN(n) ? "" : n;
+        }
+      }
+      changes.push({field: f, value: parsed});
+    }
+  }
+  // Event date: write both iso and display fields so sort + UI stay aligned.
+  const dateNew = document.getElementById("m-event_date").value.trim();
+  if (dateNew !== _modalInitial.event_date) {
+    changes.push({field: "event_date_iso", value: dateNew});
+    changes.push({field: "event_date", value: dateNew});
+  }
+  if (changes.length === 0) { closeEditModal(); return; }
+  for (const c of changes) {
+    await fetch("/api/inventory/edit", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({source: _modalRow.source, source_id: String(_modalRow.source_id), ...c}),
+    });
+  }
+  closeEditModal();
+  await load();
+}
+
+document.addEventListener("dblclick", (e) => {
+  if (e.target.closest(".modal-bg")) return;
+  if (e.target.closest("button")) return;
+  const tr = e.target.closest("tr");
+  if (!tr || !tr._row) return;
+  e.preventDefault();
+  openEditModal(tr._row);
+});
+
+// --- record sale ---
+let _sellRow = null;
+function _parseSeats(s) {
+  // Try to expand "12, 13, 15-17" into ["12","13","15","16","17"]. Returns
+  // null if any token isn't a number/range — caller falls back to free text.
+  if (!s) return null;
+  const out = [];
+  for (let part of s.split(",")) {
+    part = part.trim();
+    if (!part) continue;
+    const range = part.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (range) {
+      const a = parseInt(range[1], 10);
+      const b = parseInt(range[2], 10);
+      if (!Number.isFinite(a) || !Number.isFinite(b) || a > b) return null;
+      for (let i = a; i <= b; i++) out.push(String(i));
+    } else if (/^\d+$/.test(part)) {
+      out.push(part);
+    } else {
+      return null;
+    }
+  }
+  return out.length ? out : null;
+}
+function _renderSellSeats(row) {
+  const wrap = document.getElementById("sell-seats-checks");
+  const fallback = document.getElementById("sell-seats-text");
+  const label = document.getElementById("sell-seats-label");
+  const seatsRaw = row && row.seats ? String(row.seats) : "";
+  const parsed = _parseSeats(seatsRaw);
+  if (parsed && parsed.length) {
+    wrap.style.display = "flex";
+    fallback.style.display = "none";
+    fallback.value = "";
+    wrap.innerHTML = parsed.map((seat, i) => `
+      <label style="display:inline-flex;gap:4px;align-items:center;cursor:pointer;color:var(--text);">
+        <input type="checkbox" class="sell-seat-cb" data-seat="${esc(seat)}" style="cursor:pointer;">
+        ${esc(seat)}
+      </label>
+    `).join("");
+    label.textContent = "Seats sold";
+  } else {
+    wrap.style.display = "none";
+    wrap.innerHTML = "";
+    fallback.style.display = "block";
+    fallback.value = seatsRaw;
+    label.textContent = "Seats sold";
+  }
+}
+function _selectedSeats() {
+  const fallback = document.getElementById("sell-seats-text");
+  if (fallback.style.display !== "none") return fallback.value.trim();
+  const checked = [...document.querySelectorAll(".sell-seat-cb:checked")].map(cb => cb.dataset.seat);
+  return checked.join(", ");
+}
+function openSellModal(row) {
+  _sellRow = row;
+  document.getElementById("sell-qty").value = row.qty_unsold || 1;
+  document.getElementById("sell-qty").max = row.qty_unsold || 1;
+  document.getElementById("sell-price").value = "";
+  document.getElementById("sell-date").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("sell-platform").value = "viagogo";
+  document.getElementById("sell-note").value = "";
+  _renderSellSeats(row);
+  document.getElementById("sell-meta").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.section || ""}${row.row ? "/" + row.row : ""} · cost/ea ${row.cost_per_unit != null ? "$" + row.cost_per_unit.toFixed(2) : "?"}`;
+  document.getElementById("sell-src").textContent = (row.source || "").toUpperCase();
+  document.getElementById("sell-src").className = "src-tag src src-" + row.source;
+  document.getElementById("sell-bg").classList.add("open");
+  setTimeout(() => document.getElementById("sell-qty").focus(), 30);
+}
+function closeSellModal() {
+  document.getElementById("sell-bg").classList.remove("open");
+  _sellRow = null;
+}
+async function saveSellModal(asLoss) {
+  if (!_sellRow) return;
+  const qty = parseInt(document.getElementById("sell-qty").value, 10);
+  const platformSel = document.getElementById("sell-platform").value;
+  const isLoss = asLoss || platformSel === "loss";
+  const priceRaw = document.getElementById("sell-price").value.trim();
+  const sale_price = isLoss ? 0 : (priceRaw === "" ? 0 : parseFloat(priceRaw.replace(/[$,]/g, "")));
+  const sale_date = document.getElementById("sell-date").value || new Date().toISOString().slice(0, 10);
+  const platform = isLoss ? "loss" : platformSel;
+  const note = document.getElementById("sell-note").value.trim();
+  if (!qty || qty < 1 || qty > (_sellRow.qty_unsold || 0)) {
+    alert(`Qty must be between 1 and ${_sellRow.qty_unsold}`);
+    return;
+  }
+  const seats = _selectedSeats();
+  const res = await fetch("/api/sales/manual-record", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      inv_source: _sellRow.source,
+      inv_source_id: String(_sellRow.source_id),
+      qty, sale_price, sale_date, platform, note,
+      is_loss: isLoss,
+      seats,
+    }),
+  });
+  if (!res.ok) { alert("Failed to record sale"); return; }
+  closeSellModal();
+  await load();
+}
+
+// --- add pending ---
+function openPendingModal() {
+  for (const id of ["event_name","event_date","venue","section","row","seats","cost_per_unit","total_cost","email","note"]) {
+    document.getElementById("pend-" + id).value = "";
+  }
+  document.getElementById("pend-qty").value = 1;
+  hideEventSuggest();
+  setupEventAutocomplete();
+  document.getElementById("pend-bg").classList.add("open");
+  setTimeout(() => document.getElementById("pend-event_name").focus(), 30);
+}
+function closePendingModal() {
+  document.getElementById("pend-bg").classList.remove("open");
+  hideEventSuggest();
+}
+
+// --- event-name autocomplete ---------------------------------------------
+let _suggestItems = [];
+let _suggestActive = -1;
+let _suggestTimer = null;
+let _suggestBlurTimer = null;
+
+function hideEventSuggest() {
+  const ul = document.getElementById("pend-event-suggest");
+  if (ul) { ul.hidden = true; ul.innerHTML = ""; }
+  _suggestItems = [];
+  _suggestActive = -1;
+}
+
+function renderSuggestList() {
+  const ul = document.getElementById("pend-event-suggest");
+  if (!ul) return;
+  if (!_suggestItems.length) { ul.hidden = true; ul.innerHTML = ""; return; }
+  ul.innerHTML = _suggestItems.map((s, i) => {
+    const date = s.event_date_iso || "";
+    const venue = s.venue || "";
+    const meta = [date, venue].filter(Boolean).join(" · ");
+    return `<li data-i="${i}" class="suggest-item${i === _suggestActive ? ' active' : ''}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line);${i === _suggestActive ? 'background:var(--bg-2);' : ''}">
+      <span style="color:var(--text);">${esc(s.event_name)}</span>
+      ${meta ? `<span style="color:var(--muted);margin-left:8px;font-size:11px;">${esc(meta)}</span>` : ''}
+    </li>`;
+  }).join("");
+  ul.hidden = false;
+}
+
+async function fetchEventSuggestions(q) {
+  try {
+    const res = await fetch("/api/events/suggest?q=" + encodeURIComponent(q));
+    if (!res.ok) return [];
+    const d = await res.json();
+    return d.suggestions || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function pickSuggestion(idx) {
+  const s = _suggestItems[idx];
+  if (!s) return;
+  document.getElementById("pend-event_name").value = s.event_name || "";
+  if (s.event_date_iso) document.getElementById("pend-event_date").value = s.event_date_iso;
+  if (s.venue) document.getElementById("pend-venue").value = s.venue;
+  hideEventSuggest();
+}
+
+function setupEventAutocomplete() {
+  const inp = document.getElementById("pend-event_name");
+  const ul = document.getElementById("pend-event-suggest");
+  if (!inp || !ul || inp._wired) return;
+  inp._wired = true;
+  inp.addEventListener("input", () => {
+    const v = inp.value.trim();
+    clearTimeout(_suggestTimer);
+    if (v.length < 2) { hideEventSuggest(); return; }
+    _suggestTimer = setTimeout(async () => {
+      _suggestItems = await fetchEventSuggestions(v);
+      _suggestActive = _suggestItems.length ? 0 : -1;
+      renderSuggestList();
+    }, 150);
+  });
+  inp.addEventListener("keydown", (e) => {
+    if (ul.hidden || !_suggestItems.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      _suggestActive = (_suggestActive + 1) % _suggestItems.length;
+      renderSuggestList();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      _suggestActive = (_suggestActive - 1 + _suggestItems.length) % _suggestItems.length;
+      renderSuggestList();
+    } else if (e.key === "Enter") {
+      if (_suggestActive >= 0) {
+        e.preventDefault();
+        pickSuggestion(_suggestActive);
+      }
+    } else if (e.key === "Escape") {
+      hideEventSuggest();
+    }
+  });
+  inp.addEventListener("blur", () => {
+    clearTimeout(_suggestBlurTimer);
+    _suggestBlurTimer = setTimeout(hideEventSuggest, 120);
+  });
+  ul.addEventListener("mousedown", (e) => {
+    const li = e.target.closest("li.suggest-item");
+    if (!li) return;
+    e.preventDefault();
+    const idx = parseInt(li.dataset.i, 10);
+    if (Number.isFinite(idx)) pickSuggestion(idx);
+  });
+}
+// Two-way link: cost/ticket × qty = total cost. Whichever the user typed last wins;
+// we update the *other* field. Skip if qty is unset/invalid.
+let _pendCostSrc = null; // "per" | "total" | null — which field the user touched last
+function _pendQty() {
+  const q = parseInt(document.getElementById("pend-qty").value, 10);
+  return q > 0 ? q : 0;
+}
+function _pendSyncFromPer() {
+  _pendCostSrc = "per";
+  const q = _pendQty();
+  const per = parseFloat(document.getElementById("pend-cost_per_unit").value);
+  const tot = document.getElementById("pend-total_cost");
+  if (q && !isNaN(per)) tot.value = (per * q).toFixed(2);
+  else if (!document.getElementById("pend-cost_per_unit").value) tot.value = "";
+}
+function _pendSyncFromTotal() {
+  _pendCostSrc = "total";
+  const q = _pendQty();
+  const tot = parseFloat(document.getElementById("pend-total_cost").value);
+  const per = document.getElementById("pend-cost_per_unit");
+  if (q && !isNaN(tot)) per.value = (tot / q).toFixed(2);
+  else if (!document.getElementById("pend-total_cost").value) per.value = "";
+}
+function _pendSyncFromQty() {
+  // Recompute the field the user *didn't* most-recently type, based on the other.
+  const q = _pendQty();
+  const perEl = document.getElementById("pend-cost_per_unit");
+  const totEl = document.getElementById("pend-total_cost");
+  if (!q) return;
+  if (_pendCostSrc === "total") {
+    const tot = parseFloat(totEl.value);
+    if (!isNaN(tot)) perEl.value = (tot / q).toFixed(2);
+  } else {
+    const per = parseFloat(perEl.value);
+    if (!isNaN(per)) totEl.value = (per * q).toFixed(2);
+  }
+}
+async function savePendingModal() {
+  const event_name = document.getElementById("pend-event_name").value.trim();
+  const qty = parseInt(document.getElementById("pend-qty").value, 10);
+  if (!event_name) { alert("Event name is required"); return; }
+  if (!qty || qty < 1) { alert("Qty must be ≥ 1"); return; }
+  // Cost/ticket is the source of truth in DB. If only Total was entered, derive it.
+  let costPer = document.getElementById("pend-cost_per_unit").value;
+  const totVal = document.getElementById("pend-total_cost").value;
+  if (!costPer && totVal) {
+    const t = parseFloat(totVal);
+    if (!isNaN(t)) costPer = (t / qty).toFixed(4);
+  }
+  const body = {
+    event_name,
+    event_date: document.getElementById("pend-event_date").value,
+    venue: document.getElementById("pend-venue").value.trim(),
+    section: document.getElementById("pend-section").value.trim(),
+    row: document.getElementById("pend-row").value.trim(),
+    seats: document.getElementById("pend-seats").value.trim(),
+    qty,
+    cost_per_unit: costPer || null,
+    email: document.getElementById("pend-email").value.trim(),
+    note: document.getElementById("pend-note").value.trim(),
+  };
+  const res = await fetch("/api/inventory/manual-add", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) { alert("Failed to add"); return; }
+  closePendingModal();
+  await load();
+}
+document.getElementById("add-pending").addEventListener("click", openPendingModal);
+document.getElementById("pend-close").addEventListener("click", closePendingModal);
+document.getElementById("pend-cancel").addEventListener("click", closePendingModal);
+document.getElementById("pend-save").addEventListener("click", savePendingModal);
+document.getElementById("pend-cost_per_unit").addEventListener("input", _pendSyncFromPer);
+document.getElementById("pend-total_cost").addEventListener("input", _pendSyncFromTotal);
+document.getElementById("pend-qty").addEventListener("input", _pendSyncFromQty);
+document.getElementById("pend-bg").addEventListener("click", (e) => {
+  if (e.target.id === "pend-bg") closePendingModal();
+});
+
+document.getElementById("sell-close").addEventListener("click", closeSellModal);
+document.getElementById("sell-cancel").addEventListener("click", closeSellModal);
+document.getElementById("sell-save").addEventListener("click", () => saveSellModal(false));
+document.getElementById("sell-loss").addEventListener("click", () => {
+  if (!confirm("Mark this batch as unsold (full cost loss)?")) return;
+  saveSellModal(true);
+});
+document.getElementById("sell-bg").addEventListener("click", (e) => {
+  if (e.target.id === "sell-bg") closeSellModal();
+});
+// Sync qty to the count of checked seat boxes so the user doesn't have to
+// touch both. Only applies when the checkbox path is active.
+document.getElementById("sell-seats-checks").addEventListener("change", (e) => {
+  if (!e.target.classList.contains("sell-seat-cb")) return;
+  const n = document.querySelectorAll(".sell-seat-cb:checked").length;
+  if (n > 0) document.getElementById("sell-qty").value = n;
+});
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".row-sell");
+  if (!btn) return;
+  e.stopPropagation();
+  const tr = btn.closest("tr");
+  const row = tr && tr._row;
+  if (row) openSellModal(row);
+});
+
+document.getElementById("m-close").addEventListener("click", closeEditModal);
+document.getElementById("m-cancel").addEventListener("click", closeEditModal);
+document.getElementById("m-save").addEventListener("click", saveEditModal);
+document.getElementById("modal-bg").addEventListener("click", (e) => {
+  if (e.target.id === "modal-bg") closeEditModal();
+});
+document.addEventListener("keydown", (e) => {
+  const editOpen = document.getElementById("modal-bg").classList.contains("open");
+  const sellOpen = document.getElementById("sell-bg").classList.contains("open");
+  const pendOpen = document.getElementById("pend-bg").classList.contains("open");
+  if (!editOpen && !sellOpen && !pendOpen) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    if (editOpen) closeEditModal();
+    if (sellOpen) closeSellModal();
+    if (pendOpen) closePendingModal();
+  }
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    if (editOpen) saveEditModal();
+    if (sellOpen) saveSellModal(false);
+    if (pendOpen) savePendingModal();
+  }
+});
+
+load();
+setInterval(load, 30000);
+
+// Click an auth-warn badge to re-trigger the scraper after the user has
+// re-signed-in to that source. Polls until the run finishes, then refreshes
+// the page so the new state (and any cleared badges) shows up.
+window._reauthRunning = window._reauthRunning || new Set();
+document.addEventListener("click", async (e) => {
+  const badge = e.target.closest(".auth-warn");
+  if (!badge) return;
+  if (badge.classList.contains("scraping")) return;  // already in flight
+  const src = badge.dataset.authSrc || "the source";
+  if (!confirm(`I've re-signed into ${src.toUpperCase()} in the dedicated Chrome window. Run the scraper again now?`)) return;
+  window._reauthRunning.add(src);
+  badge.classList.add("scraping");
+  badge.textContent = `⏳ ${src.toUpperCase()} RE-SCRAPING…`;
+  let res;
+  try {
+    res = await fetch("/api/refresh", {method: "POST"});
+  } catch (err) {
+    alert("Couldn't reach the server: " + err.message);
+    window._reauthRunning.delete(src);
+    badge.classList.remove("scraping");
+    return;
+  }
+  if (!res.ok) {
+    alert("Refresh failed: " + res.status);
+    window._reauthRunning.delete(src);
+    badge.classList.remove("scraping");
+    return;
+  }
+  // Poll every 5s until lr.running === false AND lr.at is fresher than now,
+  // then reload the page so all stats and badges reflect the new state.
+  const startedAt = Date.now();
+  const maxWaitMs = 5 * 60 * 1000;  // 5 min safety cap
+  const poll = setInterval(async () => {
+    if (Date.now() - startedAt > maxWaitMs) {
+      clearInterval(poll);
+      alert("Scrape is taking longer than expected. Reload the page when it's done.");
+      window._reauthRunning.delete(src);
+      return;
+    }
+    try {
+      const m = await fetch("/api/maaser").then(r => r.json());
+      const lr = m.last_run || {};
+      const finished = !lr.running && lr.at && new Date(lr.at).getTime() >= startedAt;
+      if (finished) {
+        clearInterval(poll);
+        window._reauthRunning.delete(src);
+        // Page reload picks up the new last_run.count.auth_errors — if the
+        // re-login worked, the badge for `src` will simply not render anymore.
+        window.location.reload();
+      }
+    } catch (err) {
+      // transient; just keep polling
+    }
+  }, 5000);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Tools</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
+    --pink: #f06595;
+    --cyan: #0f766e;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 24px; max-width: 920px; margin: 0 auto; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 28px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .tool-card { border: 1px solid var(--line); padding: 18px 20px; margin-bottom: 18px; background: var(--bg-2); }
+  .tool-card .desc { color: var(--muted); font-size: 11px; margin-bottom: 14px; line-height: 1.6; }
+  label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; display: block; margin-bottom: 6px; }
+  input[type="text"], input[type="url"] { width: 100%; font-family: inherit; font-size: 12px; padding: 9px 12px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input[type="text"]:focus, input[type="url"]:focus { outline: none; border-color: var(--accent); }
+  button { font-family: inherit; font-size: 11px; padding: 9px 16px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--accent); color: var(--bg); border: 1px solid var(--accent); margin-top: 12px; }
+  button:hover { background: #0a5cc2; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .status { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line); background: var(--bg-3); font-size: 12px; line-height: 1.6; min-height: 14px; }
+  .status.error { border-color: var(--red); color: var(--red); }
+  .status.success { border-color: var(--green); }
+  .status .row { padding: 2px 0; }
+  .status .folder { color: var(--accent); word-break: break-all; }
+  .status .file-list { margin-top: 8px; padding-left: 16px; color: var(--muted); font-size: 11px; }
+  .status .file-list li { padding: 1px 0; word-break: break-all; }
+  .status .seat { color: var(--green); }
+  .spinner { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>TOOLS</h1>
+    <span class="meta" id="sub">utilities</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools" class="active">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <h2>HIDDEN PAGES</h2>
+  <div class="tool-card">
+    <div class="desc">Pages removed from the top menu — they still work from here.</div>
+    <a href="/credits" style="color:var(--accent);margin-right:18px;">Credits</a>
+    <a href="/sources" style="color:var(--accent);margin-right:18px;">Sources</a>
+    <a href="/jerujam" style="color:var(--accent);">JeruJam</a>
+  </div>
+
+  <h2>KUPAT · PRINT TICKETS TO PDF</h2>
+  <div class="tool-card">
+    <div class="desc">
+      Paste a Kupat e-document URL (the link from your purchase email of the form
+      <code style="color:var(--cyan);">tickets.kupat.co.il/edocument/&lt;uuid&gt;/?id=&lt;number&gt;</code>) and we&rsquo;ll
+      drive a headless browser to render each ticket in the order as its own PDF, named
+      <code style="color:var(--cyan);">&lt;EventName&gt;_&lt;Date&gt;_&lt;Section&gt;_Row&lt;N&gt;_Seat&lt;N&gt;.pdf</code>,
+      saved into a per-event folder under
+      <code style="color:var(--cyan);">$KARTIS_TICKETS_DIR</code>
+      (defaults to <code>~/OneDrive/KartisTickets/</code>). Takes ~5s per ticket.
+    </div>
+    <form id="kupat-form" onsubmit="return false;">
+      <label for="kupat-url">Kupat e-document URL</label>
+      <input id="kupat-url" type="url"
+             placeholder="https://tickets.kupat.co.il/edocument/...?id=...">
+      <button id="kupat-go">Print PDFs</button>
+    </form>
+    <div id="kupat-status" class="status" style="display:none"></div>
+  </div>
+
+  <h2>TICKCHAK · REDACT + SPLIT TICKETS</h2>
+  <div class="tool-card">
+    <div class="desc">
+      Upload a multi-page Tickchak ticket PDF. We strip the buyer name,
+      phone, ticket price, and Tickchak logo from every page, then split
+      it into one PDF per ticket — saved into the same per-event folder
+      under <code style="color:var(--cyan);">$KARTIS_TICKETS_DIR</code>
+      as the Kupat tool, named
+      <code style="color:var(--cyan);">&lt;EventName&gt;_&lt;Date&gt;_&lt;Section&gt;_Row&lt;N&gt;_Seat&lt;N&gt;.pdf</code>.
+    </div>
+    <form id="tickchak-form" onsubmit="return false;">
+      <label for="tickchak-file">Tickchak PDF</label>
+      <input id="tickchak-file" type="file" accept="application/pdf"
+             style="width:100%;font-family:inherit;font-size:12px;padding:9px 12px;background:var(--bg-3);color:var(--text);border:1px solid var(--line);">
+      <button id="tickchak-go">Process PDF</button>
+    </form>
+    <div id="tickchak-status" class="status" style="display:none"></div>
+  </div>
+
+  <h2>PACHA NY · FETCH TICKETS FROM GMAIL</h2>
+  <div class="tool-card">
+    <div class="desc">
+      Scans the dashboard&rsquo;s Gmail inbox for Pacha New York / FourVenues ticket
+      emails (forward them to <code style="color:var(--cyan);">fwd.pbtsign@gmail.com</code>),
+      downloads each ticket PDF, and keeps <strong>page&nbsp;1</strong> of each &mdash;
+      grouped per event and numbered, e.g.
+      <code style="color:var(--cyan);">Pacha ticket 1 of 10 - Alok.pdf</code>.
+      The tickets are bundled into a <strong>zip you download in your browser</strong>
+      (de-duped, totals self-correct).
+    </div>
+    <form id="pacha-form" onsubmit="return false;">
+      <label for="pacha-days">Look back (days)</label>
+      <input id="pacha-days" type="text" inputmode="numeric" value="60"
+             style="max-width:120px;">
+      <button id="pacha-go">Fetch Tickets</button>
+    </form>
+    <div id="pacha-status" class="status" style="display:none"></div>
+  </div>
+</main>
+<script>
+const esc = s => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+const $ = id => document.getElementById(id);
+
+$("kupat-go").addEventListener("click", async () => {
+  const url = $("kupat-url").value.trim();
+  if (!url) { alert("Paste a Kupat URL first"); return; }
+  const btn = $("kupat-go");
+  const statusEl = $("kupat-status");
+  btn.disabled = true;
+  btn.textContent = "Working...";
+  statusEl.className = "status";
+  statusEl.style.display = "block";
+  statusEl.innerHTML = `<div class="row"><span class="spinner"></span> Launching browser — this takes ~5–7 seconds per ticket.</div>`;
+  try {
+    const res = await fetch("/api/kupat-pdf", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({url}),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      statusEl.className = "status error";
+      statusEl.innerHTML = `<div class="row">⚠ ${esc(data.error || "Unknown error")}</div>`;
+      return;
+    }
+    statusEl.className = "status success";
+    const fileList = (data.tickets || []).map(t =>
+      `<li>${esc(t.filename)} <span class="seat">(seat ${esc(t.seat)})</span></li>`
+    ).join("");
+    statusEl.innerHTML = `
+      <div class="row">✓ Saved <strong>${data.tickets.length}</strong> tickets for
+        <strong>${esc(data.event_name || "")}</strong> at <strong>${esc(data.venue || "")}</strong>
+        · ${esc((data.event_date || "").slice(0, 16))}</div>
+      <div class="row">Folder: <span class="folder">${esc(data.folder)}</span></div>
+      <ul class="file-list">${fileList}</ul>
+    `;
+  } catch (e) {
+    statusEl.className = "status error";
+    statusEl.innerHTML = `<div class="row">⚠ ${esc(e.message || e)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Print PDFs";
+  }
+});
+
+$("tickchak-go").addEventListener("click", async () => {
+  const fileInput = $("tickchak-file");
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) { alert("Pick a Tickchak PDF first"); return; }
+  const btn = $("tickchak-go");
+  const statusEl = $("tickchak-status");
+  btn.disabled = true;
+  btn.textContent = "Working...";
+  statusEl.className = "status";
+  statusEl.style.display = "block";
+  statusEl.innerHTML = `<div class="row"><span class="spinner"></span> Redacting + splitting ${esc(file.name)}…</div>`;
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/tickchak-pdf", {method: "POST", body: fd});
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      statusEl.className = "status error";
+      statusEl.innerHTML = `<div class="row">⚠ ${esc(data.error || "Unknown error")}</div>`;
+      return;
+    }
+    statusEl.className = "status success";
+    const fileList = (data.tickets || []).map(t => {
+      const seat = t.seat ? `seat ${esc(t.seat)}` : "";
+      const row = t.row ? `row ${esc(t.row)}` : "";
+      const meta = [row, seat].filter(Boolean).join(" · ");
+      return `<li>${esc(t.filename)}${meta ? ` <span class="seat">(${meta})</span>` : ""}</li>`;
+    }).join("");
+    statusEl.innerHTML = `
+      <div class="row">✓ Saved <strong>${data.tickets.length}</strong> ticket${data.tickets.length === 1 ? "" : "s"} for
+        <strong>${esc(data.event_name || "")}</strong>${data.venue ? ` at <strong>${esc(data.venue)}</strong>` : ""}
+        ${data.event_date ? ` · ${esc(data.event_date)}` : ""}</div>
+      <div class="row">Folder: <span class="folder">${esc(data.folder)}</span></div>
+      <ul class="file-list">${fileList}</ul>
+    `;
+  } catch (e) {
+    statusEl.className = "status error";
+    statusEl.innerHTML = `<div class="row">⚠ ${esc(e.message || e)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Process PDF";
+  }
+});
+
+$("pacha-go").addEventListener("click", async () => {
+  const days = ($("pacha-days").value || "").trim();
+  if (!/^\d+$/.test(days)) { alert("Enter a number of days"); return; }
+  const btn = $("pacha-go");
+  const statusEl = $("pacha-status");
+  btn.disabled = true;
+  btn.textContent = "Working...";
+  statusEl.className = "status";
+  statusEl.style.display = "block";
+  statusEl.innerHTML = `<div class="row"><span class="spinner"></span> Scanning Gmail + downloading tickets…</div>`;
+  try {
+    const res = await fetch("/api/pacha-fetch", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({days: Number(days)}),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      statusEl.className = "status error";
+      statusEl.innerHTML = `<div class="row">⚠ ${esc(data.error || "Unknown error")}</div>`;
+      return;
+    }
+    const total = data.tickets || 0;
+    const groups = (data.groups || []).map(g =>
+      `<li>${esc(g.event)} <span class="seat">(${esc(g.date || "no date")})</span> — ${g.count} ticket${g.count === 1 ? "" : "s"}</li>`
+    ).join("");
+    const skipped = (data.skipped || []).length
+      ? `<div class="row">Skipped ${data.skipped.length}: <span class="seat">${esc(data.skipped.join("; "))}</span></div>`
+      : "";
+    if (total === 0) {
+      statusEl.className = "status";
+      statusEl.innerHTML = `<div class="row">No Pacha tickets found in the last ${esc(days)} day(s).</div>${skipped}`;
+      return;
+    }
+    statusEl.className = "status success";
+    statusEl.innerHTML = `
+      <div class="row">✓ Found <strong>${total}</strong> ticket${total === 1 ? "" : "s"}
+        across <strong>${data.events}</strong> event${data.events === 1 ? "" : "s"}.</div>
+      <ul class="file-list">${groups}</ul>
+      ${skipped}
+    `;
+    // Trigger the zip download automatically, and leave a manual link too.
+    if (data.download_url) {
+      const href = data.download_url + "?name=" + encodeURIComponent(data.download_name || "Pacha tickets.zip");
+      const a = document.createElement("a");
+      a.href = href; a.download = data.download_name || "Pacha tickets.zip";
+      document.body.appendChild(a); a.click(); a.remove();
+      statusEl.innerHTML += `<div class="row" style="margin-top:8px;">⬇ <a href="${esc(href)}" style="color:var(--accent);">Download ${esc(data.download_name || "tickets.zip")}</a> (starts automatically)</div>`;
+    }
+  } catch (e) {
+    statusEl.className = "status error";
+    statusEl.innerHTML = `<div class="row">⚠ ${esc(e.message || e)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Fetch Tickets";
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Money Owed</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  .sub-nav { margin-bottom: 14px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; }
+  .sub-nav a { color: var(--muted); text-decoration: none; margin-right: 14px; }
+  .sub-nav a:hover, .sub-nav a.active { color: var(--accent); }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .blurb { color: var(--muted); font-size: 11px; letter-spacing: 0.5px; margin-bottom: 14px; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.center, td.center { text-align: center; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.owed-row { cursor: pointer; }
+  .chip { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
+  .chip-charge { color: var(--orange); border-color: var(--orange); }
+  .chip-withdrawal { color: var(--purple); border-color: var(--purple); }
+  .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; color: var(--red); }
+  tbody tr:hover .row-action { opacity: 0.7; }
+  tbody tr .row-action:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .paid-check { width: 16px; height: 16px; cursor: pointer; accent-color: var(--green); }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 540px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus, .modal-body select:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>KARTIS</h1>
+    <span class="meta" id="lastrun">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses" class="active">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="sub-nav">
+    <a href="/expenses">← Expenses</a>
+    <a href="/owed" class="active">Money Owed</a>
+  </div>
+
+  <h2>Money Owed
+    <button id="add-owed" style="margin-left:14px;font-size:11px;letter-spacing:1px;">+ Add Entry</button>
+  </h2>
+  <div class="blurb">
+    Personal charges put on a ticket card, or cash pulled from a ticket account, that need to be paid back.
+    Check the box when paid back to remove it.
+  </div>
+  <table id="owed-table">
+    <thead><tr>
+      <th class="center">PAID</th>
+      <th>DATE</th>
+      <th>DESCRIPTION</th>
+      <th>CARD / ACCOUNT</th>
+      <th>DIRECTION</th>
+      <th class="num">AMOUNT</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="owed-tbody"></tbody>
+  </table>
+  <div id="owed-empty" class="empty" style="display:none">nothing owed</div>
+</main>
+
+<!-- Add/edit modal -->
+<div id="owed-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span id="owed-title">ADD ENTRY</span><button class="close" id="owed-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Track money that needs to flow back into a ticket card or account.</div>
+      <label>Date *</label><input id="owed-date" type="date">
+      <label>Amount *</label><input id="owed-amount" type="number" step="0.01" min="0" placeholder="USD">
+      <label>Description</label><input id="owed-description" type="text" placeholder="e.g. Groceries on Amex">
+      <label>Card / Account</label><input id="owed-card" type="text" placeholder="e.g. Chase Sapphire / Capital One">
+      <label>Direction *</label>
+      <select id="owed-direction">
+        <option value="charge">Charged on card (personal expense)</option>
+        <option value="withdrawal">Cash pulled from account</option>
+      </select>
+    </div>
+    <div class="modal-foot">
+      <span class="muted">ctrl+enter saves</span>
+      <button id="owed-cancel">Cancel</button>
+      <button class="primary" id="owed-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => "$" + (n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const today = () => new Date().toISOString().slice(0,10);
+
+let _state = { items: [] };
+let _editingId = null;
+
+async function load() {
+  const res = await fetch("/api/owed");
+  if (!res.ok) { console.error("failed to load"); return; }
+  _state = await res.json();
+  render();
+}
+
+function render() {
+  if (_state.last_run && _state.last_run.at) {
+    $("lastrun").textContent = "last_scrape=" + new Date(_state.last_run.at).toLocaleString();
+  }
+  const tbody = $("owed-tbody");
+  tbody.innerHTML = "";
+  if (!_state.items || !_state.items.length) {
+    $("owed-empty").style.display = "";
+    return;
+  }
+  $("owed-empty").style.display = "none";
+  for (const r of _state.items) {
+    const tr = document.createElement("tr");
+    tr.className = "owed-row";
+    tr.dataset.id = r.id;
+    const dirLabel = r.direction === "charge" ? "ON CARD"
+                    : r.direction === "withdrawal" ? "FROM ACCOUNT" : (r.direction || "");
+    const dirChip = r.direction === "charge" ? "chip-charge"
+                    : r.direction === "withdrawal" ? "chip-withdrawal" : "";
+    tr.innerHTML = `
+      <td class="center"><input type="checkbox" class="paid-check" data-act="paid" title="Mark as paid back"></td>
+      <td>${escape(r.date_iso || "")}</td>
+      <td>${escape(r.description || "")}</td>
+      <td>${escape(r.card_account || "")}</td>
+      <td>${dirLabel ? `<span class="chip ${dirChip}">${dirLabel}</span>` : ""}</td>
+      <td class="num">${fmt(r.amount)}</td>
+      <td><button class="row-action" data-act="del" title="Delete entry">×</button></td>
+    `;
+    tr.addEventListener("dblclick", (e) => {
+      if (e.target.closest("input, button")) return;
+      openModal(r);
+    });
+    tbody.appendChild(tr);
+  }
+}
+
+function escape(s) {
+  return String(s || "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+}
+
+function openModal(item) {
+  _editingId = item ? item.id : null;
+  $("owed-title").textContent = item ? "// EDIT ENTRY" : "// ADD ENTRY";
+  $("owed-date").value = item ? (item.date_iso || "") : today();
+  $("owed-amount").value = item ? (item.amount || "") : "";
+  $("owed-description").value = item ? (item.description || "") : "";
+  $("owed-card").value = item ? (item.card_account || "") : "";
+  $("owed-direction").value = item ? (item.direction || "charge") : "charge";
+  $("owed-bg").classList.add("open");
+  setTimeout(() => $("owed-amount").focus(), 30);
+}
+
+function closeModal() { $("owed-bg").classList.remove("open"); _editingId = null; }
+
+async function saveModal() {
+  const date_iso = $("owed-date").value;
+  const amount = parseFloat($("owed-amount").value);
+  if (!date_iso) { alert("Date required"); return; }
+  if (!amount || amount <= 0) { alert("Amount must be > 0"); return; }
+  const body = {
+    id: _editingId,
+    date_iso, amount,
+    description: $("owed-description").value.trim(),
+    card_account: $("owed-card").value.trim(),
+    direction: $("owed-direction").value,
+  };
+  const url = _editingId ? "/api/owed/edit" : "/api/owed/add";
+  const res = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return; }
+  closeModal();
+  await load();
+}
+
+document.addEventListener("click", async (e) => {
+  // paid-check checkbox: confirm + delete
+  const chk = e.target.closest(".paid-check");
+  if (chk) {
+    const tr = chk.closest("tr");
+    const id = tr && tr.dataset.id;
+    if (!id) return;
+    if (!confirm("Mark this as paid back? It will be removed from the list.")) {
+      chk.checked = false;
+      return;
+    }
+    await fetch("/api/owed/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id}) });
+    await load();
+    return;
+  }
+  const btn = e.target.closest(".row-action");
+  if (!btn) return;
+  const tr = btn.closest("tr");
+  const id = tr && tr.dataset.id;
+  if (!id) return;
+  if (btn.dataset.act === "del") {
+    if (!confirm("Delete this entry?")) return;
+    await fetch("/api/owed/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id}) });
+    await load();
+  }
+});
+
+$("add-owed").addEventListener("click", () => openModal(null));
+$("owed-close").addEventListener("click", closeModal);
+$("owed-cancel").addEventListener("click", closeModal);
+$("owed-save").addEventListener("click", saveModal);
+$("owed-bg").addEventListener("click", e => { if (e.target.id === "owed-bg") closeModal(); });
+
+document.addEventListener("keydown", (e) => {
+  if (!$("owed-bg").classList.contains("open")) return;
+  if (e.key === "Escape") closeModal();
+  else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) saveModal();
+});
+
+load();
+</script>
+</body>
+</html>
