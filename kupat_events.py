@@ -13,14 +13,27 @@ app.py (`run_il_events`). Two anonymous endpoints:
         Events often show up here DAYS before the sale is official — that
         early visibility is the point of the 'new' ping.
 
-  GET https://www.kupat.co.il/  (the WordPress homepage)
-      → the "officially on sale" signal. Promoted shows appear as
-        <article class="item-show … show_artist-<slug>" aria-label="<name>">
-        tiles with an <a href="…/show/<slug>"> link and an <img
-        class="item-image"> banner. A catalog feature is matched to a tile
-        by normalized urlName vs the tile's /show/ slug or artist class
-        ("peer tasi" → "peertasi"), with the Hebrew name vs aria-label as
-        fallback. No per-show page fetches needed.
+  GET https://www.kupat.co.il/  (the homepage; override with
+                                 KARTIS_KUPAT_HOME_URL)
+      → the "officially on sale" signal. Parsed by a two-strategy chain so
+        a redesign degrades instead of blinding the monitor:
+
+          'cards' — the WordPress card grid: <article class="item-show …
+             show_artist-<slug>" aria-label="<name>"> holding an
+             <a href="…/show/<slug>"> and an <img class="item-image">
+             banner. Precise, and the layout as of 2026-07.
+          'links' — layout-agnostic fallback used only when 'cards' finds
+             nothing: every /show/<slug> link anywhere on the page, with
+             the name and banner lifted from the surrounding markup. Any
+             kupat.co.il subdomain and relative hrefs both count, since
+             the regional sites (2207., jerusalem., …) share the scheme.
+
+        A catalog feature is matched to a tile by normalized urlName vs
+        the tile's /show/ slug or artist class ("peer tasi" → "peertasi"),
+        with the Hebrew name vs aria-label as fallback. No per-show page
+        fetches needed. `last_warning()` reports when the fallback carried
+        the tick, so run_il_events can surface "layout changed" on
+        /api/il-events/status instead of it only reaching stdout.
 
 `on_sale` therefore means "promoted on the kupat.co.il homepage": a feature
 that's only in the catalog pings 'new' (marked not-yet-official), and its
@@ -30,12 +43,17 @@ check_on_sale raises, so the diff loop keeps each event's stored state
 instead of mis-recording a flip.
 
 CLI probe:  python kupat_events.py [--json]
+            python kupat_events.py --home        (homepage tiles only)
+            python scripts/probe_kupat_site.py   (full site fingerprint)
 """
 import gzip
+import html as html_mod
 import json
+import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import kupat
@@ -46,26 +64,78 @@ FEATURES_URL = kupat.API_BASE + "/features"
 # through a BrowserSession, but it answers plain urllib too (verified
 # 2026-07). ~1 MB gzipped; feeds the "new date under a known event" diff.
 PRESENTATIONS_URL = kupat.API_BASE + "/presentations/?locationId=0&isHold=0"
-HOME_URL = "https://www.kupat.co.il/"
+# The homepage host is a setting, not a constant: kupat runs regional
+# sites on the same codebase (2207., jerusalem., …) and a redesign has
+# moved the canonical landing page before.
+HOME_URL = os.environ.get("KARTIS_KUPAT_HOME_URL", "").strip() or "https://www.kupat.co.il/"
 
-_TILE_SLUG_RE = re.compile(r'href="https://www\.kupat\.co\.il/show/([a-z0-9_\-]+)"', re.IGNORECASE)
+# A show link on ANY kupat.co.il host, absolute or relative — group 1 is
+# the href up to the slug, group 2 the slug itself. Slugs are sometimes
+# percent-encoded Hebrew, so the character class can't be [a-z0-9_-].
+_SHOW_HREF_RE = re.compile(
+    r'href="((?:https?://[^"/]*kupat\.co\.il)?/show/([^"/?#]+))/?(?:[?#][^"]*)?"',
+    re.IGNORECASE)
+# Card container: <article>/<div>/<li class="… item-show …">. Nested
+# matches are harmless — tiles are deduped by slug.
+_CARD_RE = re.compile(r'<(?:article|div|li)[^>]+class="[^"]*item-show[^"]*"[^>]*>',
+                      re.IGNORECASE)
 _TILE_ARTIST_RE = re.compile(r'show_artist-([a-z0-9_\-]+)')
 _TILE_IMG_RE = re.compile(r'<img[^>]+class="[^"]*item-image[^"]*"[^>]+src="([^"]+)"', re.IGNORECASE)
+# Any <img> — the fallback strategy can't assume the 'item-image' class.
+# Split in two so every source attribute on a tag is visible: one regex
+# finds the tags, the other every candidate URL inside one (a single
+# combined pattern only ever yields the first attribute per tag, which is
+# exactly the placeholder on a lazy-loaded grid).
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_IMG_SRC_ATTR_RE = re.compile(
+    r'(?:data-lazy-src|data-original|data-src|srcset|src)="([^"\s]+)', re.IGNORECASE)
 _ARIA_RE = re.compile(r'aria-label="([^"]*)"')
+_IMG_ALT_RE = re.compile(r'<img[^>]+alt="([^"]+)"', re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+# Where one tile stops and the next begins, for the fallback's forward
+# window. Deliberately excludes <div>, which wraps everything.
+_TILE_BOUNDARY_RE = re.compile(
+    r'<a[\s>]|<(?:article|li|section)[\s>]|</(?:article|li|section)>', re.IGNORECASE)
+
+# Guard for the layout-agnostic fallback: a mega-menu or a sitemap block
+# could otherwise turn hundreds of links into pseudo-events.
+MAX_HOMEPAGE_TILES = 200
+
+# Populated by fetch_homepage_tiles; read by last_warning() so a layout
+# change surfaces on /api/il-events/status, not just in the log.
+_LAST_HOMEPAGE = {"strategy": None, "tiles": 0, "error": None}
 
 
 class KupatEventsError(RuntimeError):
     pass
 
 
-def _get(url, timeout=None):
-    req = urllib.request.Request(url, headers=kupat.REQUEST_HEADERS)
+# kupat.REQUEST_HEADERS asks for JSON, which is right for the API but can
+# make a content-negotiating front end serve something other than the page
+# a browser sees. The homepage fetch gets a browser's document headers.
+_HTML_HEADERS = dict(kupat.REQUEST_HEADERS, **{
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
+              "image/webp,*/*;q=0.8",
+    "Upgrade-Insecure-Requests": "1",
+})
+
+
+def _get(url, timeout=None, headers=None, with_meta=False):
+    req = urllib.request.Request(url, headers=headers or kupat.REQUEST_HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=timeout or kupat.REQUEST_TIMEOUT) as resp:
             raw = resp.read()
             if resp.headers.get("Content-Encoding") == "gzip":
                 raw = gzip.decompress(raw)
-            return raw
+            if not with_meta:
+                return raw
+            return raw, {
+                "status": resp.status,
+                "url": resp.url,          # after redirects
+                "headers": {k.lower(): v for k, v in resp.headers.items()},
+            }
     except urllib.error.HTTPError as e:
         raise KupatEventsError(f"{url} returned HTTP {e.code}") from e
     except urllib.error.URLError as e:
@@ -95,44 +165,177 @@ _TILE_TITLE_RE = re.compile(r'<h2[^>]+class="[^"]*item-title[^"]*"[^>]*>\s*<span
                             re.IGNORECASE)
 
 
-def fetch_homepage_tiles():
-    """Parse the kupat.co.il homepage into a list of show tiles:
-    ``[{"slug", "name", "image", "keys"}]`` — ``keys`` is the set of
-    normalized match keys (slug, show_artist class, aria-label). Raises on
-    network trouble or when a 200 page parses to zero tiles (a site
-    redesign must read as a fetch failure, never as 'nothing is
-    promoted')."""
-    html = _get(HOME_URL).decode("utf-8", errors="replace")
-    tiles = []
-    seen_slugs = set()
-    starts = [m.start() for m in re.finditer(r'<article[^>]+class="[^"]*item-show[^"]*"[^>]*>', html)]
+def _text(fragment, limit=120):
+    """Visible text of an HTML fragment: tags stripped, entities decoded,
+    whitespace collapsed."""
+    return _WS_RE.sub(" ", html_mod.unescape(_TAG_RE.sub(" ", fragment or ""))).strip()[:limit]
+
+
+def _clean(value, limit=120):
+    """An attribute value (aria-label, alt) as display text."""
+    return _WS_RE.sub(" ", html_mod.unescape(value or "")).strip()[:limit]
+
+
+def _abs_url(href):
+    return urllib.parse.urljoin(HOME_URL, href or "")
+
+
+def _find_image(fragment):
+    """First real image URL in a fragment. Lazy-loading grids park an inline
+    `data:` placeholder (a 1x1 gif, a blur SVG) in `src` and put the real
+    banner in `data-src`/`srcset`, and the placeholder often comes FIRST in
+    attribute order — so read every source attribute on every <img> and take
+    the first that isn't a data URI, falling back to the placeholder only if
+    that's genuinely all there is."""
+    first = ""
+    for tag in _IMG_TAG_RE.finditer(fragment):
+        for m in _IMG_SRC_ATTR_RE.finditer(tag.group(0)):
+            url = m.group(1)
+            if not url.lower().startswith("data:"):
+                return url
+            first = first or url
+    return first
+
+
+def _make_tile(slug, href, name, image):
+    """One homepage show tile. ``keys`` is the set of normalized strings a
+    catalog feature may match on (slug as written, slug percent-decoded,
+    the artist class, the display name)."""
+    keys = {k for k in (_norm(slug), _norm(urllib.parse.unquote(slug)), _norm(name)) if k}
+    return {"slug": slug, "name": name, "image": _abs_url(image) if image else "",
+            "url": _abs_url(href), "keys": keys}
+
+
+def _parse_tiles_structured(html):
+    """Strategy 'cards' — the WordPress '.item-show' grid. Precise: each
+    tile is bounded by the next card so the aria/title/img regexes can't
+    bleed into a neighbour."""
+    tiles, seen = [], set()
+    starts = [m.start() for m in _CARD_RE.finditer(html)]
     for i, start in enumerate(starts):
-        # Bound each tile at the next <article> so aria/title/img regexes
-        # can't bleed into the neighbouring tile.
         end = starts[i + 1] if i + 1 < len(starts) else min(len(html), start + 4000)
         block = html[start:end]
-        slug_m = _TILE_SLUG_RE.search(block)
-        if not slug_m:
+        href_m = _SHOW_HREF_RE.search(block)
+        if not href_m:
             continue
-        slug = slug_m.group(1)
-        if slug in seen_slugs:
+        slug = href_m.group(2)
+        if slug in seen:
             continue
-        seen_slugs.add(slug)
+        seen.add(slug)
         img_m = _TILE_IMG_RE.search(block)
+        image = img_m.group(1) if img_m else _find_image(block)
         aria = _ARIA_RE.search(block)
         title = _TILE_TITLE_RE.search(block)
-        name = ((aria.group(1) if aria else "") or (title.group(1) if title else "")).strip()
+        name = _clean(aria.group(1) if aria else "") or _clean(title.group(1) if title else "")
+        tile = _make_tile(slug, href_m.group(1), name, image)
         artist_m = _TILE_ARTIST_RE.search(block)
-        keys = {k for k in (
-            _norm(slug),
-            _norm(artist_m.group(1)) if artist_m else "",
-            _norm(name),
-        ) if k}
-        tiles.append({"slug": slug, "name": name,
-                      "image": img_m.group(1) if img_m else "", "keys": keys})
-    if not tiles:
-        raise KupatEventsError("homepage parsed to 0 show tiles — layout change?")
+        if artist_m:
+            tile["keys"].add(_norm(artist_m.group(1)))
+        tile["keys"].discard("")
+        tiles.append(tile)
     return tiles
+
+
+def _parse_tiles_anchors(html):
+    """Strategy 'links' — layout-agnostic fallback: every /show/<slug>
+    link on the page, with the name and banner lifted from the markup
+    around it. Used only when the card grid finds nothing, so a redesign
+    costs precision rather than the whole on-sale signal.
+
+    Everything is read from the anchor itself plus a FORWARD window that
+    stops at the next anchor or card boundary. Nothing is read backwards
+    and nothing crosses a boundary: a loose window makes a bare nav link
+    inherit the neighbouring card's title and banner, which would then ping
+    as a brand-new show graphic under the wrong name. A card that puts its
+    title after the link ('<a><img></a><h3>name</h3>') is the reason the
+    forward window exists at all.
+
+    Name preference, most to least trustworthy: the anchor's own
+    aria-label, its inner text, a heading just after it, then image alt
+    text (often a file name or a bare artist tag)."""
+    tiles, by_slug = [], {}
+    for m in _SHOW_HREF_RE.finditer(html):
+        slug = m.group(2)
+        # The anchor's own markup: back to its '<a', forward to '</a>'.
+        a_open = html.rfind("<a", max(0, m.start() - 400), m.start())
+        a_start = a_open if a_open != -1 else m.start()
+        a_close = html.find("</a>", m.end())
+        a_end = a_close + 4 if a_close != -1 and a_close - m.end() < 4000 else m.end()
+        anchor = html[a_start:a_end]
+        # Forward window for a trailing title/banner, bounded by whatever
+        # starts the next tile.
+        bound = _TILE_BOUNDARY_RE.search(html, a_end, min(len(html), a_end + 900))
+        after = html[a_end:bound.start() if bound else min(len(html), a_end + 900)]
+
+        aria = _ARIA_RE.search(anchor)
+        heading = re.search(r"<h[1-6][^>]*>(.*?)</h[1-6]>", after, re.IGNORECASE | re.DOTALL)
+        alt = _IMG_ALT_RE.search(anchor) or _IMG_ALT_RE.search(after)
+        name = (_clean(aria.group(1) if aria else "")
+                or _text(anchor[anchor.find(">") + 1:])
+                or _text(heading.group(1) if heading else "")
+                or _clean(alt.group(1) if alt else ""))
+        image = _find_image(anchor) or _find_image(after)
+
+        prev = by_slug.get(slug)
+        if prev is None:
+            tile = _make_tile(slug, m.group(1), name, image)
+            by_slug[slug] = tile
+            tiles.append(tile)
+        else:
+            # Same show linked twice (banner link + title link): keep the
+            # richest version rather than whichever came first.
+            if image and not prev["image"]:
+                prev["image"] = _abs_url(image)
+            if name and len(name) > len(prev["name"]):
+                prev["name"] = name
+                prev["keys"].add(_norm(name))
+                prev["keys"].discard("")
+        if len(tiles) >= MAX_HOMEPAGE_TILES:
+            break
+    return tiles
+
+
+def fetch_home_html():
+    """Raw homepage bytes plus response metadata (status, final URL,
+    headers) — the probe script reports on these; fetch_homepage_tiles
+    only wants the body."""
+    return _get(HOME_URL, headers=_HTML_HEADERS, with_meta=True)
+
+
+def fetch_homepage_tiles():
+    """Parse the kupat homepage into a list of show tiles:
+    ``[{"slug", "name", "image", "url", "keys"}]`` — ``keys`` is the set of
+    normalized match keys. Tries the precise card grid first and falls back
+    to a generic /show/ link scan; raises on network trouble or when a 200
+    page yields no shows under EITHER strategy (a site redesign must read
+    as a fetch failure, never as 'nothing is promoted')."""
+    raw, _meta = fetch_home_html()
+    html = raw.decode("utf-8", errors="replace")
+    tiles, strategy = _parse_tiles_structured(html), "cards"
+    if not tiles:
+        tiles, strategy = _parse_tiles_anchors(html), "links"
+    if not tiles:
+        _LAST_HOMEPAGE.update(strategy=None, tiles=0,
+                              error="parsed to 0 show tiles — layout change?")
+        raise KupatEventsError("homepage parsed to 0 show tiles — layout change?")
+    _LAST_HOMEPAGE.update(strategy=strategy, tiles=len(tiles), error=None)
+    if strategy == "links":
+        print(f"[kupat_events] homepage card markup not found — generic "
+              f"/show/ link scan found {len(tiles)} tiles; layout may have changed")
+    return tiles
+
+
+def last_warning():
+    """Optional source-module hook read by app.run_il_events: a short
+    human-readable note about a degraded (but not failed) fetch, or None.
+    Surfacing this on /api/il-events/status is what turns a silent
+    homepage break into something noticed the same day."""
+    if _LAST_HOMEPAGE["error"]:
+        return f"homepage: {_LAST_HOMEPAGE['error']}"
+    if _LAST_HOMEPAGE["strategy"] == "links":
+        return (f"homepage: card markup missing, using generic /show/ link scan "
+                f"({_LAST_HOMEPAGE['tiles']} tiles) — check the layout")
+    return None
 
 
 def fetch_events():
@@ -255,8 +458,13 @@ def fetch_events():
         # pseudo-event keyed home:<slug> so the standard diff pings its
         # first appearance; when the catalog entry shows up later it pings
         # 'new' under its own feature id as usual.
+        #
+        # A banner is required. The ping is literally "new show graphic",
+        # and the requirement is what keeps the layout-agnostic 'links'
+        # fallback safe: a redesign whose nav or footer links shows would
+        # otherwise turn every one of them into a pseudo-event.
         for idx, t in enumerate(tiles):
-            if idx in matched_tiles:
+            if idx in matched_tiles or not t["image"]:
                 continue
             events.append({
                 "source": SOURCE_NAME,
@@ -268,7 +476,7 @@ def fetch_events():
                 "on_sale": True,   # promoted by definition; never flips
                 "image": t["image"],
                 "homepage_teaser": True,
-                "url": f"https://www.kupat.co.il/show/{t['slug']}",
+                "url": t.get("url") or f"https://www.kupat.co.il/show/{t['slug']}",
             })
     return events
 
@@ -339,14 +547,28 @@ def main(argv):
                 price = f"₪{p['min_price']:g}" if p.get("min_price") else ""
                 print(f"  {fid:>6}/{p['perf_key']:<6} {so} {p['date_text']:<17} {price:<8} {p['venue']}")
         return 0
+    if "--home" in argv:
+        tiles = fetch_homepage_tiles()
+        if "--json" in argv:
+            print(json.dumps([dict(t, keys=sorted(t["keys"])) for t in tiles],
+                             indent=1, ensure_ascii=False))
+            return 0
+        print(f"{len(tiles)} tiles on {HOME_URL} via the "
+              f"'{_LAST_HOMEPAGE['strategy']}' strategy\n")
+        for t in tiles:
+            print(f"  {'img' if t['image'] else '---'} {t['slug']:<30.30} {t['name']}")
+        return 0
     events = fetch_events()
     if "--json" in argv:
         print(json.dumps(events, indent=1, ensure_ascii=False))
         return 0
     n_home = sum(1 for e in events if e["on_sale"] and not e.get("homepage_teaser"))
     n_teaser = sum(1 for e in events if e.get("homepage_teaser"))
+    warn = last_warning()
     print(f"{len(events)} entries — {n_home} catalog features promoted on the "
-          f"homepage, {n_teaser} teaser graphics without a catalog link\n")
+          f"homepage, {n_teaser} teaser graphics without a catalog link")
+    print(f"homepage strategy: {_LAST_HOMEPAGE['strategy'] or 'FAILED'}"
+          + (f"   ⚠ {warn}" if warn else "") + "\n")
     for ev in events:
         if ev.get("homepage_teaser"):
             mark = "TEASER"

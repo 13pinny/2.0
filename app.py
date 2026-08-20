@@ -242,7 +242,7 @@ _edm_last_market_at = None
 IL_EVENT_SOURCES = {"kupat": kupat_events, "tm": tm_events, "barby": barby_events}
 _last_il_events = {"at": None, "events": {}, "new": 0, "onsale": 0,
                    "newdate": 0, "notified": 0, "baseline": [], "errors": {},
-                   "error": None, "running": False}
+                   "warnings": {}, "error": None, "running": False}
 _il_events_lock = threading.Lock()
 IL_EVENTS_INTERVAL_MINUTES = int(os.getenv("KARTIS_IL_EVENTS_INTERVAL_MINUTES") or 10)
 IL_EVENTS_ENABLED = (os.getenv("KARTIS_IL_EVENTS_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
@@ -671,7 +671,7 @@ def run_il_events():
             return
 
         muted = db.setting_get_bool("master_muted", default=False)
-        counts, baselines, errors = {}, [], {}
+        counts, baselines, errors, warnings = {}, [], {}, {}
         pings = []  # (kind, ev, old_row)
 
         for source, mod in IL_EVENT_SOURCES.items():
@@ -680,6 +680,19 @@ def run_il_events():
             except Exception as e:
                 errors[source] = f"{type(e).__name__}: {e}"
                 continue
+            # Optional per-source hook: a fetch that SUCCEEDED but degraded
+            # (kupat falling back to the generic homepage link scan). These
+            # used to reach stdout only, so a site redesign could quietly
+            # cost the on-sale signal for weeks — surface it on
+            # /api/il-events/status instead.
+            if hasattr(mod, "last_warning"):
+                try:
+                    note = mod.last_warning()
+                except Exception as e:
+                    note = f"last_warning() failed: {type(e).__name__}: {e}"
+                if note:
+                    warnings[source] = note
+                    print(f"[il-events] {source} warning: {note}")
             # Sources exposing fetch_presentations (kupat: one site-wide
             # catalog call; tm: one perf-list request per event) get per-date
             # visibility, so a new show added under an EXISTING event page
@@ -758,6 +771,7 @@ def run_il_events():
 
         _last_il_events.update(
             at=now_iso, events=counts, baseline=baselines, errors=errors,
+            warnings=warnings,
             error=("; ".join(f"{s}: {e}" for s, e in errors.items())
                    if len(errors) == len(IL_EVENT_SOURCES) else None),
             new=sum(1 for k, _, _ in pings if k == "new"),
