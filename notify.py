@@ -1,0 +1,1232 @@
+"""Discord + Gmail notifications for the Ticketmaster drop checker.
+
+Reads credentials from the environment:
+  DISCORD_WEBHOOK_URL  — main/fallback webhook from a Discord server's
+                         integrations page. Every category lands here unless
+                         it has its own webhook below.
+  DISCORD_WEBHOOK_DROPS / DISCORD_WEBHOOK_STATUS / DISCORD_WEBHOOK_NEW_EVENTS
+  / DISCORD_WEBHOOK_JUMPS / DISCORD_WEBHOOK_SHOCKS / DISCORD_WEBHOOK_PRICER
+  / DISCORD_WEBHOOK_LISTINGS / DISCORD_WEBHOOK_TODOS
+                       — optional per-category webhooks (one Discord channel
+                         each). Unset categories fall back to
+                         DISCORD_WEBHOOK_URL, never to silence. (shocks has
+                         one extra hop: if unset, the Discord bot auto-creates
+                         a #pacha-shocks channel before falling back.)
+  GMAIL_USER           — Gmail address to send from
+  GMAIL_APP_PASSWORD   — 16-char app password (NOT the regular Gmail password)
+  NOTIFY_EMAIL_TO      — destination address (defaults to GMAIL_USER if unset)
+
+Both channels are best-effort: a failure on one does not stop the other. The
+caller gets a result dict it can persist to the drop-event log.
+
+CLI smoke test: `python notify.py` pings the main webhook + email, then one
+test ping per distinct per-category webhook so a channel-routing typo shows
+up here instead of on the first real alert.
+"""
+import json
+import os
+import smtplib
+import ssl
+import urllib.request
+import urllib.error
+from email.message import EmailMessage
+
+
+# Public base URL for links inside notifications (Discord embeds, emails).
+# The app serves on :5000/:8000 locally but is reached at kartis.homes.
+BASE_URL = (os.environ.get("KARTIS_BASE_URL") or "https://kartis.homes").rstrip("/")
+
+
+# Discord channel routing: notification category → env var holding that
+# channel's webhook. _discord_webhook() falls back to DISCORD_WEBHOOK_URL
+# for any category without its own webhook.
+_WEBHOOK_ENV = {
+    "drops":      "DISCORD_WEBHOOK_DROPS",       # buyable-seat alerts (notify_drop)
+    "status":     "DISCORD_WEBHOOK_STATUS",      # sold-out / last-tickets signals (notify_drop)
+    "new_events": "DISCORD_WEBHOOK_NEW_EVENTS",  # genuinely-new events + on-sale flips (pacha/kupat/TM-IL/barby/zappa/EDM)
+    "jumps":      "DISCORD_WEBHOOK_JUMPS",       # pacha + EDM tier/price jumps and low-stock (price about to jump)
+    "shocks":     "DISCORD_WEBHOOK_SHOCKS",      # pacha + EDM price DROPS and restocks (returns / cheaper re-release — buy NOW)
+    "pricer":     "DISCORD_WEBHOOK_PRICER",      # auto-pricer changes/pauses/caps
+    "listings":   "DISCORD_WEBHOOK_LISTINGS",    # intake→viagogo push pipeline
+    "todos":      "DISCORD_WEBHOOK_TODOS",       # daily to-do digest
+}
+
+
+def _discord_webhook(category=None):
+    """Webhook URL for a notification category ('' when nothing is set)."""
+    var = _WEBHOOK_ENV.get(category)
+    url = os.environ.get(var, "").strip() if var else ""
+    return url or os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+
+
+def _pacha_shocks_webhook():
+    """Webhook for pacha price-DROP shocks. Resolution order: an explicit
+    DISCORD_WEBHOOK_SHOCKS pins a channel; otherwise the Discord bot creates
+    (or reuses) a #pacha-shocks channel on first ping — zero manual setup,
+    cached in discord_event_channels; otherwise the usual category fallback
+    to DISCORD_WEBHOOK_URL, so a shock is never silently dropped. The name
+    must stay pre-slugged lowercase: Discord rewrites spaces to dashes on
+    create, which would break webhook_for's reuse-by-name lookup."""
+    url = os.environ.get("DISCORD_WEBHOOK_SHOCKS", "").strip()
+    if url:
+        return url
+    try:
+        import discord_bot  # local import — keeps notify.py free of the db dep
+        url = discord_bot.webhook_for("pacha-shocks") or ""
+    except Exception as e:
+        print(f"[notify] pacha-shocks bot channel failed: {e}")
+        url = ""
+    return url or _discord_webhook("shocks")
+
+
+def _seat_block(seat):
+    """Pick the block/section code from a seat dict, accepting both the
+    normalized `block` key (kupat + new ticketmaster) and the raw `b` key
+    (older ticketmaster fixtures). Returns '' if neither is set."""
+    return str(seat.get("block") or seat.get("b") or "")
+
+
+def _seat_row(seat):
+    return str(seat.get("row") or seat.get("r") or "?")
+
+
+def _seat_num(seat):
+    v = seat.get("seat")
+    if v is None:
+        v = seat.get("l")
+    return str(v) if v is not None else "?"
+
+
+def _block_info(labels, code):
+    """Return (name_or_code, price_or_none) for a block code, given a labels
+    payload from a source's get_labels(). Falls back to the raw code when
+    the block isn't in the cached map."""
+    blocks = ((labels or {}).get("blocks")) or {}
+    entry = blocks.get(code) or blocks.get(str(code)) or {}
+    name = entry.get("name") or code
+    return name, entry.get("price")
+
+
+def _short(seat, labels=None):
+    code = _seat_block(seat) or "?"
+    name, _ = _block_info(labels, code)
+    return f"{name} · row {_seat_row(seat)} · seat {_seat_num(seat)}"
+
+
+def _festival_status_line(seat):
+    """One-line status for a festival/hub watcher's status-encoded seat."""
+    st = seat.get("status")
+    qty = seat.get("qty_available")
+    base = {
+        "soldout": "❌ Sold out",
+        "lasttickets": "⚠️ Last tickets remaining",
+        "available": "🎟️ Available",
+        "closed": "⛔ Sales closed",
+    }.get(st, "🎟️ Available")
+    if qty is not None and st != "soldout":
+        base += f" — {qty} tickets left"
+    return base
+
+
+def _format_seat_lines(seats, limit=40, labels=None):
+    """Group seats by block (showing block name once, then row/seat pairs).
+    Hebrew block names render right-to-left in Discord/Gmail naturally;
+    Unicode bidi handles it without any explicit marker.
+
+    When any seat carries a `_perf` field (event-level watchers aggregate
+    across performances), seats are first grouped by performance code, with
+    a `— Perf NNN —` separator between groups.
+
+    Festival/hub watchers carry a single status-encoded seat (no per-seat
+    granularity), so render one status line instead of a seat list.
+    """
+    if seats and all(s.get("festival") or s.get("ga") for s in seats):
+        return [_festival_status_line(seats[0])]
+    perf_groups = _group_by_perf(seats)
+    lines = []
+    shown = 0
+    multi_perf = perf_groups is not None and len(perf_groups) > 1
+    iterable = perf_groups.items() if perf_groups else [(None, seats)]
+    for perf_code, perf_seats in iterable:
+        if multi_perf:
+            lines.append(f"— Perf {perf_code} —")
+        by_block = {}
+        for s in perf_seats:
+            by_block.setdefault(_seat_block(s) or "?", []).append(s)
+        for code, group in sorted(by_block.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            name, price = _block_info(labels, code)
+            header_bits = [str(name)]
+            if str(name) != str(code):
+                header_bits.append(f"({code})")
+            if price is not None:
+                header_bits.append(f"— ₪{price:.0f}")
+            if len(group) > 1:
+                header_bits.append(f"× {len(group)}")
+            lines.append(f"**{' '.join(header_bits)}**")
+            for seat in sorted(group, key=lambda s: (_seat_row(s), _seat_num(s))):
+                if shown >= limit:
+                    lines.append(f"... +{len(seats) - shown} more")
+                    return lines
+                mark = " ⚠️" if seat.get("unconfirmed") else ""
+                lines.append(f"• row {_seat_row(seat)}, seat {_seat_num(seat)}{mark}")
+                shown += 1
+    return lines
+
+
+def _seat_content_summary(seats, labels=None, when=None, max_seat_lines=14):
+    """Multiline seat summary for the Discord message `content` field:
+
+        📅 September 9th
+        **VIP B ₪499 ×2**
+        row 8 seat 36
+        row 8 seat 37
+
+    The embed description already lists every seat, but Discord's PUSH
+    NOTIFICATION preview shows only the plain content/title — without this,
+    a phone ping reads just \"3 new seats dropped\" and the date/section/seat
+    numbers are invisible until the message is opened. Seated drops only;
+    GA/status seats have no seat numbers to show.
+    """
+    real = [s for s in seats if not (s.get("festival") or s.get("ga"))]
+    if not real:
+        return None
+    lines = []
+    if when:
+        lines.append(f"📅 {when}")
+    by_block = {}
+    for s in real:
+        by_block.setdefault(_seat_block(s) or "?", []).append(s)
+    shown = 0
+    for code, group in sorted(by_block.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        name, price = _block_info(labels, code)
+        head = str(name)
+        if price is not None:
+            head += f" ₪{price:.0f}"
+        if len(group) > 1:
+            head += f" ×{len(group)}"
+        lines.append(f"**{head}**")
+        for s in sorted(group, key=lambda s: (_seat_row(s), _seat_num(s))):
+            if shown >= max_seat_lines:
+                lines.append(f"… +{len(real) - shown} more")
+                return "\n".join(lines)
+            lines.append(f"row {_seat_row(s)} seat {_seat_num(s)}"
+                         + (" ⚠️ unconfirmed" if s.get("unconfirmed") else ""))
+            shown += 1
+    return "\n".join(lines)
+
+
+def _group_by_perf(seats):
+    """If any seat has a `_perf` field, return an ordered dict of perf_code
+    -> seat list, preserving first-seen perf order. Returns None otherwise so
+    the caller can fall back to the flat (single-perf) layout."""
+    if not any(s.get("_perf") for s in seats):
+        return None
+    groups = {}
+    for s in seats:
+        pc = s.get("_perf") or "?"
+        groups.setdefault(pc, []).append(s)
+    return groups
+
+
+def _total_price(seats, labels):
+    """Sum of public prices for the listed seats. Returns None if any seat
+    has an unknown block (we don't want to under-report)."""
+    if not labels:
+        return None
+    total = 0.0
+    for s in seats:
+        _, price = _block_info(labels, _seat_block(s))
+        if price is None:
+            return None
+        total += price
+    return total
+
+
+def _post_discord(webhook_url, payload):
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        webhook_url, data=data, method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": "kartis-tm-watcher/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return f"ok ({resp.status})"
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:200]
+        return f"http {e.code}: {body}"
+    except urllib.error.URLError as e:
+        return f"net error: {e.reason}"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+
+
+def _send_email(subject, body, gmail_user, gmail_pwd, to_addr):
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = gmail_user
+    msg["To"] = to_addr
+    msg.set_content(body)
+    ctx = ssl.create_default_context()
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
+            server.starttls(context=ctx)
+            # Gmail rejects spaces in app passwords occasionally — strip just in case.
+            server.login(gmail_user, gmail_pwd.replace(" ", ""))
+            server.send_message(msg)
+        return "ok"
+    except smtplib.SMTPAuthenticationError as e:
+        return f"auth failed: {e.smtp_code} {e.smtp_error.decode('utf-8','replace')[:120] if isinstance(e.smtp_error, bytes) else e.smtp_error}"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+
+
+def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, labels=None, channels=None, headline=None, discord_override=None):
+    """Send a notification for added seats. Returns {'discord': str, 'email': str}.
+
+    `label` — user-facing watcher name (e.g. "אגם בוחבוט · אמפי קיסריה …").
+    `perf_url` — public URL of the performance.
+    `added_seats` — list of seat dicts (any source's fetch_selectable_seats).
+    `labels` — labels payload from the source's get_labels(); when provided,
+        block codes are translated to human names and prices are shown.
+    `channels` — iterable of {'discord', 'email'}. None = both. Empty = neither
+        (the function still returns a result dict so the caller can record it).
+    `headline` — optional banner prepended to the Discord embed title and email
+        subject. Used by event-level watchers to flag a sold-out → available
+        transition (e.g. "🎟️ MSP03 — tickets just opened").
+
+    Discord channel routing: an alert whose added seats are ALL status
+    pseudo-seats in a non-buyable state (sold out / last tickets / sales
+    closed) is a market signal, not a buy-now drop — it routes to the
+    'status' category. Anything with real seats, or a status seat saying
+    "available" (tickets just opened), is actionable and routes to 'drops'.
+
+    `discord_override` — optional webhook URL for a per-event channel
+    (discord_bot.webhook_for). Only applies to buyable-drop pings; status
+    pings keep going to the shared status channel.
+    """
+    status_only = bool(added_seats) and all(
+        (s.get("festival") or s.get("ga"))
+        and (s.get("status") or "") in ("soldout", "lasttickets", "closed")
+        for s in added_seats
+    )
+    if status_only:
+        discord_url = _discord_webhook("status")
+    else:
+        discord_url = discord_override or _discord_webhook("drops")
+    gmail_user = os.environ.get("GMAIL_USER", "").strip()
+    gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
+    if channels is None:
+        channels = {"discord", "email"}
+    else:
+        channels = {c.strip().lower() for c in channels}
+
+    n_added = len(added_seats)
+    is_festival = bool(added_seats) and all(s.get("festival") or s.get("ga") for s in added_seats)
+    # Unconfirmed drops: seats that surfaced in the raw feed of a perf TM
+    # still marks SOLD OUT (the status endpoint is server-side cached and
+    # lags). Often returns about to be released — worth checking NOW, but
+    # not yet proven buyable, so the ping says so explicitly.
+    real_seats = [s for s in added_seats if not (s.get("festival") or s.get("ga"))]
+    n_unconf = sum(1 for s in real_seats if s.get("unconfirmed"))
+    all_unconf = bool(real_seats) and n_unconf == len(real_seats)
+    seat_lines = _format_seat_lines(added_seats, labels=labels)
+    if n_unconf:
+        seat_lines.append(
+            "⚠️ = perf still shows SOLD OUT on TM — seats surfaced in the raw "
+            "seat feed (often returns about to open; status lags). Check the page now.")
+    seat_block = "\n".join(seat_lines)
+    meta = ((labels or {}).get("meta")) or {}
+    event_name = meta.get("eventName") or ""
+    venue = meta.get("venueName") or ""
+    # Prefer the source's venue-local time string (kupat/tickchak) so we
+    # don't shift it through UTC; fall back to the epoch for ticketmaster.
+    when = meta.get("firstPerfText") or ""
+    if not when and meta.get("firstPerfMs"):
+        try:
+            from datetime import datetime, timezone
+            d = datetime.fromtimestamp(meta["firstPerfMs"] / 1000, tz=timezone.utc)
+            when = d.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            when = ""
+    total_price = _total_price(added_seats, labels)
+
+    discord_result = "skipped (channel disabled)" if "discord" not in channels else "skipped (no DISCORD_WEBHOOK_URL)"
+    if "discord" in channels and discord_url:
+        title_bits = []
+        if headline:
+            title_bits.append(headline)
+        if not is_festival:
+            if all_unconf:
+                title_bits.append(
+                    f"🕵️ {n_added} seat{'s' if n_added != 1 else ''} surfaced — perf marked SOLD OUT")
+            else:
+                title_bits.append(f"🎟️ {n_added} new seat{'s' if n_added != 1 else ''} dropped")
+        if event_name and not (is_festival and headline and event_name in headline):
+            title_bits.append(f"— {event_name}")
+        embed = {
+            "title": " ".join(title_bits)[:256],  # Discord embed title limit
+            "description": seat_block[:4000] if seat_block else "(empty)",
+            "url": perf_url,
+            "color": 0xFAA61A if all_unconf else 0x57F287,
+            "fields": [
+                {"name": "Watcher", "value": label or "(unnamed)", "inline": True},
+            ],
+        }
+        if venue:
+            embed["fields"].append({"name": "Venue", "value": venue, "inline": True})
+        if when:
+            embed["fields"].append({"name": "When", "value": when, "inline": True})
+        if total_now is not None:
+            embed["fields"].append({"name": "Total available", "value": str(total_now), "inline": True})
+        if total_price is not None:
+            embed["fields"].append({"name": "List price", "value": f"₪{total_price:,.0f}", "inline": True})
+        if removed_count:
+            embed["fields"].append({"name": "Also removed", "value": str(removed_count), "inline": True})
+        payload = {"embeds": [embed]}
+        summary = _seat_content_summary(added_seats, labels=labels, when=when)
+        if summary:
+            payload["content"] = summary[:1990]
+        discord_result = _post_discord(discord_url, payload)
+
+    email_result = "skipped (channel disabled)" if "email" not in channels else "skipped (no GMAIL creds)"
+    if "email" in channels and gmail_user and gmail_pwd and to_addr:
+        subj_bits = ["[Kartis]"]
+        if headline:
+            subj_bits.append(headline)
+        if not is_festival:
+            if all_unconf:
+                subj_bits.append(f"{n_added} seat{'s' if n_added != 1 else ''} surfaced (perf marked sold out)")
+            else:
+                subj_bits.append(f"{n_added} new seat{'s' if n_added != 1 else ''}")
+        if event_name and not (is_festival and headline and event_name in headline):
+            subj_bits.append(f"— {event_name}")
+        subject = " ".join(subj_bits)[:200]
+        # Festival: the status line is appended below as seat_block; don't
+        # prepend the misleading "N new seats available" line.
+        body_lines = [] if is_festival else [f"{n_added} new seat{'s' if n_added != 1 else ''} available."]
+        if event_name:
+            body_lines.append(f"Event: {event_name}")
+        if venue:
+            body_lines.append(f"Venue: {venue}")
+        if when:
+            body_lines.append(f"When:  {when}")
+        body_lines.append(f"Watcher: {label}")
+        body_lines.append(f"Buy: {perf_url}")
+        body_lines.append("")
+        body_lines.append(seat_block or "(empty)")
+        body_lines.append("")
+        if total_price is not None:
+            body_lines.append(f"List price total: ₪{total_price:,.0f}")
+        if total_now is not None:
+            body_lines.append(f"Total selectable seats now: {total_now}")
+        if removed_count:
+            body_lines.append(f"Seats that disappeared since last check: {removed_count}")
+        email_result = _send_email(subject, "\n".join(body_lines), gmail_user, gmail_pwd, to_addr)
+
+    return {"discord": discord_result, "email": email_result}
+
+
+def send_test(label="Kartis test"):
+    """One-off test notification — used by the dashboard 'Test notify' button
+    to confirm both channels are wired up before relying on them."""
+    discord_url = _discord_webhook()
+    gmail_user = os.environ.get("GMAIL_USER", "").strip()
+    gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
+
+    discord_result = "skipped (no DISCORD_WEBHOOK_URL)"
+    if discord_url:
+        discord_result = _post_discord(discord_url, {
+            "embeds": [{
+                "title": "🟢 Kartis drop-checker test",
+                "description": f"If you see this in Discord, the webhook is wired up correctly.\nLabel: **{label}**",
+                "color": 0x5865F2,
+            }]
+        })
+
+    email_result = "skipped (no GMAIL creds)"
+    if gmail_user and gmail_pwd and to_addr:
+        email_result = _send_email(
+            f"[Kartis] test notification — {label}",
+            f"This is a test from the Kartis drop checker.\nIf you got this, Gmail SMTP is wired up.\nLabel: {label}\n",
+            gmail_user, gmail_pwd, to_addr,
+        )
+
+    return {"discord": discord_result, "email": email_result}
+
+
+def send_todo_digest(due_today, overdue):
+    """Daily reminder for the to-do page: one digest message per channel,
+    not one per task. `due_today` and `overdue` are lists of todo dicts
+    (from db.todo_due_open). Returns the same shape as notify_drop so the
+    caller can log the result.
+    """
+    discord_url = _discord_webhook("todos")
+    gmail_user = os.environ.get("GMAIL_USER", "").strip()
+    gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
+
+    def _fmt_task(t):
+        bits = [t.get("title") or "(untitled)"]
+        urgency = (t.get("urgency") or "").upper()
+        if urgency and urgency != "NORMAL":
+            bits.append(f"[{urgency}]")
+        return " ".join(bits)
+
+    n_today = len(due_today)
+    n_over = len(overdue)
+
+    discord_result = "skipped (no DISCORD_WEBHOOK_URL)"
+    if discord_url:
+        desc_lines = []
+        if overdue:
+            desc_lines.append(f"**Overdue ({n_over}):**")
+            for t in overdue[:20]:
+                days_late = ""
+                try:
+                    from datetime import date, datetime
+                    d = datetime.strptime((t.get("due_date_iso") or "")[:10], "%Y-%m-%d").date()
+                    days_late = f" — {(date.today() - d).days}d late"
+                except Exception:
+                    pass
+                desc_lines.append(f"• {_fmt_task(t)}{days_late}")
+            if n_over > 20:
+                desc_lines.append(f"... +{n_over - 20} more")
+        if due_today:
+            if desc_lines:
+                desc_lines.append("")
+            desc_lines.append(f"**Due today ({n_today}):**")
+            for t in due_today[:20]:
+                desc_lines.append(f"• {_fmt_task(t)}")
+            if n_today > 20:
+                desc_lines.append(f"... +{n_today - 20} more")
+        embed = {
+            "title": f"📋 {n_over + n_today} to-do reminder{'s' if (n_over + n_today) != 1 else ''}",
+            "description": "\n".join(desc_lines)[:4000] or "(empty)",
+            "url": BASE_URL + "/todos",
+            "color": 0xF97316 if n_over else 0x58A6FF,
+        }
+        discord_result = _post_discord(discord_url, {"embeds": [embed]})
+
+    email_result = "skipped (no GMAIL creds)"
+    if gmail_user and gmail_pwd and to_addr:
+        body_lines = [f"{n_over + n_today} to-do reminder(s):", ""]
+        if overdue:
+            body_lines.append(f"OVERDUE ({n_over}):")
+            for t in overdue:
+                body_lines.append(f"  • {_fmt_task(t)} — due {t.get('due_date_iso') or '?'}")
+            body_lines.append("")
+        if due_today:
+            body_lines.append(f"DUE TODAY ({n_today}):")
+            for t in due_today:
+                body_lines.append(f"  • {_fmt_task(t)}")
+            body_lines.append("")
+        body_lines.append(f"Open the to-do page: {BASE_URL}/todos")
+        subj_bits = ["[Kartis] To-Do reminders"]
+        if n_over:
+            subj_bits.append(f"— {n_over} overdue")
+        if n_today:
+            subj_bits.append(f"— {n_today} due today")
+        email_result = _send_email(" ".join(subj_bits)[:200], "\n".join(body_lines),
+                                   gmail_user, gmail_pwd, to_addr)
+
+    return {"discord": discord_result, "email": email_result}
+
+
+def notify_viagogo_match(push_row):
+    """Notify that a Kupat purchase email has been matched (or not) to a
+    viagogo event and priced, and is waiting on /listings for the user to
+    approve before a draft listing gets created. Never creates anything
+    itself — this is a heads-up, not an action.
+
+    `push_row` is a viagogo_push DB row dict (db.viagogo_push_get /
+    viagogo_push_insert's return value).
+    """
+    discord_url = _discord_webhook("listings")
+    gmail_user = os.environ.get("GMAIL_USER", "").strip()
+    gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
+
+    status = push_row.get("status") or ""
+    no_match = status == "no_match"
+    event_name = push_row.get("event_name") or "(unknown event)"
+    venue = push_row.get("venue") or ""
+    chosen_name = push_row.get("chosen_event_name") or ""
+    chosen_venue = push_row.get("chosen_venue") or ""
+    chosen_date = push_row.get("chosen_event_date") or ""
+    qty = push_row.get("qty")
+    cost_per_unit = push_row.get("cost_per_unit")
+    website_price = push_row.get("website_price_usd")
+    pending_url = BASE_URL + "/listings"
+
+    title = "❓ Kupat ticket — no viagogo match found" if no_match else "🎟️ Kupat ticket matched on viagogo — needs approval"
+    desc_lines = [f"**{event_name}**" + (f" — {venue}" if venue else "")]
+    if not no_match and chosen_name:
+        desc_lines.append(f"Matched: **{chosen_name}**" + (f" — {chosen_venue}" if chosen_venue else "") + (f" ({chosen_date})" if chosen_date else ""))
+    if qty:
+        desc_lines.append(f"Qty: {qty}")
+    if cost_per_unit is not None:
+        desc_lines.append(f"Kupat price: ₪{cost_per_unit:,.2f}/ticket")
+    if website_price is not None:
+        desc_lines.append(f"Proposed viagogo price: ${website_price:,.2f}/ticket (5x)")
+    desc_lines.append("")
+    desc_lines.append("Review and approve on the Listings page before any listing is created.")
+
+    discord_result = "skipped (no DISCORD_WEBHOOK_URL)"
+    if discord_url:
+        embed = {
+            "title": title,
+            "description": "\n".join(desc_lines)[:4000],
+            "url": pending_url,
+            "color": 0xFAA61A if no_match else 0x5865F2,
+        }
+        discord_result = _post_discord(discord_url, {"embeds": [embed]})
+
+    email_result = "skipped (no GMAIL creds)"
+    if gmail_user and gmail_pwd and to_addr:
+        subject = f"[Kartis] {title} — {event_name}"[:200]
+        body = "\n".join(desc_lines) + f"\n\nOpen: {pending_url}\n"
+        email_result = _send_email(subject, body, gmail_user, gmail_pwd, to_addr)
+
+    return {"discord": discord_result, "email": email_result}
+
+
+def notify_viagogo_listed(info):
+    """A viagogo listing was just created from the approve flow. Discord
+    heads-up with everything needed to trust it went out correctly.
+
+    `info` keys: event_name, venue, event_date, section, row, seats, qty,
+    price, currency (default USD), published (bool), tickets_uploaded
+    (bool/None), ticket_note (str/None), pricer_enabled (bool),
+    pricer_floor (num/None), pricer_sections (list/None), buyer_email,
+    listing_id.
+    """
+    discord_url = _discord_webhook("listings")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    cur = info.get("currency") or "USD"
+    live = info.get("published")
+    price = info.get("price")
+    seatbits = []
+    if info.get("section"):
+        seatbits.append(str(info["section"]).split("\n")[0])
+    if info.get("row"):
+        seatbits.append(f"row {info['row']}")
+    if info.get("seats"):
+        seatbits.append(f"seats {info['seats']}")
+    seat_line = " · ".join(seatbits) or "—"
+
+    tix = info.get("tickets_uploaded")
+    if tix is True:
+        tix_line = "✅ e-tickets attached"
+    elif info.get("tickets_skipped"):
+        tix_line = "⏭️ e-tickets skipped by choice — attach before it sells"
+    elif tix is False:
+        tix_line = "⚠️ e-tickets NOT attached" + (f" — {info['ticket_note']}" if info.get("ticket_note") else "")
+    else:
+        tix_line = "— no e-tickets for this listing"
+
+    if info.get("pricer_enabled"):
+        pr = f"🟢 ON · floor {cur} {float(info.get('pricer_floor') or 0):,.2f}"
+        secs = info.get("pricer_sections") or []
+        pr += f" · vs {', '.join(secs)}" if secs else " · vs own section"
+    else:
+        pr = "⚪ OFF (fixed price)"
+
+    date = info.get("event_date") or ""
+    venue = info.get("venue") or ""
+    desc = [
+        f"**{info.get('event_name') or '(event)'}**" + (f" — {venue}" if venue else ""),
+        f"📅 {date}" if date else "",
+        f"🎫 {seat_line}  ·  qty {info.get('qty') or '?'}",
+        f"💵 {cur} {price:,.2f}/ticket" if price is not None else "",
+        f"🤖 Auto-pricer: {pr}",
+        tix_line,
+        f"📧 sold under {info['buyer_email']}" if info.get("buyer_email") else "",
+    ]
+    embed = {
+        "title": ("🟢 Listing LIVE on viagogo" if live else "📝 Draft listing created on viagogo"),
+        "description": "\n".join(l for l in desc if l)[:4000],
+        "url": BASE_URL + "/listings",
+        "color": 0x2ECC71 if live else 0x95A5A6,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
+def notify_pricer_change(info):
+    """Auto-pricer changed (or, dry-run, would change) a listing's price.
+    Discord-only — these fire up to every 15 minutes and email would be
+    noise. `info`: event_name, section, listing_id, old_price, new_price,
+    competitor_price, floor, dry_run."""
+    discord_url = _discord_webhook("pricer")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    dry = info.get("dry_run")
+    title = ("🧪 [DRY RUN] Auto-pricer would reprice" if dry
+             else "💸 Auto-pricer changed a listing price")
+    lines = [
+        f"**{info.get('event_name') or '(unknown event)'}** — "
+        f"{(info.get('section') or '').splitlines()[0]}",
+        f"${info.get('old_price'):,.2f} → **${info.get('new_price'):,.2f}**",
+    ]
+    if info.get("competitor_price") is not None:
+        lines.append(f"Cheapest competitor: ${info['competitor_price']:,.2f}")
+    if info.get("floor") is not None:
+        lines.append(f"Floor: ${info['floor']:,.2f}")
+    embed = {
+        "title": title,
+        "description": "\n".join(lines)[:4000],
+        "url": "https://kartis.homes/pricer",
+        "color": 0xFAA61A if dry else 0x56D364,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
+def _pacha_tier_lines(ev, limit=5):
+    """'• General Access - 20th Release: 18 of 20 left — $185' per tier.
+    Tiers without an available count are skipped."""
+    out = []
+    for t in (ev.get("tiers") or [])[:limit]:
+        if t.get("available") is None:
+            continue
+        qty = f" of {t['quantity']}" if t.get("quantity") is not None else ""
+        price = f" — ${t['price']:,.0f}" if t.get("price") is not None else ""
+        out.append(f"• {t['name'] or 'Tickets'}: **{t['available']}**{qty} left{price}")
+    return out
+
+
+def _pacha_available_at_price(ev, price, vip=False):
+    """Tickets buyable right now at exactly `price` — the size of the cheap
+    batch a shock ping is announcing. Sums across (non-)VIP tiers at that
+    price; None when no tier with a count sits there. The VIP/non-VIP split
+    mirrors _pick_ga_tier's name test in pacha_events."""
+    total, seen = 0, False
+    for t in (ev.get("tiers") or []):
+        if vip != ("vip" in (t.get("name") or "").lower()):
+            continue
+        if t.get("price") == price and t.get("available") is not None:
+            total += t["available"]
+            seen = True
+    return total if seen else None
+
+
+def notify_pacha_event(kind, ev, old=None):
+    """Pacha NYC event-monitor ping. Discord-only — fires up to every
+    minute and speed matters more than a paper trail. `kind` is one of
+    'new' (event just appeared on pacha-nyc.com/events), 'onsale'
+    (waitlist/hidden-GA event became buyable), 'price_up' (headline GA
+    price climbed a release), 'price_down' (GA or VIP got CHEAPER — a
+    return or an earlier/cheaper release re-opened; the time-critical
+    buy-now shock), 'low_stock' (the GA release's tickets-left count
+    crossed below the alert threshold — the price is about to jump).
+    `ev` is a normalized dict from pacha_events.fetch_events(); `old` is
+    the previously stored DB row (the price kinds use its old prices,
+    low_stock its old count).
+
+    Routing: 'price_up' and 'low_stock' are demand signals about an event
+    we already know, not new inventory — they go to the 'jumps' channel;
+    'price_down' goes to #pacha-shocks (see _pacha_shocks_webhook);
+    'new' and 'onsale' stay in 'new_events'."""
+    if kind == "price_down":
+        discord_url = _pacha_shocks_webhook()
+    else:
+        discord_url = _discord_webhook("jumps" if kind in ("price_up", "low_stock") else "new_events")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    name = ev.get("name") or "(unknown event)"
+    ga = ev.get("ga_price")
+    vip = ev.get("vip_price")
+    lines = [f"**{ev.get('date_text') or ev.get('start_date') or ''}**"]
+
+    if kind == "onsale":
+        title = f"🎟️ Pacha NYC: {name} is now ON SALE"
+        color = 0x56D364
+        if ga:
+            lines.append(f"GA from **${ga:,.0f}**")
+    elif kind == "price_up":
+        old_price = (old or {}).get("ga_price")
+        title = f"📈 Pacha NYC: {name} GA ${old_price:,.0f} → ${ga:,.0f}"
+        color = 0xFAA61A
+        lines.append("Selling through — price climbs with each release.")
+    elif kind == "price_down":
+        old_ga = (old or {}).get("ga_price")
+        old_vip = (old or {}).get("vip_price")
+        drops = []
+        if old_ga and ga and ga < old_ga:
+            n = _pacha_available_at_price(ev, ga)
+            drops.append(f"GA ${old_ga:,.0f} → ${ga:,.0f}"
+                         + (f" ({n} left)" if n is not None else ""))
+        if old_vip and vip and vip < old_vip:
+            n = _pacha_available_at_price(ev, vip, vip=True)
+            drops.append(f"VIP ${old_vip:,.0f} → ${vip:,.0f}"
+                         + (f" ({n} left)" if n is not None else ""))
+        title = f"⚡ Pacha NYC: {name} {' · '.join(drops) or 'price DROPPED'}"
+        color = 0x00B0F4
+        lines.append("Price DROPPED — cheaper tickets just appeared "
+                     "(a return, or an earlier release re-opened). They "
+                     "usually go fast.")
+    elif kind == "low_stock":
+        left = ev.get("ga_available")
+        release = ev.get("ga_release") or "current GA release"
+        title = f"⏳ Pacha NYC: {name} — only {left} left in {release}"
+        color = 0xED4245
+        was = (old or {}).get("ga_available")
+        if was is not None:
+            lines.append(f"Was {was} earlier — the next release usually costs more.")
+        else:
+            lines.append("The next release usually costs more.")
+    else:
+        title = f"🪩 New Pacha NYC event — {name}"
+        color = 0xE91E63
+        if ga:
+            lines.append(f"GA from **${ga:,.0f}**")
+        if vip:
+            lines.append(f"VIP from ${vip:,.0f}")
+        if ev.get("iswaitlist"):
+            lines.append("⏳ Waitlist only for now — not yet buyable.")
+
+    lines.extend(_pacha_tier_lines(ev))
+    # Customer-facing checkout is the event page's #tickets section — the
+    # FourVenues iframe URL also sells but adds tax there.
+    buy = f"{ev['page_url']}#tickets" if ev.get("page_url") else ev.get("buy_url")
+    if buy:
+        lines.append(f"[Buy tickets]({buy})")
+    embed = {
+        "title": title[:250],
+        "description": "\n".join(lines)[:4000],
+        "url": ev.get("page_url") or "https://pacha-nyc.com/events",
+        "color": color,
+    }
+    payload = {"embeds": [embed]}
+    if kind == "price_down":
+        # Discord's phone push previews only `content`, not the embed — put
+        # the prices on the lock screen for the time-critical shock ping.
+        payload["content"] = title[:1990]
+    return {"discord": _post_discord(discord_url, payload)}
+
+
+# US EDM single-event trackers (posh / leap / eventim). Same spirit as the
+# pacha monitor, but these watch named events on three platforms, and only
+# posh publishes remaining counts — every count here may be None, which
+# means UNKNOWN and must never render as "0 left".
+_EDM_SOURCE_LABEL = {
+    "posh": "Posh",
+    "leap": "Leap Events",
+    "eventim": "Eventim US",
+}
+
+
+def _edm_tier_lines(ev, limit=6):
+    """'• Wave 2 — $28.49 · 15 left' per tier, cheapest first. Sold-out
+    tiers are kept (they're the release history that makes the current
+    price legible) but struck through."""
+    tiers = ev.get("tiers") or []
+    out = []
+    for t in tiers[:limit]:
+        price = f" — ${t['price']:,.2f}" if t.get("price") is not None else ""
+        if t.get("sold_out"):
+            state = " · ~~sold out~~"
+        elif t.get("closed"):
+            state = " · not on sale"
+        elif t.get("available") is not None:
+            state = f" · **{t['available']}** left"
+        else:
+            state = ""
+        out.append(f"• {t.get('name') or 'Tickets'}{price}{state}")
+    if len(tiers) > limit:
+        out.append(f"…and {len(tiers) - limit} more tier(s)")
+    return out
+
+
+def notify_edm_event(kind, ev, old=None):
+    """US EDM event-tracker ping (posh / leap / eventim). Discord-only, like
+    the pacha monitor — these fire on a short poll and speed beats a paper
+    trail. `kind` is one of:
+
+      'new'        first successful fetch of a newly tracked event
+      'onsale'     nothing buyable → something buyable (a wave opened)
+      'restock'    was fully SOLD OUT and is buyable again — perishable
+      'soldout'    every tier is now sold out
+      'new_tier'   a wave/tier never listed before appeared (more inventory)
+      'price_up'   the cheapest buyable price climbed (a wave sold through)
+      'price_down' the cheapest buyable price DROPPED — a return or a
+                   cheaper wave re-opening; the buy-now shock
+      'low_stock'  the current release's remaining count crossed the alert
+                   threshold (posh only — the others publish no counts)
+
+    `ev` is a normalized dict from one of the *_events fetchers; `old` is
+    the previously stored edm_seen_events row.
+
+    Routing mirrors pacha's: the perishable kinds ('price_down', 'restock')
+    go to the shocks channel, demand signals ('price_up', 'low_stock') to
+    'jumps', a full sell-out to 'status', the rest to 'new_events'."""
+    if kind in ("price_down", "restock"):
+        discord_url = _pacha_shocks_webhook()
+    elif kind in ("price_up", "low_stock"):
+        discord_url = _discord_webhook("jumps")
+    elif kind == "soldout":
+        discord_url = _discord_webhook("status")
+    else:
+        discord_url = _discord_webhook("new_events")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    site = _EDM_SOURCE_LABEL.get(ev.get("source"),
+                                 (ev.get("source") or "EDM").title())
+    name = ev.get("name") or "(unknown event)"
+    price = ev.get("min_price")
+    old_price = (old or {}).get("min_price")
+    where = " · ".join(x for x in (ev.get("venue"), ev.get("date_text")) if x)
+    lines = [f"**{where}**"] if where else []
+
+    if kind == "onsale":
+        title = f"🎟️ {site}: {name} is ON SALE"
+        color = 0x56D364
+        if price is not None:
+            lines.append(f"From **${price:,.2f}**"
+                         + (f" ({ev['lead_tier']})" if ev.get("lead_tier") else ""))
+    elif kind == "restock":
+        title = f"⚡ {site}: {name} is BACK — tickets available again"
+        color = 0x00B0F4
+        if price is not None:
+            lines.append(f"From **${price:,.2f}**"
+                         + (f" ({ev['lead_tier']})" if ev.get("lead_tier") else ""))
+        lines.append("It was sold out — returns usually go fast.")
+    elif kind == "soldout":
+        title = f"🚫 {site}: {name} is SOLD OUT"
+        color = 0x99AAB5
+        if old_price is not None:
+            lines.append(f"Last price was ${old_price:,.2f}.")
+    elif kind == "new_tier":
+        added = ev.get("_new_tiers") or []
+        label = ", ".join(t.get("name") or "Tickets" for t in added[:3]) or "a new tier"
+        title = f"🆕 {site}: {name} — new release: {label}"
+        color = 0x9B59B6
+        lines.append("More inventory just went up.")
+    elif kind == "price_up":
+        title = (f"📈 {site}: {name} ${old_price:,.2f} → ${price:,.2f}"
+                 if old_price is not None and price is not None
+                 else f"📈 {site}: {name} price climbed")
+        color = 0xFAA61A
+        lines.append("A release sold through — the price steps up with each one.")
+    elif kind == "price_down":
+        title = (f"⚡ {site}: {name} ${old_price:,.2f} → ${price:,.2f}"
+                 if old_price is not None and price is not None
+                 else f"⚡ {site}: {name} price DROPPED")
+        color = 0x00B0F4
+        left = ev.get("lead_available")
+        lines.append("Price DROPPED — cheaper tickets just appeared (a return, "
+                     "or an earlier release re-opened)."
+                     + (f" **{left}** at this price." if left is not None else ""))
+    elif kind == "low_stock":
+        left = ev.get("lead_available")
+        release = ev.get("lead_tier") or "the current release"
+        title = f"⏳ {site}: {name} — only {left} left in {release}"
+        color = 0xED4245
+        was = (old or {}).get("lead_available")
+        if was is not None:
+            lines.append(f"Was {was} earlier — the next release usually costs more.")
+        else:
+            lines.append("The next release usually costs more.")
+    else:  # 'new'
+        title = f"🪩 Now tracking — {name} ({site})"
+        color = 0xE91E63
+        if price is not None:
+            lines.append(f"From **${price:,.2f}**"
+                         + (f" ({ev['lead_tier']})" if ev.get("lead_tier") else ""))
+        if ev.get("sold_out"):
+            lines.append("Currently sold out — you'll get a ping if it returns.")
+
+    if ev.get("total_sold") is not None:
+        lines.append(f"{ev['total_sold']:,} sold so far.")
+    lines.extend(_edm_tier_lines(ev))
+    if ev.get("page_url"):
+        lines.append(f"[Buy tickets]({ev['page_url']})")
+
+    embed = {
+        "title": title[:250],
+        "description": "\n".join(lines)[:4000],
+        "color": color,
+    }
+    if ev.get("page_url"):
+        embed["url"] = ev["page_url"]
+    payload = {"embeds": [embed]}
+    if kind in ("price_down", "restock", "low_stock"):
+        # Discord's phone push previews only `content`, not the embed — put
+        # the headline on the lock screen for the time-critical kinds.
+        payload["content"] = title[:1990]
+    return {"discord": _post_discord(discord_url, payload)}
+
+
+def notify_dice(kind, info):
+    """DICE purchases-tracker ping. `kind` is 'purchase' (new purchase email
+    recorded), 'transfer' (transfer applied to holdings), or
+    'transfer_problem' (transfer couldn't be matched cleanly — unmatched /
+    overflow — needs a human look). Routed to 'listings' (the intake
+    pipeline channel). Discord-only."""
+    discord_url = _discord_webhook("listings")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    name = info.get("event_name") or "(unknown event)"
+    acct = info.get("account_email") or "?"
+    qty = info.get("qty")
+    lines = []
+    if info.get("event_date_iso"):
+        lines.append(f"**{info['event_date_iso']}**")
+    lines.append(f"Account: `{acct}`")
+
+    if kind == "purchase":
+        title = f"🎲 DICE purchase — {qty} × {name}"
+        color = 0x5865F2
+        if info.get("ticket_type"):
+            lines.append(info["ticket_type"])
+        if info.get("price_total") is not None:
+            lines.append(f"Total ${info['price_total']:,.2f}")
+    elif kind == "transfer":
+        title = f"📤 DICE transfer — {qty} × {name} sent"
+        color = 0x56D364
+        if info.get("recipient"):
+            lines.append(f"To: {info['recipient']}")
+        if info.get("held_after") is not None:
+            lines.append(f"{info['held_after']} still held on this account")
+    else:
+        title = f"⚠️ DICE transfer needs review — {qty or '?'} × {name}"
+        color = 0xED4245
+        lines.append(f"Match status: **{info.get('match_status') or 'unmatched'}**")
+        if info.get("recipient"):
+            lines.append(f"To: {info['recipient']}")
+        lines.append("Couldn't be applied to a recorded purchase — check /dice.")
+
+    embed = {"title": title[:250], "description": "\n".join(lines)[:4000], "color": color}
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
+_SITE_EVENT_LABELS = {"kupat": "Kupat", "tm": "Ticketmaster IL", "zappa": "Zappa",
+                      "barby": "Barby"}
+
+
+def notify_site_event(kind, ev, old=None):
+    """Israeli-sites event-monitor ping (kupat.co.il / ticketmaster.co.il).
+    Discord-only — fires up to every 10 minutes and speed matters more than
+    a paper trail. `kind` is 'new' (event just appeared on the site's
+    listing feed), 'newdate' (kupat/tm — a new performance appeared
+    under an already-known event page; ev['new_perfs'] lists the added
+    dates) or 'onsale' (a listed-but-not-selling event's sale
+    opened — for kupat that means the show got PROMOTED TO THE
+    kupat.co.il HOMEPAGE, the site's "officially on sale" moment). `ev` is
+    a normalized dict from kupat_events/tm_events fetch_events(); an
+    `image` URL, when present (kupat homepage banner), is attached as the
+    embed graphic. `old` is the previously stored DB row (unused, kept
+    for parity with notify_pacha_event)."""
+    discord_url = _discord_webhook("new_events")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+
+    label = _SITE_EVENT_LABELS.get(ev.get("source"), ev.get("source") or "?")
+    name = ev.get("name") or "(unknown event)"
+    lines = []
+    if ev.get("date_text"):
+        lines.append(f"**{ev['date_text']}**")
+    if ev.get("venue"):
+        lines.append(ev["venue"])
+    if ev.get("price_text"):
+        lines.append(f"From {ev['price_text']}")
+
+    if kind == "newdate":
+        # A new performance appeared under an already-known event page
+        # (kupat/tm) — for sold-out artists this is the highest-value
+        # ping there is. `ev['new_perfs']` carries just the added dates.
+        added = ev.get("new_perfs") or []
+        n = len(added)
+        title = (f"📅 {label}: new date added — {name}" if n == 1
+                 else f"📅 {label}: {n} new dates added — {name}")
+        lines = []
+        for p in added:
+            line = f"**{p.get('date_text') or '?'}**"
+            if p.get("venue"):
+                line += f" — {p['venue']}"
+            if p.get("min_price"):
+                line += f" — from ₪{p['min_price']:g}"
+            if p.get("soldout"):
+                line += " — SOLD OUT"
+            lines.append(line)
+        color = 0xF39C12
+    elif kind == "onsale":
+        if ev.get("source") == "kupat":
+            title = f"🏠 Kupat: {name} is now on the homepage — sale is official"
+        else:
+            title = f"🎟️ {label}: {name} is now ON SALE"
+        color = 0x56D364
+    elif ev.get("homepage_teaser"):
+        title = f"🖼️ Kupat homepage: new show graphic — {name}"
+        color = 0xB57EDC
+        lines.append("Announced on the homepage, but no ticket link in the "
+                     "catalog yet — sale likely opens soon.")
+    else:
+        title = f"🎫 New {label} event — {name}"
+        color = 0xE91E63
+        if ev.get("on_sale") is False:
+            lines.append("⏳ Not on sale yet — listed only." +
+                         (" Watch for the homepage ping." if ev.get("source") == "kupat" else ""))
+
+    embed = {
+        "title": title[:250],
+        "description": "\n".join(lines)[:4000],
+        "url": ev.get("url") or "",
+        "color": color,
+    }
+    if ev.get("image"):
+        embed["image"] = {"url": ev["image"]}
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
+def notify_pricer_paused(info):
+    """Auto-pricer paused a listing because its price on inv.viagogo differs
+    from the last price the pricer set (i.e. a manual change). Discord +
+    email — the pricer stays off for this listing until the user resumes it
+    from the dashboard, so this one shouldn't be missed. `info`: event_name,
+    section, listing_id, expected, seen."""
+    discord_url = _discord_webhook("pricer")
+    gmail_user = os.environ.get("GMAIL_USER", "").strip()
+    gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+    to_addr = (os.environ.get("NOTIFY_EMAIL_TO") or gmail_user).strip()
+
+    title = "⏸️ Auto-pricer paused — manual price change detected"
+    lines = [
+        f"**{info.get('event_name') or '(unknown event)'}** — "
+        f"{(info.get('section') or '').splitlines()[0]}",
+        f"Pricer last set: ${info.get('expected'):,.2f}",
+        f"inv.viagogo now shows: ${info.get('seen'):,.2f}",
+        "",
+        "Auto-pricing is paused for this listing. Resume it from the "
+        "dashboard when ready.",
+    ]
+    body = "\n".join(lines)
+
+    discord_result = "skipped (no DISCORD_WEBHOOK_URL)"
+    if discord_url:
+        embed = {
+            "title": title,
+            "description": body[:4000],
+            "url": "https://kartis.homes/pricer",
+            "color": 0xFAA61A,
+        }
+        discord_result = _post_discord(discord_url, {"embeds": [embed]})
+
+    email_result = "skipped (no GMAIL creds)"
+    if gmail_user and gmail_pwd and to_addr:
+        subject = f"[Kartis] {title} — {info.get('event_name') or ''}"[:200]
+        email_result = _send_email(
+            subject, body + "\n\nOpen: https://kartis.homes/pricer\n",
+            gmail_user, gmail_pwd, to_addr,
+        )
+
+    return {"discord": discord_result, "email": email_result}
+
+
+def notify_pricer_adopted(info):
+    """Auto-pricer noticed an external price change (user's manual move on
+    inv.viagogo) and adopted it as the new baseline — pricing continues,
+    and a raise holds until a competitor undercuts it. Only sent for
+    dollar-scale moves; viagogo's own cent-drift adopts silently.
+    `info`: event_name, section, listing_id, expected, seen."""
+    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+    lines = [
+        f"**{info.get('event_name') or '(unknown event)'}** — "
+        f"{(info.get('section') or '').splitlines()[0]}",
+        f"Pricer had set ${info.get('expected'):,.2f}; inv now shows "
+        f"**${info.get('seen'):,.2f}** — adopted as the new baseline.",
+        "",
+        "Auto-pricing stays ON: this price holds while you're cheapest, "
+        "and the pricer undercuts again the moment a competitor goes below it.",
+    ]
+    embed = {
+        "title": "🔄 Auto-pricer adopted your price change",
+        "description": "\n".join(lines)[:4000],
+        "url": "https://kartis.homes/pricer",
+        "color": 0x58A6FF,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
+def notify_pricer_rate_limited(info):
+    """Auto-pricer hit the sliding-window drop cap on a listing (e.g. 15% in
+    12h) and stopped lowering. Sent once per episode (not every tick).
+    `info`: event_name, section, listing_id, current, wanted, baseline,
+    pct, hours."""
+    discord_url = _discord_webhook("pricer")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+    lines = [
+        f"**{info.get('event_name') or '(unknown event)'}** — "
+        f"{(info.get('section') or '').splitlines()[0]}",
+        f"Already down {info.get('pct'):g}% from ${info.get('baseline'):,.2f} "
+        f"in the last {info.get('hours'):g}h — holding at ${info.get('current'):,.2f}.",
+        f"Competitors would call for ${info.get('wanted'):,.2f}.",
+        "",
+        "Auto-lowering resumes as the window slides; take over manually "
+        "from the Pricer page if you want to chase the market down.",
+    ]
+    embed = {
+        "title": "🛑 Auto-pricer drop cap reached",
+        "description": "\n".join(lines)[:4000],
+        "url": "https://kartis.homes/pricer",
+        "color": 0xF85149,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
+def notify_cv_pricer_down(error_text, streak):
+    """CrowdVolt pricer tick has failed `streak` times in a row — usually a
+    Cloudflare challenge on the parked tab or an expired CrowdVolt login,
+    both of which need a human in noVNC. Throttled by the caller."""
+    discord_url = _discord_webhook("pricer")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+    lines = [
+        f"{streak} ticks in a row have failed. Last error:",
+        f"```{(error_text or '')[:500]}```",
+        "If it mentions Cloudflare or a missing login: open "
+        "[noVNC](https://vnc.kartis.homes/vnc.html?autoconnect=true&resize=remote&reconnect=true), "
+        "pass the check in the CrowdVolt tab, and sign in again.",
+    ]
+    embed = {
+        "title": "🔴 CrowdVolt pricer is down",
+        "description": "\n".join(lines)[:4000],
+        "url": "https://kartis.homes/cvpricer",
+        "color": 0xF85149,
+    }
+    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+
+
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+    load_dotenv()
+    print(send_test("CLI smoke test"))
+    # One test ping per *distinct* per-category webhook so a channel-routing
+    # typo shows up here, not on the first real alert.
+    _by_url = {}
+    for _cat, _var in _WEBHOOK_ENV.items():
+        _url = os.environ.get(_var, "").strip()
+        if _url:
+            _by_url.setdefault(_url, []).append(_cat)
+    _main_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not _by_url:
+        print("no per-category webhooks configured — everything goes to the main channel")
+    for _url, _cats in _by_url.items():
+        if _url == _main_url:
+            print(f"{'+'.join(_cats)}: same as main webhook")
+            continue
+        _res = _post_discord(_url, {"embeds": [{
+            "title": f"🟢 Kartis channel test — {', '.join(_cats)}",
+            "description": "This channel receives: **" + ", ".join(_cats) + "**",
+            "color": 0x5865F2,
+        }]})
+        print(f"{'+'.join(_cats)}: {_res}")

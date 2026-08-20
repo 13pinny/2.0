@@ -1,0 +1,1476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Sales</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
+    --pink: #f06595;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; position: sticky; top: 56px; z-index: 4; background: var(--bg); padding: 10px 0; margin: 0 0 14px; border-bottom: 1px solid var(--line); }
+  input, select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); position: sticky; top: 110px; background: var(--bg); }
+  th.col-check, td.col-check { width: 28px; padding: 6px 4px 6px 10px; }
+  input.row-check { width: 14px; height: 14px; cursor: pointer; padding: 0; margin: 0; vertical-align: middle; accent-color: var(--accent); }
+  tr.row-selected td { background: rgba(88,166,255,0.08) !important; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.is-new td { background: #e6f4ea; }
+  .src { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
+  .src-lysted { color: var(--accent); border-color: var(--accent); }
+  .src-viagogo { color: var(--orange); border-color: var(--orange); }
+  .src-jerujam { color: var(--purple); border-color: var(--purple); }
+  .src-crowdvolt { color: var(--pink); border-color: var(--pink); }
+  .src-untracked { color: var(--muted); border-color: var(--muted); }
+  .new-badge { padding: 1px 5px; font-size: 9px; background: rgba(86,211,100,0.12); color: var(--green); border: 1px solid var(--green); border-radius: 1px; letter-spacing: 1.5px; margin-left: 4px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 28px 0 10px; color: var(--text); display: flex; align-items: baseline; gap: 12px; }
+  h2:first-of-type { margin-top: 0; }
+  h2 .count { color: var(--muted); font-weight: 400; font-size: 11px; }
+  .pill-bar { display: flex; gap: 4px; margin-bottom: 12px; }
+  .pill-bar .pill { font-family: inherit; font-size: 10px; letter-spacing: 1.5px; padding: 5px 12px; border: 1px solid var(--line); background: var(--bg-2); color: var(--muted); cursor: pointer; text-transform: uppercase; }
+  .pill-bar .pill:hover { background: #e9edf2; color: var(--text); }
+  .pill-bar .pill.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.06); }
+  tbody tr { cursor: pointer; }
+  tr.group-hdr { scroll-margin-top: 130px; }
+  tr.group-hdr td { background: var(--bg-2); padding: 12px 14px; border-top: 1px solid var(--line); cursor: pointer; user-select: none; }
+  tr.group-hdr td:hover { background: #e7ebf0; }
+  tr.group-hdr .chev { display: inline-block; width: 14px; color: var(--muted); transition: transform 0.15s; font-size: 14px; vertical-align: middle; }
+  tr.group-hdr.expanded .chev { transform: rotate(90deg); }
+  tr.group-hdr .evt-title { color: var(--text); font-weight: 700; letter-spacing: 0.3px; font-size: 15px; vertical-align: middle; }
+  tr.group-hdr .evt-meta { color: var(--muted); margin-left: 10px; font-size: 11px; vertical-align: middle; }
+  tr.group-hdr .evt-stats { float: right; color: var(--muted); font-size: 11px; padding-top: 3px; }
+  tr.group-hdr .evt-stats .ratio { color: var(--text); margin-right: 12px; }
+  tr.group-hdr .evt-stats .pos { color: var(--green); }
+  tr.group-hdr .evt-stats .neg { color: var(--red); }
+  tr.listing-hdr td { background: #eaeef3; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 12px; border-top: 1px dashed var(--line); cursor: default; }
+  tr.listing-row { cursor: pointer; }
+  tr.listing-row[data-clickable="false"] { cursor: default; }
+  tr.listing-row td { background: #f1f4f8; color: var(--muted); font-size: 12px; }
+  tr.listing-row:hover td { background: #e2ecf9; }
+  tr.listing-row .src { opacity: 0.85; }
+  tr.listing-row .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid var(--line); cursor: pointer; font-size: 14px; line-height: 18px; padding: 0; opacity: 0.85; transition: opacity 0.1s, background 0.1s, border-color 0.1s; margin-right: 2px; }
+  tr.listing-row:hover .row-action { opacity: 1; }
+  tr.listing-row .row-sell-list { color: var(--green); }
+  tr.listing-row .row-sell-list:hover { background: rgba(86,211,100,0.15); border-color: var(--green); }
+  tr.listing-row .row-hide-list { color: var(--red); }
+  tr.listing-row .row-hide-list:hover { background: rgba(248,81,73,0.15); border-color: var(--red); }
+  td.edited { background: rgba(88,166,255,0.06); }
+  td.edited::after { content: " ●"; color: var(--accent); font-size: 8px; vertical-align: super; }
+  /* Single-click-to-edit cells (currently: platform). The dblclick-row-to-edit
+     pattern is preserved for everything else; platform gets a faster path
+     since it changes more often. */
+  td.cell-edit { cursor: pointer; position: relative; }
+  td.cell-edit:hover { background: rgba(88,166,255,0.08); }
+  td.cell-edit:hover::before {
+    content: "✎"; position: absolute; right: 4px; top: 50%;
+    transform: translateY(-50%); color: var(--accent); font-size: 10px; opacity: 0.7;
+  }
+  /* Group-merge UI: checkbox in each event-group header lets the user
+     pick 2+ groups, and the floating bar at the bottom opens the merge
+     modal. ⊟ MERGED badge marks groups that were already merged together,
+     click to split. */
+  .grp-check { width: 13px; height: 13px; vertical-align: middle; margin-right: 6px; cursor: pointer; accent-color: var(--accent); }
+  .grp-unmerge { background: transparent; border: 1px solid var(--purple); color: var(--purple); padding: 1px 6px; font-size: 9px; letter-spacing: 1.5px; margin-left: 8px; cursor: pointer; font-family: inherit; border-radius: 1px; }
+  .grp-unmerge:hover { background: rgba(167,139,250,0.12); }
+  #merge-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--purple); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; z-index: 999; letter-spacing: 0.5px; gap: 12px; align-items: center; }
+  #merge-bar.open { display: flex; }
+  #merge-bar .bulk-count { color: var(--purple); font-weight: 600; }
+  #merge-bar button { font-family: inherit; font-size: 11px; padding: 6px 12px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; }
+  #merge-bar button.primary { color: var(--purple); border-color: var(--purple); }
+  #merge-bar button.primary:hover { background: rgba(167,139,250,0.1); }
+  #merge-modal-bg .merge-opt { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; padding: 4px 0; }
+  #merge-modal-bg .merge-opt input[type="radio"] { accent-color: var(--purple); }
+  #merge-modal-bg .merge-opt .name { flex: 1; }
+  #merge-modal-bg .merge-opt .meta { color: var(--muted); font-size: 11px; }
+  /* edit modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 540px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal h3 .close:hover { color: var(--text); }
+  .modal h3 .src-tag { font-size: 10px; padding: 1px 6px; border: 1px solid; border-radius: 1px; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 110px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus, .modal-body select:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot button:hover { background: #e9edf2; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+  .muted { color: var(--muted); }
+  .row-del { width: 22px; height: 22px; border-radius: 0; background: transparent; color: var(--red); border: 1px solid var(--line); cursor: pointer; font-size: 14px; line-height: 18px; padding: 0; opacity: 0.85; transition: opacity 0.1s, background 0.1s, border-color 0.1s; }
+  tbody tr:hover .row-del { opacity: 1; }
+  tbody tr .row-del:hover { background: rgba(248,81,73,0.15); border-color: var(--red); }
+  #bulk-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--accent); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; z-index: 999; letter-spacing: 0.5px; gap: 12px; align-items: center; }
+  #bulk-bar.open { display: flex; }
+  #bulk-bar .bulk-count { color: var(--accent); font-weight: 600; }
+  #bulk-bar button { font-family: inherit; font-size: 11px; padding: 6px 12px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; }
+  #bulk-bar button:hover { background: #e9edf2; }
+  #bulk-bar button.danger { color: var(--red); border-color: var(--red); }
+  #bulk-bar button.danger:hover { background: rgba(248,81,73,0.1); }
+  #bulk-bar button.primary { color: var(--accent); border-color: var(--accent); }
+  #bulk-bar button.primary:hover { background: rgba(88,166,255,0.1); }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); color: var(--text); border: 1px solid var(--line); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; z-index: 1000; letter-spacing: 0.5px; }
+  #toast button { margin-left: 12px; padding: 3px 10px; background: transparent; color: var(--amber); border: 1px solid var(--line-2); cursor: pointer; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
+  #toast button:hover { background: #e9edf2; }
+  #toast .kbd { color: var(--muted); margin-left: 8px; font-size: 10px; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>SALES</h1>
+    <span class="meta" id="sub">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales" class="active">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Tickets</div><div class="value" id="s-tickets">0</div></div>
+    <div class="stat"><div class="label">Sales</div><div class="value" id="s-sales">0</div></div>
+    <div class="stat"><div class="label">Events</div><div class="value" id="s-events">0</div></div>
+    <div class="stat amber"><div class="label">My Cost</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat green"><div class="label">Total Sales</div><div class="value" id="s-total">$0</div></div>
+    <div class="stat green"><div class="label">My Payout</div><div class="value" id="s-payout">$0</div></div>
+    <div class="stat"><div class="label">My ROI</div><div class="value" id="s-roi">—</div></div>
+    <div class="stat green"><div class="label">My Profit</div><div class="value" id="s-profit">$0</div></div>
+  </div>
+
+  <div class="bar" style="margin-bottom:6px;">
+    <span class="muted" style="font-size:10px;letter-spacing:1.5px;align-self:center;">FILTER BY</span>
+    <div class="pill-bar" id="basis-pills" style="margin:0;">
+      <button type="button" class="pill active" data-basis="sale">Sale date</button>
+      <button type="button" class="pill" data-basis="event">Event date</button>
+    </div>
+    <div class="pill-bar" id="range-pills" style="margin:0;">
+      <button type="button" class="pill" data-range="3">Last 3</button>
+      <button type="button" class="pill" data-range="7">Last 7</button>
+      <button type="button" class="pill" data-range="14">Last 14</button>
+      <button type="button" class="pill" data-range="30">Last 30</button>
+      <button type="button" class="pill" data-range="ytd">YTD</button>
+      <button type="button" class="pill active" data-range="all">All time</button>
+      <button type="button" class="pill" data-range="custom">Custom</button>
+    </div>
+    <span id="custom-range" style="display:none; gap:4px; align-items:center;">
+      <input type="date" id="date-from" style="font-size:11px;padding:5px 8px;">
+      <span class="muted" style="font-size:11px;">→</span>
+      <input type="date" id="date-to" style="font-size:11px;padding:5px 8px;">
+    </span>
+  </div>
+
+  <div class="bar">
+    <input type="search" id="q-search" placeholder="search event venue platform" style="flex:1; min-width:200px;">
+    <select id="q-source">
+      <option value="all">SRC: ALL</option>
+      <option value="lysted">LYSTED</option>
+      <option value="viagogo">VIAGOGO</option>
+      <option value="crowdvolt">CROWDVOLT</option>
+      <option value="jerujam">JJT</option>
+    </select>
+    <select id="q-new">
+      <option value="all">SHOW: ALL</option>
+      <option value="new">ONLY NEW v JJ</option>
+    </select>
+    <select id="q-sort">
+      <option value="event-asc" selected>EVENT DATE ↑ (TODAY-FIRST)</option>
+      <option value="event-desc">EVENT DATE ↓</option>
+      <option value="sale-desc">SOLD ↓ (NEW)</option>
+      <option value="sale-asc">SOLD ↑ (OLD)</option>
+      <option value="rev-desc">REV ↓</option>
+    </select>
+  </div>
+
+  <h2 id="recent-header">RECENT <span class="count" id="recent-count"></span><span class="count" id="recent-rev"></span>
+    <button type="button" id="toggle-recent" class="pill" style="margin-left:auto;font-size:10px;letter-spacing:1.5px;padding:4px 10px;background:var(--bg-2);color:var(--muted);border:1px solid var(--line);cursor:pointer;text-transform:uppercase;">Hide</button>
+  </h2>
+  <div id="recent-wrap">
+    <table>
+      <thead><tr>
+        <th class="col-check"><input type="checkbox" class="row-check" id="check-all-recent" title="Select all visible"></th>
+        <th>SOLD</th><th>EVENT</th><th>VENUE</th><th>SEC/ROW</th>
+        <th>SRC</th><th>PLATFORM</th><th>ORDER#</th><th class="num">QTY</th>
+        <th class="num">REV</th><th class="num">COST</th><th class="num">NET</th><th class="num">ROI</th><th></th>
+      </tr></thead>
+      <tbody id="recentbody"></tbody>
+    </table>
+    <div id="recentempty" class="empty" style="display:none">no sales in this window</div>
+  </div>
+
+  <h2>ALL SALES <span class="count" id="all-count"></span></h2>
+  <table>
+    <thead><tr>
+      <th class="col-check"><input type="checkbox" class="row-check" id="check-all" title="Select all visible"></th>
+      <th>SOLD</th><th>EVENT</th><th>VENUE</th><th>SEC/ROW</th>
+      <th>SRC</th><th>PLATFORM</th><th>ORDER#</th><th class="num">QTY</th>
+      <th class="num">REV</th><th class="num">COST</th><th class="num">NET</th><th class="num">ROI</th><th></th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">no sales match</div>
+
+  <h2 id="unsold-header" style="display:none; color:var(--red);">DIDN'T SELL <span class="count" id="unsold-count"></span><span class="count" id="unsold-loss"></span></h2>
+  <table id="unsold-table" style="display:none">
+    <thead><tr>
+      <th>EVENT</th><th>VENUE</th><th>SEC/ROW</th><th>SEATS</th>
+      <th>SRC</th><th class="num">QTY</th><th class="num">COST</th>
+      <th>MARKED</th><th></th>
+    </tr></thead>
+    <tbody id="unsoldbody"></tbody>
+  </table>
+
+  <h2 id="canceled-header" style="display:none; color:var(--amber);">CANCELED <span class="count" id="canceled-count"></span><span class="count" id="canceled-lost"></span></h2>
+  <table id="canceled-table" style="display:none">
+    <thead><tr>
+      <th>SOLD</th><th>EVENT</th><th>VENUE</th><th>SEC/ROW</th>
+      <th>SRC</th><th>PLATFORM</th><th>ORDER#</th>
+      <th class="num">QTY</th><th class="num">SALE</th><th class="num">COST</th>
+      <th>CANCELED</th><th></th>
+    </tr></thead>
+    <tbody id="canceledbody"></tbody>
+  </table>
+</main>
+
+<div id="bulk-bar">
+  <span class="bulk-count" id="bulk-count">0 selected</span>
+  <button class="primary" id="bulk-edit">Edit</button>
+  <button class="danger" id="bulk-delete">Delete</button>
+  <button id="bulk-clear">Clear</button>
+</div>
+
+<div id="merge-bar">
+  <span class="bulk-count" id="merge-count">0 groups</span>
+  <button class="primary" id="merge-go">Merge into one event</button>
+  <button id="merge-clear">Clear</button>
+</div>
+
+<div id="merge-modal-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>MERGE EVENT GROUPS <span class="src-tag" id="merge-modal-count" style="color:var(--purple);border-color:var(--purple);">0 GROUPS</span></span><button class="close" id="merge-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Pick which event name to use for the merged group, or type your own. Future inventory + sales rows that match any of these groups will display under the chosen name.</div>
+      <div id="merge-opts"></div>
+      <label>Custom name</label><input id="merge-custom-name" type="text" placeholder="(or pick one above)">
+      <label>Date</label><input id="merge-date" type="date">
+      <label>Venue</label><input id="merge-venue" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="merge-foot-note">Merging is reversible — click ⊟ MERGED on the group header to split.</span>
+      <button id="merge-cancel">Cancel</button>
+      <button class="primary" id="merge-save" style="background:var(--purple);border-color:var(--purple);color:var(--bg);">Merge</button>
+    </div>
+  </div>
+</div>
+
+
+<div id="bulk-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>BULK EDIT <span class="src-tag" id="bulk-src" style="color:var(--accent);border-color:var(--accent);">0 SALES</span></span><button class="close" id="bulk-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Only filled-in fields are applied. Leave blank to keep each row's existing value.</div>
+      <label>Sale Date</label><input id="bulk-sale_date" type="text" placeholder="(unchanged)">
+      <label>Event Name</label><input id="bulk-event_name" type="text" placeholder="(unchanged)">
+      <label>Venue</label><input id="bulk-venue" type="text" placeholder="(unchanged)">
+      <label>Section</label><input id="bulk-section" type="text" placeholder="(unchanged)">
+      <label>Row</label><input id="bulk-row" type="text" placeholder="(unchanged)">
+      <label>Platform</label><input id="bulk-platform" type="text" list="platform-options" placeholder="(unchanged)">
+      <label>Qty</label><input id="bulk-qty" type="number" step="1" placeholder="(unchanged)">
+      <label>Sale Price</label><input id="bulk-sale_price" type="number" step="0.01" placeholder="(unchanged)">
+      <label>Cost</label><input id="bulk-cost" type="number" step="0.01" placeholder="(unchanged)">
+    </div>
+    <div class="modal-foot">
+      <span class="muted">applies only to filled fields</span>
+      <button id="bulk-edit-cancel">Cancel</button>
+      <button class="primary" id="bulk-edit-save">Apply to <span id="bulk-edit-count">0</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- Suggestions for Platform inputs (edit modal + bulk-edit). Free-text still works;
+     this just auto-completes the common values. New platforms can be added here. -->
+<datalist id="platform-options">
+  <option value="JJT">
+  <option value="Lysted">
+  <option value="Viagogo">
+  <option value="CrowdVolt">
+</datalist>
+
+<div id="toast"><span id="toast-msg"></span><button id="toast-undo">Undo</button><span class="kbd">Ctrl+Z</span></div>
+
+<div id="modal-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>EDIT SALE <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="m-meta"></div>
+      <label>Sale Date</label><input id="m-sale_date" type="date">
+      <label>Event Name</label><input id="m-event_name" type="text">
+      <label>Event Date</label><input id="m-event_date" type="date">
+      <label>Venue</label><input id="m-venue" type="text">
+      <label>Section</label><input id="m-section" type="text">
+      <label>Row</label><input id="m-row" type="text">
+      <label>Platform</label><input id="m-platform" type="text" list="platform-options">
+      <label>Qty</label><input id="m-qty" type="number" step="1">
+      <label>Sale Price</label><input id="m-sale_price" type="number" step="0.01">
+      <label>Cost</label><input id="m-cost" type="number" step="0.01">
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="m-foot-note">Tip: clear a field to revert it to the scraped value</span>
+      <button id="m-cancel">Cancel</button>
+      <button class="primary" id="m-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+// Date formatters — backend dates can be raw ISO ("2026-06-25T18:00:00.000Z"
+// or "2026-06-25T18:00") or pre-formatted strings. We always pull the
+// YYYY-MM-DD prefix and any HH:MM after a T, then render "Jun 25, 2026" or
+// "Jun 25, 2026 6:00 PM". Falls back to the raw string if the regex misses,
+// so we never lose info if the backend ships us something unexpected.
+const _MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtDate(s) {
+  if (!s) return "";
+  const m = String(s).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return String(s);
+  return `${_MONTH_ABBR[+m[2] - 1]} ${+m[3]}, ${m[1]}`;
+}
+function fmtDateTime(s) {
+  if (!s) return "";
+  const dm = String(s).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!dm) return String(s);
+  let out = `${_MONTH_ABBR[+dm[2] - 1]} ${+dm[3]}, ${dm[1]}`;
+  const tm = String(s).match(/T(\d{2}):(\d{2})/);
+  if (tm) {
+    let h = +tm[1]; const min = tm[2];
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    out += ` ${h}:${min} ${ampm}`;
+  }
+  return out;
+}
+let _rows = [];
+// Per-event-group total tickets ever bought (Lysted purchases / JeruJam /
+// manual / Viagogo available+sold, max across sources to avoid double-
+// counting overlapping inventory tracked in two systems). Backend-supplied.
+let _boughtByEvent = new Map();
+// Per-event-group list of currently-unsold inventory rows. Used to render
+// "still listed" rows under each event's sold rows when expanded.
+let _invByEvent = new Map();
+// Which event group keys are expanded in the All Sales / Recent tables.
+let _expanded = new Set();
+// Group-merge selection: which event-group keys the user has checkboxed
+// in the All-Sales / Recent tables. When 2+ are selected, the merge bar
+// appears and clicking "Merge" opens the modal.
+let _selectedGroupKeys = new Set();
+// canonical_group_key set of currently-merged groups (for the ⊟ MERGED badge).
+let _mergedGroupKeys = new Set();
+function _eventKey(r) {
+  if (r && r.event_group) return r.event_group;
+  return ((r?.event_name || "") + "|" + (r?.event_date_iso || r?.event_date || "")).toLowerCase();
+}
+
+function _sortCmp(mode, searching) {
+  if (searching) {
+    // When the user has a search active, cluster matches by event so two
+    // BLOND'ISH rows sit next to each other, then by event date asc, then
+    // newest sales first.
+    return (a,b) => {
+      const an = (a.event_name || "").toLowerCase();
+      const bn = (b.event_name || "").toLowerCase();
+      if (an !== bn) return an < bn ? -1 : 1;
+      const ad = a.event_date_iso || "zzz";
+      const bd = b.event_date_iso || "zzz";
+      if (ad !== bd) return ad < bd ? -1 : 1;
+      return (b.sale_date_iso || "").localeCompare(a.sale_date_iso || "");
+    };
+  }
+  if (mode === "sale-asc") return (a,b) => (a.sale_date || "").localeCompare(b.sale_date || "");
+  if (mode === "event-asc") return (a,b) => (a.event_date_iso || "zzz").localeCompare(b.event_date_iso || "zzz");
+  if (mode === "event-desc") return (a,b) => (b.event_date_iso || "").localeCompare(a.event_date_iso || "");
+  if (mode === "rev-desc") return (a,b) => (b.sale_price || 0) - (a.sale_price || 0);
+  return (a,b) => (b.sale_date || "").localeCompare(a.sale_date || "");
+}
+
+function _srcLabel(s) {
+  return s === "jerujam" ? "JJT" : (s || "").toUpperCase();
+}
+function _payout(r) {
+  return (r.payout != null) ? r.payout : r.sale_price;
+}
+function _net(r) {
+  const p = _payout(r);
+  return p == null ? null : (p - (r.cost || 0));
+}
+function _roi(r) {
+  const n = _net(r);
+  return (n == null || !r.cost) ? null : (n / r.cost) * 100;
+}
+
+function _renderListingRow(r) {
+  const tr = document.createElement("tr");
+  tr.className = "listing-row";
+  const cost = r.cost != null ? r.cost : (r.cost_per_unit ? r.cost_per_unit * (r.qty_unsold || 0) : 0);
+  const list = r.list_price;
+  // Synthesized "(no detail)" rows have no source_id — can't delete those.
+  const canDelete = !!(r.source && r.source_id);
+  if (!canDelete) tr.dataset.clickable = "false";
+  const delBtn = canDelete
+    ? `<button class="row-action row-hide-list" title="Remove this listing from inventory" data-hide-source="${esc(r.source)}" data-hide-id="${esc(r.source_id)}">×</button>`
+    : "";
+  tr.innerHTML = `
+    <td class="col-check"></td>
+    <td><span class="muted">listed</span></td>
+    <td>${esc(r.event_name || "")}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(r.event_date_iso || r.event_date))}</div></td>
+    <td>${esc(r.venue || "")}</td>
+    <td>${esc(r.section || "")}${r.row ? " / " + esc(r.row) : ""}</td>
+    <td><span class="src src-${esc(r.source)}">${esc(_srcLabel(r.source))}</span></td>
+    <td>${esc(r.delivery_type || "")}</td>
+    <td class="muted" style="font-size:11px;"></td>
+    <td class="num">${r.qty_unsold ?? ""}</td>
+    <td class="num">${list != null ? money(list) : "—"}</td>
+    <td class="num">${money(cost)}</td>
+    <td class="num">—</td>
+    <td class="num">—</td>
+    <td>${delBtn}</td>
+  `;
+  return tr;
+}
+
+function _renderRow(r) {
+  const payout = _payout(r);
+  const net = _net(r);
+  const netColor = net == null ? "var(--muted)" : net >= 0 ? "var(--green)" : "var(--red)";
+  const roi = _roi(r);
+  const roiColor = roi == null ? "var(--muted)" : roi >= 0 ? "var(--green)" : "var(--red)";
+  const roiText = roi == null ? "—" : (roi >= 0 ? "+" : "") + roi.toFixed(1) + "%";
+  const tr = document.createElement("tr");
+  if (r.is_new) tr.className = "is-new";
+  const newBadge = r.is_new ? '<span class="new-badge">NEW</span>' : '';
+  const ed = (f) => (r._edited || []).includes(f) ? "edited" : "";
+  tr.title = "Double-click to edit";
+  // Lysted sales: only the payout matters (sale_price is the gross before Lysted's fee).
+  // Other sources: show sale_price, with payout as a subline when it differs.
+  let revCell;
+  if (r.source === "lysted") {
+    revCell = payout == null
+      ? '<span class="muted">unknown</span>'
+      : money(payout);
+  } else {
+    const showPayout = r.sale_price != null && payout != null && Math.abs(payout - r.sale_price) > 0.01;
+    revCell = r.sale_price == null
+      ? '<span class="muted">unknown</span>'
+      : money(r.sale_price) + (showPayout ? `<div class="muted" style="font-size:10px;">payout ${money(payout)}</div>` : '');
+  }
+  const selKey = `${r.source}:::${r.sale_id}`;
+  const isSelected = _selected.has(selKey);
+  if (isSelected) tr.classList.add("row-selected");
+  tr.innerHTML = `
+    <td class="col-check"><input type="checkbox" class="row-check" data-sel="${esc(selKey)}"${isSelected ? " checked" : ""}></td>
+    <td class="${ed('sale_date')}">${r.sale_date_iso || r.sale_date ? esc(fmtDate(r.sale_date_iso || r.sale_date)) : '<span class="muted">—</span>'}</td>
+    <td class="${ed('event_name')}">${esc(r.event_name)}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(r.event_date_iso || r.event_date))}</div></td>
+    <td class="${ed('venue')}">${esc(r.venue)}</td>
+    <td class="${ed('section')}">${esc(r.section)}${r.row ? " / " + esc(r.row) : ""}</td>
+    <td><span class="src src-${esc(r.source)}">${esc(_srcLabel(r.source))}</span>${newBadge}</td>
+    <td class="cell-edit ${ed('platform')}" data-edit-field="platform" title="Click to edit platform">${esc(r.platform)}</td>
+    <td class="muted" style="font-size:11px;">${esc(r.order_id || "")}</td>
+    <td class="num ${ed('qty')}">${r.qty ?? ""}</td>
+    <td class="num ${ed('sale_price')}">${revCell}</td>
+    <td class="num ${ed('cost')}">${money(r.cost)}</td>
+    <td class="num" style="color:${netColor};">${net == null ? '—' : money(net)}</td>
+    <td class="num" style="color:${roiColor};">${roiText}</td>
+    <td style="white-space:nowrap;"><button class="row-del row-cancel" title="Cancel sale (sale was reversed; releases the matched inventory)" data-cancel-source="${esc(r.source)}" data-cancel-id="${esc(r.sale_id)}" style="color:var(--amber);">↺</button><button class="row-del" title="Delete this sale" data-source="${esc(r.source)}" data-id="${esc(r.sale_id)}">×</button></td>
+  `;
+  tr._row = r;
+  return tr;
+}
+
+// Global date filter state. Basis = which date on the row to test against
+// the range. Range = preset name or "custom" (uses _dateFrom / _dateTo).
+let _dateBasis = "sale";  // "sale" | "event"
+let _dateRange = "all";
+let _dateFrom = "";
+let _dateTo = "";
+
+function _rowDate(r) {
+  return _dateBasis === "event"
+    ? (r.event_date_iso || (r.event_date ? String(r.event_date).slice(0,10) : ""))
+    : (r.sale_date_iso || (r.sale_date ? String(r.sale_date).slice(0,10) : ""));
+}
+
+function _inDateRange(r) {
+  if (_dateRange === "all") return true;
+  const iso = _rowDate(r);
+  if (!iso) return false;
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return false;
+  const now = new Date(); now.setHours(0,0,0,0);
+  if (_dateRange === "ytd") return d.getFullYear() === now.getFullYear() && d <= now;
+  if (_dateRange === "custom") {
+    if (_dateFrom && iso < _dateFrom) return false;
+    if (_dateTo && iso > _dateTo) return false;
+    return true;
+  }
+  const days = Number(_dateRange);
+  if (!Number.isFinite(days) || days <= 0) return true;
+  const min = new Date(now); min.setDate(min.getDate() - (days - 1));
+  return d >= min && d <= now;
+}
+
+function _renderGrouped(tbody, rows, groupOrder) {
+  const groups = new Map();
+  for (const r of rows) {
+    const key = _eventKey(r);
+    if (!groups.has(key)) {
+      groups.set(key, { key, event_name: r.event_name, event_date: r.event_date, event_date_iso: r.event_date_iso, venue: r.venue, rows: [] });
+    }
+    groups.get(key).rows.push(r);
+  }
+  // Group order: caller picks. event-asc puts past events at the top and
+  // future at the bottom (paired with a scroll-to-today on first load so
+  // you land on the next upcoming event). Default = most-recent sale first
+  // — used by the Recent panel where "newest sale" is the natural anchor.
+  let ordered;
+  if (groupOrder === "event-asc") {
+    ordered = [...groups.values()].sort((a, b) => (a.event_date_iso || "zzz").localeCompare(b.event_date_iso || "zzz"));
+  } else if (groupOrder === "event-desc") {
+    ordered = [...groups.values()].sort((a, b) => (b.event_date_iso || "").localeCompare(a.event_date_iso || ""));
+  } else {
+    ordered = [...groups.values()].sort((a, b) => {
+      const ad = a.rows.reduce((m, r) => (r.sale_date_iso && r.sale_date_iso > m) ? r.sale_date_iso : m, "");
+      const bd = b.rows.reduce((m, r) => (r.sale_date_iso && r.sale_date_iso > m) ? r.sale_date_iso : m, "");
+      return bd.localeCompare(ad);
+    });
+  }
+  for (const g of ordered) {
+    const sold = g.rows.reduce((s, r) => s + (r.qty || 0), 0);
+    // Backend-supplied total bought; fall back to sold count if the event
+    // isn't in the map (e.g. a sale with no purchase record on file).
+    const total = Math.max(sold, _boughtByEvent.get(g.key) || 0);
+    const cost = g.rows.reduce((s, r) => s + (r.cost || 0), 0);
+    const payout = g.rows.reduce((s, r) => s + (_payout(r) || 0), 0);
+    const profit = payout - cost;
+    const expanded = _expanded.has(g.key);
+    const profCls = profit >= 0 ? "pos" : "neg";
+    const profSign = profit >= 0 ? "+" : "";
+    const hdr = document.createElement("tr");
+    hdr.className = "group-hdr" + (expanded ? " expanded" : "");
+    hdr.dataset.key = g.key;
+    hdr.dataset.eventDate = g.event_date_iso || "";
+    const isMerged = _mergedGroupKeys.has(g.key);
+    const checked = _selectedGroupKeys.has(g.key) ? " checked" : "";
+    const mergedBadge = isMerged ? `<button class="grp-unmerge" title="Unmerge — split this back into the original groups" data-canonical="${esc(g.key)}">⊟ MERGED</button>` : "";
+    hdr.innerHTML = `
+      <td colspan="14">
+        <input type="checkbox" class="grp-check" data-grp-key="${esc(g.key)}" title="Select to merge with another event"${checked}>
+        <span class="chev">▸</span>
+        <span class="evt-title">${esc(g.event_name)}</span>
+        <span class="evt-meta">${esc(fmtDateTime(g.event_date_iso || g.event_date || ""))} · ${esc(g.venue || "")}</span>
+        ${mergedBadge}
+        <span class="evt-stats">
+          <span class="ratio">${sold}/${total} sold</span>
+          ${money(cost)} cost · ${money(payout)} payout ·
+          <span class="${profCls}">${profSign}${money(profit)} profit${cost ? ` · ${profSign}${((profit / cost) * 100).toFixed(1)}% ROI` : ""}</span>
+        </span>
+      </td>
+    `;
+    tbody.appendChild(hdr);
+    if (expanded) {
+      const sorted = g.rows.slice().sort((a, b) => (b.sale_date_iso || "").localeCompare(a.sale_date_iso || ""));
+      for (const r of sorted) tbody.appendChild(_renderRow(r));
+      // Authoritative still-listed total comes from bought - sold (matches
+      // what the user sees in the X/Y header). The unified-inventory rows
+      // can overcount when the matcher hasn't paired external sales (e.g.
+      // JeruJam ticket whose copies were sold via Lysted), so we cap the
+      // displayed qty per row down to what's actually still out there.
+      const listings = _invByEvent.get(g.key) || [];
+      const totalUnsold = Math.max(0, total - sold);
+      if (totalUnsold > 0) {
+        const subhdr = document.createElement("tr");
+        subhdr.className = "listing-hdr";
+        subhdr.innerHTML = `<td colspan="14">${totalUnsold} ${totalUnsold === 1 ? "ticket" : "tickets"} still listed</td>`;
+        tbody.appendChild(subhdr);
+        let remaining = totalUnsold;
+        for (const l of listings) {
+          if (remaining <= 0) break;
+          const cap = Math.min(l.qty_unsold || 0, remaining);
+          if (cap <= 0) continue;
+          remaining -= cap;
+          tbody.appendChild(_renderListingRow({...l, qty_unsold: cap}));
+        }
+        if (remaining > 0) {
+          // No detail rows (or detail underflowed) — synthesize one so the
+          // user still sees the event/venue context for the missing count.
+          const sample = sorted[0] || {};
+          tbody.appendChild(_renderListingRow({
+            source: "untracked",
+            event_name: sample.event_name || g.event_name,
+            event_date: sample.event_date || g.event_date,
+            venue: sample.venue || g.venue,
+            section: "(no detail)",
+            row: "",
+            qty_unsold: remaining,
+            list_price: null,
+            cost: null,
+            delivery_type: "",
+          }));
+        }
+      }
+    }
+  }
+}
+
+function _filterRows() {
+  const q = _searchNorm(document.getElementById("q-search").value);
+  const src = document.getElementById("q-source").value;
+  const onlyNew = document.getElementById("q-new").value === "new";
+  return _rows.filter(r => {
+    if (!_inDateRange(r)) return false;
+    if (src !== "all" && r.source !== src) return false;
+    if (onlyNew && !r.is_new) return false;
+    if (q && !(_searchNorm(r.event_name).includes(q) || _searchNorm(r.venue).includes(q) || _searchNorm(r.platform).includes(q))) return false;
+    return true;
+  });
+}
+
+function _updateMetrics(filtered) {
+  const tickets = filtered.reduce((s, r) => s + (r.qty || 0), 0);
+  const events = new Set(filtered.map(r => (r.event_name || "") + "|" + (r.event_date_iso || ""))).size;
+  const cost = filtered.reduce((s, r) => s + (r.cost || 0), 0);
+  const total = filtered.reduce((s, r) => s + (r.sale_price || 0), 0);
+  const payout = filtered.reduce((s, r) => s + (_payout(r) || 0), 0);
+  const profit = payout - cost;
+  const roi = cost ? (profit / cost) * 100 : null;
+  document.getElementById("s-tickets").textContent = tickets;
+  document.getElementById("s-sales").textContent = filtered.length;
+  document.getElementById("s-events").textContent = events;
+  document.getElementById("s-cost").textContent = money(cost);
+  document.getElementById("s-total").textContent = money(total);
+  document.getElementById("s-payout").textContent = money(payout);
+  document.getElementById("s-roi").textContent = roi == null ? "—" : (roi >= 0 ? "+" : "") + roi.toFixed(1) + "%";
+  document.getElementById("s-profit").textContent = money(profit);
+  const profitBox = document.getElementById("s-profit").parentElement;
+  profitBox.className = "stat " + (profit >= 0 ? "green" : "red");
+}
+
+function renderRecent(filtered) {
+  const recent = filtered.slice().sort((a,b) => (b.sale_date_iso || "").localeCompare(a.sale_date_iso || ""));
+  const tbody = document.getElementById("recentbody");
+  tbody.innerHTML = "";
+  _renderGrouped(tbody, recent);
+  document.getElementById("recentempty").style.display = recent.length ? "none" : "block";
+  document.getElementById("recent-count").textContent = `(${recent.length} ${recent.length === 1 ? "sale" : "sales"})`;
+  const rev = recent.reduce((a, r) => a + (r.sale_price || 0), 0);
+  const cost = recent.reduce((a, r) => a + (r.cost || 0), 0);
+  const payouts = recent.reduce((a, r) => a + (_payout(r) || 0), 0);
+  const profit = payouts - cost;
+  const roi = cost ? (profit / cost) * 100 : null;
+  const profitColor = profit >= 0 ? "var(--green)" : "var(--red)";
+  const profitSign = profit >= 0 ? "+" : "";
+  const roiText = roi == null ? "—" : (roi >= 0 ? "+" : "") + roi.toFixed(1) + "% ROI";
+  document.getElementById("recent-rev").innerHTML = `· ${money(rev)} rev · <span style="color:${profitColor};">${profitSign}${money(profit)} profit · ${roiText}</span>`;
+}
+
+// "Didn't Sell" archive — rows the user marked as not sold on the inventory
+// page. Rendered in a section below All Sales. × restores the row to active
+// inventory by removing the content-fingerprint tombstone.
+function renderUnsold(unsold, totals) {
+  const hdr = document.getElementById("unsold-header");
+  const tbl = document.getElementById("unsold-table");
+  const tbody = document.getElementById("unsoldbody");
+  tbody.innerHTML = "";
+  if (!unsold || unsold.length === 0) {
+    hdr.style.display = "none";
+    tbl.style.display = "none";
+    return;
+  }
+  hdr.style.display = "";
+  tbl.style.display = "";
+  document.getElementById("unsold-count").textContent =
+    `(${unsold.length} ${unsold.length === 1 ? "row" : "rows"} · ${totals.qty || 0} tickets)`;
+  const lossText = totals.cost ? `· ${money(totals.cost)} unrecovered cost` : "";
+  document.getElementById("unsold-loss").textContent = lossText;
+  for (const u of unsold) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(u.event_name || "")}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(u.event_date_iso || u.event_date))}</div></td>
+      <td>${esc(u.venue || "")}</td>
+      <td>${esc(u.section || "")}${u.row_label ? " / " + esc(u.row_label) : ""}</td>
+      <td class="muted" style="font-size:11px;">${esc(u.seats || "")}</td>
+      <td><span class="src src-${esc(u.source)}">${esc(_srcLabel(u.source))}</span></td>
+      <td class="num">${u.qty ?? ""}</td>
+      <td class="num">${money(u.cost)}</td>
+      <td class="muted" style="font-size:11px;">${esc(fmtDate(u.marked_at))}</td>
+      <td><button class="row-del" title="Restore to inventory" data-unmark="${esc(u.fingerprint)}">×</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-unmark]");
+  if (!btn) return;
+  e.stopPropagation();
+  const fp = btn.getAttribute("data-unmark");
+  if (!confirm("Restore this row to active inventory?")) return;
+  const res = await fetch("/api/inventory/unmark-unsold", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({fingerprint: fp}),
+  });
+  if (res.ok) {
+    await load();
+  } else {
+    alert("Failed to restore row");
+  }
+});
+
+// Canceled sales — sale was reversed (e.g. Viagogo canceled by buyer or
+// platform). Removes the sale from active rollups, releases any matcher
+// pairing, and surfaces the row in the "// CANCELED" section below. Won't
+// re-create the inventory row because the platform relists the ticket
+// itself; the regular Kartis scrape picks that up on the next pass.
+function renderCanceled(canceled, totals) {
+  const hdr = document.getElementById("canceled-header");
+  const tbl = document.getElementById("canceled-table");
+  const tbody = document.getElementById("canceledbody");
+  tbody.innerHTML = "";
+  if (!canceled || canceled.length === 0) {
+    hdr.style.display = "none";
+    tbl.style.display = "none";
+    return;
+  }
+  hdr.style.display = "";
+  tbl.style.display = "";
+  document.getElementById("canceled-count").textContent =
+    `(${canceled.length} ${canceled.length === 1 ? "row" : "rows"} · ${totals.qty || 0} tickets)`;
+  document.getElementById("canceled-lost").textContent =
+    totals.lost_revenue ? `· ${money(totals.lost_revenue)} lost revenue` : "";
+  for (const r of canceled) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.sale_date_iso || r.sale_date ? esc(fmtDate(r.sale_date_iso || r.sale_date)) : '<span class="muted">—</span>'}</td>
+      <td>${esc(r.event_name || "")}<div class="muted" style="font-size:11px;">${esc(fmtDateTime(r.event_date_iso || r.event_date))}</div></td>
+      <td>${esc(r.venue || "")}</td>
+      <td>${esc(r.section || "")}${r.row ? " / " + esc(r.row) : ""}</td>
+      <td><span class="src src-${esc(r.source)}">${esc(_srcLabel(r.source))}</span></td>
+      <td>${esc(r.platform || "")}</td>
+      <td class="muted" style="font-size:11px;">${esc(r.order_id || "")}</td>
+      <td class="num">${r.qty ?? ""}</td>
+      <td class="num">${money(r.sale_price)}</td>
+      <td class="num">${money(r.cost)}</td>
+      <td class="muted" style="font-size:11px;">${esc(fmtDate(r.canceled_at))}${r.cancel_reason ? `<div>${esc(r.cancel_reason)}</div>` : ''}</td>
+      <td><button class="row-del" title="Restore — sale wasn't actually canceled" data-uncancel-source="${esc(r.source)}" data-uncancel-id="${esc(r.sale_id)}">×</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+// Cancel button on each active sale row.
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-cancel-source]");
+  if (!btn) return;
+  e.stopPropagation();
+  const source = btn.getAttribute("data-cancel-source");
+  const sale_id = btn.getAttribute("data-cancel-id");
+  const reason = prompt("Cancel this sale?\n\nThe sale will move to the // CANCELED archive at the bottom and any matched inventory row will be released.\n\nOptional reason:", "");
+  if (reason === null) return;  // user pressed Cancel on the prompt
+  const res = await fetch("/api/sales/cancel", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source, sale_id, reason}),
+  });
+  if (res.ok) {
+    await load();
+  } else {
+    alert("Failed to cancel sale");
+  }
+});
+
+// Restore button on canceled rows.
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-uncancel-source]");
+  if (!btn) return;
+  e.stopPropagation();
+  if (!confirm("Restore this sale to active sales?")) return;
+  const source = btn.getAttribute("data-uncancel-source");
+  const sale_id = btn.getAttribute("data-uncancel-id");
+  const res = await fetch("/api/sales/uncancel", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source, sale_id}),
+  });
+  if (res.ok) {
+    await load();
+  } else {
+    alert("Failed to restore sale");
+  }
+});
+
+// --- Event-group merge ---
+function _renderMergeBar() {
+  const bar = document.getElementById("merge-bar");
+  const count = _selectedGroupKeys.size;
+  if (count < 2) { bar.classList.remove("open"); return; }
+  bar.classList.add("open");
+  document.getElementById("merge-count").textContent = `${count} groups selected`;
+}
+
+document.addEventListener("change", (e) => {
+  const cb = e.target.closest(".grp-check");
+  if (!cb) return;
+  const k = cb.getAttribute("data-grp-key");
+  if (cb.checked) _selectedGroupKeys.add(k);
+  else _selectedGroupKeys.delete(k);
+  _renderMergeBar();
+});
+
+// Stop the checkbox click from also expanding the group.
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".grp-check")) e.stopPropagation();
+});
+
+document.getElementById("merge-clear").addEventListener("click", () => {
+  _selectedGroupKeys.clear();
+  document.querySelectorAll(".grp-check:checked").forEach(c => { c.checked = false; });
+  _renderMergeBar();
+});
+
+document.getElementById("merge-go").addEventListener("click", () => {
+  if (_selectedGroupKeys.size < 2) return;
+  // Build the modal: list each selected group's name + date + venue,
+  // radio-buttons to pick one as canonical, plus a custom-name override.
+  const optsEl = document.getElementById("merge-opts");
+  optsEl.innerHTML = "";
+  // Pull the group metadata from the rendered headers — they have data-key
+  // and the header text already includes name/date/venue.
+  const groupMeta = [];
+  document.querySelectorAll("tr.group-hdr").forEach(tr => {
+    const k = tr.dataset.key;
+    if (!_selectedGroupKeys.has(k)) return;
+    const name = (tr.querySelector(".evt-title")?.textContent || "").trim();
+    const meta = (tr.querySelector(".evt-meta")?.textContent || "").trim();
+    const dateIso = tr.dataset.eventDate || "";
+    if (!groupMeta.find(g => g.key === k)) {
+      groupMeta.push({key: k, name, meta, dateIso});
+    }
+  });
+  groupMeta.forEach((g, i) => {
+    const div = document.createElement("div");
+    div.className = "merge-opt";
+    div.innerHTML = `
+      <input type="radio" name="merge-name" id="merge-r-${i}" value="${esc(g.name)}" data-date="${esc(g.dateIso)}" data-venue="${esc(g.meta)}"${i===0?" checked":""}>
+      <label for="merge-r-${i}" class="name">${esc(g.name)}</label>
+      <span class="meta">${esc(g.meta)}</span>
+    `;
+    optsEl.appendChild(div);
+  });
+  document.getElementById("merge-modal-count").textContent = `${groupMeta.length} GROUPS`;
+  document.getElementById("merge-custom-name").value = "";
+  // Pre-fill date/venue from the first selected group.
+  const first = groupMeta[0];
+  if (first) {
+    document.getElementById("merge-date").value = (first.dateIso || "").slice(0, 10);
+    // Strip the leading "// " and the date prefix from .evt-meta to recover the venue.
+    const venueMatch = first.meta.match(/·\s*(.+)$/);
+    document.getElementById("merge-venue").value = venueMatch ? venueMatch[1].trim() : "";
+  }
+  document.getElementById("merge-modal-bg").classList.add("open");
+});
+
+document.getElementById("merge-close").addEventListener("click", () => {
+  document.getElementById("merge-modal-bg").classList.remove("open");
+});
+document.getElementById("merge-cancel").addEventListener("click", () => {
+  document.getElementById("merge-modal-bg").classList.remove("open");
+});
+
+document.getElementById("merge-save").addEventListener("click", async () => {
+  const custom = document.getElementById("merge-custom-name").value.trim();
+  let chosenName = custom;
+  let chosenDate = document.getElementById("merge-date").value.trim();
+  if (!chosenName) {
+    const r = document.querySelector("input[name='merge-name']:checked");
+    if (!r) { alert("Pick a name (or type a custom one)"); return; }
+    chosenName = r.value;
+    chosenDate = chosenDate || (r.dataset.date || "");
+  }
+  const venue = document.getElementById("merge-venue").value.trim();
+  if (!chosenName) { alert("Event name required"); return; }
+  const res = await fetch("/api/event-groups/merge", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      group_keys: Array.from(_selectedGroupKeys),
+      event_name: chosenName,
+      event_date_iso: chosenDate,
+      venue,
+    }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    alert("Merge failed: " + (j.error || res.status));
+    return;
+  }
+  document.getElementById("merge-modal-bg").classList.remove("open");
+  _selectedGroupKeys.clear();
+  _renderMergeBar();
+  await load();
+});
+
+// Unmerge — clicked on the ⊟ MERGED badge of a previously-merged group.
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button.grp-unmerge");
+  if (!btn) return;
+  e.stopPropagation();
+  const canonical = btn.getAttribute("data-canonical");
+  if (!confirm("Split this merged group back into its original event groups?")) return;
+  const res = await fetch("/api/event-groups/unmerge", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({canonical_group_key: canonical}),
+  });
+  if (res.ok) {
+    await load();
+  } else {
+    alert("Unmerge failed");
+  }
+});
+
+
+const _searchNorm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+function render() {
+  const q = document.getElementById("q-search").value;
+  const sort = document.getElementById("q-sort").value;
+  const filtered = _filterRows();
+  const rows = filtered.slice().sort(_sortCmp(sort, !!q));
+
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  _renderGrouped(tbody, rows, sort);
+  document.getElementById("empty").style.display = rows.length ? "none" : "block";
+  document.getElementById("sub").textContent = `${rows.length} of ${_rows.length} shown`;
+  document.getElementById("all-count").textContent = `(${rows.length})`;
+  _updateMetrics(filtered);
+  renderRecent(filtered);
+}
+
+// Date filter wiring
+document.getElementById("basis-pills").addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (!b) return;
+  document.querySelectorAll("#basis-pills .pill").forEach(p => p.classList.toggle("active", p === b));
+  _dateBasis = b.dataset.basis;
+  render();
+});
+document.getElementById("range-pills").addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (!b) return;
+  document.querySelectorAll("#range-pills .pill").forEach(p => p.classList.toggle("active", p === b));
+  _dateRange = b.dataset.range;
+  const custom = document.getElementById("custom-range");
+  custom.style.display = _dateRange === "custom" ? "inline-flex" : "none";
+  render();
+});
+for (const id of ["date-from", "date-to"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    _dateFrom = document.getElementById("date-from").value;
+    _dateTo = document.getElementById("date-to").value;
+    if (_dateRange === "custom") render();
+  });
+}
+
+// Hide / Show the Recent section
+let _recentHidden = false;
+document.getElementById("toggle-recent").addEventListener("click", () => {
+  _recentHidden = !_recentHidden;
+  document.getElementById("recent-wrap").style.display = _recentHidden ? "none" : "";
+  document.getElementById("toggle-recent").textContent = _recentHidden ? "Show" : "Hide";
+});
+
+async function load() {
+  const [salR, invR, mergesR] = await Promise.all([
+    fetch("/api/sales-all"),
+    fetch("/api/inventory-all"),
+    fetch("/api/event-groups/merges"),
+  ]);
+  const d = await salR.json();
+  _rows = d.rows || [];
+  // Build a set of canonical_group_keys that are actively merged so the
+  // group header can show a "⊟ MERGED" badge. Click to split.
+  if (mergesR.ok) {
+    const mj = await mergesR.json();
+    _mergedGroupKeys = new Set((mj.merges || []).map(m => m.canonical_group_key));
+  } else {
+    _mergedGroupKeys = new Set();
+  }
+  renderUnsold(d.unsold || [], d.unsold_totals || {});
+  renderCanceled(d.canceled || [], d.canceled_totals || {});
+  // Backend computes per-event "tickets bought" already, taking max across
+  // overlapping sources — saves us doing it in JS.
+  _boughtByEvent = new Map(Object.entries(d.bought_by_event || {}));
+  // Bucket the still-listed rows by event_group so we can render them
+  // under the corresponding sold rows when the event is expanded.
+  _invByEvent = new Map();
+  if (invR.ok) {
+    const inv = await invR.json();
+    for (const ir of (inv.rows || [])) {
+      const k = _eventKey(ir);
+      if (!_invByEvent.has(k)) _invByEvent.set(k, []);
+      _invByEvent.get(k).push(ir);
+    }
+  }
+  render();
+}
+
+for (const id of ["q-search", "q-source", "q-sort", "q-new"]) {
+  document.getElementById(id).addEventListener("input", render);
+  document.getElementById(id).addEventListener("change", render);
+}
+
+// --- multi-select ---
+// Selection lives in a Set keyed by `source:::sale_id` so the same row checked in
+// both Recent and All Sales tables stays consistent. Shift-click does range
+// selection within whichever tbody you're clicking in.
+const _selected = new Set();
+let _lastClickedKey = null;
+let _lastClickedTbody = null;
+
+function _selKey(r) { return `${r.source}:::${r.sale_id}`; }
+
+function _renderBulkBar() {
+  const bar = document.getElementById("bulk-bar");
+  const count = _selected.size;
+  if (count === 0) { bar.classList.remove("open"); return; }
+  bar.classList.add("open");
+  document.getElementById("bulk-count").textContent = `${count} selected`;
+  document.getElementById("bulk-edit-count").textContent = count;
+  document.getElementById("bulk-src").textContent = `${count} ${count === 1 ? "SALE" : "SALES"}`;
+}
+
+function _selectedRows() {
+  // Resolve keys back to row objects from _rows. Manual sales have unique sale_ids.
+  const out = [];
+  for (const k of _selected) {
+    const [source, sale_id] = k.split(":::");
+    const row = _rows.find(r => r.source === source && String(r.sale_id) === sale_id);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+function _toggleSelKey(key, on) {
+  if (on) _selected.add(key); else _selected.delete(key);
+  // Mirror across both tables — both rows with the same data-sel key
+  document.querySelectorAll(`input.row-check[data-sel="${CSS.escape(key)}"]`).forEach(cb => { cb.checked = on; });
+  document.querySelectorAll(`input.row-check[data-sel="${CSS.escape(key)}"]`).forEach(cb => {
+    const tr = cb.closest("tr");
+    if (tr) tr.classList.toggle("row-selected", on);
+  });
+}
+
+function _selectRange(tbody, fromKey, toKey, on) {
+  const checks = Array.from(tbody.querySelectorAll("input.row-check"));
+  const fromIdx = checks.findIndex(c => c.dataset.sel === fromKey);
+  const toIdx = checks.findIndex(c => c.dataset.sel === toKey);
+  if (fromIdx === -1 || toIdx === -1) return;
+  const [a, b] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+  for (let i = a; i <= b; i++) {
+    const k = checks[i].dataset.sel;
+    if (k) _toggleSelKey(k, on);
+  }
+}
+
+document.addEventListener("click", (e) => {
+  // Per-row checkbox
+  const cb = e.target.closest("input.row-check");
+  if (!cb) return;
+  // Header "select all" checkboxes
+  if (cb.id === "check-all" || cb.id === "check-all-recent") {
+    const tbody = document.getElementById(cb.id === "check-all" ? "tbody" : "recentbody");
+    const visible = Array.from(tbody.querySelectorAll("input.row-check"));
+    for (const v of visible) _toggleSelKey(v.dataset.sel, cb.checked);
+    _renderBulkBar();
+    return;
+  }
+  e.stopPropagation();
+  const key = cb.dataset.sel;
+  if (!key) return;
+  const tbody = cb.closest("tbody");
+  if (e.shiftKey && _lastClickedKey && _lastClickedTbody === tbody) {
+    _selectRange(tbody, _lastClickedKey, key, cb.checked);
+  } else {
+    _toggleSelKey(key, cb.checked);
+  }
+  _lastClickedKey = key;
+  _lastClickedTbody = tbody;
+  _renderBulkBar();
+});
+
+document.getElementById("bulk-clear").addEventListener("click", () => {
+  for (const k of Array.from(_selected)) _toggleSelKey(k, false);
+  _renderBulkBar();
+});
+
+document.getElementById("bulk-delete").addEventListener("click", async () => {
+  const rows = _selectedRows();
+  if (!rows.length) return;
+  const manual = rows.filter(r => r.source === "manual").length;
+  const scraped = rows.length - manual;
+  let prompt = `Delete ${rows.length} sale${rows.length === 1 ? "" : "s"}?`;
+  if (manual && scraped) prompt += `\n\n${scraped} scraped (Ctrl+Z undoes), ${manual} manual (permanent, restores inventory).`;
+  else if (manual) prompt += `\n\n${manual} manual sale${manual === 1 ? "" : "s"} — permanent, will restore qty to inventory.`;
+  else prompt += `\n\nCtrl+Z undoes if needed.`;
+  if (!confirm(prompt)) return;
+  for (const r of rows) {
+    const isManual = r.source === "manual";
+    const url = isManual ? "/api/sales/manual-delete" : "/api/sales/hide";
+    const body = isManual ? {sale_id: String(r.sale_id)} : {source: r.source, sale_id: String(r.sale_id)};
+    await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    if (!isManual) {
+      const label = `${r.event_name || "?"} · qty ${r.qty}`;
+      _undoStack.push({source: r.source, sale_id: r.sale_id, label});
+    }
+  }
+  showToast(`deleted ${rows.length} sale${rows.length === 1 ? "" : "s"}`);
+  _selected.clear();
+  _renderBulkBar();
+  await load();
+});
+
+const BULK_FIELDS = ["sale_date","event_name","venue","section","row","platform","qty","sale_price","cost"];
+const BULK_NUMERIC = new Set(["qty","sale_price","cost"]);
+
+document.getElementById("bulk-edit").addEventListener("click", () => {
+  if (_selected.size === 0) return;
+  for (const f of BULK_FIELDS) document.getElementById("bulk-" + f).value = "";
+  document.getElementById("bulk-bg").classList.add("open");
+  setTimeout(() => document.getElementById("bulk-sale_date").focus(), 30);
+});
+
+function closeBulkModal() { document.getElementById("bulk-bg").classList.remove("open"); }
+
+async function saveBulkModal() {
+  const rows = _selectedRows();
+  if (!rows.length) { closeBulkModal(); return; }
+  const changes = [];
+  for (const f of BULK_FIELDS) {
+    const v = document.getElementById("bulk-" + f).value.trim();
+    if (v === "") continue;
+    let parsed = v;
+    if (BULK_NUMERIC.has(f)) {
+      const n = parseFloat(v.replace(/[$,]/g, ""));
+      if (isNaN(n)) continue;
+      parsed = n;
+    }
+    changes.push({field: f, value: parsed});
+  }
+  if (changes.length === 0) { closeBulkModal(); return; }
+  for (const r of rows) {
+    for (const c of changes) {
+      await fetch("/api/sales/edit", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({source: r.source, sale_id: String(r.sale_id), ...c}),
+      });
+    }
+  }
+  closeBulkModal();
+  showToast(`updated ${rows.length} sale${rows.length === 1 ? "" : "s"} · ${changes.length} field${changes.length === 1 ? "" : "s"}`);
+  await load();
+}
+
+document.getElementById("bulk-close").addEventListener("click", closeBulkModal);
+document.getElementById("bulk-edit-cancel").addEventListener("click", closeBulkModal);
+document.getElementById("bulk-edit-save").addEventListener("click", saveBulkModal);
+document.getElementById("bulk-bg").addEventListener("click", (e) => {
+  if (e.target.id === "bulk-bg") closeBulkModal();
+});
+
+// --- delete + undo ---
+const _undoStack = [];
+let _toastTimer = null;
+function showToast(msg) {
+  const toast = document.getElementById("toast");
+  document.getElementById("toast-msg").textContent = msg;
+  toast.style.display = "block";
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toast.style.display = "none"; }, 6000);
+}
+
+async function hideSale(row) {
+  const label = `${row.event_name || "?"} · ${row.section || ""}${row.row ? "/" + row.row : ""} · qty ${row.qty} · ${row.sale_price != null ? "$" + Number(row.sale_price).toLocaleString() : "—"}`;
+  const isManual = row.source === "manual";
+  const prompt = isManual
+    ? `Delete this manual sale?\n\n${label}\n\n(${row.qty} ticket${row.qty === 1 ? "" : "s"} will be restored to inventory)`
+    : `Delete this sale?\n\n${label}\n\nSource: ${row.source}\n(Ctrl+Z undoes if needed.)`;
+  if (!confirm(prompt)) return;
+  const url = isManual ? "/api/sales/manual-delete" : "/api/sales/hide";
+  const body = isManual
+    ? {sale_id: String(row.sale_id)}
+    : {source: row.source, sale_id: String(row.sale_id)};
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) { alert("Failed to delete"); return; }
+  const idx = _rows.findIndex(r => r.source === row.source && String(r.sale_id) === String(row.sale_id));
+  if (idx !== -1) _rows.splice(idx, 1);
+  if (!isManual) _undoStack.push({source: row.source, sale_id: row.sale_id, label});
+  showToast(`deleted // ${label}`);
+  render();
+}
+
+async function undoLast() {
+  const last = _undoStack.pop();
+  if (!last) { showToast("// nothing to undo"); return; }
+  const res = await fetch("/api/sales/unhide", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source: last.source, sale_id: String(last.sale_id)}),
+  });
+  if (!res.ok) { alert("Failed to restore"); return; }
+  showToast(`restored // ${last.label}`);
+  await load();
+}
+
+document.getElementById("toast-undo").addEventListener("click", undoLast);
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".row-del");
+  if (!btn) return;
+  e.stopPropagation();
+  const tr = btn.closest("tr");
+  const row = tr && tr._row;
+  if (row) hideSale(row);
+});
+
+// Hide-listing button on still-listed rows under expanded events.
+// Removes the row from inventory (same backend path used by the inventory
+// page's × button). The matching event header re-renders with one fewer
+// listing on next load().
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".row-hide-list");
+  if (!btn) return;
+  e.stopPropagation();
+  const source = btn.dataset.hideSource;
+  const source_id = btn.dataset.hideId;
+  if (!source || !source_id) return;
+  const tr = btn.closest("tr");
+  const evt = tr?.querySelector("td:nth-child(3)")?.textContent?.trim() || "this listing";
+  if (!confirm(`Remove this listing from inventory?\n\n${evt}\n\nUse × on the inventory page to undo.`)) return;
+  const res = await fetch("/api/inventory/hide", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source, source_id}),
+  });
+  if (!res.ok) { alert("Failed to remove listing"); return; }
+  showToast(`removed listing // ${evt}`);
+  await load();
+});
+
+// Click on a grouped event header → toggle expand/collapse.
+document.addEventListener("click", (e) => {
+  const hdr = e.target.closest("tr.group-hdr");
+  if (!hdr) return;
+  const key = hdr.dataset.key;
+  if (!key) return;
+  if (_expanded.has(key)) _expanded.delete(key);
+  else _expanded.add(key);
+  render();
+});
+
+document.addEventListener("keydown", (e) => {
+  const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z";
+  if (!isUndo) return;
+  const tag = (document.activeElement?.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+  if (document.activeElement?.isContentEditable) return;
+  e.preventDefault();
+  undoLast();
+});
+
+// --- row-level edit modal ---
+// sale_date is handled outside this list so we can dual-write iso + display
+// from a single date picker.
+const SALE_FIELDS = ["event_name","venue","section","row","platform","qty","sale_price","cost"];
+const SALE_NUMERIC = new Set(["qty","sale_price","cost"]);
+let _modalRow = null;
+let _modalInitial = {};
+
+function openEditModal(row, focusField) {
+  _modalRow = row;
+  _modalInitial = {};
+  for (const f of SALE_FIELDS) {
+    const v = row[f] ?? "";
+    document.getElementById("m-" + f).value = v;
+    _modalInitial[f] = String(v);
+  }
+  const dateVal = row.sale_date_iso || "";
+  document.getElementById("m-sale_date").value = dateVal;
+  _modalInitial["sale_date"] = String(dateVal);
+  // Event date — same dual-write pattern. Strip any time suffix from
+  // event_date_iso since <input type="date"> only takes YYYY-MM-DD.
+  const evtDate = (row.event_date_iso || "").slice(0, 10);
+  document.getElementById("m-event_date").value = evtDate;
+  _modalInitial["event_date"] = String(evtDate);
+  document.getElementById("m-meta").textContent = `${row.event_name || "?"} · ${row.event_date || ""} · ${row.venue || ""}`;
+  document.getElementById("m-src").textContent = _srcLabel(row.source);
+  document.getElementById("m-src").className = "src-tag src src-" + row.source;
+  document.getElementById("modal-bg").classList.add("open");
+  // Default focus is the sale-date field (top of modal). When opened via a
+  // click-to-edit cell (e.g. the platform cell), focus that field's input
+  // and select its current value so the user can immediately type over it.
+  const focusId = focusField ? "m-" + focusField : "m-sale_date";
+  setTimeout(() => {
+    const el = document.getElementById(focusId);
+    if (!el) return;
+    el.focus();
+    if (el.select) el.select();
+  }, 30);
+}
+function closeEditModal() {
+  document.getElementById("modal-bg").classList.remove("open");
+  _modalRow = null;
+}
+async function saveEditModal() {
+  if (!_modalRow) return;
+  const changes = [];
+  for (const f of SALE_FIELDS) {
+    const newVal = document.getElementById("m-" + f).value.trim();
+    if (newVal !== _modalInitial[f]) {
+      let parsed = newVal;
+      if (SALE_NUMERIC.has(f)) {
+        if (newVal === "") parsed = "";
+        else {
+          const n = parseFloat(newVal.replace(/[$,]/g, ""));
+          parsed = isNaN(n) ? "" : n;
+        }
+      }
+      changes.push({field: f, value: parsed});
+    }
+  }
+  // Sale date: write both iso and display so monthly grouping + display agree.
+  const dateNew = document.getElementById("m-sale_date").value.trim();
+  if (dateNew !== _modalInitial.sale_date) {
+    changes.push({field: "sale_date_iso", value: dateNew});
+    changes.push({field: "sale_date", value: dateNew});
+  }
+  // Event date: same dual-write so the group key (which keys off
+  // event_date_iso) and the displayed date stay in sync.
+  const evtNew = document.getElementById("m-event_date").value.trim();
+  if (evtNew !== _modalInitial.event_date) {
+    changes.push({field: "event_date_iso", value: evtNew});
+    changes.push({field: "event_date", value: evtNew});
+  }
+  if (changes.length === 0) { closeEditModal(); return; }
+  for (const c of changes) {
+    await fetch("/api/sales/edit", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({source: _modalRow.source, sale_id: String(_modalRow.sale_id), ...c}),
+    });
+  }
+  closeEditModal();
+  await load();
+}
+
+document.addEventListener("dblclick", (e) => {
+  if (e.target.closest(".modal-bg")) return;
+  if (e.target.closest("button")) return;
+  const tr = e.target.closest("tr");
+  if (!tr || !tr._row) return;
+  e.preventDefault();
+  openEditModal(tr._row);
+});
+
+// Single-click on a cell marked with .cell-edit (currently: platform) opens
+// the edit modal already focused on that field. Faster than waiting for the
+// double-click and remembering which row to drill into.
+document.addEventListener("click", (e) => {
+  const cell = e.target.closest("td.cell-edit");
+  if (!cell) return;
+  if (e.target.closest("button, input")) return;
+  const tr = cell.closest("tr");
+  if (!tr || !tr._row) return;
+  const field = cell.getAttribute("data-edit-field");
+  e.stopPropagation();
+  openEditModal(tr._row, field);
+});
+
+document.getElementById("m-close").addEventListener("click", closeEditModal);
+document.getElementById("m-cancel").addEventListener("click", closeEditModal);
+document.getElementById("m-save").addEventListener("click", saveEditModal);
+document.getElementById("modal-bg").addEventListener("click", (e) => {
+  if (e.target.id === "modal-bg") closeEditModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (!document.getElementById("modal-bg").classList.contains("open")) return;
+  if (e.key === "Escape") { e.preventDefault(); closeEditModal(); }
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEditModal(); }
+});
+
+load();
+</script>
+</body>
+</html>
