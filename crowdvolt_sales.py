@@ -225,11 +225,25 @@ def _page_tab(session, endpoint):
     return rows
 
 
-def fetch_sales(session):
-    """Normalized sales rows, newest tabs first, deduped on order number."""
+def fetch_raw(session):
+    """{endpoint: [raw rows]} — one pass over every sale tab. Insertion order
+    follows SALE_TABS, which is what gives dedup its precedence."""
+    return {endpoint: _page_tab(session, endpoint) for _, endpoint in SALE_TABS}
+
+
+def normalize_all(raw_by_tab):
+    """fetch_raw() output -> crowdvolt_sales rows, deduped on order number.
+
+    Split out from fetch_sales so a caller that already holds the raw rows
+    (the doctor, which reports on both shapes) normalizes them instead of
+    paging the whole history a second time — two passes are twice the API
+    calls and can disagree if a sale lands between them.
+    """
+    status_of = {endpoint: status for status, endpoint in SALE_TABS}
     out, seen = [], set()
-    for status, endpoint in SALE_TABS:
-        for raw in _page_tab(session, endpoint):
+    for endpoint, raws in raw_by_tab.items():
+        status = status_of.get(endpoint, endpoint)
+        for raw in raws:
             if not isinstance(raw, dict):
                 continue
             row = _normalize(raw, status)
@@ -239,9 +253,9 @@ def fetch_sales(session):
     return out
 
 
-def fetch_raw(session):
-    """{tab: [raw rows]} — the probe path, for diagnosing field drift."""
-    return {endpoint: _page_tab(session, endpoint) for _, endpoint in SALE_TABS}
+def fetch_sales(session):
+    """Normalized sales rows, newest tabs first, deduped on order number."""
+    return normalize_all(fetch_raw(session))
 
 
 # --- transports -----------------------------------------------------------
@@ -477,7 +491,7 @@ def doctor():
         return False
     raw_rows = [r for rows in raw_by_tab.values() for r in rows
                 if isinstance(r, dict)]
-    rows = fetch_sales(session)
+    rows = normalize_all(raw_by_tab)      # same pass, not a second fetch
     print(f"[ ok ] fetched {len(raw_rows)} raw rows -> {len(rows)} sales "
           + ", ".join(f"{t}={len(v)}" for t, v in raw_by_tab.items()))
 
