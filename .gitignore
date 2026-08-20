@@ -5,6 +5,7 @@ user_data/
 user_data_cv/
 user_data_viagogo/
 .env.cvproxy
+.env.crowdvolt
 
 # Python
 __pycache__/

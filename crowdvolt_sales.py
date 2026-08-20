@@ -34,15 +34,50 @@ names are read through alias tuples and every row is kept verbatim in
 visible raw row rather than a silently empty sync — run
 `python crowdvolt_sales.py --raw` to see what the API actually returned.
 
-CLI (needs the CV Chrome up and logged in):
+Two transports, picked automatically (see the "transports" section below):
+a configured bearer token goes over plain urllib with NO browser at all;
+otherwise it falls back to the CrowdVolt Chrome. The token path exists
+because api.crowdvolt.com is not IP-gated — only the interactive login on
+www.crowdvolt.com is, behind Cloudflare Turnstile, which an Xvfb Chrome
+with CDP attached tends never to clear.
+
+Minting the token (once, on a real desktop browser where Turnstile passes):
+
+  1. Log into crowdvolt.com in your normal Chrome.
+  2. DevTools -> Application -> Cookies -> https://www.crowdvolt.com, copy
+     the `stytch_session` value. Optionally also copy localStorage's
+     `fingerprint_id` (what.crowdvolt.com wants it; the sales endpoints
+     did not, as probed).
+  3. On the box, drop them in .env.crowdvolt (gitignored, chmod 600):
+
+         KARTIS_CV_TOKEN=<stytch_session value>
+         KARTIS_CV_FINGERPRINT=<fingerprint_id value>
+
+  4. `python crowdvolt_sales.py --check` should print the tab counts.
+
+Refreshing the token: sessions do lapse, and an expired one surfaces as a
+loud CvSalesError naming the problem (302 auth_required / 401), never as an
+empty sync. Repeat the steps above when that happens. CrowdVolt does expose
+`POST api/auth/refresh` (empty body, driven by a refresh cookie, no captcha
+involved) which could automate this — but it answered 403 "missing required
+header" to every header combination probed anonymously, so wiring it up
+needs one look at a real logged-in request first. Not guessed at here.
+
+CLI:
 
     .venv\\Scripts\\python crowdvolt_sales.py            # dry-run, print rows
+    .venv\\Scripts\\python crowdvolt_sales.py --check    # verify the token only
     .venv\\Scripts\\python crowdvolt_sales.py --raw      # dump raw JSON per tab
     .venv\\Scripts\\python crowdvolt_sales.py --write    # persist like a real sync
+    .venv\\Scripts\\python crowdvolt_sales.py --browser  # force the Chrome transport
 """
 import json
+import os
 import re
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 
 import db
 
@@ -208,6 +243,136 @@ def fetch_raw(session):
     return {endpoint: _page_tab(session, endpoint) for _, endpoint in SALE_TABS}
 
 
+# --- transports -----------------------------------------------------------
+# Two ways to reach the API, same one-method contract (.api(url) -> parsed
+# JSON, raise on anything else), so fetch_sales() doesn't care which it got:
+#
+#   HttpSession — plain urllib + a bearer token. NO browser: no Chrome, no
+#     Xvfb, no noVNC, no residential proxy. Viable because api.crowdvolt.com
+#     is not IP-gated — probed 2026-08-20 from a datacenter ASN, every
+#     endpoint answered with an application-level JSON error (302
+#     auth_required / 401 missing bearer token) rather than a Cloudflare
+#     interstitial. Only www.crowdvolt.com carries Turnstile, and only the
+#     interactive LOGIN needs to clear it — which is why the token is minted
+#     on a real desktop browser and merely carried here.
+#
+#   CvSession — the pricer's in-page fetch() through the CrowdVolt Chrome.
+#     The original path; kept as the fallback for whenever the token lapses.
+
+ENV_FILE = Path(__file__).resolve().parent / ".env.crowdvolt"
+
+# XHR header set (not the document-navigation one in edm_common — Sec-Fetch
+# values that say "navigate" on an API call are a fingerprint mismatch).
+_API_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.crowdvolt.com",
+    "Referer": "https://www.crowdvolt.com/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
+}
+
+# x-pokedex is the SPA's build constant; crowdvolt_pricer pins the same value
+# and documents how to sniff a new one if CrowdVolt rotates it.
+POKEDEX = "0376"
+
+
+def _load_env_file():
+    """systemd/.env passes these in; for a bare CLI run read .env.crowdvolt
+    (gitignored — it holds a live session token)."""
+    if os.environ.get("KARTIS_CV_TOKEN") or not ENV_FILE.exists():
+        return
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def credentials():
+    """(token, fingerprint) or (None, None) when no token is configured."""
+    _load_env_file()
+    token = (os.environ.get("KARTIS_CV_TOKEN") or "").strip()
+    fingerprint = (os.environ.get("KARTIS_CV_FINGERPRINT") or "").strip()
+    return (token or None), (fingerprint or None)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """An expired session answers 302 -> /signup with the reason in the JSON
+    body. Following it would turn a clean 'you are logged out' into an
+    unrelated HTML page, so redirects are surfaced, not chased."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class HttpSession:
+    """Browser-free transport. Mirrors CvSession.api()."""
+
+    def __init__(self, token, fingerprint=None, timeout=30):
+        self.token = token
+        self.fingerprint = fingerprint
+        self.timeout = timeout
+        self._opener = urllib.request.build_opener(_NoRedirect)
+        # Present so the scrape can close() either transport uniformly.
+        self.page = None
+
+    def api(self, url, method="GET", body=None):
+        headers = dict(_API_HEADERS)
+        headers["Authorization"] = f"Bearer {self.token}"
+        headers["x-pokedex"] = POKEDEX
+        if self.fingerprint:
+            headers["x-fingerprint-id"] = self.fingerprint
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with self._opener.open(req, timeout=self.timeout) as resp:
+                raw = resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            raw = (e.read() or b"").decode("utf-8", "replace")
+            if e.code in (301, 302, 303, 307, 308, 401, 403):
+                raise CvSalesError(
+                    f"{method} {url.split('?')[0]} -> {e.code}: {raw[:200]} "
+                    "— the CrowdVolt token is missing or expired; mint a new "
+                    "one (see 'refreshing the token' in the module docstring)")
+            raise CvSalesError(f"{method} {url.split('?')[0]} -> {e.code}: {raw[:200]}")
+        except urllib.error.URLError as e:
+            raise CvSalesError(f"{method} {url.split('?')[0]} failed: {e.reason}")
+        try:
+            return json.loads(raw)
+        except ValueError as e:
+            raise CvSalesError(f"bad JSON from {url.split('?')[0]}: {e}; got {raw[:160]}")
+
+    def close(self):
+        pass
+
+
+def open_http_session():
+    """HttpSession from the configured token, or None when none is set."""
+    token, fingerprint = credentials()
+    if not token:
+        return None
+    return HttpSession(token, fingerprint)
+
+
+def check_token(session=None):
+    """Cheapest authenticated call there is — the /selling tab counts. Returns
+    whatever the API says so a human can eyeball that it's the right account."""
+    session = session or open_http_session()
+    if session is None:
+        raise CvSalesError(
+            f"no CrowdVolt token configured — set KARTIS_CV_TOKEN in {ENV_FILE} "
+            "or the environment")
+    return session.api(f"{API}/api/buy_sell_history/seller_counts")
+
+
 def _open_session(p):
     """Session on the CrowdVolt Chrome. Lives in crowdvolt_pricer so the
     Cloudflare-challenge handling and dead-tab reopen have exactly one
@@ -235,19 +400,41 @@ def fetch_via_cdp():
 def _main():
     import sys
     args = sys.argv[1:]
+
+    session = None if "--browser" in args else open_http_session()
+    if session is not None:
+        print(f"[kartis] transport: HTTP (token from {ENV_FILE.name}/env, no browser)")
+        try:
+            return _run(session, args)
+        finally:
+            session.close()
+
+    if "--check" in args and "--browser" not in args:
+        raise SystemExit(
+            f"no CrowdVolt token configured — set KARTIS_CV_TOKEN in {ENV_FILE}\n"
+            "(see 'Minting the token' in this module's docstring)")
+
+    print("[kartis] transport: CrowdVolt Chrome over CDP")
     from patchright.sync_api import sync_playwright
     with sync_playwright() as p:
         session = _open_session(p)
         try:
-            if "--raw" in args:
-                print(json.dumps(fetch_raw(session), indent=2, default=str))
-                return
-            rows = fetch_sales(session)
+            return _run(session, args)
         finally:
             try:
                 session.page.close()
             except Exception:
                 pass
+
+
+def _run(session, args):
+    if "--check" in args:
+        print(json.dumps(check_token(session), indent=2, default=str))
+        return
+    if "--raw" in args:
+        print(json.dumps(fetch_raw(session), indent=2, default=str))
+        return
+    rows = fetch_sales(session)
     if "--json" in args:
         print(json.dumps(rows, indent=2))
     else:

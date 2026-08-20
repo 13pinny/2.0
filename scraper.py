@@ -1025,23 +1025,39 @@ def _scrape_crowdvolt_sales(context):
     An empty API result is NOT treated as failure — no sales this window is a
     legitimate answer, and re-running the DOM scrape to "confirm" it would
     just burn a Cloudflare challenge. Only a raised error falls through.
+
+    Transport order: a configured KARTIS_CV_TOKEN skips the browser entirely
+    (api.crowdvolt.com is not IP-gated — see crowdvolt_sales), then the CV
+    Chrome, then the DOM. Each step down is logged, so a silently degraded
+    setup is visible in the scrape log rather than only in the row count.
     """
-    import crowdvolt_pricer
     import crowdvolt_sales
+
+    http_session = crowdvolt_sales.open_http_session()
+    if http_session is not None:
+        try:
+            rows = crowdvolt_sales.fetch_sales(http_session)
+            print(f"[kartis] crowdvolt sales via API (token, no browser): "
+                  f"{len(rows)} rows")
+            return rows
+        except Exception as e:
+            _flag_crowdvolt_auth(str(e))
+            print(f"[kartis] crowdvolt token fetch failed ({type(e).__name__}: "
+                  f"{str(e)[:160]}); falling back to the CrowdVolt Chrome")
+        finally:
+            http_session.close()
+
+    import crowdvolt_pricer
     session = None
     try:
         session = crowdvolt_pricer.session_on_context(context)
         rows = crowdvolt_sales.fetch_sales(session)
-        print(f"[kartis] crowdvolt sales via API: {len(rows)} rows")
+        print(f"[kartis] crowdvolt sales via API (CV Chrome): {len(rows)} rows")
         return rows
     except Exception as e:
-        msg = str(e)
-        if "stytch_session" in msg or "auth_required" in msg or "/signup" in msg:
-            # Logged out of CrowdVolt in this profile — surface it as a
-            # LOGIN EXPIRED badge instead of a silent zero.
-            _auth_errors.add("crowdvolt")
+        _flag_crowdvolt_auth(str(e))
         print(f"[kartis] crowdvolt sales API failed ({type(e).__name__}: "
-              f"{msg[:160]}); falling back to the /selling page")
+              f"{str(e)[:160]}); falling back to the /selling page")
     finally:
         if session is not None:
             try:
@@ -1049,6 +1065,13 @@ def _scrape_crowdvolt_sales(context):
             except Exception:
                 pass
     return _scrape_crowdvolt_sales_dom(context)
+
+
+def _flag_crowdvolt_auth(msg):
+    """Logged out / token expired -> LOGIN EXPIRED badge, not a silent zero."""
+    if ("stytch_session" in msg or "auth_required" in msg or "/signup" in msg
+            or "missing bearer token" in msg or "expired" in msg):
+        _auth_errors.add("crowdvolt")
 
 
 def _scrape_crowdvolt_sales_dom(context):

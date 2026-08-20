@@ -320,6 +320,52 @@ Chrome keeps the datacenter IP for Lysted/Viagogo.
 
    Then `sudo systemctl restart kartis-flask`.
 
+### Can't clear Cloudflare to log in? Use a token instead (preferred)
+
+Turnstile — the invisible Cloudflare widget CrowdVolt's login sits behind
+(sitekey `0x4AAAAAACEEE5RZU0aYZaTU`) — frequently refuses to clear in the
+noVNC Chrome, and no amount of clicking helps. That is a **browser
+fingerprint** problem, not the IP: an Xvfb Chrome has software-rendered
+WebGL, no GPU, no audio device and `--remote-debugging-port` attached, all
+of which Turnstile scores badly. CrowdVolt's own client even has an error
+code for it, `cf_not_cleared`.
+
+The IP is not the issue, and this is worth internalising before spending
+more on proxies: probed 2026-08-20 from a plain **datacenter** ASN with
+`curl` and no browser at all, `api.crowdvolt.com` answered every endpoint
+with an ordinary application error — `302 auth_required`, `401 missing
+bearer token`, `302 token_rejected` for a stale bearer — and never a
+Cloudflare interstitial. `www.crowdvolt.com` served its full pages too.
+**Only the interactive login is gated.** So mint the session where Turnstile
+is happy (your own laptop) and just carry it to the box:
+
+1. In your normal desktop Chrome, log into crowdvolt.com.
+2. DevTools -> Application -> Cookies -> `https://www.crowdvolt.com`: copy
+   the **`stytch_session`** value. From Local Storage, optionally copy
+   `fingerprint_id` too.
+3. On the VPS (chmod 600 — this is a live session credential):
+
+   ```sh
+   sudo -u kartis bash -c 'cat > /opt/kartis/.env.crowdvolt <<EOF
+   KARTIS_CV_TOKEN=<stytch_session value>
+   KARTIS_CV_FINGERPRINT=<fingerprint_id value>
+   EOF'
+   sudo chmod 600 /opt/kartis/.env.crowdvolt
+   ```
+
+4. Verify — this prints the /selling tab counts and touches no browser:
+
+   ```sh
+   sudo -u kartis /opt/kartis/.venv/bin/python /opt/kartis/crowdvolt_sales.py --check
+   ```
+
+With a token present the hourly sync uses it and **never opens Chrome for
+CrowdVolt at all** — no Xvfb, no noVNC, no residential proxy, no Turnstile.
+Those stay installed only as the fallback for when the token lapses; if this
+holds up you can stop `kartis-chrome-cv` and `kartis-cvproxy` and drop the
+proxy bill. When the session does expire the sync says so explicitly
+(`token_rejected`) and the dashboard shows LOGIN EXPIRED — repeat steps 1-3.
+
 5. Confirm sales tracking end to end:
 
    ```sh
@@ -365,10 +411,24 @@ Almost always the CDP split: the scrape has to run on the CrowdVolt Chrome
 `/opt/kartis/.env`, then `curl http://localhost:9223/json/version` and
 `systemctl status kartis-cvproxy kartis-chrome-cv`. If those are healthy,
 run `crowdvolt_sales.py` by hand — "no stytch_session cookie" means the
-CrowdVolt login in `user_data_cv` expired (re-login via noVNC), a raised
-Cloudflare error means the residential IP got flagged (rotate the session
-at the provider), and rows with blank columns mean CrowdVolt renamed a
-field — `--raw` shows the new names.
+CrowdVolt login in `user_data_cv` expired, `token_rejected` means the
+`.env.crowdvolt` token did, and rows with blank columns mean CrowdVolt
+renamed a field (`--raw` shows the new names). For any login problem prefer
+the token route above over fighting Turnstile in noVNC.
+
+**Cloudflare won't let me log into CrowdVolt in the noVNC browser.**
+Expected, and not the IP — see "Use a token instead" above; that path skips
+the browser entirely. If you specifically want the in-browser login to work,
+the single highest-value thing to try is logging in from a Chrome started
+**without** `--remote-debugging-port`: stop `kartis-chrome-cv`, run
+`DISPLAY=:99 google-chrome-stable --user-data-dir=/opt/kartis/user_data_cv`
+by hand, clear Turnstile and sign in there, quit, then
+`sudo systemctl start kartis-chrome-cv`. The profile keeps the session and
+CDP only has to be absent while the challenge is being solved. Also worth
+knowing: a residential proxy can make Turnstile *worse*, since those exit
+IPs are shared with abusers — `cvproxy.py --test` prints the egress IP, and
+turning the proxy off is a legitimate experiment given the API is not
+IP-gated.
 
 **B2 sync silently doing nothing.**
 `rclone config show b2` to confirm the remote exists; `--max-age 36h`
