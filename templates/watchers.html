@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Watchers</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
+    --cyan: #0f766e;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 24px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .ok { background: #d8eede; border: 1px solid var(--green); color: var(--green); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, textarea, button, a.btn { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  textarea { resize: vertical; min-height: 90px; width: 100%; font-size: 12px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  button, a.btn { cursor: pointer; text-decoration: none; display: inline-block; }
+  button:hover, a.btn:hover { background: #e9edf2; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  button.danger { color: var(--red); border-color: #f2b8b5; }
+  button.danger:hover { background: #fdecea; }
+  button.big-stop { background: var(--red); color: #fff; border-color: var(--red); padding: 10px 18px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
+  button.big-stop:hover { background: #c63a31; }
+  button.big-resume { background: var(--green); color: #061; border-color: var(--green); padding: 10px 18px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
+  button.big-resume:hover { background: #44b352; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line-2); color: var(--muted); border-radius: 1px; letter-spacing: 1px; text-transform: uppercase; }
+  .status.active { color: var(--green); border-color: var(--green); }
+  .status.paused { color: var(--amber); border-color: var(--amber); }
+  .status.muted { color: var(--orange); border-color: var(--orange); }
+  .status.error { color: var(--red); border-color: var(--red); }
+  .src { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
+  .src-ticketmaster { color: var(--accent); border-color: var(--accent); }
+  .src-kupat { color: var(--purple); border-color: var(--purple); }
+  .src-tickchak { color: var(--cyan); border-color: var(--cyan); }
+  .src-haku { color: var(--green); border-color: var(--green); }
+  .src-tmdiscover { color: var(--orange); border-color: var(--orange); }
+  .empty { color: var(--muted); padding: 28px; text-align: center; font-size: 12px; }
+  .seats-detail { font-size: 11px; color: var(--muted); white-space: pre-wrap; max-height: 200px; overflow: auto; padding: 6px 8px; background: var(--bg-3); border: 1px solid var(--line); }
+  details summary { cursor: pointer; color: var(--accent); font-size: 11px; }
+  .add-form { display: grid; grid-template-columns: 2fr 1fr auto; gap: 8px; max-width: 900px; }
+  .add-form input { width: 100%; }
+  .bulk-form { max-width: 900px; }
+  .bulk-results { font-size: 11px; max-height: 220px; overflow: auto; padding: 8px; background: var(--bg-3); border: 1px solid var(--line); margin-top: 8px; }
+  .bulk-results .ok-line { color: var(--green); }
+  .bulk-results .err-line { color: var(--red); }
+  a.tm-link { color: var(--accent); text-decoration: none; }
+  a.tm-link:hover { text-decoration: underline; }
+  /* Inline rename button — small, blends with row, becomes prominent on hover. */
+  button.btn-icon { padding: 1px 6px; font-size: 12px; line-height: 1; background: transparent; color: var(--muted); border: 1px solid transparent; border-radius: 0; cursor: pointer; opacity: 0.4; }
+  tbody tr:hover button.btn-icon { opacity: 1; }
+  button.btn-icon:hover { color: var(--accent); border-color: var(--line); background: var(--bg-3); }
+  /* Label cell: link + pencil sit on one line; the link wraps long Hebrew titles. */
+  td.label-cell { display: flex; align-items: baseline; gap: 6px; }
+  td.label-cell a.tm-link { flex: 1; min-width: 0; word-break: break-word; }
+  .master-controls { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; padding: 12px 14px; background: var(--bg-2); border: 1px solid var(--line); margin-bottom: 14px; }
+  .toggle-group { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  .toggle-group .label { font-weight: 600; }
+  .toggle-group.on .label { color: var(--amber); }
+  /* Switch */
+  .switch { position: relative; display: inline-block; width: 38px; height: 20px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider { position: absolute; cursor: pointer; inset: 0; background: var(--line-2); transition: 0.2s; border-radius: 20px; }
+  .switch .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; top: 3px; background: var(--text); transition: 0.2s; border-radius: 50%; }
+  .switch input:checked + .slider { background: var(--amber); }
+  .switch input:checked + .slider:before { transform: translateX(18px); background: #fff; }
+  /* Inline channel dropdown */
+  select.channels { font-size: 11px; padding: 4px 6px; }
+  input.dchan { display: block; margin-top: 4px; width: 110px; font-family: inherit; font-size: 11px; padding: 3px 6px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  input.dchan::placeholder { color: var(--muted); }
+  /* Tabs label area */
+  table th.col-tight, table td.col-tight { white-space: nowrap; }
+  /* Filter badge + modal */
+  .filter-badge { display: inline-block; padding: 1px 6px; font-size: 9px; letter-spacing: 1px; color: var(--purple); border: 1px solid var(--purple); border-radius: 1px; margin-left: 6px; }
+  .filter-badge.empty { color: var(--muted); border-color: var(--line-2); }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: none; z-index: 50; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 580px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 20px; cursor: pointer; padding: 0; line-height: 1; }
+  .modal h3 .close:hover { color: var(--text); }
+  .modal-body { padding: 14px 18px; }
+  .modal-body .row { display: grid; grid-template-columns: 130px 1fr; gap: 10px 14px; align-items: center; margin-bottom: 12px; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input[type=number], .modal-body select { font-family: inherit; font-size: 12px; padding: 6px 8px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); width: 100%; }
+  .modal-body .price-row { display: flex; gap: 6px; align-items: center; }
+  .modal-body .price-row input { flex: 1; }
+  .modal-body .help { font-size: 10px; color: var(--muted); grid-column: 2; line-height: 1.4; }
+  .sections-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; max-height: 240px; overflow-y: auto; padding: 6px 8px; background: var(--bg-3); border: 1px solid var(--line); }
+  .sections-grid label { display: flex; align-items: center; gap: 8px; font-size: 11px; text-transform: none; color: var(--text); letter-spacing: 0; cursor: pointer; padding: 2px 0; }
+  .sections-grid input[type=checkbox] { accent-color: var(--accent); }
+  .sections-grid .price { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { padding: 7px 14px; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>WATCHERS</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers" class="active">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+<div id="errbox" class="err" style="display:none"></div>
+<div id="okbox" class="ok" style="display:none"></div>
+
+<div class="stats">
+  <div class="stat"><div class="label">Watchers</div><div class="value" id="s-total">0</div></div>
+  <div class="stat green"><div class="label">Active</div><div class="value" id="s-active">0</div></div>
+  <div class="stat amber"><div class="label">Paused / Muted</div><div class="value" id="s-paused">0</div></div>
+  <div class="stat"><div class="label">Last Tick</div><div class="value" id="s-tick">—</div></div>
+  <div class="stat green"><div class="label">Drops Logged</div><div class="value" id="s-drops">0</div></div>
+  <div class="stat red"><div class="label">Errors</div><div class="value" id="s-errors">0</div></div>
+</div>
+
+<h2>MASTER CONTROLS</h2>
+<div class="master-controls">
+  <div class="toggle-group" id="tg-paused">
+    <label class="switch"><input type="checkbox" id="m-paused"><span class="slider"></span></label>
+    <div><div class="label">Master Pause</div><div style="font-size:10px;color:var(--muted)">stops polling for everyone</div></div>
+  </div>
+  <div class="toggle-group" id="tg-muted">
+    <label class="switch"><input type="checkbox" id="m-muted"><span class="slider"></span></label>
+    <div><div class="label">Master Mute</div><div style="font-size:10px;color:var(--muted)">keeps polling, suppresses all pings</div></div>
+  </div>
+  <div style="flex:1"></div>
+  <button class="big-stop" id="btn-stop">🛑 STOP EVERYTHING</button>
+  <button class="big-resume" id="btn-resume">▶ RESUME ALL</button>
+</div>
+
+<h2>ADD WATCHER</h2>
+<form class="add-form" id="addForm">
+  <input id="add-url" placeholder="Paste a Ticketmaster.co.il /performance/, kupat.co.il /booking/features/, or discover.ticketmaster.co.il/event/ URL" required>
+  <input id="add-label" placeholder="label (optional)">
+  <button type="submit" id="add-btn">Add &amp; baseline</button>
+</form>
+
+<details style="margin-top:8px;max-width:900px">
+  <summary style="font-size:11px;letter-spacing:1px">Bulk add — paste multiple URLs (one per line)</summary>
+  <form class="bulk-form" id="bulkForm" style="margin-top:6px">
+    <textarea id="bulk-urls" placeholder="https://www.ticketmaster.co.il/performance/MBP19/001/ALL/iw
+https://tickets.kupat.co.il/booking/features/1358?display=list&prsntId=51596
+# lines starting with # are skipped"></textarea>
+    <div style="margin-top:6px">
+      <button type="submit" id="bulk-btn">Add all</button>
+    </div>
+    <div id="bulk-results" class="bulk-results" style="display:none"></div>
+  </form>
+</details>
+
+<div class="bar" style="margin-top:8px">
+  <button id="test-btn">Send test notification</button>
+  <button id="check-btn">Check all now</button>
+  <span class="meta" id="interval">—</span>
+</div>
+
+<h2>WATCHERS</h2>
+<table>
+  <thead><tr>
+    <th>LABEL</th>
+    <th>SOURCE</th>
+    <th>EVENT/PERF</th>
+    <th>STATUS</th>
+    <th>LAST CHECK</th>
+    <th class="num">SEATS / TOTAL</th>
+    <th class="col-tight">CHANNELS</th>
+    <th class="col-tight">MUTE</th>
+    <th class="col-tight">FILTERS</th>
+    <th>ACTIONS</th>
+  </tr></thead>
+  <tbody id="watchersBody"></tbody>
+</table>
+<div id="watchersEmpty" class="empty" style="display:none">no watchers yet — paste a URL above to start</div>
+
+<h2>DROP HISTORY</h2>
+<table>
+  <thead><tr>
+    <th>WHEN</th><th>WATCHER</th><th class="num">+ADDED</th><th class="num">-REMOVED</th>
+    <th>NOTIFY</th><th>SEATS</th>
+  </tr></thead>
+  <tbody id="dropsBody"></tbody>
+</table>
+<div id="dropsEmpty" class="empty" style="display:none">no drops detected yet</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleString(); } catch (_) { return iso; }
+}
+function escape(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+function showError(msg) {
+  $('errbox').textContent = msg; $('errbox').style.display = 'block';
+  setTimeout(() => $('errbox').style.display = 'none', 7000);
+}
+function showOk(msg) {
+  $('okbox').textContent = msg; $('okbox').style.display = 'block';
+  setTimeout(() => $('okbox').style.display = 'none', 4000);
+}
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  let data; try { data = await r.json(); } catch (_) { data = null; }
+  if (!r.ok) throw new Error((data && data.error) || `HTTP ${r.status}`);
+  return data;
+}
+
+const SRC_URLS = {
+  // perf_code === 'ALL' marks event-level watchers — link to the /event/ page
+  // that covers every performance under the event, not a /performance/ URL.
+  ticketmaster: (e, p) => (p === 'ALL'
+    ? `https://www.ticketmaster.co.il/event/${e}/ALL/iw`
+    : `https://www.ticketmaster.co.il/performance/${e}/${p}/ALL/iw`),
+  kupat:        (e, p) => `https://tickets.kupat.co.il/booking/features/${e}?display=list&prsntId=${p}`,
+  // tickchak's slug IS the URL; perf_code is always "0" — ignore it.
+  tickchak:     (e, _p) => `https://tickchak.co.il/${e}`,
+  // dice event_code is the internal 24-hex id — dice.fm 308-redirects it
+  // to the canonical slug URL.
+  dice:         (e, _p) => `https://dice.fm/event/${e}`,
+  // haku (Houston Marathon) event_code is the 20-hex event key.
+  haku:         (e, _p) => `https://events.hakuapp.com/events/${e}/registration_options`,
+  // tmdiscover watches a whole TM-IL series landing page; event_code is its
+  // slug and perf_code is always "0".
+  tmdiscover:   (e, _p) => `https://discover.ticketmaster.co.il/event/${e}`,
+};
+
+const CHANNEL_CHOICES = [
+  ['discord,email', 'Both'],
+  ['discord',       'Discord only'],
+  ['email',         'Email only'],
+  ['',              'None (mute)'],
+];
+
+async function load() {
+  let data;
+  try { data = await api('/api/watchers'); }
+  catch (e) { showError(e.message); return; }
+  const watchers = data.watchers || [];
+  const drops = data.drops || [];
+  const lastTm = data.last_tm || {};
+  const settings = data.settings || {};
+
+  $('s-total').textContent = watchers.length;
+  $('s-active').textContent = watchers.filter(w => !w.paused && !w.muted).length;
+  $('s-paused').textContent = watchers.filter(w => w.paused || w.muted).length;
+  $('s-tick').textContent = lastTm.at ? new Date(lastTm.at).toLocaleTimeString() : '—';
+  $('s-drops').textContent = drops.length;
+  $('s-errors').textContent = lastTm.errors || 0;
+  $('interval').textContent = `tick = every ${data.interval_seconds}s${lastTm.paused ? ' (PAUSED)' : ''}`;
+
+  // Master controls reflect persisted state without firing change events
+  $('m-paused').checked = !!settings.master_paused;
+  $('m-muted').checked  = !!settings.master_muted;
+  $('tg-paused').classList.toggle('on', !!settings.master_paused);
+  $('tg-muted').classList.toggle('on', !!settings.master_muted);
+
+  const wbody = $('watchersBody');
+  wbody.innerHTML = '';
+  $('watchersEmpty').style.display = watchers.length ? 'none' : 'block';
+  for (const w of watchers) {
+    const src = w.source || 'ticketmaster';
+    const tr = document.createElement('tr');
+    let status, statusLabel;
+    if (w.last_check_error) { status = 'error'; statusLabel = 'ERROR'; }
+    else if (w.paused)      { status = 'paused'; statusLabel = 'PAUSED'; }
+    else if (w.muted)       { status = 'muted'; statusLabel = 'MUTED'; }
+    else                    { status = 'active'; statusLabel = 'ACTIVE'; }
+    const channelSel = (CHANNEL_CHOICES.map(([val, txt]) =>
+      `<option value="${val}" ${val === (w.notify_channels || '') ? 'selected' : ''}>${txt}</option>`
+    ).join(''));
+    const tmUrl = (SRC_URLS[src] || SRC_URLS.ticketmaster)(w.event_code, w.perf_code);
+    const filterSummary = filterSummaryFor(w);
+    tr.innerHTML = `
+      <td class="label-cell">
+        <a class="tm-link" href="${tmUrl}" target="_blank" rel="noopener" title="open on ${escape(src)}.co.il">${escape(w.label || '—')}</a>
+        <button class="btn-icon" data-act="rename" data-id="${w.id}" title="rename event">&#9998;</button>
+      </td>
+      <td><span class="src src-${src}">${escape(src)}</span></td>
+      <td><a class="tm-link" href="${tmUrl}" target="_blank" rel="noopener">${escape(w.event_code)}/${escape(w.perf_code)}</a></td>
+      <td><span class="status ${status}" title="${escape(w.last_check_error || '')}">${statusLabel}</span></td>
+      <td>${fmtTime(w.last_check_at)}</td>
+      <td class="num">${seatCell(w)}</td>
+      <td class="col-tight">
+        <select class="channels" data-id="${w.id}">${channelSel}</select>
+        <input class="dchan" data-id="${w.id}" type="text" placeholder="#shared drops"
+               value="${escape(w.discord_channel || '')}"
+               title="per-event Discord channel for drop pings — same name across watchers = same channel; empty = shared drops channel">
+      </td>
+      <td class="col-tight">
+        <label class="switch" title="mute notifications (keeps polling)"><input type="checkbox" data-id="${w.id}" data-act="mute" ${w.muted ? 'checked' : ''}><span class="slider"></span></label>
+      </td>
+      <td class="col-tight">
+        <button data-act="filters" data-id="${w.id}">Filters</button>
+        ${filterSummary ? `<span class="filter-badge">${escape(filterSummary)}</span>` : '<span class="filter-badge empty">none</span>'}
+      </td>
+      <td>
+        <button data-act="check" data-id="${w.id}">Check</button>
+        <button data-act="toggle" data-id="${w.id}" data-paused="${w.paused ? 0 : 1}">${w.paused ? 'Resume' : 'Pause'}</button>
+        <button class="danger" data-act="delete" data-id="${w.id}">Delete</button>
+      </td>`;
+    wbody.appendChild(tr);
+  }
+  wbody.querySelectorAll('button[data-act]').forEach(b => b.addEventListener('click', onWatcherAction));
+  wbody.querySelectorAll('select.channels').forEach(s => s.addEventListener('change', onChannelChange));
+  wbody.querySelectorAll('input[data-act="mute"]').forEach(c => c.addEventListener('change', onMuteChange));
+  wbody.querySelectorAll('input.dchan').forEach(i => i.addEventListener('change', onDiscordChannelChange));
+
+  const watcherById = Object.fromEntries(watchers.map(w => [w.id, w]));
+  const dbody = $('dropsBody');
+  dbody.innerHTML = '';
+  $('dropsEmpty').style.display = drops.length ? 'none' : 'block';
+  for (const d of drops) {
+    const w = watcherById[d.watcher_id];
+    const wlabel = w ? `${w.label} (${w.event_code}/${w.perf_code})` : d.watcher_id;
+    let seatsHtml = '';
+    if (d.seats_json) {
+      try {
+        const seats = JSON.parse(d.seats_json);
+        const lines = seats.map(s => {
+          const block = s.block || s.b || '?';
+          const row = s.row || s.r || '?';
+          const seat = s.seat ?? s.l ?? '?';
+          return `${block} R${row} S${seat}`;
+        }).join('\n');
+        seatsHtml = `<details><summary>${seats.length} seat(s)</summary><div class="seats-detail">${escape(lines)}</div></details>`;
+      } catch (_) {
+        seatsHtml = `<span class="meta">parse error</span>`;
+      }
+    }
+    let notifyResult = '';
+    if (d.notify_result) {
+      try {
+        const nr = JSON.parse(d.notify_result);
+        notifyResult = `discord: ${escape(nr.discord||'?')} · email: ${escape(nr.email||'?')}`;
+      } catch (_) { notifyResult = escape(d.notify_result); }
+    }
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${fmtTime(d.detected_at)}</td>
+      <td>${escape(wlabel)}</td>
+      <td class="num">${d.added_count}</td>
+      <td class="num">${d.removed_count}</td>
+      <td style="font-size:11px">${notifyResult}</td>
+      <td>${seatsHtml}</td>`;
+    dbody.appendChild(tr);
+  }
+}
+
+async function onWatcherAction(e) {
+  const btn = e.currentTarget;
+  const act = btn.dataset.act;
+  const id = btn.dataset.id;
+  btn.disabled = true;
+  try {
+    if (act === 'check') {
+      const r = await api('/api/watchers/check-now', 'POST', { id });
+      showOk(`Checked. Added ${r.added}${r.error ? ' / err: ' + r.error : ''}`);
+    } else if (act === 'toggle') {
+      await api('/api/watchers/toggle', 'POST', { id, paused: parseInt(btn.dataset.paused, 10) });
+    } else if (act === 'delete') {
+      if (!confirm('Delete this watcher and its history?')) { btn.disabled = false; return; }
+      await api('/api/watchers/delete', 'POST', { id });
+    } else if (act === 'filters') {
+      await openFiltersModal(id);
+      btn.disabled = false;
+      return;  // load() called from modal save
+    } else if (act === 'rename') {
+      // Pull the current label from the row's link text — that's already
+      // escaped HTML so we read .textContent for the original string.
+      const linkEl = btn.parentElement.querySelector('a.tm-link');
+      const current = linkEl ? linkEl.textContent : '';
+      const next = prompt('Rename event:', current);
+      if (next == null) { btn.disabled = false; return; }  // cancelled
+      const trimmed = next.trim();
+      if (!trimmed || trimmed === current) { btn.disabled = false; return; }
+      try {
+        await api('/api/watchers/update', 'POST', { id, label: trimmed });
+        showOk('Renamed.');
+        await load();
+      } catch (err) { showError(err.message); }
+      finally { btn.disabled = false; }
+      return;
+    }
+    await load();
+  } catch (err) { showError(err.message); }
+  finally { btn.disabled = false; }
+}
+
+function seatCell(w) {
+  // Festival/hub tickchak watchers: a colored status badge plus exact
+  // released/left counts when we have them, and a per-type breakdown in
+  // the hover tooltip (men's/accessible/price tiers).
+  if (w.festival_status) {
+    const palette = {
+      available:   ['Available',    '#16a34a'],
+      lasttickets: ['Last tickets', '#d97706'],
+      soldout:     ['Sold out',     '#dc2626'],
+    };
+    const [txt, color] = palette[w.festival_status] || [w.festival_status, '#888'];
+    const badge = `<span style="display:inline-block;padding:1px 6px;border-radius:6px;` +
+                  `background:${color};color:#fff;font-size:10px;font-weight:600">${txt}</span>`;
+    const total = w.total_seats, avail = w.available_seats;
+    let counts = '', tip = '';
+    if (total != null && avail != null) {
+      const sold = Math.max(0, total - avail);
+      const pctSold = total > 0 ? (sold / total * 100) : 0;
+      counts = `<div>${avail} / ${total}</div>` +
+               `<div style="font-size:10px;color:var(--muted)">${pctSold.toFixed(1)}% sold</div>`;
+      const rows = Object.entries(w.festival_types || {})
+        .filter(([k, v]) => v && v.amount)
+        .map(([k, v]) => `${v.name || k}: ${v.available}/${v.amount} left (${v.sold} sold)`);
+      if (rows.length) tip = ` title="${escape(rows.join('\n'))}"`;
+    }
+    return `<div${tip}>${badge}${counts}</div>`;
+  }
+  // Prefer the source's own per-tick "available quantity" when it
+  // exposes one (tickchak). Otherwise fall back to the watcher's
+  // last_seat_count, which is what ticketmaster + kupat already
+  // report at seat granularity.
+  const avail = (w.available_seats != null) ? w.available_seats : w.last_seat_count;
+  const total = w.total_seats;
+  if (avail == null) return '—';
+  if (!total) return String(avail);
+  const sold = Math.max(0, total - avail);
+  const pctSold = total > 0 ? (sold / total * 100) : 0;
+  return `<div>${avail} / ${total}</div>` +
+         `<div style="font-size:10px;color:var(--muted)">${pctSold.toFixed(1)}% sold</div>`;
+}
+
+function filterSummaryFor(w) {
+  if (!w.filters) return '';
+  let f;
+  try { f = typeof w.filters === 'string' ? JSON.parse(w.filters) : w.filters; }
+  catch (_) { return ''; }
+  if (!f) return '';
+  const bits = [];
+  if (f.min_group_size && f.min_group_size > 1) bits.push(`min ${f.min_group_size}`);
+  if (f.exclude_sections && f.exclude_sections.length) {
+    const first = f.exclude_sections.slice(0, 2).join(',');
+    bits.push(`skip ${first}${f.exclude_sections.length > 2 ? '…' : ''}`);
+  }
+  if (f.min_price != null || f.max_price != null) {
+    bits.push(`₪${f.min_price ?? '-'}-${f.max_price ?? '-'}`);
+  }
+  return bits.join(' · ');
+}
+
+async function openFiltersModal(watcherId) {
+  let data;
+  try {
+    data = await api(`/api/watchers/sections?id=${encodeURIComponent(watcherId)}`);
+  } catch (err) { showError(err.message); return; }
+  const f = data.filters || {};
+  const sections = data.sections || [];
+  const excluded = new Set((f.exclude_sections || []).map(String));
+
+  const sectionsHtml = sections.length
+    ? sections.map(s =>
+        `<label><input type="checkbox" data-code="${escape(s.code)}" ${excluded.has(String(s.code)) ? 'checked' : ''}>` +
+        `<span>${escape(s.name)}</span>` +
+        `<span class="price">${s.price != null ? '₪' + Math.round(s.price) : ''}</span></label>`
+      ).join('')
+    : '<div class="meta" style="padding:8px">(no sections cached yet — labels will populate after the first tick)</div>';
+
+  const modalHtml = `
+    <div class="modal">
+      <h3>Filters <button class="close" id="f-close" type="button">×</button></h3>
+      <div class="modal-body">
+        <div class="row">
+          <label>Min seats</label>
+          <select id="f-mgs">
+            <option value="1" ${(f.min_group_size||1)==1?'selected':''}>1 — any seat counts</option>
+            <option value="2" ${(f.min_group_size||1)==2?'selected':''}>2 — exclude singles (default)</option>
+            <option value="3" ${(f.min_group_size||1)==3?'selected':''}>3 — require trios+</option>
+            <option value="4" ${(f.min_group_size||1)==4?'selected':''}>4 — require quads+</option>
+          </select>
+          <div class="help">Adjacent = same row, seat numbers within 2 of each other (handles even/odd seat numbering).</div>
+        </div>
+        <div class="row">
+          <label>Price range</label>
+          <div class="price-row">
+            <input type="number" id="f-min-price" placeholder="min ₪" value="${f.min_price != null ? f.min_price : ''}" min="0" step="1">
+            <span class="meta">to</span>
+            <input type="number" id="f-max-price" placeholder="max ₪" value="${f.max_price != null ? f.max_price : ''}" min="0" step="1">
+          </div>
+          <div class="help">Leave blank for no bound.</div>
+        </div>
+        <div class="row">
+          <label style="align-self:flex-start">Exclude sections</label>
+          <div>
+            ${sections.length ? `<div style="display:flex;gap:8px;margin-bottom:4px">
+              <button type="button" id="f-sec-all">Select all</button>
+              <button type="button" id="f-sec-none">Clear all</button>
+            </div>` : ''}
+            <div class="sections-grid" id="f-sections">${sectionsHtml}</div>
+            <div class="help" style="grid-column:auto;margin-top:4px">Tick sections to skip. Leave all unchecked to include everything.</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="muted">Filters apply at notify-time. Changes take effect on the next tick.</span>
+        <button type="button" id="f-cancel">Cancel</button>
+        <button type="button" id="f-save" class="primary">Save</button>
+      </div>
+    </div>`;
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg open';
+  bg.innerHTML = modalHtml;
+  document.body.appendChild(bg);
+
+  const close = () => bg.remove();
+  const setAllSections = (checked) =>
+    bg.querySelectorAll('#f-sections input[type=checkbox]').forEach(c => { c.checked = checked; });
+  const secAll = bg.querySelector('#f-sec-all');
+  const secNone = bg.querySelector('#f-sec-none');
+  if (secAll) secAll.onclick = () => setAllSections(true);
+  if (secNone) secNone.onclick = () => setAllSections(false);
+  bg.querySelector('#f-close').addEventListener('click', close);
+  bg.querySelector('#f-cancel').addEventListener('click', close);
+  bg.addEventListener('click', e => { if (e.target === bg) close(); });
+
+  bg.querySelector('#f-save').addEventListener('click', async () => {
+    const mgs = parseInt(bg.querySelector('#f-mgs').value, 10) || 1;
+    const minP = bg.querySelector('#f-min-price').value;
+    const maxP = bg.querySelector('#f-max-price').value;
+    const excl = Array.from(bg.querySelectorAll('#f-sections input:checked')).map(c => c.dataset.code);
+    const filters = {};
+    if (mgs > 1) filters.min_group_size = mgs;
+    if (excl.length) filters.exclude_sections = excl;
+    if (minP !== '') filters.min_price = parseFloat(minP);
+    if (maxP !== '') filters.max_price = parseFloat(maxP);
+    try {
+      await api('/api/watchers/update', 'POST', { id: watcherId, filters });
+      showOk('Filters saved');
+      close();
+      await load();
+    } catch (err) { showError(err.message); }
+  });
+}
+
+async function onChannelChange(e) {
+  const sel = e.currentTarget;
+  const id = sel.dataset.id;
+  const value = sel.value;  // CSV string, possibly empty
+  try {
+    await api('/api/watchers/update', 'POST', { id, notify_channels: value });
+    showOk('Channels saved');
+  } catch (err) { showError(err.message); await load(); }
+}
+
+async function onDiscordChannelChange(e) {
+  const inp = e.currentTarget;
+  try {
+    await api('/api/watchers/update', 'POST', { id: inp.dataset.id, discord_channel: inp.value });
+    showOk(inp.value.trim() ? 'Channel saved — created on next drop' : 'Back to shared drops channel');
+    await load();
+  } catch (err) { showErr(err); }
+}
+
+async function onMuteChange(e) {
+  const cb = e.currentTarget;
+  const id = cb.dataset.id;
+  try {
+    await api('/api/watchers/update', 'POST', { id, muted: cb.checked });
+    showOk(cb.checked ? 'Muted' : 'Un-muted');
+    await load();
+  } catch (err) { showError(err.message); cb.checked = !cb.checked; }
+}
+
+async function onMasterToggle(key, checked) {
+  try {
+    await api('/api/watchers/settings', 'POST', { key, value: checked });
+    showOk(`${key} = ${checked}`);
+    await load();
+  } catch (err) { showError(err.message); await load(); }
+}
+
+$('m-paused').addEventListener('change', e => onMasterToggle('master_paused', e.target.checked));
+$('m-muted').addEventListener('change', e => onMasterToggle('master_muted', e.target.checked));
+
+$('btn-stop').addEventListener('click', async () => {
+  if (!confirm('Pause all polling AND mute all notifications?')) return;
+  try { await api('/api/watchers/stop-everything', 'POST', {}); showOk('Stopped everything'); await load(); }
+  catch (err) { showError(err.message); }
+});
+$('btn-resume').addEventListener('click', async () => {
+  try { await api('/api/watchers/resume-everything', 'POST', {}); showOk('Resumed all'); await load(); }
+  catch (err) { showError(err.message); }
+});
+
+$('addForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = $('add-url').value.trim();
+  const label = $('add-label').value.trim();
+  if (!url) return;
+  $('add-btn').disabled = true;
+  try {
+    const r = await api('/api/watchers/add', 'POST', { url, label });
+    $('add-url').value = ''; $('add-label').value = '';
+    showOk(r.warning ? `Added but: ${r.warning}` : 'Added; baseline captured.');
+    await load();
+  } catch (err) { showError(err.message); }
+  finally { $('add-btn').disabled = false; }
+});
+
+$('bulkForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('bulk-urls').value;
+  if (!text.trim()) return;
+  $('bulk-btn').disabled = true;
+  $('bulk-results').style.display = 'none';
+  try {
+    const r = await api('/api/watchers/bulk-add', 'POST', { urls: text });
+    const lines = r.results.map(x => x.ok
+      ? `<div class="ok-line">+ ${escape(x.url)} → ${escape(x.label || x.id)}${x.warning ? ' [' + escape(x.warning) + ']' : ''}</div>`
+      : `<div class="err-line">✗ ${escape(x.url)} → ${escape(x.error)}</div>`).join('');
+    $('bulk-results').innerHTML = lines || '<div class="meta">(no URLs found)</div>';
+    $('bulk-results').style.display = 'block';
+    if (r.added) {
+      $('bulk-urls').value = '';
+      showOk(`Added ${r.added} watcher${r.added === 1 ? '' : 's'}.`);
+    }
+    await load();
+  } catch (err) { showError(err.message); }
+  finally { $('bulk-btn').disabled = false; }
+});
+
+$('test-btn').addEventListener('click', async () => {
+  $('test-btn').disabled = true;
+  try {
+    const r = await api('/api/watchers/test-notify', 'POST', {});
+    showOk(`Test sent — discord: ${r.result.discord} · email: ${r.result.email}`);
+  } catch (err) { showError(err.message); }
+  finally { $('test-btn').disabled = false; }
+});
+
+$('check-btn').addEventListener('click', async () => {
+  $('check-btn').disabled = true;
+  try {
+    await api('/api/watchers/check-now', 'POST', {});
+    showOk('Tick triggered. Refreshing in 3s…');
+    setTimeout(load, 3000);
+  } catch (err) { showError(err.message); }
+  finally { $('check-btn').disabled = false; }
+});
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Chutzot Hayotzer</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df; --cyan: #0f766e;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.zero { color: var(--muted); }
+  .stat .partial { font-size: 9px; color: var(--amber); letter-spacing: 1px; margin-top: 3px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 57px; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tfoot td { border-top: 2px solid var(--line-2); font-weight: 700; }
+  a.tm-link { color: var(--accent); text-decoration: none; }
+  a.tm-link:hover { text-decoration: underline; }
+  .when { color: var(--muted); font-size: 11px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; }
+  .badge.available { background: #16a34a; }
+  .badge.lasttickets { background: #d97706; }
+  .badge.soldout { background: #dc2626; }
+  .badge.unknown { background: #888; }
+  .pct { font-size: 10px; color: var(--muted); }
+  .vel { font-variant-numeric: tabular-nums; }
+  .vel.zero { color: var(--muted); }
+  .vel.hot { color: var(--green); font-weight: 600; }
+  .vel .star { color: var(--amber); }
+  .types { font-size: 10px; color: var(--muted); white-space: pre-line; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>CHUTZOT HAYOTZER</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival" class="active">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+
+  <h2>Tickets sold (all shows)</h2>
+  <p class="sub" id="totalsSub">—</p>
+  <div class="stats" id="totals"></div>
+
+  <h2>Shows</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Show</th>
+        <th>Date</th>
+        <th>Status</th>
+        <th class="num">Left / Released</th>
+        <th class="num">+1h</th>
+        <th class="num">+6h</th>
+        <th class="num">+24h</th>
+        <th class="num">+3d</th>
+        <th class="num">+7d</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+    <tfoot id="foot"></tfoot>
+  </table>
+  <p class="sub" id="footnote"></p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const WIN_LABELS = { '1h':'Last hour', '6h':'Last 6 hours', '24h':'Last 24 hours', '3d':'Last 3 days', '7d':'Last 7 days' };
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+
+function fmtAgo(iso){
+  if (!iso) return '';
+  const secs = (Date.now() - new Date(iso).getTime())/1000;
+  if (secs < 90) return 'just now';
+  if (secs < 5400) return Math.round(secs/60)+'m ago';
+  if (secs < 129600) return Math.round(secs/3600)+'h ago';
+  return Math.round(secs/86400)+'d ago';
+}
+
+function velCell(wv){
+  if (!wv || wv.sold == null) return '<td class="num vel zero">—</td>';
+  const cls = wv.sold > 0 ? 'vel hot' : 'vel zero';
+  const star = wv.partial ? '<span class="star" title="limited history — fewer than this many hours/days tracked so far">*</span>' : '';
+  return `<td class="num ${cls}">${fmt(wv.sold)}${star}</td>`;
+}
+
+function typeTip(types){
+  const rows = Object.entries(types || {})
+    .filter(([k,v]) => v && v.amount)
+    .map(([k,v]) => `${v.name || k}: ${v.available}/${v.amount} left (${v.sold} sold)`);
+  return rows.join('\n');
+}
+
+async function load(){
+  let d;
+  try {
+    const r = await fetch('/api/festival', {cache:'no-store'});
+    d = await r.json();
+  } catch (e) {
+    $('errbox').style.display = 'block';
+    $('errbox').textContent = 'Failed to load /api/festival: ' + e;
+    return;
+  }
+  $('errbox').style.display = 'none';
+  const wins = d.windows || ['1h','6h','24h','3d','7d'];
+
+  // Top totals box
+  $('totals').innerHTML = wins.map(k => {
+    const t = (d.totals || {})[k] || {};
+    const zero = !t.sold ? ' zero' : '';
+    const partial = t.partial ? '<div class="partial">* limited history</div>' : '';
+    return `<div class="stat"><div class="label">${WIN_LABELS[k] || k}</div>` +
+           `<div class="value${zero}">${fmt(t.sold)}</div>${partial}</div>`;
+  }).join('');
+
+  const ls = (d.last_sync || {}).at;
+  $('totalsSub').textContent = `${(d.shows||[]).length} shows · snapshot ${ls ? fmtAgo(ls) : 'pending'} · auto-refreshes`;
+  $('meta').textContent = `${(d.shows||[]).length} shows tracked`;
+
+  // Per-show rows
+  const rows = d.shows || [];
+  if (!rows.length) {
+    $('rows').innerHTML = `<tr><td colspan="9" class="empty">No festival shows tracked yet. Add tickchak hub events on the Watchers page.</td></tr>`;
+    $('foot').innerHTML = '';
+    return;
+  }
+  $('rows').innerHTML = rows.map(s => {
+    const total = s.total, avail = s.available;
+    const pct = (total && avail != null) ? ((total - avail) / total * 100).toFixed(1) : null;
+    const leftCell = (avail != null && total != null)
+      ? `<div>${fmt(avail)} / ${fmt(total)}</div><div class="pct">${pct}% sold</div>`
+      : '—';
+    const tip = typeTip(s.festival_types);
+    const url = `https://tickchak.co.il/${escape(s.event_code)}`;
+    const st = s.status || 'unknown';
+    const name = s.event_name || s.label || s.event_code;
+    return `<tr>
+      <td><a class="tm-link" href="${url}" target="_blank" rel="noopener">${escape(name)}</a></td>
+      <td class="when">${escape((s.when||'').slice(0,10))}</td>
+      <td><span class="badge ${st}">${st === 'lasttickets' ? 'Last tickets' : st === 'soldout' ? 'Sold out' : st.charAt(0).toUpperCase()+st.slice(1)}</span></td>
+      <td class="num" ${tip ? `title="${escape(tip)}"` : ''}>${leftCell}</td>
+      ${velCell(s.windows['1h'])}
+      ${velCell(s.windows['6h'])}
+      ${velCell(s.windows['24h'])}
+      ${velCell(s.windows['3d'])}
+      ${velCell(s.windows['7d'])}
+    </tr>`;
+  }).join('');
+
+  // Totals footer row (sold-per-window across shows + aggregate left/released)
+  const sumTotal = rows.reduce((a,s)=>a+(s.total||0),0);
+  const sumAvail = rows.reduce((a,s)=>a+(s.available||0),0);
+  const pctAll = sumTotal ? ((sumTotal-sumAvail)/sumTotal*100).toFixed(1) : '0.0';
+  $('foot').innerHTML = `<tr>
+    <td>TOTAL</td><td></td><td></td>
+    <td class="num">${fmt(sumAvail)} / ${fmt(sumTotal)}<div class="pct">${pctAll}% sold</div></td>
+    ${wins.map(k => velCell((d.totals||{})[k])).join('')}
+  </tr>`;
+
+  // Footnote about partial history
+  const since = rows.map(s=>s.tracking_since).filter(Boolean).sort()[0];
+  $('footnote').textContent = since
+    ? `* "limited history" = the window is longer than how long this has been tracked (since ${new Date(since).toLocaleString()}). Numbers fill in as more snapshots accrue.`
+    : 'Sales tracking just started — rolling-window numbers fill in over the next minutes/days.';
+}
+
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
