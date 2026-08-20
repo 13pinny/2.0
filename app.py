@@ -40,6 +40,7 @@ import scraper
 import tickchak
 import tickchak_pdf
 import ticketmaster
+import tm_discover
 import tm_events
 import todos as todos_mod
 import vault
@@ -59,6 +60,7 @@ WATCHER_SOURCES = {
     "barby": barby,
     "dice": dice,
     "haku": haku,
+    "tmdiscover": tm_discover,
 }
 
 
@@ -82,6 +84,11 @@ def _detect_source(url):
         return "tickchak", tickchak
     if "kupat.co.il" in s:
         return "kupat", kupat
+    # TM-IL "series" landing pages (discover.ticketmaster.co.il/event/<slug>)
+    # — a separate site from the ticketing SPA, so this must run BEFORE the
+    # ticketmaster.co.il rule below, which would otherwise swallow it.
+    if "discover.ticketmaster.co.il" in s or re.match(r"\s*(?:tm)?discover\s*/", s or ""):
+        return "tmdiscover", tm_discover
     if "ticketmaster.co.il" in s:
         return "ticketmaster", ticketmaster
     if re.fullmatch(r"\s*\d+\s*/\s*\d+\s*", s or ""):
@@ -4738,6 +4745,18 @@ def _check_one_watcher(w, now_iso):
                 headline = f"🏃 Charity entries — {_hnm}"
             else:
                 headline = f"🏃 Registration update — {_hnm}"
+
+        # tmdiscover: every matched seat is a date whose status box just
+        # turned buyable (sold out / not-yet-open → last tickets or on sale),
+        # so headline the flip instead of "N new seats". A date going the
+        # other way is a silent removal and never reaches here.
+        # (Keep in sync with watcher_only.py.)
+        if src_name == "tmdiscover" and matched:
+            _snm = ((labels or {}).get("meta") or {}).get("eventName") or label or w["event_code"]
+            _last = all((s.get("status") or "") == "low_availability" for s in matched)
+            _n = len(matched)
+            _icon, _tail = ("⚠️", " (כרטיסים אחרונים)") if _last else ("🎟️", "")
+            headline = f"{_icon} {_n} date{'s' if _n != 1 else ''} just opened{_tail} — {_snm}"
 
         if enabled and matched:
             result = notify.notify_drop(

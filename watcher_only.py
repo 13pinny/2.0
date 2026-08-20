@@ -34,6 +34,7 @@ import kupat
 import notify
 import tickchak
 import ticketmaster
+import tm_discover
 
 # Load .env from the repo root next to this script, not the current working
 # directory — so notify creds resolve even when launched from elsewhere.
@@ -41,7 +42,8 @@ load_dotenv(Path(__file__).parent / ".env")
 db.init()
 
 SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
-           "barby": barby, "dice": dice, "haku": haku}
+           "barby": barby, "dice": dice, "haku": haku,
+           "tmdiscover": tm_discover}
 
 import os
 INTERVAL = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
@@ -191,6 +193,18 @@ def check_one(w, now_iso):
                 headline = f"🏃 Charity entries — {_hnm}"
             else:
                 headline = f"🏃 Registration update — {_hnm}"
+        # tmdiscover: every matched seat is a date whose status box just
+        # turned buyable (sold out / not-yet-open → last tickets or on sale),
+        # so headline the flip instead of "N new seats". A date going the
+        # other way is a silent removal and never reaches here.
+        # (Keep in sync with app.py._check_one_watcher.)
+        if src_name == "tmdiscover" and matched:
+            _snm = ((lbls or {}).get("meta") or {}).get("eventName") or label or w["event_code"]
+            _last = all((s.get("status") or "") == "low_availability" for s in matched)
+            _n = len(matched)
+            _icon, _tail = ("⚠️", " (כרטיסים אחרונים)") if _last else ("🎟️", "")
+            headline = f"{_icon} {_n} date{'s' if _n != 1 else ''} just opened{_tail} — {_snm}"
+
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,

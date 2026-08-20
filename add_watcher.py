@@ -24,12 +24,14 @@ import haku
 import kupat
 import tickchak
 import ticketmaster
+import tm_discover
 
 load_dotenv()
 db.init()
 
 SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
-           "barby": barby, "dice": dice, "haku": haku}
+           "barby": barby, "dice": dice, "haku": haku,
+           "tmdiscover": tm_discover}
 
 
 def detect_source(url):
@@ -47,6 +49,11 @@ def detect_source(url):
         return "tickchak", tickchak
     if "kupat.co.il" in s:
         return "kupat", kupat
+    # TM-IL "series" landing pages (discover.ticketmaster.co.il/event/<slug>)
+    # — a separate site from the ticketing SPA, so this must run BEFORE the
+    # ticketmaster.co.il rule below, which would otherwise swallow it.
+    if "discover.ticketmaster.co.il" in s or re.match(r"\s*(?:tm)?discover\s*/", s or ""):
+        return "tmdiscover", tm_discover
     if "ticketmaster.co.il" in s:
         return "ticketmaster", ticketmaster
     if re.fullmatch(r"\s*\d+\s*/\s*\d+\s*", s or ""):

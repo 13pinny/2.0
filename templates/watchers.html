@@ -69,6 +69,7 @@
   .src-kupat { color: var(--purple); border-color: var(--purple); }
   .src-tickchak { color: var(--cyan); border-color: var(--cyan); }
   .src-haku { color: var(--green); border-color: var(--green); }
+  .src-tmdiscover { color: var(--orange); border-color: var(--orange); }
   .empty { color: var(--muted); padding: 28px; text-align: center; font-size: 12px; }
   .seats-detail { font-size: 11px; color: var(--muted); white-space: pre-wrap; max-height: 200px; overflow: auto; padding: 6px 8px; background: var(--bg-3); border: 1px solid var(--line); }
   details summary { cursor: pointer; color: var(--accent); font-size: 11px; }
@@ -190,7 +191,7 @@
 
 <h2>ADD WATCHER</h2>
 <form class="add-form" id="addForm">
-  <input id="add-url" placeholder="Paste Ticketmaster.co.il /performance/ or kupat.co.il /booking/features/ URL" required>
+  <input id="add-url" placeholder="Paste a Ticketmaster.co.il /performance/, kupat.co.il /booking/features/, or discover.ticketmaster.co.il/event/ URL" required>
   <input id="add-label" placeholder="label (optional)">
   <button type="submit" id="add-btn">Add &amp; baseline</button>
 </form>
@@ -283,6 +284,9 @@ const SRC_URLS = {
   dice:         (e, _p) => `https://dice.fm/event/${e}`,
   // haku (Houston Marathon) event_code is the 20-hex event key.
   haku:         (e, _p) => `https://events.hakuapp.com/events/${e}/registration_options`,
+  // tmdiscover watches a whole TM-IL series landing page; event_code is its
+  // slug and perf_code is always "0".
+  tmdiscover:   (e, _p) => `https://discover.ticketmaster.co.il/event/${e}`,
 };
 
 const CHANNEL_CHOICES = [
