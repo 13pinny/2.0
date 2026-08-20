@@ -23,8 +23,18 @@ OWNER="${KARTIS_USER:-kartis}"
 [ -d "$APP_DIR" ] || { echo "no $APP_DIR — set KARTIS_DIR" >&2; exit 1; }
 [ -x "$PY" ] || { echo "no venv python at $PY" >&2; exit 1; }
 
-echo "Paste the two KARTIS_CV_* lines from cv_token_grab.js, then press Ctrl-D:"
-INPUT=$(cat)
+# Read from the terminal rather than stdin when we have one. This matters
+# because the documented flow is "paste a multi-line block into your shell":
+# a plain `cat` would happily swallow whatever pasted lines came after this
+# script's own invocation. /dev/tty always means the human.
+if [ -n "${1:-}" ] && [ -f "$1" ]; then
+    INPUT=$(cat "$1")                       # setup_crowdvolt_token.sh <file>
+elif [ -t 0 ] && [ -r /dev/tty ]; then
+    echo "Paste the two KARTIS_CV_* lines from cv_token_grab.js, then Ctrl-D:"
+    INPUT=$(cat /dev/tty)
+else
+    INPUT=$(cat)                            # piped in
+fi
 
 TOKEN=$(printf '%s\n' "$INPUT" | sed -n 's/^[[:space:]]*KARTIS_CV_TOKEN=//p' | tr -d '"'"'"'\r' | head -1)
 FP=$(printf '%s\n'    "$INPUT" | sed -n 's/^[[:space:]]*KARTIS_CV_FINGERPRINT=//p' | tr -d '"'"'"'\r' | head -1)
