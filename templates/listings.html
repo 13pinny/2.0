@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Listings</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  button { background: var(--bg-2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; font-family: inherit; font-size: 12px; letter-spacing: 1px; cursor: pointer; text-transform: uppercase; }
+  button:hover { background: #e9edf2; }
+  button.confirm { border-color: var(--green); color: var(--green); }
+  button.confirm:hover { background: #e6f4ea; }
+  button.confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.reject { border-color: var(--red); color: var(--red); }
+  button.reject:hover { background: #fdecea; }
+  button.publish { border-color: var(--orange); color: var(--orange); }
+  button.publish:hover { background: #fdefe3; }
+  button.publish:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .inbox-empty { color: var(--muted); font-size: 12px; padding: 18px 0; letter-spacing: 1px; }
+
+  .inbox-card { border: 1px solid var(--line); margin-bottom: 10px; background: var(--bg-2); }
+  .inbox-card .ic-head { display: flex; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); align-items: center; flex-wrap: wrap; }
+  .inbox-card .ic-head .from { color: var(--muted); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .inbox-card .ic-head .provider { font-size: 10px; padding: 1px 6px; border: 1px solid var(--accent); color: var(--accent); letter-spacing: 1.5px; text-transform: uppercase; }
+  .inbox-card .ic-head .provider.status-awaiting_approval { border-color: var(--amber); color: var(--amber); }
+  .inbox-card .ic-head .provider.status-no_match { border-color: var(--red); color: var(--red); }
+  .inbox-card .ic-head .provider.status-error { border-color: var(--red); color: var(--red); }
+  .inbox-card .ic-head .provider.status-created { border-color: var(--green); color: var(--green); }
+  .inbox-card .ic-head .provider.status-listed { border-color: var(--green); color: var(--green); }
+  .inbox-card .ic-head .when { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+  .inbox-card .ic-head .warn { font-size: 10px; color: var(--amber); letter-spacing: 1px; border: 1px solid var(--amber); padding: 1px 6px; }
+  .inbox-card .ic-subject { padding: 8px 14px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .inbox-card .ic-body { padding: 10px 14px; display: grid; grid-template-columns: 110px 1fr 110px 1fr; gap: 6px 12px; font-size: 12px; }
+  .inbox-card .ic-body label { color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; align-self: center; }
+  .inbox-card .ic-body input, .inbox-card .ic-body select { background: var(--bg-3); border: 1px solid var(--line); color: var(--text); padding: 5px 8px; font-family: inherit; font-size: 12px; width: 100%; }
+  .inbox-card .ic-body select { cursor: pointer; }
+  .inbox-card .ic-foot { padding: 10px 14px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--line); }
+
+  .poll-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+  #poll-status { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+
+  /* slider toggles */
+  .sw { position: relative; display: inline-block; width: 38px; height: 20px; flex: none; }
+  .sw input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .sw .track { position: absolute; inset: 0; background: #c6ccd4; border-radius: 20px; cursor: pointer; transition: background .15s; }
+  .sw .track:before { content: ""; position: absolute; height: 16px; width: 16px; left: 2px; top: 2px;
+                      background: #fff; border-radius: 50%; transition: transform .15s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .sw input:checked + .track { background: var(--green); }
+  .sw input:checked + .track:before { transform: translateX(18px); }
+  .sw-row { display: flex; align-items: center; gap: 8px; }
+  .sw-note { font-size: 10px; color: var(--muted); }
+
+  /* listing-note / restriction checkbox rows */
+  .opt-row { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+  .opt-row label.opt { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text);
+                       text-transform: none; letter-spacing: 0; cursor: pointer; user-select: none; }
+  .opt-row label.opt input { width: auto; cursor: pointer; accent-color: var(--accent); }
+
+  /* compete-sections picker (popup with big clickable chips, like /pricer) */
+  #cs-overlay { display: none; position: fixed; inset: 0; background: rgba(15,23,32,0.45); z-index: 40; }
+  #cs-panel { display: none; position: fixed; top: 8vh; left: 50%; transform: translateX(-50%);
+              width: min(560px, 94vw); max-height: 80vh; overflow-y: auto; z-index: 41;
+              background: var(--bg-2); border: 1px solid var(--line-2); box-shadow: 0 12px 40px rgba(0,0,0,0.25); }
+  #cs-panel .cs-head { padding: 14px 18px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; }
+  #cs-panel .cs-sub { padding: 0 18px 10px; font-size: 11px; color: var(--muted); }
+  #cs-chips { padding: 6px 18px 16px; }
+  .cs-group { margin-bottom: 12px; }
+  .cs-group-head { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; margin-bottom: 8px;
+                   border: 1px dashed var(--line-2); background: var(--bg-2); font-size: 11px; font-weight: 600;
+                   text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; user-select: none; border-radius: 4px; }
+  .cs-group-head:hover { border-color: var(--accent); }
+  .cs-group-head .cnt { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .cs-group-chips { display: flex; flex-wrap: wrap; gap: 10px; }
+  .cs-chip { padding: 10px 16px; border: 1px solid var(--line-2); background: var(--bg-3);
+             font-size: 13px; cursor: pointer; user-select: none; border-radius: 4px; }
+  .cs-chip.sel { border-color: var(--accent); background: #dbeafe; color: var(--accent); font-weight: 600; }
+  #cs-panel .cs-foot { padding: 12px 18px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>KARTIS</h1>
+    <span class="meta" id="lastpoll"></span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings" class="active">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="poll-bar">
+    <button id="poll-now">Poll Gmail Now</button>
+    <span id="poll-status"></span>
+  </div>
+
+  <h2>Viagogo Draft Listings
+    <span style="margin-left:14px;font-size:10px;letter-spacing:1px;color:var(--muted);">Kupat purchases auto-matched + priced at 5× USD — review and approve to create a draft on viagogo</span>
+  </h2>
+  <div id="vg-container"></div>
+
+  <h2 id="h-done" style="display:none">Completed
+    <span style="margin-left:14px;font-size:10px;letter-spacing:1px;color:var(--muted);">approved or rejected — no action needed</span>
+  </h2>
+  <div id="vg-done"></div>
+</main>
+
+<div id="cs-overlay"></div>
+<div id="cs-panel">
+  <div class="cs-head" id="cs-title">Compete against which sections?</div>
+  <div class="cs-sub">Tap to toggle — the auto-pricer undercuts the cheapest competitor across the selected sections. Empty = its own section only.</div>
+  <div id="cs-chips"></div>
+  <div class="cs-foot">
+    <button type="button" id="cs-cancel">Cancel</button>
+    <button type="button" class="confirm" id="cs-ok">Done</button>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+async function load() {
+  const [vgR, intakeR] = await Promise.all([
+    fetch("/api/viagogo-push"),
+    fetch("/api/pending-intake"),
+  ]);
+  if (intakeR.ok) {
+    const ind = await intakeR.json();
+    const li = ind.last_intake || {};
+    if (li.at) {
+      $("lastpoll").textContent = `last poll ${new Date(li.at).toLocaleString()} · fetched ${li.fetched || 0} · saved ${li.saved || 0}${li.error ? " · err: " + li.error : ""}`;
+    }
+  }
+  if (vgR.ok) {
+    const d = await vgR.json();
+    renderCards(d.rows || []);
+  }
+}
+
+function renderCards(rows) {
+  const container = $("vg-container");
+  const doneContainer = $("vg-done");
+
+  // Completed section (created / listed / rejected)
+  const done = rows.filter(r => ["created", "listed", "rejected"].includes(r.status));
+  $("h-done").style.display = done.length ? "" : "none";
+  doneContainer.innerHTML = done.map(r => {
+    const when = r.updated_at ? new Date(r.updated_at).toLocaleString() : "";
+    const isCreated = r.status === "created" || r.status === "listed";
+    return `<div style="border:1px solid var(--line);margin-bottom:6px;padding:10px 14px;display:flex;gap:14px;align-items:center;opacity:0.6;font-size:12px;">
+      <span style="font-size:10px;padding:1px 6px;border:1px solid ${isCreated ? "var(--green)" : "var(--red)"};color:${isCreated ? "var(--green)" : "var(--red)"};letter-spacing:1.5px;text-transform:uppercase;">${esc(r.status)}</span>
+      <span style="flex:1;">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
+      <span style="color:var(--muted);">${esc(r.chosen_event_date || r.event_date_iso || "")}</span>
+      ${r.viagogo_section ? `<span style="color:var(--muted);">${esc(r.viagogo_section)}</span>` : ""}
+      ${r.buyer_email ? `<span style="color:var(--accent);font-size:10px;" title="Account the tickets were bought under">📧 ${esc(r.buyer_email)}</span>` : ""}
+      ${r.error ? `<span style="color:var(--red);border:1px solid var(--red);padding:1px 6px;font-size:10px;" title="${esc(r.error)}">⚠ ${esc(r.error.slice(0, 60))}</span>` : ""}
+      <span style="color:var(--muted);font-size:10px;">${esc(when)}</span>
+    </div>`;
+  }).join("");
+
+  const active = rows.filter(r => !["created", "listed", "rejected"].includes(r.status));
+  if (!active.length) {
+    container.innerHTML = '<div class="inbox-empty">no viagogo matches waiting on review</div>';
+    return;
+  }
+  container.innerHTML = "";
+  for (const r of active) {
+    const card = document.createElement("div");
+    card.className = "inbox-card";
+    card.dataset.id = r.id;
+    card.dataset.searchQuery = r.chosen_event_name || r.event_name || r.venue || "";
+    card.dataset.suggestedSection = r.suggested_viagogo_section || "";
+    card.dataset.kupatSection = r.section || "";
+    const candidates = r.candidates || [];
+    const noMatch = r.status === "no_match";
+    const when = r.created_at ? new Date(r.created_at).toLocaleString() : "";
+    const eventOptions = candidates.map(c =>
+      `<option value="${esc(c.event_id)}" ${c.event_id === r.chosen_event_id ? "selected" : ""}>${esc(c.event_name)} — ${esc(c.venue || "")} (${esc(c.date || "")})</option>`
+    ).join("");
+    card.innerHTML = `
+      <div class="ic-head">
+        <span class="provider status-${esc(r.status)}">${esc(r.status.replace(/_/g, " "))}</span>
+        <span class="from" title="${esc(r.chosen_venue || r.venue || "")}">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
+        ${r.buyer_email ? `<span style="font-size:10px;color:var(--accent);letter-spacing:0.5px;" title="Account the tickets were bought under — deliver from this inbox">📧 ${esc(r.buyer_email)}</span>` : ""}
+        <span class="when">${esc(when)}</span>
+        ${r.error ? `<span class="warn" title="${esc(r.error)}">${esc(r.error.slice(0, 80))}</span>` : ""}
+      </div>
+      <div class="ic-subject" style="direction: rtl; text-align: right; color: var(--text);" title="What the Kupat email/ticket says — confirm the viagogo section AND DATE against this">
+        🎫 ${esc(r.event_name || "?")}${r.venue ? ` — ${esc(r.venue)}` : ""} &nbsp;·&nbsp; 📅 <b style="color: var(--accent);">${esc(fmtTicketDate(r.event_date_iso) || "— תאריך לא זוהה —")}</b> &nbsp;·&nbsp; אזור: <b style="color: var(--amber);">${esc(r.section || "— לא צוין —")}</b>${r.row_label ? ` &nbsp;·&nbsp; שורה: ${esc(r.row_label)}` : ""}${r.seats ? ` &nbsp;·&nbsp; כיסאות: ${esc(r.seats)}` : ""}
+      </div>
+      <div class="ic-subject">
+        ${noMatch
+          ? `No viagogo match — searched <em>${esc(r.event_name || r.venue || "?")}</em>. Teach the English name below to retry — or paste the viagogo event link (…/E-12345678) to pin the exact event.`
+          : r.cost_per_unit == null
+            ? `<span style="color: var(--amber);">No price in the email — enter Viagogo $/ea and Face value below before approving.</span>`
+            : `Paid: &#8362;${Number(r.cost_per_unit).toFixed(2)}/ea &times; ${r.qty || 0} &nbsp;&rarr;&nbsp; viagogo $${Number(r.website_price_usd || 0).toFixed(2)}/ea (5&times;, fx ${r.fx_rate ? Number(r.fx_rate).toFixed(4) : "?"})`}
+      </div>
+      <div class="ic-body">
+        ${noMatch ? `
+        <label>Hebrew name</label><input type="text" value="${esc(r.event_name || "")}" readonly style="opacity:0.6;" title="Kupat event name">
+        <label>English name *</label><input data-f="teach_english" type="text" placeholder="e.g. Eden Ben Zaken — or a viagogo event URL">
+        <div style="grid-column: span 4; text-align: right; margin: -4px 0 4px;">
+          <button class="confirm" data-act="vg-teach" style="padding: 4px 12px; font-size: 11px;">Teach &amp; Re-search</button>
+        </div>
+        ` : ""}
+        <label>viagogo Event</label>
+        <select data-f="event_id" style="grid-column: 2 / -1;">
+          <option value="">— select —</option>
+          ${eventOptions}
+        </select>
+        <div data-hint="date" style="grid-column: 2 / -1; font-size: 11px; letter-spacing: 0.5px; min-height: 14px; margin-top: -4px;"></div>
+        <label title="Show missing from the list? Paste its public viagogo page URL (…/E-123456) and it gets verified + added">viagogo link</label>
+        <div style="grid-column: 2 / -1; display: flex; gap: 8px;">
+          <input data-f="event_url" type="text" placeholder="paste https://www.viagogo.com/…/E-123456 if the right show isn't listed above" style="flex: 1;">
+          <button type="button" data-act="vg-set-event" style="padding: 4px 12px; font-size: 11px; white-space: nowrap;">Use link</button>
+        </div>
+        <label>Section *</label>
+        <select data-f="section" style="grid-column: 2 / -1;">
+          <option value="">— pick event to load sections —</option>
+        </select>
+        <div style="grid-column: 2 / -1; display: flex; align-items: center; gap: 10px; margin-top: -2px; min-height: 14px;">
+          <span data-hint="section" style="font-size: 10px; letter-spacing: 0.5px;"></span>
+          <button type="button" data-act="reload-sections" style="background: none; border: none; color: var(--accent); cursor: pointer; font-size: 10px; letter-spacing: 0.5px; text-transform: none; padding: 0;">↻ reload sections</button>
+        </div>
+        <label>Ticket Type</label><select data-f="ticket_type">
+          <option value="E-Tickets">E-Tickets</option>
+          <option value="Paper Tickets">Paper Tickets</option>
+        </select>
+        <label>Qty</label><input data-f="available_tickets" type="number" min="1" value="${r.qty ?? ""}">
+        <label title="What buyers pay on viagogo — per ticket. Edit to set your price.">Viagogo $/ea</label><input data-f="website_price" type="number" step="0.01" value="${r.website_price_usd ?? ""}">
+        <label title="Your take-home per ticket after viagogo's 10% cut">Proceeds $/ea</label><input data-f="proceeds" type="number" step="0.01" readonly title="Auto = viagogo price − 10%" value="${r.website_price_usd != null ? (r.website_price_usd * 0.9).toFixed(2) : ""}" style="color:var(--green);opacity:0.85;">
+        <label>Face value $/ea</label><input data-f="face_value" type="number" step="0.01" value="${r.cost_usd_per_ticket ?? ""}">
+        <label>Row</label><input data-f="row" type="text" value="${esc(r.row_label || "")}">
+        <label>Seats (kupat)</label><input type="text" value="${esc(r.seats || "")}" readonly style="opacity:0.6;">
+        <label title="Viagogo listing notes — can only be set before tickets are uploaded, so pick them here">Notes</label>
+        <div class="opt-row">
+          <label class="opt"><input type="checkbox" data-f="note_standing">Standing Only</label>
+          <label class="opt"><input type="checkbox" data-f="note_aisle">Aisle seat</label>
+          <label class="opt"><input type="checkbox" data-f="note_row1">Actual 1st row of section</label>
+          <label class="opt"><input type="checkbox" data-f="note_row2">Actual 2nd row of section</label>
+        </div>
+        <label title="Viagogo 'Restrictions on Use'">Restrictions</label>
+        <div class="opt-row">
+          <label class="opt"><input type="checkbox" data-f="restrict_21">21 and over Ticket</label>
+          <label class="opt"><input type="checkbox" data-f="restrict_18">Over 18 Ticket</label>
+        </div>
+        <label title="Viagogo 'Ticket Separation' — how the listing may be split between buyers. Auto: numbered rows avoid leaving one or three; GA/no row = Any.">Separation</label>
+        <select data-f="split_preference" style="grid-column: 2 / -1;">
+          <option value="Any">Any</option>
+          <option value="None">None (sell together)</option>
+          <option value="AvoidOne">Avoid leaving one ticket</option>
+          <option value="AvoidOneAndThree">Avoid leaving one or three tickets</option>
+          <option value="Pairs">Avoid odd numbers</option>
+        </select>
+        <label title="Attach the e-ticket PDFs to this listing right after it's created. Turn off to list now and upload tickets yourself later.">Upload tickets</label>
+        <div class="sw-row">
+          <label class="sw"><input data-f="upload_tickets" type="checkbox" ${r.ticket_url ? "checked" : "disabled"}><span class="track"></span></label>
+          <span class="sw-note" data-f="upload-note">${r.ticket_url
+            ? "pull the tickets from the order link and attach them"
+            : "no ticket link on this order — nothing to upload"}</span>
+        </div>
+        <label title="Enroll in the auto-pricer as soon as the listing is created — undercuts the cheapest competitor, never below your floor">Auto-price</label>
+        <div class="sw-row">
+          <label class="sw"><input data-f="pricer_enabled" type="checkbox"><span class="track"></span></label>
+          <span class="sw-note">undercut competitors from the moment it's live</span>
+        </div>
+        <label title="Auto-pricing never goes below this — required when Auto-price is on">Floor $/ea *</label>
+        <input data-f="pricer_floor" type="number" step="0.01" placeholder="never price below">
+        <label title="Sections whose competitors this listing prices against — defaults to its own section">Compete vs</label>
+        <div style="grid-column: 2 / -1; display: flex; align-items: center; gap: 10px;">
+          <span data-f="compete-summary" style="font-size: 11px; color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">— pick event to load sections —</span>
+          <button type="button" data-act="pick-compete" style="padding: 4px 12px; font-size: 11px;">Pick sections</button>
+        </div>
+      </div>
+      <div class="ic-foot">
+        <button class="reject" data-act="vg-reject">Reject</button>
+        <button class="confirm" data-act="vg-approve-draft" ${noMatch ? "disabled" : ""}>Approve → Draft</button>
+        <button class="publish" data-act="vg-approve-live" ${noMatch ? "disabled" : ""}>Approve &amp; List Live</button>
+      </div>
+    `;
+    container.appendChild(card);
+
+    // Ticket-separation smart default: numbered row → avoid leaving one or
+    // three; blank/GA-like row → Any. Re-derived when Row changes, until the
+    // user touches the dropdown themselves.
+    const GA_ROW_RE = /^\s*(ga|gen(eral)?\s*adm(ission)?|standing|עמידה|כללי)?\s*$/i;
+    const rowInput = card.querySelector("input[data-f='row']");
+    const splitSel = card.querySelector("select[data-f='split_preference']");
+    const deriveSplit = () => {
+      if (splitSel.dataset.dirty) return;
+      splitSel.value = GA_ROW_RE.test(rowInput.value) ? "Any" : "AvoidOneAndThree";
+    };
+    splitSel.addEventListener("change", () => { splitSel.dataset.dirty = "1"; });
+    rowInput.addEventListener("input", deriveSplit);
+    deriveSplit();
+
+    // Wire event + ticket-type dropdowns to reload the section list
+    const eventSel = card.querySelector("select[data-f='event_id']");
+    const ticketSel = card.querySelector("select[data-f='ticket_type']");
+    eventSel.addEventListener("change", () => loadSections(card, eventSel.value, ticketSel.value));
+    ticketSel.addEventListener("change", () => loadSections(card, eventSel.value, ticketSel.value));
+
+    // Keep proceeds (per-ticket take-home = viagogo price − 10%) in sync live
+    const priceInput = card.querySelector("input[data-f='website_price']");
+    const proceedsInput = card.querySelector("input[data-f='proceeds']");
+    if (priceInput && proceedsInput) {
+      priceInput.addEventListener("input", () => {
+        const p = parseFloat(priceInput.value || "0");
+        proceedsInput.value = p > 0 ? (p * 0.9).toFixed(2) : "";
+      });
+    }
+
+    // Manual re-fetch for when viagogo's picker is laggy — beats refreshing
+    // the whole page just to retry the section load.
+    const reloadSecBtn = card.querySelector("[data-act='reload-sections']");
+    if (reloadSecBtn) reloadSecBtn.addEventListener("click", () => loadSections(card, eventSel.value, ticketSel.value));
+
+    // Auto-load sections for the pre-chosen event
+    if (r.chosen_event_id) loadSections(card, r.chosen_event_id, "E-Tickets");
+
+    // Live date check: ticket email date vs the selected viagogo event's
+    // date — a same-artist wrong-night match is an expensive mistake.
+    const dateCheck = () => {
+      const hint = card.querySelector("[data-hint='date']");
+      if (!hint) return;
+      card.dataset.dateMismatch = "";
+      const want = parseDateLoose(r.event_date_iso);
+      const cand = (r.candidates || []).find(c => c.event_id === eventSel.value);
+      const got = cand ? parseDateLoose(cand.date) : null;
+      if (!eventSel.value) { hint.textContent = ""; return; }
+      if (!want || !got) {
+        hint.style.color = "var(--amber)";
+        hint.textContent = "⚠ can't verify the date — ticket says " + (fmtTicketDate(r.event_date_iso) || "?") + ", check the show manually";
+        return;
+      }
+      if (want.getTime() === got.getTime()) {
+        hint.style.color = "var(--green)";
+        hint.textContent = "✓ date matches the ticket — " + fmtDateNice(want);
+      } else {
+        hint.style.color = "var(--red)";
+        hint.textContent = "⛔ WRONG SHOW? ticket is " + fmtDateNice(want) + " but this viagogo event is " + fmtDateNice(got);
+        card.dataset.dateMismatch = "1";
+      }
+    };
+    eventSel.addEventListener("change", dateCheck);
+    dateCheck();
+  }
+}
+
+function parseDateLoose(s) {
+  if (!s) return null;
+  const d = new Date(/^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) + "T00:00:00" : s);
+  if (isNaN(d)) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function fmtDateNice(d) {
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+}
+function fmtTicketDate(iso) {
+  const d = parseDateLoose(iso);
+  return d ? fmtDateNice(d) : null;
+}
+
+// Pick the program's best guess for the viagogo section, given the live
+// section list, any learned mapping, and the raw Kupat section text.
+// Returns {value, source} — source drives the verify hint below.
+function guessSection(sections, suggested, kupatSection) {
+  // 1. A previously learned venue+section mapping is authoritative.
+  if (suggested && sections.includes(suggested)) return {value: suggested, source: "learned"};
+  const k = String(kupatSection || "").trim();
+  // Hebrew tier keyword → ranked English keywords (Menorah-arena convention,
+  // user-confirmed 2026-07-20): אולם = the lower bowl, יציע = the upper
+  // tier; when viagogo offers both wordings prefer "Hall" over "Lower" and
+  // "Gallery" over "Upper".
+  let prefs = null;
+  if (/אולם/.test(k)) prefs = ["hall", "lower", "floor"];
+  else if (/יציע/.test(k)) prefs = ["gallery", "upper", "balcony"];
+  const rank = s => {
+    if (!prefs) return 0;
+    const i = prefs.findIndex(p => s.toLowerCase().includes(p));
+    return i === -1 ? prefs.length : i;
+  };
+  // 2. A number carried over from the Kupat section (e.g. "אולם 3" → "…3");
+  // among same-number sections the tier keyword breaks the tie.
+  const nums = k.match(/\d+/g) || [];
+  for (const n of nums) {
+    const rx = new RegExp("(^|\\D)" + n + "(\\D|$)");
+    const hits = sections.filter(s => rx.test(s));
+    if (hits.length) {
+      hits.sort((a, b) => rank(a) - rank(b));
+      return {value: hits[0], source: "guess"};
+    }
+  }
+  // 2b. No number matched — fall back to the tier keyword alone.
+  if (prefs) {
+    const hit = prefs.map(p => sections.find(s => s.toLowerCase().includes(p))).find(Boolean);
+    if (hit) return {value: hit, source: "guess"};
+  }
+  // 3. Case-insensitive substring match either direction.
+  const kl = k.toLowerCase();
+  if (kl) {
+    const hit = sections.find(s => { const sl = s.toLowerCase(); return sl.includes(kl) || kl.includes(sl); });
+    if (hit) return {value: hit, source: "guess"};
+  }
+  return {value: "", source: "none"};
+}
+
+async function loadSections(card, eventId, ticketType) {
+  const searchQuery = card.dataset.searchQuery || "";
+  const sel = card.querySelector("select[data-f='section']");
+  if (!sel || !eventId || !searchQuery) return;
+  const suggested = card.dataset.suggestedSection || "";
+  const kupatSection = card.dataset.kupatSection || "";
+  const hint = card.querySelector("[data-hint='section']");
+  if (hint) hint.textContent = "";
+  sel.innerHTML = '<option value="">loading sections...</option>';
+  sel.disabled = true;
+  // Guard against a stalled backend (viagogo picker lag) leaving the dropdown
+  // stuck on "loading..." — abort after 60s and point at the reload button.
+  const ctrl = new AbortController();
+  const killer = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const params = new URLSearchParams({event_id: eventId, search_query: searchQuery, ticket_type: ticketType || "E-Tickets"});
+    const res = await fetch("/api/viagogo-sections?" + params, {signal: ctrl.signal});
+    const d = await res.json();
+    if (!res.ok || !d.sections || !d.sections.length) {
+      sel.innerHTML = `<option value="">${esc(d.error || "no sections found")}</option>`;
+      sel.disabled = false;
+      if (hint) { hint.style.color = "var(--amber)"; hint.textContent = "couldn't load — click ↻ reload sections"; }
+      return;
+    }
+    const g = guessSection(d.sections, suggested, kupatSection);
+    sel.innerHTML = '<option value="">— select section —</option>' +
+      d.sections.map(s => `<option value="${esc(s)}" ${s === g.value ? "selected" : ""}>${esc(s)}</option>`).join("");
+    sel.disabled = false;
+    // Same section list feeds the auto-pricer's compete-vs picker popup;
+    // keep any choices the user already made, else default to the guess.
+    card.dataset.sectionsList = JSON.stringify(d.sections);
+    const prev = JSON.parse(card.dataset.competeSelected || "[]")
+      .filter(s => d.sections.includes(s));
+    const initial = prev.length ? prev : (g.value ? [g.value] : []);
+    card.dataset.competeSelected = JSON.stringify(initial);
+    updateCompeteSummary(card);
+    if (hint) {
+      if (g.source === "learned") {
+        hint.style.color = "var(--green)";
+        hint.textContent = kupatSection
+          ? `✓ saved mapping for ticket "${kupatSection}" — change if wrong`
+          : "✓ auto-selected from a saved mapping — change if wrong";
+      } else if (g.source === "guess") {
+        hint.style.color = "var(--amber)";
+        hint.textContent = `⚠ best guess — ticket says "${kupatSection}", verify before approving`;
+      } else {
+        hint.style.color = "var(--amber)";
+        hint.textContent = kupatSection
+          ? `ticket says "${kupatSection}" — couldn't match it, pick manually`
+          : "no section on the Kupat email (GA/standing?) — pick manually";
+      }
+    }
+  } catch (e) {
+    const stalled = e && e.name === "AbortError";
+    sel.innerHTML = `<option value="">${stalled ? "timed out" : "network error"} — click ↻ reload</option>`;
+    sel.disabled = false;
+    if (hint) { hint.style.color = "var(--red)"; hint.textContent = (stalled ? "section load stalled" : "network error") + " — click ↻ reload sections"; }
+  } finally {
+    clearTimeout(killer);
+  }
+}
+
+// ---- compete-sections picker popup --------------------------------------
+let _csCard = null;
+
+function updateCompeteSummary(card) {
+  const el = card.querySelector("[data-f='compete-summary']");
+  if (!el) return;
+  const sel = JSON.parse(card.dataset.competeSelected || "[]");
+  el.textContent = sel.length ? sel.join(" · ") : "own section only";
+  el.style.color = sel.length ? "var(--text)" : "var(--muted)";
+}
+
+function openCompetePicker(card) {
+  const sections = JSON.parse(card.dataset.sectionsList || "[]");
+  if (!sections.length) { alert("Sections not loaded yet — pick the viagogo event first."); return; }
+  _csCard = card;
+  const chosen = new Set(JSON.parse(card.dataset.competeSelected || "[]"));
+  $("cs-title").textContent = "Compete against which sections?";
+  // Group by the section's category — the name minus its number ("Hall 9" →
+  // "Hall", "Upper Tier 12" → "Upper Tier"). Clicking a category header
+  // bulk-toggles every section in it (same idea as /pricer's section-head
+  // checkboxes). Groups keep the section list's original order.
+  const groups = new Map();
+  for (const s of sections) {
+    const cat = s.replace(/\d+/g, " ").replace(/\s+/g, " ").trim() || s;
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(s);
+  }
+  const chip = s =>
+    `<div class="cs-chip ${chosen.has(s) ? "sel" : ""}" data-sec="${esc(s)}">${esc(s)}</div>`;
+  $("cs-chips").innerHTML = [...groups.entries()].map(([cat, secs]) =>
+    secs.length > 1
+      ? `<div class="cs-group">
+           <div class="cs-group-head" data-group="${esc(cat)}" title="click to select/unselect all ${secs.length}">
+             ${esc(cat)} <span class="cnt">· all ${secs.length}</span>
+           </div>
+           <div class="cs-group-chips">${secs.map(chip).join("")}</div>
+         </div>`
+      : `<div class="cs-group"><div class="cs-group-chips">${secs.map(chip).join("")}</div></div>`
+  ).join("");
+  $("cs-overlay").style.display = "block";
+  $("cs-panel").style.display = "block";
+}
+
+function closeCompetePicker(save) {
+  if (save && _csCard) {
+    const sel = [...document.querySelectorAll("#cs-chips .cs-chip.sel")].map(c => c.dataset.sec);
+    _csCard.dataset.competeSelected = JSON.stringify(sel);
+    updateCompeteSummary(_csCard);
+  }
+  $("cs-overlay").style.display = "none";
+  $("cs-panel").style.display = "none";
+  _csCard = null;
+}
+
+document.getElementById("cs-chips").addEventListener("click", (e) => {
+  const head = e.target.closest(".cs-group-head");
+  if (head) {
+    // Bulk-toggle the category: all on unless every chip is already on.
+    const chips = [...head.parentElement.querySelectorAll(".cs-chip")];
+    const allOn = chips.every(c => c.classList.contains("sel"));
+    chips.forEach(c => c.classList.toggle("sel", !allOn));
+    return;
+  }
+  const chip = e.target.closest(".cs-chip");
+  if (chip) chip.classList.toggle("sel");
+});
+document.getElementById("cs-ok").addEventListener("click", () => closeCompetePicker(true));
+document.getElementById("cs-cancel").addEventListener("click", () => closeCompetePicker(false));
+document.getElementById("cs-overlay").addEventListener("click", () => closeCompetePicker(false));
+
+async function approveCard(card, publish) {
+  const id = card.dataset.id;
+  const f = {};
+  card.querySelectorAll("[data-f]").forEach(el => { f[el.dataset.f] = el.value; });
+  if (!f.event_id) { alert("Pick the matching viagogo event first"); return; }
+  if (!f.section || !f.section.trim()) { alert("Section is required — pick a viagogo section"); return; }
+  if (card.dataset.dateMismatch === "1" &&
+      !confirm("⛔ The selected viagogo event's DATE does not match the ticket email.\nSelling tickets for the wrong show is expensive.\n\nApprove anyway?")) {
+    return;
+  }
+  const price = parseFloat(f.website_price || "0");
+  const proceeds = parseFloat(f.proceeds || "0") || +(price * 0.9).toFixed(2);
+  const body = {
+    id,
+    event_id: f.event_id,
+    section: f.section.trim(),
+    ticket_type: f.ticket_type || "E-Tickets",
+    available_tickets: parseInt(f.available_tickets || "0", 10),
+    website_price: price,
+    proceeds: proceeds,
+    face_value: parseFloat(f.face_value || "0"),
+    row: (f.row || "").trim(),
+    publish: !!publish,
+  };
+  const upEl = card.querySelector("input[data-f='upload_tickets']");
+  body.upload_tickets = !!(upEl && upEl.checked && !upEl.disabled);
+  // Notes + restrictions are one checkbox pool on viagogo's form; the
+  // generic [data-f] collector above read .value — checkboxes need .checked.
+  body.listing_notes = ["note_standing", "note_aisle", "note_row1", "note_row2",
+                        "restrict_21", "restrict_18"]
+    .filter(k => !!card.querySelector(`input[data-f='${k}']`)?.checked);
+  body.split_preference = f.split_preference || "Any";
+  const pricerOn = !!card.querySelector("input[data-f='pricer_enabled']")?.checked;
+  if (pricerOn) {
+    const floor = parseFloat(f.pricer_floor || "0");
+    if (!(floor > 0)) { alert("Auto-price is on — set a floor price first (it never prices below that)."); return; }
+    const compete = JSON.parse(card.dataset.competeSelected || "[]");
+    body.pricer = {enabled: true, floor_price: floor, compete_sections: compete};
+  }
+  const kind = publish ? "LIVE listing — buyers can purchase immediately" : "DRAFT (unpublished) listing";
+  const pricerTxt = body.pricer
+    ? ` Auto-pricer ON (floor $${body.pricer.floor_price.toFixed(2)}, vs ${body.pricer.compete_sections.length ? body.pricer.compete_sections.join(", ") : "own section"}).`
+    : "";
+  const upTxt = upEl && !upEl.disabled
+    ? (body.upload_tickets ? " E-tickets will be attached." : " ⚠ Tickets will NOT be uploaded — attach them yourself before it sells.")
+    : "";
+  const NOTE_LABELS = {note_standing: "Standing Only", note_aisle: "Aisle seat",
+                       note_row1: "1st row", note_row2: "2nd row",
+                       restrict_21: "21+", restrict_18: "18+"};
+  const SPLIT_LABELS = {Any: "any split", None: "sell together", AvoidOne: "avoid leaving 1",
+                        AvoidOneAndThree: "avoid leaving 1 or 3", Pairs: "avoid odd numbers"};
+  const optTxt = ` Separation: ${SPLIT_LABELS[body.split_preference] || body.split_preference}.`
+    + (body.listing_notes.length ? ` Notes: ${body.listing_notes.map(k => NOTE_LABELS[k] || k).join(", ")}.` : "");
+  if (!confirm(`Create a ${kind} — ${body.available_tickets} × $${price.toFixed(2)}/ea (you net $${proceeds.toFixed(2)}/ea) in "${body.section}"?${optTxt}${upTxt}${pricerTxt}`)) return;
+  const res = await fetch("/api/viagogo-push/approve", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Approve failed: " + (e.error || res.status)); return; }
+  await load();
+  setTimeout(() => load(), 8000);
+}
+
+async function rejectCard(card) {
+  const id = card.dataset.id;
+  if (!confirm("Reject this viagogo match? No listing will be created.")) return;
+  const res = await fetch("/api/viagogo-push/reject", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id}) });
+  if (!res.ok) { alert("Reject failed"); return; }
+  await load();
+}
+
+async function teachName(card) {
+  const id = card.dataset.id;
+  const hebrew = (card.querySelector("input[readonly]")?.value || "").trim();
+  const english = (card.querySelector("input[data-f='teach_english']")?.value || "").trim();
+  if (!english) { alert("Type the English artist name first"); return; }
+  const btn = card.querySelector("[data-act='vg-teach']");
+  if (btn) btn.disabled = true;
+  const res = await fetch("/api/kupat-name-map", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({hebrew, english, push_id: id}),
+  });
+  if (!res.ok) { alert("Failed to save name mapping"); if (btn) btn.disabled = false; return; }
+  await load();
+  setTimeout(() => load(), 5000);
+}
+
+async function setEventFromLink(card) {
+  const id = card.dataset.id;
+  const url = (card.querySelector("input[data-f='event_url']")?.value || "").trim();
+  if (!url) { alert("Paste the viagogo event page URL first (…/E-123456)"); return; }
+  const btn = card.querySelector("[data-act='vg-set-event']");
+  if (btn) { btn.disabled = true; btn.textContent = "verifying… (~15s)"; }
+  try {
+    const res = await fetch("/api/viagogo-push/set-event", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({id, url}),
+    });
+    const d = await res.json();
+    if (!res.ok) { alert(d.error || "failed"); return; }
+    await load();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Use link"; }
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".inbox-card .ic-foot button, .inbox-card [data-act='vg-teach'], .inbox-card [data-act='vg-set-event'], .inbox-card [data-act='pick-compete']");
+  if (!btn) return;
+  e.stopPropagation();
+  const card = btn.closest(".inbox-card");
+  if (btn.dataset.act === "vg-approve-draft") await approveCard(card, false);
+  else if (btn.dataset.act === "vg-approve-live") await approveCard(card, true);
+  else if (btn.dataset.act === "vg-reject") await rejectCard(card);
+  else if (btn.dataset.act === "vg-teach") await teachName(card);
+  else if (btn.dataset.act === "vg-set-event") await setEventFromLink(card);
+  else if (btn.dataset.act === "pick-compete") openCompetePicker(card);
+});
+
+$("poll-now").addEventListener("click", async () => {
+  const btn = $("poll-now");
+  btn.disabled = true;
+  $("poll-status").textContent = "polling...";
+  try {
+    const res = await fetch("/api/pending-intake/poll", {method: "POST"});
+    if (res.status === 429) {
+      $("poll-status").textContent = "already running — try again in a moment";
+    } else if (!res.ok) {
+      $("poll-status").textContent = "poll failed (" + res.status + ")";
+    } else {
+      $("poll-status").textContent = "polled — checking for new emails...";
+      setTimeout(() => load(), 1500);
+    }
+  } finally {
+    setTimeout(() => { btn.disabled = false; }, 3000);
+  }
+});
+
+load();
+</script>
+</body>
+</html>

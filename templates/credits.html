@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Credits</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.neutral { color: var(--text); }
+  .stat .value.red { color: var(--red); }
+  .stat .sub { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 1px; }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); display: flex; align-items: center; }
+  .blurb { color: var(--muted); font-size: 11px; letter-spacing: 0.5px; margin-bottom: 14px; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.credit-row { cursor: pointer; }
+  tr.credit-row.open td { background: var(--bg-2); }
+  tr.spend-wrap > td { padding: 0; background: var(--bg-2); border-bottom: 1px solid var(--line-2); }
+  .spend-panel { padding: 10px 14px 14px; }
+  .spend-panel .panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .spend-panel .panel-head .label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+  .spend-panel table { font-size: 11px; }
+  .spend-panel th { padding: 6px 8px; font-size: 9px; }
+  .spend-panel td { padding: 5px 8px; border-bottom: 1px dashed var(--line); }
+  .spend-panel .empty-spends { color: var(--muted); font-size: 11px; padding: 8px 0; }
+  .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; color: var(--red); }
+  tbody tr:hover .row-action { opacity: 0.7; }
+  tbody tr .row-action:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .stale-warn { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid var(--amber); border-radius: 1px; color: var(--amber); margin-left: 8px; }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 540px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+
+  .toast { position: fixed; top: 70px; right: 24px; z-index: 200; min-width: 320px; max-width: 420px; background: var(--bg-2); border: 1px solid var(--green); box-shadow: 0 12px 32px rgba(0,0,0,0.6); padding: 14px 16px; display: none; }
+  .toast.open { display: block; animation: toast-in 0.18s ease-out; }
+  @keyframes toast-in { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .toast .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .toast .head .label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--green); }
+  .toast .head .x { background: transparent; border: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0; line-height: 1; }
+  .toast .big { font-size: 26px; color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+  .toast .sub { font-size: 11px; color: var(--muted); letter-spacing: 0.5px; margin-bottom: 10px; }
+  .toast .actions { display: flex; gap: 8px; }
+  .toast .actions button { font-family: inherit; font-size: 11px; padding: 6px 12px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .toast .actions button.primary { background: var(--green); color: var(--bg); border-color: var(--green); }
+  .toast .actions .copied { font-size: 10px; color: var(--green); align-self: center; letter-spacing: 1px; opacity: 0; transition: opacity 0.2s; }
+  .toast .actions .copied.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>CREDITS</h1>
+    <span class="meta" id="sub">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+    <a href="/credits" class="active">CREDITS</a>
+  </nav>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Open balance ILS</div><div class="value neutral" id="s-bal-ils">₪0</div></div>
+    <div class="stat"><div class="label">Open balance $ today</div><div class="value" id="s-bal-usd">$0</div></div>
+    <div class="stat"><div class="label">Credits open</div><div class="value neutral" id="s-count">0</div></div>
+    <div class="stat"><div class="label">FX rate (ILS/USD)</div><div class="value neutral" id="s-fx">—</div><div class="sub" id="s-fx-when"></div></div>
+    <div class="stat"><div class="label">Δ vs original $</div><div class="value neutral" id="s-delta">—</div><div class="sub">today's $ of full face minus original cost</div></div>
+  </div>
+
+  <h2>Kupat refund credits
+    <button id="add-credit" style="margin-left:auto;font-size:11px;letter-spacing:1px;">+ Add Credit</button>
+  </h2>
+  <div class="blurb">
+    Refund credits issued in shekels by Kupat. Original USD cost is what you originally paid for the
+    ticket. Today's USD value reflects the current ILS/USD rate, so the spread tells you whether
+    waiting helped or hurt. Click any row to log a partial spend.
+  </div>
+  <table id="credits-table">
+    <thead><tr>
+      <th>Issued</th>
+      <th class="num">ILS face</th>
+      <th class="num">Original $</th>
+      <th class="num">Spent ILS</th>
+      <th class="num">Balance ILS</th>
+      <th class="num">Balance $ today</th>
+      <th class="num">Δ vs orig.</th>
+      <th>Note</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="credits-tbody"></tbody>
+  </table>
+  <div id="credits-empty" class="empty" style="display:none">no credits yet — click + Add Credit above</div>
+</main>
+
+<!-- Add/edit credit modal -->
+<div id="cr-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span id="cr-title">ADD CREDIT</span><button class="close" id="cr-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Issued date and ILS face are required. Original USD cost is optional but recommended.</div>
+      <label>Issued *</label><input id="cr-date" type="date">
+      <label>ILS face *</label><input id="cr-ils" type="number" step="0.01" min="0" placeholder="shekels">
+      <label>Original $</label><input id="cr-usd" type="number" step="0.01" min="0" placeholder="USD originally paid">
+      <label>Note</label><input id="cr-note" type="text" placeholder="e.g. Alex Warren refund">
+    </div>
+    <div class="modal-foot">
+      <span class="muted">ctrl+enter saves</span>
+      <button id="cr-cancel">Cancel</button>
+      <button class="primary" id="cr-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Save-result toast: shows USD value of just-logged spend so the user can copy
+     it straight into the new ticket's cost field. -->
+<div id="save-toast" class="toast">
+  <div class="head">
+    <span class="label">Spend saved</span>
+    <button class="x" id="toast-close" title="Dismiss">×</button>
+  </div>
+  <div class="big" id="toast-usd">$0.00</div>
+  <div class="sub" id="toast-sub">—</div>
+  <div class="actions">
+    <button class="primary" id="toast-copy">Copy $</button>
+    <span class="copied" id="toast-copied">copied</span>
+  </div>
+</div>
+
+<!-- Add spend modal -->
+<div id="sp-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span id="sp-title">LOG SPEND</span><button class="close" id="sp-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="sp-meta">—</div>
+      <label>Spend date *</label><input id="sp-date" type="date">
+      <label>ILS spent *</label><input id="sp-ils" type="number" step="0.01" min="0" placeholder="shekels">
+      <label>Note</label><input id="sp-note" type="text" placeholder="e.g. Alex Warren Phoenix tickets">
+    </div>
+    <div class="modal-foot">
+      <span class="muted">FX rate snapshot is captured automatically</span>
+      <button id="sp-cancel">Cancel</button>
+      <button class="primary" id="sp-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const usd = n => n == null ? "—" : "$" + (Number(n) || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const ils = n => n == null ? "—" : "₪" + (Number(n) || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const today = () => new Date().toISOString().slice(0,10);
+
+let _state = { rows: [], fx_rate: null, fx_fetched_at: null, fx_stale: false };
+let _editingId = null;
+let _spendingCreditId = null;
+let _openCreditId = null;
+
+function escape(s) {
+  return String(s == null ? "" : s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+}
+
+async function load() {
+  const res = await fetch("/api/credits");
+  if (!res.ok) { console.error("failed to load credits"); return; }
+  _state = await res.json();
+  render();
+}
+
+function render() {
+  const rows = _state.rows || [];
+  let totBalIls = 0, totBalUsd = 0, totFaceUsdToday = 0, totOrig = 0, openCount = 0;
+  for (const r of rows) {
+    totBalIls += Number(r.ils_remaining) || 0;
+    if (r.usd_value_today != null) totBalUsd += Number(r.usd_value_today);
+    if (r.usd_face_today != null) totFaceUsdToday += Number(r.usd_face_today);
+    if (r.original_usd_cost != null) totOrig += Number(r.original_usd_cost);
+    if ((Number(r.ils_remaining) || 0) > 0.001) openCount++;
+  }
+  $("s-bal-ils").textContent = ils(totBalIls);
+  $("s-bal-usd").textContent = usd(totBalUsd);
+  $("s-count").textContent = String(openCount);
+  if (_state.fx_rate) {
+    $("s-fx").innerHTML = Number(_state.fx_rate).toFixed(4) + (_state.fx_stale ? ' <span class="stale-warn">stale</span>' : '');
+    if (_state.fx_fetched_at) {
+      const d = new Date(_state.fx_fetched_at);
+      $("s-fx-when").textContent = "fetched " + d.toLocaleString();
+    } else {
+      $("s-fx-when").textContent = "";
+    }
+  } else {
+    $("s-fx").textContent = "—";
+    $("s-fx-when").textContent = "rate unavailable";
+  }
+  // Δ summary: today's USD of full face minus original USD cost (only credits with original_usd known)
+  let deltaSum = 0, deltaHas = false;
+  for (const r of rows) {
+    if (r.delta_vs_original != null) { deltaSum += Number(r.delta_vs_original); deltaHas = true; }
+  }
+  if (deltaHas) {
+    const sign = deltaSum >= 0 ? "+" : "";
+    $("s-delta").textContent = sign + usd(deltaSum);
+    $("s-delta").className = "value " + (deltaSum >= 0 ? "" : "red");
+  } else {
+    $("s-delta").textContent = "—";
+    $("s-delta").className = "value neutral";
+  }
+  $("sub").textContent = `${rows.length} credit${rows.length === 1 ? "" : "s"} · ${openCount} open`;
+
+  const tbody = $("credits-tbody");
+  tbody.innerHTML = "";
+  if (!rows.length) {
+    $("credits-empty").style.display = "";
+    return;
+  }
+  $("credits-empty").style.display = "none";
+
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.className = "credit-row";
+    if (_openCreditId === r.id) tr.classList.add("open");
+    tr.dataset.id = r.id;
+    const deltaCell = (() => {
+      if (r.delta_vs_original == null) return "—";
+      const v = Number(r.delta_vs_original);
+      const sign = v >= 0 ? "+" : "";
+      const cls = v >= 0 ? "pos" : "neg";
+      return `<span class="${cls}">${sign}${usd(v)}</span>`;
+    })();
+    tr.innerHTML = `
+      <td>${escape(r.issued_date || "")}</td>
+      <td class="num">${ils(r.ils_amount)}</td>
+      <td class="num">${r.original_usd_cost != null ? usd(r.original_usd_cost) : "—"}</td>
+      <td class="num">${ils(r.ils_spent)}</td>
+      <td class="num">${ils(r.ils_remaining)}</td>
+      <td class="num">${usd(r.usd_value_today)}</td>
+      <td class="num">${deltaCell}</td>
+      <td>${escape(r.note || "")}</td>
+      <td>
+        <button class="row-action" data-act="edit" title="Edit credit" style="color:var(--accent)">✎</button>
+        <button class="row-action" data-act="del" title="Delete credit (and all spends)">×</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+
+    if (_openCreditId === r.id) {
+      const wrap = document.createElement("tr");
+      wrap.className = "spend-wrap";
+      const td = document.createElement("td");
+      td.colSpan = 9;
+      const spends = r.spends || [];
+      let spendsHtml = "";
+      if (spends.length) {
+        spendsHtml = `
+          <table>
+            <thead><tr>
+              <th>Date</th>
+              <th class="num">ILS spent</th>
+              <th class="num">FX rate</th>
+              <th class="num">USD at spend</th>
+              <th>Note</th>
+              <th></th>
+            </tr></thead>
+            <tbody>
+              ${spends.map(s => `
+                <tr data-spend-id="${escape(s.id)}">
+                  <td>${escape(s.spend_date || "")}</td>
+                  <td class="num">${ils(s.ils_amount)}</td>
+                  <td class="num">${s.fx_rate ? Number(s.fx_rate).toFixed(4) : "—"}</td>
+                  <td class="num">${usd(s.usd_at_spend)}</td>
+                  <td>${escape(s.note || "")}</td>
+                  <td><button class="row-action" data-act="del-spend" title="Delete spend" style="opacity:0.7">×</button></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
+      } else {
+        spendsHtml = `<div class="empty-spends">no spends logged yet</div>`;
+      }
+      td.innerHTML = `
+        <div class="spend-panel">
+          <div class="panel-head">
+            <span class="label">Spends · balance ${ils(r.ils_remaining)} (${usd(r.usd_value_today)} today)</span>
+            <button data-act="add-spend" data-credit-id="${escape(r.id)}">+ Log Spend</button>
+          </div>
+          ${spendsHtml}
+        </div>
+      `;
+      wrap.appendChild(td);
+      tbody.appendChild(wrap);
+    }
+  }
+}
+
+function openCreditModal(item) {
+  _editingId = item ? item.id : null;
+  $("cr-title").textContent = item ? "// EDIT CREDIT" : "// ADD CREDIT";
+  $("cr-date").value = item ? (item.issued_date || "") : today();
+  $("cr-ils").value = item ? (item.ils_amount || "") : "";
+  $("cr-usd").value = item && item.original_usd_cost != null ? item.original_usd_cost : "";
+  $("cr-note").value = item ? (item.note || "") : "";
+  $("cr-bg").classList.add("open");
+  setTimeout(() => $("cr-ils").focus(), 30);
+}
+
+function closeCreditModal() { $("cr-bg").classList.remove("open"); _editingId = null; }
+
+async function saveCredit() {
+  const issued_date = $("cr-date").value;
+  const ils_amount = parseFloat($("cr-ils").value);
+  const usd_raw = $("cr-usd").value;
+  const original_usd_cost = usd_raw === "" ? null : parseFloat(usd_raw);
+  const note = $("cr-note").value.trim();
+  if (!issued_date) { alert("Date required"); return; }
+  if (!ils_amount || ils_amount <= 0) { alert("ILS face must be > 0"); return; }
+  const body = _editingId
+    ? {id: _editingId, issued_date, ils_amount, original_usd_cost, note}
+    : {issued_date, ils_amount, original_usd_cost, note};
+  const url = _editingId ? "/api/credits/edit" : "/api/credits/add";
+  const res = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return; }
+  closeCreditModal();
+  await load();
+}
+
+function openSpendModal(creditId) {
+  _spendingCreditId = creditId;
+  const credit = (_state.rows || []).find(r => r.id === creditId);
+  $("sp-title").textContent = "// LOG SPEND";
+  $("sp-meta").textContent = credit
+    ? `Balance: ${ils(credit.ils_remaining)} (${usd(credit.usd_value_today)} today)`
+    : "—";
+  $("sp-date").value = today();
+  $("sp-ils").value = "";
+  $("sp-note").value = "";
+  $("sp-bg").classList.add("open");
+  setTimeout(() => $("sp-ils").focus(), 30);
+}
+
+function closeSpendModal() { $("sp-bg").classList.remove("open"); _spendingCreditId = null; }
+
+async function saveSpend() {
+  if (!_spendingCreditId) return;
+  const spend_date = $("sp-date").value;
+  const ils_amount = parseFloat($("sp-ils").value);
+  const note = $("sp-note").value.trim();
+  if (!spend_date) { alert("Date required"); return; }
+  if (!ils_amount || ils_amount <= 0) { alert("ILS amount must be > 0"); return; }
+  const body = {credit_id: _spendingCreditId, spend_date, ils_amount, note};
+  const res = await fetch("/api/credits/spend/add", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return; }
+  const result = await res.json();
+  closeSpendModal();
+  await load();
+  // Surface the just-logged spend's USD value so it's trivial to copy into
+  // the new ticket's cost field elsewhere.
+  showSpendToast(ils_amount, result.fx_rate);
+}
+
+let _toastUsdValue = null;
+let _toastTimer = null;
+function showSpendToast(ils_amount, fx_rate) {
+  if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
+  if (!fx_rate) {
+    $("toast-usd").textContent = "—";
+    $("toast-sub").textContent = `${ils_amount} ILS spent · FX rate unavailable, can't compute USD`;
+    _toastUsdValue = null;
+  } else {
+    const usdVal = ils_amount / fx_rate;
+    _toastUsdValue = usdVal.toFixed(2);
+    $("toast-usd").textContent = "$" + Number(_toastUsdValue).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    $("toast-sub").textContent = `${ils_amount.toLocaleString()} ILS @ ${Number(fx_rate).toFixed(4)} → use this as the ticket cost`;
+  }
+  $("toast-copied").classList.remove("show");
+  $("save-toast").classList.add("open");
+  _toastTimer = setTimeout(closeSpendToast, 12000);
+}
+function closeSpendToast() {
+  $("save-toast").classList.remove("open");
+  if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
+}
+async function copyToastUsd() {
+  if (!_toastUsdValue) return;
+  try {
+    await navigator.clipboard.writeText(_toastUsdValue);
+    $("toast-copied").classList.add("show");
+  } catch (e) {
+    // clipboard API can fail in some contexts; fall back to a prompt
+    window.prompt("Copy this value:", _toastUsdValue);
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  // Spend-row delete
+  const spendDel = e.target.closest("[data-act='del-spend']");
+  if (spendDel) {
+    e.stopPropagation();
+    const tr = spendDel.closest("tr");
+    const sid = tr && tr.dataset.spendId;
+    if (!sid) return;
+    if (!confirm("Delete this spend?")) return;
+    await fetch("/api/credits/spend/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id: sid}) });
+    await load();
+    return;
+  }
+  const addSpend = e.target.closest("[data-act='add-spend']");
+  if (addSpend) {
+    e.stopPropagation();
+    openSpendModal(addSpend.dataset.creditId);
+    return;
+  }
+  const btn = e.target.closest(".row-action");
+  if (btn && btn.closest("tr.credit-row")) {
+    e.stopPropagation();
+    const tr = btn.closest("tr.credit-row");
+    const id = tr.dataset.id;
+    if (btn.dataset.act === "del") {
+      if (!confirm("Delete this credit and all its spends? This cannot be undone.")) return;
+      await fetch("/api/credits/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id}) });
+      if (_openCreditId === id) _openCreditId = null;
+      await load();
+    } else if (btn.dataset.act === "edit") {
+      const item = (_state.rows || []).find(r => r.id === id);
+      if (item) openCreditModal(item);
+    }
+    return;
+  }
+  // Toggle expand on row click
+  const row = e.target.closest("tr.credit-row");
+  if (row) {
+    const id = row.dataset.id;
+    _openCreditId = (_openCreditId === id) ? null : id;
+    render();
+  }
+});
+
+$("add-credit").addEventListener("click", () => openCreditModal(null));
+$("cr-close").addEventListener("click", closeCreditModal);
+$("cr-cancel").addEventListener("click", closeCreditModal);
+$("cr-save").addEventListener("click", saveCredit);
+$("cr-bg").addEventListener("click", e => { if (e.target.id === "cr-bg") closeCreditModal(); });
+
+$("sp-close").addEventListener("click", closeSpendModal);
+$("sp-cancel").addEventListener("click", closeSpendModal);
+$("sp-save").addEventListener("click", saveSpend);
+$("sp-bg").addEventListener("click", e => { if (e.target.id === "sp-bg") closeSpendModal(); });
+
+$("toast-close").addEventListener("click", closeSpendToast);
+$("toast-copy").addEventListener("click", copyToastUsd);
+
+document.addEventListener("keydown", (e) => {
+  if ($("cr-bg").classList.contains("open")) {
+    if (e.key === "Escape") closeCreditModal();
+    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) saveCredit();
+  } else if ($("sp-bg").classList.contains("open")) {
+    if (e.key === "Escape") closeSpendModal();
+    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) saveSpend();
+  }
+});
+
+load();
+</script>
+</body>
+</html>

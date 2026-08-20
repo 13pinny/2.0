@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — To-Do</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df; --cyan: #0f766e;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 24px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+  h2 .pill { font-size: 10px; padding: 2px 8px; border: 1px solid var(--line-2); color: var(--text); letter-spacing: 1px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.amber .value { color: var(--amber); }
+  .stat.red .value { color: var(--red); }
+  .stat.green .value { color: var(--green); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, textarea, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  textarea { resize: vertical; min-height: 70px; width: 100%; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  button.primary:hover { background: #0a5cc2; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tbody tr.done td { color: var(--muted); }
+  tbody tr.done td .title { text-decoration: line-through; }
+  tr.todo-row { cursor: pointer; }
+  .chip { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; margin-right: 4px; }
+  .chip-low { color: var(--muted); border-color: var(--line-2); }
+  .chip-normal { color: var(--accent); border-color: var(--accent); }
+  .chip-high { color: var(--amber); border-color: var(--amber); }
+  .chip-critical { color: var(--red); border-color: var(--red); }
+  .chip-tag { color: var(--purple); border-color: var(--purple); text-transform: lowercase; letter-spacing: 0.5px; }
+  .chip-link { color: var(--cyan); border-color: var(--cyan); text-decoration: none; }
+  .chip-link:hover { background: rgba(20,184,166,0.1); }
+  .chip-recur { color: var(--orange); border-color: var(--orange); }
+  .chip-missing { color: var(--red); border-color: var(--red); }
+  .due-today { color: var(--amber); font-weight: 600; }
+  .due-overdue { color: var(--red); font-weight: 600; }
+  .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; color: var(--red); }
+  tbody tr:hover .row-action { opacity: 0.7; }
+  tbody tr .row-action:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+  .checkbox { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
+
+  /* Suggestions */
+  .sugg-section { background: var(--bg-2); border: 1px solid var(--line); margin-bottom: 18px; }
+  .sugg-hdr { padding: 10px 14px; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 10px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  .sugg-hdr:hover { background: var(--bg-3); }
+  .sugg-hdr .count { color: var(--orange); font-weight: 600; }
+  .sugg-hdr .caret { color: var(--muted); margin-left: auto; font-size: 14px; }
+  .sugg-body { border-top: 1px solid var(--line); padding: 6px 14px 10px; display: none; }
+  .sugg-section.open .sugg-body { display: block; }
+  .sugg-section.open .sugg-hdr .caret { transform: rotate(90deg); }
+  .sugg-item { display: grid; grid-template-columns: 1fr auto; gap: 8px 14px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: center; }
+  .sugg-item:last-child { border-bottom: none; }
+  .sugg-item .meta-line { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .sugg-item .actions { display: flex; gap: 6px; }
+  .sugg-item .actions button { font-size: 11px; padding: 5px 9px; }
+
+  /* Modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 40px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 620px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select, .modal-body textarea { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus, .modal-body select:focus, .modal-body textarea:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-body .full { grid-column: 1 / -1; }
+  .price-row { display: flex; gap: 6px; align-items: center; }
+  .price-row input { flex: 1; }
+  .price-row select { width: 90px; }
+  .link-row { display: flex; gap: 6px; }
+  .link-row select { width: 150px; flex: none; }
+  .link-row input { flex: 1; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.danger { color: var(--red); border-color: #f2b8b5; }
+  .modal-foot button.danger:hover { background: #fdecea; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+
+  /* Subtasks inside the modal */
+  .subtasks { grid-column: 1 / -1; border-top: 1px dashed var(--line); padding-top: 10px; margin-top: 4px; }
+  .subtasks .sub-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+  .subtasks .sub-row { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+  .subtasks .sub-row.done .sub-title { color: var(--muted); text-decoration: line-through; }
+  .subtasks .sub-title { flex: 1; }
+  .subtasks .sub-del { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 2px 6px; font-size: 12px; }
+  .subtasks .sub-del:hover { color: var(--red); }
+  .subtasks .sub-add { display: flex; gap: 6px; }
+  .subtasks .sub-add input { flex: 1; }
+  .subtasks .help { font-size: 10px; color: var(--muted); margin-top: 6px; }
+
+  /* Reminder status bar */
+  .remind-status { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; padding: 8px 14px; background: var(--bg-2); border: 1px solid var(--line); margin-bottom: 14px; font-size: 11px; color: var(--muted); }
+  .remind-status button { font-size: 10px; padding: 4px 9px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>KARTIS</h1>
+    <span class="meta" id="lastrun">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos" class="active">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Open</div><div class="value" id="s-open">0</div></div>
+    <div class="stat amber"><div class="label">Due Today</div><div class="value" id="s-today">0</div></div>
+    <div class="stat red"><div class="label">Overdue</div><div class="value" id="s-overdue">0</div></div>
+    <div class="stat green"><div class="label">Done This Week</div><div class="value" id="s-done">0</div></div>
+  </div>
+
+  <div id="remind-bar" class="remind-status" style="display:none">
+    <span id="remind-text">—</span>
+    <button id="remind-now-btn" title="Run the digest right now (mostly for testing)">Run digest now</button>
+  </div>
+
+  <div id="sugg-section" class="sugg-section" style="display:none">
+    <div class="sugg-hdr" id="sugg-hdr">
+      💡 <span class="count" id="sugg-count">0</span> suggestion<span id="sugg-plural">s</span>
+      <span style="color:var(--muted);font-size:11px;letter-spacing:0;text-transform:none;">— derived from your data</span>
+      <span class="caret">›</span>
+    </div>
+    <div class="sugg-body" id="sugg-body"></div>
+  </div>
+
+  <h2>
+    Tasks
+    <button id="add-todo" style="font-size:11px;letter-spacing:1px;">+ Add Task</button>
+    <input type="search" id="q-search" placeholder="search title notes tags" style="font-size:11px;width:240px;">
+    <select id="q-status" style="font-size:11px;">
+      <option value="open" selected>OPEN</option>
+      <option value="done">DONE</option>
+      <option value="all">ALL</option>
+    </select>
+    <select id="q-urgency" style="font-size:11px;">
+      <option value="">ANY URGENCY</option>
+      <option value="critical">CRITICAL</option>
+      <option value="high">HIGH</option>
+      <option value="normal">NORMAL</option>
+      <option value="low">LOW</option>
+    </select>
+    <select id="q-tag" style="font-size:11px;"><option value="">ANY TAG</option></select>
+    <select id="q-source" style="font-size:11px;">
+      <option value="">ANY SOURCE</option>
+      <option value="none">— none —</option>
+    </select>
+  </h2>
+  <table id="todo-table">
+    <thead><tr>
+      <th style="width:24px;"></th>
+      <th>TITLE</th>
+      <th>URGENCY</th>
+      <th>DUE</th>
+      <th>TAGS</th>
+      <th>LINKED</th>
+      <th class="num">AMOUNT</th>
+      <th style="width:30px;"></th>
+    </tr></thead>
+    <tbody id="todo-tbody"></tbody>
+  </table>
+  <div id="todo-empty" class="empty" style="display:none">no tasks yet — click "+ Add Task" above</div>
+</main>
+
+<!-- Add / Edit modal -->
+<div id="todo-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span id="todo-title">ADD TASK</span><button class="close" id="todo-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="todo-meta">Plain task with optional deadline, urgency, tags, recurrence, and a link back to inventory / watcher / etc.</div>
+      <label>Title *</label><input id="t-title" type="text" placeholder="e.g. Deliver tickets for X concert">
+      <label>Notes</label><textarea id="t-notes" placeholder="optional details"></textarea>
+      <label>Due date</label><input id="t-due" type="date">
+      <label>Urgency</label>
+      <select id="t-urgency">
+        <option value="low">LOW</option>
+        <option value="normal" selected>NORMAL</option>
+        <option value="high">HIGH</option>
+        <option value="critical">CRITICAL</option>
+      </select>
+      <label>Recurrence</label>
+      <select id="t-recurrence">
+        <option value="">(none)</option>
+        <option value="daily">DAILY</option>
+        <option value="weekly">WEEKLY</option>
+        <option value="monthly">MONTHLY</option>
+      </select>
+      <label>Tags</label><input id="t-tags" type="text" placeholder="comma-separated, e.g. delivery, payment">
+      <label>Amount</label>
+      <div class="price-row">
+        <input id="t-amount" type="number" step="0.01" placeholder="optional memo">
+        <select id="t-currency"><option value="">—</option><option value="USD">USD</option><option value="ILS">ILS</option></select>
+      </div>
+      <label>Link to</label>
+      <div class="link-row">
+        <select id="t-link-source">
+          <option value="">— none —</option>
+          <option value="inventory">Inventory</option>
+          <option value="watcher">Watcher</option>
+          <option value="lysted_purchase">Lysted purchase</option>
+          <option value="viagogo_listing">Viagogo listing</option>
+          <option value="expense">Expense</option>
+          <option value="maaser">Maaser</option>
+          <option value="owed">Owed item</option>
+        </select>
+        <input id="t-link-id" type="text" placeholder="entity id">
+      </div>
+
+      <div class="subtasks" id="subtasks-zone" style="display:none">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;">Subtasks</div>
+        <div class="sub-list" id="sub-list"></div>
+        <div class="sub-add">
+          <input id="sub-input" type="text" placeholder="add subtask + enter">
+          <button id="sub-add-btn" type="button">+ Add</button>
+        </div>
+        <div class="help">Subtasks save immediately — no need to click Save below.</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="muted">ctrl+enter saves · esc closes</span>
+      <button id="todo-del" class="danger" style="display:none">Delete</button>
+      <button id="todo-cancel">Cancel</button>
+      <button class="primary" id="todo-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const today = () => new Date().toISOString().slice(0,10);
+function escape(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function fmtMoney(amount, cur) {
+  if (amount == null) return "";
+  const sym = cur === "ILS" ? "₪" : (cur === "USD" ? "$" : "");
+  return sym + Number(amount).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+}
+function relDue(iso) {
+  if (!iso) return "";
+  const today = new Date(); today.setHours(0,0,0,0);
+  const d = new Date(iso + "T00:00:00");
+  const diff = Math.round((d - today) / 86400000);
+  if (diff === 0) return '<span class="due-today">Today</span>';
+  if (diff < 0) return `<span class="due-overdue">Overdue ${-diff}d</span>`;
+  if (diff === 1) return "Tomorrow";
+  if (diff < 14) return `In ${diff}d`;
+  return iso;
+}
+
+let _state = { todos: [], stats: {}, suggestions: [] };
+let _editingId = null;
+let _editingTodo = null;
+
+async function loadAll() {
+  const [main, sugg] = await Promise.all([
+    fetch("/api/todos?status=all").then(r => r.json()),
+    fetch("/api/todos/suggestions").then(r => r.json()),
+  ]);
+  _state.todos = main.todos || [];
+  _state.stats = main.stats || {};
+  _state.last_remind = main.last_remind;
+  _state.suggestions = sugg.suggestions || [];
+  render();
+}
+
+function render() {
+  $("s-open").textContent = _state.stats.open || 0;
+  $("s-today").textContent = _state.stats.due_today || 0;
+  $("s-overdue").textContent = _state.stats.overdue || 0;
+  $("s-done").textContent = _state.stats.done_week || 0;
+  renderRemindStatus();
+  renderSuggestions();
+  renderTagFilter();
+  renderTodos();
+}
+
+function renderRemindStatus() {
+  const r = _state.last_remind;
+  if (!r || !r.at) { $("remind-bar").style.display = "none"; return; }
+  $("remind-bar").style.display = "";
+  let txt = `Last digest: ${new Date(r.at).toLocaleString()} · sent=${r.sent_count || 0} (today=${r.due_today || 0}, overdue=${r.overdue || 0})`;
+  if (r.paused) txt += " · MASTER PAUSED";
+  if (r.muted) txt += " · MASTER MUTED";
+  if (r.error) txt += " · ERROR: " + r.error;
+  $("remind-text").textContent = txt;
+}
+
+function renderSuggestions() {
+  const sec = $("sugg-section");
+  const body = $("sugg-body");
+  if (!_state.suggestions.length) { sec.style.display = "none"; return; }
+  sec.style.display = "";
+  $("sugg-count").textContent = _state.suggestions.length;
+  $("sugg-plural").textContent = _state.suggestions.length === 1 ? "" : "s";
+  body.innerHTML = "";
+  for (const s of _state.suggestions) {
+    const div = document.createElement("div");
+    div.className = "sugg-item";
+    div.innerHTML = `
+      <div>
+        <div><span class="chip chip-${s.urgency || "normal"}">${(s.urgency || "normal").toUpperCase()}</span> ${escape(s.title)}</div>
+        <div class="meta-line">${escape(s.reason || "")} · due ${escape(s.due_date_iso || "—")}</div>
+      </div>
+      <div class="actions">
+        <button class="primary" data-act="accept" data-key="${escape(s.key)}">+ Add as task</button>
+        <button data-act="snooze7" data-key="${escape(s.key)}">Snooze 7d</button>
+        <button data-act="snooze30" data-key="${escape(s.key)}">Snooze 30d</button>
+      </div>
+    `;
+    body.appendChild(div);
+  }
+}
+
+function renderTagFilter() {
+  const sel = $("q-tag");
+  const cur = sel.value;
+  const all = new Set();
+  for (const t of _state.todos) for (const tag of (t.tags || [])) all.add(tag);
+  const tags = [...all].sort();
+  sel.innerHTML = '<option value="">ANY TAG</option>' + tags.map(t => `<option value="${escape(t)}">${escape(t)}</option>`).join("");
+  if (tags.includes(cur)) sel.value = cur;
+}
+
+function renderTodos() {
+  const search = ($("q-search").value || "").toLowerCase().trim();
+  const status = $("q-status").value;
+  const urgency = $("q-urgency").value;
+  const tag = $("q-tag").value;
+  const src = $("q-source").value;
+  let rows = _state.todos.slice();
+  if (status === "open") rows = rows.filter(r => r.status === "open");
+  else if (status === "done") rows = rows.filter(r => r.status === "done");
+  if (urgency) rows = rows.filter(r => r.urgency === urgency);
+  if (tag) rows = rows.filter(r => (r.tags || []).includes(tag));
+  if (src === "none") rows = rows.filter(r => !r.linked_source);
+  else if (src) rows = rows.filter(r => r.linked_source === src);
+  if (search) {
+    rows = rows.filter(r =>
+      (r.title || "").toLowerCase().includes(search) ||
+      (r.notes || "").toLowerCase().includes(search) ||
+      (r.tags || []).some(t => t.toLowerCase().includes(search))
+    );
+  }
+  const tbody = $("todo-tbody");
+  tbody.innerHTML = "";
+  if (!rows.length) { $("todo-empty").style.display = ""; return; }
+  $("todo-empty").style.display = "none";
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.className = "todo-row" + (r.status === "done" ? " done" : "");
+    tr.dataset.id = r.id;
+    const subInfo = r.subtask_total ? ` <span style="color:var(--muted);font-size:11px;">(${r.subtask_done}/${r.subtask_total})</span>` : "";
+    const recurChip = r.recurrence ? ` <span class="chip chip-recur">↻ ${r.recurrence.toUpperCase()}</span>` : "";
+    const tagsHtml = (r.tags || []).map(t => `<span class="chip chip-tag">${escape(t)}</span>`).join("");
+    let linkHtml = "";
+    if (r.link) {
+      const cls = r.link.missing ? "chip chip-missing" : "chip chip-link";
+      const inner = `${escape(r.link.label)}`;
+      linkHtml = r.link.href
+        ? `<a class="${cls}" href="${escape(r.link.href)}" onclick="event.stopPropagation()">${inner}</a>`
+        : `<span class="${cls}">${inner}</span>`;
+    }
+    tr.innerHTML = `
+      <td><input type="checkbox" class="checkbox" data-act="toggle" ${r.status === "done" ? "checked" : ""}></td>
+      <td><span class="title">${escape(r.title)}</span>${subInfo}${recurChip}</td>
+      <td><span class="chip chip-${r.urgency}">${r.urgency.toUpperCase()}</span></td>
+      <td>${relDue(r.due_date_iso)}</td>
+      <td>${tagsHtml}</td>
+      <td>${linkHtml}</td>
+      <td class="num">${fmtMoney(r.amount, r.amount_currency)}</td>
+      <td><button class="row-action" data-act="del" title="Delete task">×</button></td>
+    `;
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("input[type=checkbox]")) return;
+      if (e.target.closest(".row-action")) return;
+      if (e.target.closest("a")) return;
+      openModal(r);
+    });
+    tbody.appendChild(tr);
+  }
+}
+
+// ---- Modal ----
+function openModal(todo) {
+  _editingId = todo ? todo.id : null;
+  _editingTodo = todo || null;
+  $("todo-title").textContent = todo ? "// EDIT TASK" : "// ADD TASK";
+  $("todo-del").style.display = todo ? "" : "none";
+  $("t-title").value = todo ? (todo.title || "") : "";
+  $("t-notes").value = todo ? (todo.notes || "") : "";
+  $("t-due").value = todo ? (todo.due_date_iso || "") : "";
+  $("t-urgency").value = todo ? (todo.urgency || "normal") : "normal";
+  $("t-recurrence").value = todo ? (todo.recurrence || "") : "";
+  $("t-tags").value = todo ? (todo.tags || []).join(", ") : "";
+  $("t-amount").value = todo ? (todo.amount != null ? todo.amount : "") : "";
+  $("t-currency").value = todo ? (todo.amount_currency || "") : "";
+  $("t-link-source").value = todo ? (todo.linked_source || "") : "";
+  $("t-link-id").value = todo ? (todo.linked_source_id || "") : "";
+  $("subtasks-zone").style.display = todo ? "" : "none";
+  if (todo) renderSubs(todo.subtasks || []);
+  $("todo-bg").classList.add("open");
+  setTimeout(() => $("t-title").focus(), 30);
+}
+function closeModal() { $("todo-bg").classList.remove("open"); _editingId = null; _editingTodo = null; }
+
+function renderSubs(subs) {
+  const list = $("sub-list");
+  list.innerHTML = "";
+  for (const s of subs) {
+    const div = document.createElement("div");
+    div.className = "sub-row" + (s.done ? " done" : "");
+    div.innerHTML = `
+      <input type="checkbox" class="checkbox" data-sub-id="${escape(s.id)}" ${s.done ? "checked" : ""}>
+      <span class="sub-title">${escape(s.title)}</span>
+      <button class="sub-del" data-sub-del="${escape(s.id)}" title="Delete">×</button>
+    `;
+    list.appendChild(div);
+  }
+}
+
+async function saveModal() {
+  const title = $("t-title").value.trim();
+  if (!title) { alert("Title required"); return; }
+  const body = {
+    title,
+    notes: $("t-notes").value,
+    due_date_iso: $("t-due").value || null,
+    urgency: $("t-urgency").value,
+    recurrence: $("t-recurrence").value || null,
+    tags: $("t-tags").value,
+    amount: $("t-amount").value || null,
+    amount_currency: $("t-currency").value || null,
+    linked_source: $("t-link-source").value || null,
+    linked_source_id: $("t-link-id").value || null,
+  };
+  let url = "/api/todos/add";
+  if (_editingId) { url = "/api/todos/edit"; body.id = _editingId; }
+  const res = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return; }
+  closeModal();
+  await loadAll();
+}
+
+async function deleteCurrent() {
+  if (!_editingId) return;
+  if (!confirm("Delete this task and its subtasks?")) return;
+  await fetch("/api/todos/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id: _editingId})});
+  closeModal();
+  await loadAll();
+}
+
+// ---- Subtask handlers (live, not gated on Save) ----
+async function addSubtask() {
+  if (!_editingId) return;
+  const title = $("sub-input").value.trim();
+  if (!title) return;
+  await fetch("/api/todos/subtask/add", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({todo_id: _editingId, title})});
+  $("sub-input").value = "";
+  await refreshSubsFromServer();
+}
+async function refreshSubsFromServer() {
+  if (!_editingId) return;
+  await loadAll();
+  const fresh = _state.todos.find(t => t.id === _editingId);
+  if (fresh) renderSubs(fresh.subtasks || []);
+}
+
+// ---- Event wiring ----
+document.addEventListener("click", async (e) => {
+  // Top-level row actions
+  const subBtnDel = e.target.closest("[data-sub-del]");
+  if (subBtnDel) {
+    await fetch("/api/todos/subtask/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id: subBtnDel.dataset.subDel})});
+    await refreshSubsFromServer();
+    return;
+  }
+  const subChk = e.target.closest("input[data-sub-id]");
+  if (subChk) {
+    await fetch("/api/todos/subtask/toggle", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id: subChk.dataset.subId})});
+    await refreshSubsFromServer();
+    return;
+  }
+  const toggle = e.target.closest("input[data-act=toggle]");
+  if (toggle) {
+    const tr = toggle.closest("tr");
+    const id = tr && tr.dataset.id;
+    if (id) {
+      await fetch("/api/todos/toggle", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id})});
+      await loadAll();
+    }
+    return;
+  }
+  const del = e.target.closest("button[data-act=del]");
+  if (del) {
+    const tr = del.closest("tr");
+    const id = tr && tr.dataset.id;
+    if (id && confirm("Delete this task?")) {
+      await fetch("/api/todos/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id})});
+      await loadAll();
+    }
+    return;
+  }
+  // Suggestion actions
+  const sBtn = e.target.closest(".sugg-item button[data-act]");
+  if (sBtn) {
+    const act = sBtn.dataset.act;
+    const key = sBtn.dataset.key;
+    sBtn.disabled = true;
+    if (act === "accept") {
+      await fetch("/api/todos/suggestions/accept", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({key})});
+    } else if (act === "snooze7" || act === "snooze30") {
+      const days = act === "snooze7" ? 7 : 30;
+      await fetch("/api/todos/suggestions/dismiss", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({key, days})});
+    }
+    await loadAll();
+  }
+});
+
+$("sugg-hdr").addEventListener("click", () => $("sugg-section").classList.toggle("open"));
+$("add-todo").addEventListener("click", () => openModal(null));
+$("todo-close").addEventListener("click", closeModal);
+$("todo-cancel").addEventListener("click", closeModal);
+$("todo-save").addEventListener("click", saveModal);
+$("todo-del").addEventListener("click", deleteCurrent);
+$("sub-add-btn").addEventListener("click", addSubtask);
+$("sub-input").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addSubtask(); }});
+$("todo-bg").addEventListener("click", e => { if (e.target.id === "todo-bg") closeModal(); });
+$("q-search").addEventListener("input", renderTodos);
+$("q-status").addEventListener("change", renderTodos);
+$("q-urgency").addEventListener("change", renderTodos);
+$("q-tag").addEventListener("change", renderTodos);
+$("q-source").addEventListener("change", renderTodos);
+$("remind-now-btn").addEventListener("click", async () => {
+  $("remind-now-btn").disabled = true;
+  await fetch("/api/todos/remind-now", {method:"POST"});
+  setTimeout(async () => { $("remind-now-btn").disabled = false; await loadAll(); }, 1500);
+});
+
+document.addEventListener("keydown", (e) => {
+  if (!$("todo-bg").classList.contains("open")) return;
+  if (e.key === "Escape") closeModal();
+  else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) saveModal();
+});
+
+loadAll();
+</script>
+</body>
+</html>
