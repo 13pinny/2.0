@@ -170,6 +170,9 @@ the VPS Xvfb display with Chrome on it. Log into:
 2. Viagogo (`inv.viagogo.com`)
 3. CrowdVolt
 
+(Once Phase 2/3 are on, Viagogo and CrowdVolt each log in on their own
+Chrome instead — see those sections. Only Lysted stays on this one.)
+
 Close the Chrome window when done. Sessions persist in `/opt/kartis/user_data/`.
 
 Kill the noVNC bridge processes (`pkill websockify x11vnc`) — we don't
@@ -245,14 +248,16 @@ Only if Phase 1 still hits Cloudflare 403s on Viagogo after 24–48 h.
 
 4. Re-run the noVNC step (step 7 above) on the Viagogo Chrome — but this
    time start `chromium --user-data-dir=/opt/kartis/user_data_viagogo
-   --remote-debugging-port=9223 --proxy-server=$PROXY_URL` and log into
+   --remote-debugging-port=9224 --proxy-server=$PROXY_URL` and log into
    Viagogo only.
 
 5. Point the scraper at the Viagogo Chrome by uncommenting in `.env`:
 
    ```
-   KARTIS_CDP_URL_VIAGOGO=http://localhost:9223
+   KARTIS_CDP_URL_VIAGOGO=http://localhost:9224
    ```
+
+   (:9224, not :9223 — :9223 belongs to the CrowdVolt Chrome in Phase 3.)
 
 6. Restart Flask:
 
@@ -265,6 +270,66 @@ Only if Phase 1 still hits Cloudflare 403s on Viagogo after 24–48 h.
    flagged — rotate the session in IPRoyal's dashboard and retry.
 
 ---
+
+## Phase 3 — CrowdVolt on its own Chrome (residential proxy)
+
+CrowdVolt's Cloudflare interstitial-challenges the Hetzner IP and the
+Turnstile loops even for a human — while Viagogo 403s residential IPs, so
+the box IP can't simply move. CrowdVolt therefore gets its own Chrome
+(`kartis-chrome-cv`, CDP **:9223**, profile `/opt/kartis/user_data_cv`)
+egressing through a paid static-residential proxy, and the main :9222
+Chrome keeps the datacenter IP for Lysted/Viagogo.
+
+1. Put the provider's proxy in `/opt/kartis/.env.cvproxy` (gitignored,
+   chmod 600 — percent-encode any `:` or `@` inside user/pass):
+
+   ```sh
+   sudo -u kartis bash -c 'cat > /opt/kartis/.env.cvproxy <<EOF
+   KARTIS_CVPROXY_UPSTREAM=http://USER:PASS@residential.iproyal.com:12321
+   EOF'
+   sudo chmod 600 /opt/kartis/.env.cvproxy
+   ```
+
+   Verify the upstream and see the egress IP before involving Chrome:
+
+   ```sh
+   sudo -u kartis /opt/kartis/.venv/bin/python /opt/kartis/cvproxy.py --test
+   ```
+
+2. Install and start the units (the forwarder must come up first — Chrome
+   silently drops `user:pass` given in `--proxy-server`, so `cvproxy.py`
+   injects the credentials on localhost):
+
+   ```sh
+   sudo cp deploy/systemd/kartis-cvproxy.service /etc/systemd/system/
+   sudo cp deploy/systemd/kartis-chrome-cv.service /etc/systemd/system/
+   sudo cp deploy/systemd/kartis-wm.service /etc/systemd/system/   # openbox titlebars
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now kartis-cvproxy kartis-wm kartis-chrome-cv
+   ```
+
+3. Log into CrowdVolt **in that window**: open the noVNC bookmark, pick the
+   second Chrome window (offset at 60,60), and sign in. The session lands in
+   `user_data_cv` — the main Chrome no longer has a CrowdVolt login at all.
+
+4. Point both the pricer and the sales scrape at it in `/opt/kartis/.env`:
+
+   ```
+   KARTIS_CDP_URL_CROWDVOLT=http://localhost:9223
+   ```
+
+   Then `sudo systemctl restart kartis-flask`.
+
+5. Confirm sales tracking end to end:
+
+   ```sh
+   sudo -u kartis /opt/kartis/.venv/bin/python /opt/kartis/crowdvolt_sales.py
+   ```
+
+   That prints one line per sale off CrowdVolt's JSON API (Delivered +
+   Incomplete tabs). Add `--write` to persist, or `--raw` to dump the raw
+   API rows when a column comes back blank. Once it looks right, trigger a
+   resync from the dashboard and check `crowdvolt_sales` in the UI.
 
 ## Troubleshooting
 
@@ -293,6 +358,17 @@ x11vnc drifted off port 5900 (auto-probed to 5901 after a quick restart)
 while websockify still bridges 5900. The `kartis-vnc.service` unit pins
 `-rfbport 5900` to prevent this; if you see it, confirm with
 `ss -tlnp | grep 5900` and that the unit has the `-rfbport 5900` flag.
+
+**CrowdVolt sales stuck at 0.**
+Almost always the CDP split: the scrape has to run on the CrowdVolt Chrome
+(:9223), not the main one. Check `KARTIS_CDP_URL_CROWDVOLT` is in
+`/opt/kartis/.env`, then `curl http://localhost:9223/json/version` and
+`systemctl status kartis-cvproxy kartis-chrome-cv`. If those are healthy,
+run `crowdvolt_sales.py` by hand — "no stytch_session cookie" means the
+CrowdVolt login in `user_data_cv` expired (re-login via noVNC), a raised
+Cloudflare error means the residential IP got flagged (rotate the session
+at the provider), and rows with blank columns mean CrowdVolt renamed a
+field — `--raw` shows the new names.
 
 **B2 sync silently doing nothing.**
 `rclone config show b2` to confirm the remote exists; `--max-age 36h`

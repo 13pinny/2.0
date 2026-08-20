@@ -39,6 +39,7 @@ All commands assume the venv at `.venv\Scripts\`. On Windows use `.venv\Scripts\
 | Probe the zappa-club.co.il catalog (the market sweep's zappa fetcher) | `.venv\Scripts\python zappa_events.py` (add `--json`, `--category "<name>"`; opens a headful off-screen Chromium — headless is blocked) |
 | Dry-run the viagogo market-sales tracker (the /vgsales page's fetcher) | `.venv\Scripts\python viagogo_market_sales.py` (add `--event <id>`, `--json`; `--write` persists like a real tick) |
 | Probe the inv.viagogo magnifier popup's sales grid raw | `.venv\Scripts\python scripts\probe_viagogo_market_sales.py [event_id]` |
+| Dry-run the CrowdVolt sales fetch (the hourly scrape's CV half) | `.venv\Scripts\python crowdvolt_sales.py` (add `--json`, `--raw` to dump the API rows; `--write` persists like a real sync) |
 
 There is no test suite, no linter, and no build step — the project ships as plain Python scripts.
 
@@ -95,6 +96,10 @@ Per-seat cool-down: some venues (kupat VIP seats especially) flap a hot seat in 
 ### Lysted / Viagogo / CrowdVolt scraping (full mode only)
 
 `scraper.py` uses `patchright.sync_api` to `connect_over_cdp("http://localhost:9222")` against the Chrome window launched by `login.py`. **There is no login automation by design** — Cloudflare blocks headless browsers, so a human signs in once and the scraper inherits the session. Chrome's user profile is stored in `./user_data/` (gitignored). If Chrome is closed, all scraping fails until `login.py` runs again.
+
+On the VPS the browser is split three ways, and the scraper picks a context per source: `KARTIS_CDP_URL` (main, :9222, datacenter IP — Lysted), `KARTIS_CDP_URL_VIAGOGO` (:9224 — viagogo 403s residential IPs), `KARTIS_CDP_URL_CROWDVOLT` (:9223, behind `cvproxy.py`'s residential upstream — CrowdVolt's Cloudflare interstitial-challenges the datacenter IP). Each unset var falls back to the main Chrome, so local single-Chrome dev is unchanged. **A source's login lives only in its own profile**, so routing a scrape at the wrong Chrome doesn't degrade — it returns zero rows. That was exactly the 2026-08 CrowdVolt outage: the CV Chrome split moved the login to `user_data_cv` but `scraper.py` kept scraping :9222.
+
+CrowdVolt **sales** no longer come from the `/selling` DOM at all — `crowdvolt_sales.py` pages CrowdVolt's own `api.crowdvolt.com/api/buy_sell_history/sell_delivered` + `sell_incomplete` through the pricer's in-page `CvSession`, which is why it also captures sold-but-undelivered orders the old Completed-tab scrape missed. Deliberately **not** `sell_all` — that includes the still-unsold `sell_active` asks, which are listings, not sales. Field names are read through alias tuples with every row kept verbatim in `raw_cells`, so a CrowdVolt rename shows up as a blank column plus a visible raw row (diagnose with `--raw`) instead of a silently empty sync. The DOM scrape survives as `_scrape_crowdvolt_sales_dom` and runs only when the API path *raises* — an empty API result is a legitimate "no sales", not a fallback trigger.
 
 ### Viagogo auto-pricer (full mode only)
 

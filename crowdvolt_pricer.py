@@ -311,6 +311,17 @@ def _settle_challenge(page):
             "through the check in the CrowdVolt tab, then sign in if needed")
 
 
+def session_on_context(context):
+    """A CvSession on a context the caller already holds. The hourly scrape
+    reuses its CrowdVolt context this way instead of opening a second CDP
+    connection to the same Chrome."""
+    page = context.new_page()
+    page.goto(HOME_URL, wait_until="domcontentloaded", timeout=45000)
+    page.wait_for_timeout(3000)
+    _settle_challenge(page)
+    return CvSession(page)
+
+
 def open_session(p):
     # scraper's hardened connect: pre-closes stray ticketing tabs (a parked
     # tab stuck on a CF challenge has a self-navigating iframe that can
@@ -319,11 +330,7 @@ def open_session(p):
     import scraper
     browser = scraper._connect_over_cdp(p, CDP_URL)
     context = browser.contexts[0]
-    page = context.new_page()
-    page.goto(HOME_URL, wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(3000)
-    _settle_challenge(page)
-    return CvSession(page)
+    return session_on_context(context)
 
 
 # --- pricing rule ---------------------------------------------------------

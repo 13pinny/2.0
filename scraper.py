@@ -17,8 +17,14 @@ DEBUG_DIR = Path(__file__).parent / "debug"
 # Viagogo scrape through a separate Chrome (different profile + residential
 # proxy) to dodge Cloudflare 403s. When unset, Viagogo uses the same Chrome
 # as everything else — i.e. behavior is identical to before this change.
+# KARTIS_CDP_URL_CROWDVOLT is the mirror image: CrowdVolt's Cloudflare
+# interstitial-challenges the datacenter IP, so CrowdVolt rides its own
+# Chrome behind a residential proxy (kartis-chrome-cv, :9223). The CV login
+# lives in that profile, so once the env var is set the main Chrome has no
+# CrowdVolt session at all — this scrape MUST follow it there.
 CDP_URL = os.getenv("KARTIS_CDP_URL", "http://localhost:9222")
 CDP_URL_VIAGOGO = os.getenv("KARTIS_CDP_URL_VIAGOGO") or CDP_URL
+CDP_URL_CROWDVOLT = os.getenv("KARTIS_CDP_URL_CROWDVOLT") or CDP_URL
 
 
 def _parse_money(text):
@@ -1006,6 +1012,46 @@ def _parse_crowdvolt_row(cells):
 
 
 def _scrape_crowdvolt_sales(context):
+    """Sales off CrowdVolt's own JSON API, falling back to the /selling DOM.
+
+    The API path (crowdvolt_sales.py) is primary: it survives the redesigns
+    that broke the table scrape twice, and it picks up the Incomplete tab —
+    sold-but-not-yet-delivered orders the old Completed-only scrape missed
+    entirely. The DOM scrape stays as the fallback for the day CrowdVolt
+    reshapes buy_sell_history, but note it can only help if `context` is the
+    CrowdVolt Chrome; on the main datacenter-IP Chrome both paths fail the
+    same way, which is the bug this replaced.
+
+    An empty API result is NOT treated as failure — no sales this window is a
+    legitimate answer, and re-running the DOM scrape to "confirm" it would
+    just burn a Cloudflare challenge. Only a raised error falls through.
+    """
+    import crowdvolt_pricer
+    import crowdvolt_sales
+    session = None
+    try:
+        session = crowdvolt_pricer.session_on_context(context)
+        rows = crowdvolt_sales.fetch_sales(session)
+        print(f"[kartis] crowdvolt sales via API: {len(rows)} rows")
+        return rows
+    except Exception as e:
+        msg = str(e)
+        if "stytch_session" in msg or "auth_required" in msg or "/signup" in msg:
+            # Logged out of CrowdVolt in this profile — surface it as a
+            # LOGIN EXPIRED badge instead of a silent zero.
+            _auth_errors.add("crowdvolt")
+        print(f"[kartis] crowdvolt sales API failed ({type(e).__name__}: "
+              f"{msg[:160]}); falling back to the /selling page")
+    finally:
+        if session is not None:
+            try:
+                session.page.close()
+            except Exception:
+                pass
+    return _scrape_crowdvolt_sales_dom(context)
+
+
+def _scrape_crowdvolt_sales_dom(context):
     # CrowdVolt redesigned the page in May 2026: /dashboard/sales redirects
     # to /selling, the layout swapped from a single table to tabs (Incomplete
     # / Completed), and the ?orderType=completed query param is no longer
@@ -1233,6 +1279,22 @@ def scrape_all():
                 print(f"[kartis] viagogo CDP connect failed at {CDP_URL_VIAGOGO}: {type(e).__name__}: {e}")
                 viagogo_context = None
 
+        # Same hook for CrowdVolt (kartis-chrome-cv on :9223 — residential
+        # proxy, own profile, own CrowdVolt login). Unset = main Chrome, i.e.
+        # the local-dev single-Chrome setup is unchanged.
+        crowdvolt_context = context
+        if CDP_URL_CROWDVOLT != CDP_URL:
+            try:
+                cv_browser = _connect_over_cdp(p, CDP_URL_CROWDVOLT)
+                crowdvolt_context = (
+                    cv_browser.contexts[0]
+                    if cv_browser.contexts
+                    else cv_browser.new_context()
+                )
+            except Exception as e:
+                print(f"[kartis] crowdvolt CDP connect failed at {CDP_URL_CROWDVOLT}: {type(e).__name__}: {e}")
+                crowdvolt_context = None
+
         page = context.new_page()
         try:
             _ensure_logged_in(page)
@@ -1276,7 +1338,9 @@ def scrape_all():
             print(f"[kartis] viagogo sales scrape failed: {type(e).__name__}: {e}")
 
         try:
-            result["crowdvolt_sales"] = _scrape_crowdvolt_sales(context)
+            if crowdvolt_context is None:
+                raise RuntimeError(f"crowdvolt CDP unavailable at {CDP_URL_CROWDVOLT}")
+            result["crowdvolt_sales"] = _scrape_crowdvolt_sales(crowdvolt_context)
         except Exception as e:
             print(f"[kartis] crowdvolt sales scrape failed: {type(e).__name__}: {e}")
     return result
