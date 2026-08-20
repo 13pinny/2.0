@@ -40,6 +40,8 @@ All commands assume the venv at `.venv\Scripts\`. On Windows use `.venv\Scripts\
 | Dry-run the viagogo market-sales tracker (the /vgsales page's fetcher) | `.venv\Scripts\python viagogo_market_sales.py` (add `--event <id>`, `--json`; `--write` persists like a real tick) |
 | Probe the inv.viagogo magnifier popup's sales grid raw | `.venv\Scripts\python scripts\probe_viagogo_market_sales.py [event_id]` |
 | Dry-run the CrowdVolt sales fetch (the hourly scrape's CV half) | `.venv\Scripts\python crowdvolt_sales.py` (add `--check` to test just the token, `--json`, `--raw` to dump the API rows, `--browser` to force the Chrome transport; `--write` persists like a real sync) |
+| Verify the CrowdVolt token end to end (transport + field mapping + renewal) | `.venv\Scripts\python crowdvolt_sales.py --doctor` |
+| Install a fresh CrowdVolt token on the VPS | `bash scripts/setup_crowdvolt_token.sh` (paste the output of `scripts/cv_token_grab.js`, run in a logged-in browser's DevTools console) |
 
 There is no test suite, no linter, and no build step — the project ships as plain Python scripts.
 

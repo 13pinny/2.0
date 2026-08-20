@@ -66,6 +66,7 @@ needs one look at a real logged-in request first. Not guessed at here.
 CLI:
 
     .venv\\Scripts\\python crowdvolt_sales.py            # dry-run, print rows
+    .venv\\Scripts\\python crowdvolt_sales.py --doctor   # full end-to-end check
     .venv\\Scripts\\python crowdvolt_sales.py --check    # verify the token only
     .venv\\Scripts\\python crowdvolt_sales.py --raw      # dump raw JSON per tab
     .venv\\Scripts\\python crowdvolt_sales.py --write    # persist like a real sync
@@ -373,6 +374,131 @@ def check_token(session=None):
     return session.api(f"{API}/api/buy_sell_history/seller_counts")
 
 
+# --- doctor ---------------------------------------------------------------
+
+_ALL_ALIASES = set(
+    _F_ORDER + _F_EVENT + _F_EVENT_DATE + _F_VENUE + _F_QTY + _F_TYPE
+    + _F_PRICE_PER + _F_PAYOUT + _F_SALE_DATE)
+
+# Columns that must populate for the sync to be worth anything. A column here
+# that is empty on EVERY row means an alias missed — almost certainly a
+# CrowdVolt rename, which the report names explicitly rather than leaving as a
+# quietly blank column.
+_CRITICAL = ("order_id", "event_name", "qty", "sale_price", "sale_date_iso")
+
+
+def _refresh_probe(token):
+    """Can the session be renewed without a browser? POST auth/refresh takes
+    an empty body and no captcha, but rejects anonymous callers with 403
+    'missing required header' — this finds which credential shape it wants,
+    using the real session, so renewal can be automated instead of guessed.
+    Read-only: refresh mints a new access token, it never invalidates one."""
+    attempts = (
+        ("bearer", {"Authorization": f"Bearer {token}"}),
+        ("cookie", {"Cookie": f"stytch_session={token}"}),
+        ("bearer+cookie", {"Authorization": f"Bearer {token}",
+                           "Cookie": f"stytch_session={token}"}),
+    )
+    out = []
+    for label, extra in attempts:
+        headers = dict(_API_HEADERS)
+        headers["x-pokedex"] = POKEDEX
+        headers["Content-Type"] = "application/json"
+        headers.update(extra)
+        req = urllib.request.Request(
+            f"{API}/api/auth/refresh", data=b"{}", headers=headers, method="POST")
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            with opener.open(req, timeout=20) as resp:
+                body = resp.read().decode("utf-8", "replace")
+            has_token = '"access_token"' in body or '"accessToken"' in body
+            out.append((label, resp.status, "access_token returned" if has_token
+                        else body[:80]))
+        except urllib.error.HTTPError as e:
+            body = (e.read() or b"").decode("utf-8", "replace")
+            out.append((label, e.code, body[:80]))
+        except urllib.error.URLError as e:
+            out.append((label, "-", str(e.reason)[:80]))
+    return out
+
+
+def doctor():
+    """End-to-end check of the token transport. Returns True when sales
+    tracking is actually working. Prints a report either way — the point is
+    that every failure mode names itself instead of showing up as zero rows."""
+    ok = True
+    print("CrowdVolt sales — doctor\n" + "=" * 58)
+
+    # 1. credentials
+    token, fingerprint = credentials()
+    if not token:
+        print(f"[FAIL] no token. Set KARTIS_CV_TOKEN in {ENV_FILE} or the "
+              "environment.\n       Get it by pasting scripts/cv_token_grab.js "
+              "into the DevTools\n       console of a browser logged into "
+              "crowdvolt.com.")
+        return False
+    print(f"[ ok ] token configured ({len(token)} chars), "
+          f"fingerprint {'set' if fingerprint else 'absent (fine)'}")
+
+    session = HttpSession(token, fingerprint)
+
+    # 2. transport
+    try:
+        counts = session.api(f"{API}/api/buy_sell_history/seller_counts")
+        print(f"[ ok ] api.crowdvolt.com accepted the token — no browser "
+              f"involved\n       seller_counts: {json.dumps(counts)[:120]}")
+    except CvSalesError as e:
+        print(f"[FAIL] {str(e)[:240]}")
+        return False
+
+    # 3. sales + field-mapping coverage
+    try:
+        raw_by_tab = fetch_raw(session)
+    except CvSalesError as e:
+        print(f"[FAIL] sales endpoints: {str(e)[:200]}")
+        return False
+    raw_rows = [r for rows in raw_by_tab.values() for r in rows
+                if isinstance(r, dict)]
+    rows = fetch_sales(session)
+    print(f"[ ok ] fetched {len(raw_rows)} raw rows -> {len(rows)} sales "
+          + ", ".join(f"{t}={len(v)}" for t, v in raw_by_tab.items()))
+
+    if not rows:
+        print("[note] no sales on the account right now, so the field mapping "
+              "could not be\n       checked. Re-run the doctor after the next "
+              "sale.")
+        return ok
+
+    filled = {k: sum(1 for r in rows if r.get(k) not in (None, ""))
+              for k in rows[0]}
+    blank = [k for k in _CRITICAL if filled.get(k, 0) == 0]
+    for k in _CRITICAL:
+        n = filled.get(k, 0)
+        print(f"       {k:<16} {n}/{len(rows)} rows populated"
+              + ("   <-- EMPTY" if n == 0 else ""))
+    if blank:
+        ok = False
+        seen_keys = sorted({k for r in raw_rows for k in r})
+        unmapped = [k for k in seen_keys if k not in _ALL_ALIASES]
+        print(f"[FAIL] these columns never populated: {', '.join(blank)}\n"
+              f"       CrowdVolt most likely renamed a field. Keys present in "
+              f"the API rows\n       that no alias claims: "
+              f"{', '.join(unmapped) or '(none)'}\n"
+              f"       Add the right name to the _F_* tuples at the top of "
+              f"this module.")
+    else:
+        print("[ ok ] every critical column populated — field mapping is good")
+
+    # 4. renewal
+    print("\n--- session renewal (auth/refresh) ---")
+    for label, status, detail in _refresh_probe(token):
+        mark = "ok  " if str(status) == "200" else "    "
+        print(f"[{mark}] {label:<14} -> {status}  {detail}")
+    print("       A 200 with access_token means renewal can be automated;\n"
+          "       otherwise re-paste the cookie when it lapses.")
+    return ok
+
+
 def _open_session(p):
     """Session on the CrowdVolt Chrome. Lives in crowdvolt_pricer so the
     Cloudflare-challenge handling and dead-tab reopen have exactly one
@@ -409,7 +535,7 @@ def _main():
         finally:
             session.close()
 
-    if "--check" in args and "--browser" not in args:
+    if ("--check" in args or "--doctor" in args) and "--browser" not in args:
         raise SystemExit(
             f"no CrowdVolt token configured — set KARTIS_CV_TOKEN in {ENV_FILE}\n"
             "(see 'Minting the token' in this module's docstring)")
@@ -428,6 +554,8 @@ def _main():
 
 
 def _run(session, args):
+    if "--doctor" in args:
+        raise SystemExit(0 if doctor() else 1)
     if "--check" in args:
         print(json.dumps(check_token(session), indent=2, default=str))
         return

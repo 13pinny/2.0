@@ -339,25 +339,32 @@ Cloudflare interstitial. `www.crowdvolt.com` served its full pages too.
 **Only the interactive login is gated.** So mint the session where Turnstile
 is happy (your own laptop) and just carry it to the box:
 
-1. In your normal desktop Chrome, log into crowdvolt.com.
-2. DevTools -> Application -> Cookies -> `https://www.crowdvolt.com`: copy
-   the **`stytch_session`** value. From Local Storage, optionally copy
-   `fingerprint_id` too.
-3. On the VPS (chmod 600 — this is a live session credential):
+1. In your normal desktop Chrome, log into crowdvolt.com. Open DevTools
+   (F12) -> Console, paste the contents of **`scripts/cv_token_grab.js`**,
+   press Enter. It copies the two `KARTIS_CV_*` lines to your clipboard.
+
+2. On the VPS, paste them into the installer, then Ctrl-D:
 
    ```sh
-   sudo -u kartis bash -c 'cat > /opt/kartis/.env.crowdvolt <<EOF
-   KARTIS_CV_TOKEN=<stytch_session value>
-   KARTIS_CV_FINGERPRINT=<fingerprint_id value>
-   EOF'
-   sudo chmod 600 /opt/kartis/.env.crowdvolt
+   bash /opt/kartis/scripts/setup_crowdvolt_token.sh
    ```
 
-4. Verify — this prints the /selling tab counts and touches no browser:
+   It writes `/opt/kartis/.env.crowdvolt` as `kartis:kartis` 0600 (backing up
+   any previous token to `.prev`), runs the doctor, and restarts
+   `kartis-flask`. If the token is rejected it says so and leaves the backup
+   in place rather than reporting success.
+
+To re-check at any time — this touches no browser at all:
 
    ```sh
-   sudo -u kartis /opt/kartis/.venv/bin/python /opt/kartis/crowdvolt_sales.py --check
+   sudo -u kartis /opt/kartis/.venv/bin/python /opt/kartis/crowdvolt_sales.py --doctor
    ```
+
+   The doctor verifies the token, fetches sales, and reports **per-column
+   fill rates**. That last part matters: if CrowdVolt ever renames a field,
+   the doctor names the exact new key to add to the `_F_*` alias tuples
+   instead of leaving a quietly blank column. It also probes `auth/refresh`
+   to show whether renewal can be automated.
 
 With a token present the hourly sync uses it and **never opens Chrome for
 CrowdVolt at all** — no Xvfb, no noVNC, no residential proxy, no Turnstile.
