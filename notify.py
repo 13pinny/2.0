@@ -1016,13 +1016,14 @@ def notify_site_event(kind, ev, old=None):
     a paper trail. `kind` is 'new' (event just appeared on the site's
     listing feed), 'newdate' (kupat/tm — a new performance appeared
     under an already-known event page; ev['new_perfs'] lists the added
-    dates) or 'onsale' (a listed-but-not-selling event's sale
-    opened — for kupat that means the show got PROMOTED TO THE
-    kupat.co.il HOMEPAGE, the site's "officially on sale" moment). `ev` is
-    a normalized dict from kupat_events/tm_events fetch_events(); an
-    `image` URL, when present (kupat homepage banner), is attached as the
-    embed graphic. `old` is the previously stored DB row (unused, kept
-    for parity with notify_pacha_event)."""
+    dates) or 'onsale' (a listed-but-not-selling event's sale opened — for
+    kupat that means its published ticket-sale window has now started).
+    `ev` is a normalized dict from kupat_events/tm_events fetch_events();
+    an `image` URL, when present (the kupat CMS show banner), is attached
+    as the embed graphic, and a `sale_start` on a not-yet-selling event is
+    shown so a pre-announced sale is actionable before it opens. `old` is
+    the previously stored DB row (unused, kept for parity with
+    notify_pacha_event)."""
     discord_url = _discord_webhook("new_events")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
@@ -1057,22 +1058,18 @@ def notify_site_event(kind, ev, old=None):
             lines.append(line)
         color = 0xF39C12
     elif kind == "onsale":
-        if ev.get("source") == "kupat":
-            title = f"🏠 Kupat: {name} is now on the homepage — sale is official"
-        else:
-            title = f"🎟️ {label}: {name} is now ON SALE"
+        title = f"🎟️ {label}: {name} is now ON SALE"
         color = 0x56D364
-    elif ev.get("homepage_teaser"):
-        title = f"🖼️ Kupat homepage: new show graphic — {name}"
-        color = 0xB57EDC
-        lines.append("Announced on the homepage, but no ticket link in the "
-                     "catalog yet — sale likely opens soon.")
     else:
         title = f"🎫 New {label} event — {name}"
         color = 0xE91E63
         if ev.get("on_sale") is False:
-            lines.append("⏳ Not on sale yet — listed only." +
-                         (" Watch for the homepage ping." if ev.get("source") == "kupat" else ""))
+            if ev.get("sale_start"):
+                lines.append(f"⏳ Not on sale yet — sale opens **{ev['sale_start']}**.")
+            else:
+                lines.append("⏳ Not on sale yet — listed only." +
+                             (" Watch for the on-sale ping."
+                              if ev.get("source") == "kupat" else ""))
 
     embed = {
         "title": title[:250],

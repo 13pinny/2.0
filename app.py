@@ -660,7 +660,9 @@ def run_il_events():
 
     Gating mirrors the Pacha monitor: first tick ever per source is a
     baseline — store everything, ping nothing. master_paused skips the tick
-    entirely; master_muted keeps state current but skips the Discord sends."""
+    entirely; master_muted keeps state current but skips the Discord sends.
+    A source that redefines what on_sale MEANS bumps its ONSALE_BASIS, which
+    buys one more silent tick for the on_sale column alone (see below)."""
     if not _il_events_lock.acquire(blocking=False):
         return
     _last_il_events["running"] = True
@@ -700,6 +702,26 @@ def run_il_events():
                 baselines.append(source)
             counts[source] = len(events)
 
+            # A source can change what `on_sale` MEANS — kupat's moved from
+            # "promoted on the WordPress homepage" to the CMS's real
+            # ticket-sale-start when www.kupat.co.il was rebuilt (2026-08).
+            # Re-deriving every stored row against the new basis would fire
+            # an 'onsale' burst for the events the old signal simply never
+            # caught, so the first tick under a new basis stores the fresh
+            # values silently — the same trick a NULL perfs_json plays for
+            # dates — and only the tick after that re-arms the flip ping.
+            # Gated on the source's own signal working this tick: on a
+            # fetch failure on_sale falls back to the stored value, and
+            # banking the migration off that would just defer the burst.
+            basis = getattr(mod, "ONSALE_BASIS", None)
+            basis_key = f"il_events_onsale_basis_{source}"
+            signal_ok = any(ev.get("on_sale") is not None for ev in events)
+            rebasis = bool(basis) and signal_ok and not baseline \
+                and db.setting_get(basis_key) != basis
+            if rebasis:
+                print(f"[il-events] {source} on_sale basis -> {basis}: re-baselining "
+                      f"{len(seen)} stored rows silently (no 'onsale' pings)")
+
             for ev in events:
                 old = seen.get(ev["event_key"])
                 if ev.get("on_sale") is None:
@@ -711,10 +733,13 @@ def run_il_events():
                         except Exception as e:
                             print(f"[il-events] {source} check_on_sale({ev['event_key']}) failed: {e}")
                             ev["on_sale"] = True if old is None else bool(old["on_sale"])
-                # Sale-opened is a one-way latch: a show dropping off the
-                # kupat homepage (rotation, hiccup) or a TM status blip must
-                # not re-arm the 'onsale' ping and fire again on its return.
-                if old is not None and old["on_sale"] and not ev["on_sale"]:
+                # Sale-opened is a one-way latch: a kupat show vanishing
+                # from the CMS (unpublished, hiccup) or a TM status blip
+                # must not re-arm the 'onsale' ping and fire on its return.
+                # A basis change is the deliberate exception — that tick is
+                # allowed to correct a stored True back down to False.
+                if old is not None and old["on_sale"] and not ev["on_sale"] \
+                        and not rebasis:
                     ev["on_sale"] = True
                 if perf_map is not None and ev["event_key"] in perf_map:
                     cur = perf_map[ev["event_key"]]
@@ -736,13 +761,15 @@ def run_il_events():
                     continue
                 if old is None:
                     pings.append(("new", ev, None))
-                elif not old["on_sale"] and ev["on_sale"]:
+                elif not old["on_sale"] and ev["on_sale"] and not rebasis:
                     pings.append(("onsale", ev, old))
 
             for ev in events:
                 db.site_events_upsert_seen(source, ev, now_iso)
                 if ev.get("_perf_union") is not None:
                     db.site_events_set_perfs(source, ev["event_key"], ev["_perf_union"])
+            if basis and signal_ok and db.setting_get(basis_key) != basis:
+                db.setting_set(basis_key, basis, now_iso)
             if baseline:
                 print(f"[il-events] {source} baseline stored: {len(events)} events, no pings")
 
