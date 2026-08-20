@@ -281,24 +281,42 @@ _API_HEADERS = {
 POKEDEX = "0376"
 
 
-def _load_env_file():
-    """systemd/.env passes these in; for a bare CLI run read .env.crowdvolt
-    (gitignored — it holds a live session token)."""
-    if os.environ.get("KARTIS_CV_TOKEN") or not ENV_FILE.exists():
-        return
-    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+def _read_env_file():
+    """Parsed .env.crowdvolt, or {} when there isn't one.
+
+    Deliberately re-read on EVERY call rather than cached into os.environ:
+    the file is two lines, and the whole point of it is that a token can be
+    rotated while the app runs. Seeding os.environ once would pin the first
+    token for the life of the gunicorn worker, so pasting a fresh cookie
+    would appear to do nothing until a restart — the exact failure this
+    module exists to avoid.
+    """
+    out = {}
+    try:
+        text = ENV_FILE.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return out
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+        out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
 
 
 def credentials():
-    """(token, fingerprint) or (None, None) when no token is configured."""
-    _load_env_file()
-    token = (os.environ.get("KARTIS_CV_TOKEN") or "").strip()
-    fingerprint = (os.environ.get("KARTIS_CV_FINGERPRINT") or "").strip()
+    """(token, fingerprint) or (None, None) when no token is configured.
+
+    The file wins over the environment when it exists — it's the rotatable
+    surface, and `setup_crowdvolt_token.sh` writes it. With no file we fall
+    back to the process env so systemd/.env still works.
+    """
+    env = _read_env_file()
+    token = (env.get("KARTIS_CV_TOKEN")
+             or os.environ.get("KARTIS_CV_TOKEN") or "").strip()
+    fingerprint = (env.get("KARTIS_CV_FINGERPRINT")
+                   or os.environ.get("KARTIS_CV_FINGERPRINT") or "").strip()
     return (token or None), (fingerprint or None)
 
 

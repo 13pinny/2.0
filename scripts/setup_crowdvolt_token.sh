@@ -52,15 +52,22 @@ echo
 
 sudo -u "$OWNER" "$PY" "$APP_DIR/crowdvolt_sales.py" --doctor || {
     echo
-    echo "The doctor reported a problem — the token was NOT accepted." >&2
-    echo "Most likely the cookie was copied from a logged-out tab, or it has" >&2
-    echo "already expired. Re-run cv_token_grab.js and try again." >&2
+    echo "The doctor reported a problem — read its output above; it names the" >&2
+    echo "failure rather than leaving you to guess:" >&2
+    echo "  * 'token_rejected' / 'auth_required' -> the cookie was copied from" >&2
+    echo "    a logged-out tab or has already expired. Re-run cv_token_grab.js." >&2
+    echo "    The previous token is still at $ENV_FILE.prev if you need it back." >&2
+    echo "  * 'these columns never populated' -> the token is FINE and sales" >&2
+    echo "    are being fetched; CrowdVolt renamed a field. The doctor prints" >&2
+    echo "    the exact new keys to add to the _F_* tuples in crowdvolt_sales.py." >&2
     exit 1
 }
 
 echo
 echo "CrowdVolt sales tracking is live over the token transport."
-echo "Restarting kartis-flask so the scheduler picks it up..."
+# The token is re-read from this file on every call, so a rotation takes
+# effect immediately — the restart is only so the scheduler picks up any
+# code change that came with it.
 sudo -n systemctl restart kartis-flask 2>/dev/null \
     && echo "kartis-flask restarted." \
     || echo "(couldn't restart kartis-flask automatically — run:"\
