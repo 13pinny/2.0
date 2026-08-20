@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — VG Sales</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+    --cyan: #0f766e; --pink: #e91e63; --vg: #0f766e;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--vg); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--vg); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.green { color: var(--green); }
+  .stat .value.zero { color: var(--muted); }
+  .stat .hint { font-size: 9px; color: var(--muted); letter-spacing: 1px; margin-top: 3px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+  input[type=text] { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; width: 220px; }
+  input#addurl { width: 320px; }
+  button { background: var(--vg); color: #fff; border: 0; font: inherit; font-size: 11px; letter-spacing: 1px; padding: 6px 14px; border-radius: 6px; cursor: pointer; text-transform: uppercase; }
+  button:disabled { background: var(--line-2); color: var(--muted); cursor: default; }
+  button.ghost { background: var(--bg-2); color: var(--muted); border: 1px solid var(--line-2); }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); white-space: nowrap; cursor: pointer; user-select: none; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th .arrow { color: var(--accent); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr.ev { cursor: pointer; }
+  tbody tr.ev:hover td { background: var(--bg-3); }
+  tr.detail td { background: var(--bg-2); padding: 4px 10px 12px 26px; font-size: 11px; color: var(--muted); }
+  tr.detail .sec { padding: 2px 0; }
+  tr.detail .sec b { color: var(--text); }
+  tr.detail .bar { display: inline-block; width: 90px; height: 6px; background: var(--bg-3); border-radius: 3px; margin: 0 8px; vertical-align: middle; overflow: hidden; }
+  tr.detail .bar i { display: block; height: 100%; background: var(--vg); }
+  tr.detail .rh { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
+  tr.detail .rh .rhh { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 3px; }
+  tr.detail .sale-row { padding: 1px 0; font-variant-numeric: tabular-nums; }
+  tr.detail .sale-row .ours { color: var(--vg); font-weight: 600; }
+  tr.detail .sale-row .base { color: var(--amber); }
+  tr.detail .unwatch { margin-top: 10px; }
+  .when { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .badge.listed { background: var(--vg); }
+  .badge.watch { background: var(--purple); }
+  .badge.err { background: var(--red); }
+  .vel { font-variant-numeric: tabular-nums; }
+  .vel.zero { color: var(--muted); }
+  .vel.hot { color: var(--green); font-weight: 600; }
+  .vel .star { color: var(--amber); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  .msg { background: #e6f4ea; border: 1px solid var(--green); color: var(--green); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>VG SALES</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales" class="active">VG SALES</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+  <div class="msg" id="msgbox"></div>
+
+  <div class="stats" id="totals"></div>
+  <p class="sub" id="statusline">—</p>
+
+  <h2>Events <span class="rel" style="font-size:10px;color:var(--muted)">(click a row for sections + recent sales)</span></h2>
+  <div class="controls">
+    <input type="text" id="q" placeholder="filter by artist…" />
+    <input type="text" id="addurl" placeholder="watch an event — paste viagogo …/E-12345 URL or id" />
+    <button id="addbtn">Watch</button>
+    <button id="runbtn" class="ghost">Check now</button>
+  </div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr id="head"></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+  <p class="sub" id="footnote"></p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+const money = n => (n == null) ? '—' : '$' + n.toLocaleString();
+
+let DATA = null;
+let sortKey = 'w24h';
+let sortDir = -1;
+const open = new Set();
+
+const COLS = [
+  { key:'name',  label:'Event' },
+  { key:'date',  label:'Date' },
+  { key:'src',   label:'Src' },
+  { key:'ours',  label:'Ours', num:true },
+  { key:'w1h',   label:'+1h', num:true },
+  { key:'w6h',   label:'+6h', num:true },
+  { key:'w24h',  label:'+24h', num:true },
+  { key:'w3d',   label:'+3d', num:true },
+  { key:'w7d',   label:'+7d', num:true },
+  { key:'total', label:'Σ Sold', num:true },
+  { key:'med',   label:'Med $', num:true },
+  { key:'last',  label:'Last sale' },
+];
+
+function sortVal(e, key){
+  const w = k => { const v = (e.windows||{})[k]; return v && v.sold != null ? v.sold : -1; };
+  switch(key){
+    case 'name': return (e.name||'').toLowerCase();
+    case 'date': return e.date_iso || '9999';
+    case 'src': return (e.listed ? 0 : 2) + (e.watch ? 0 : 1);
+    case 'ours': return e.our_listings || 0;
+    case 'w1h': return w('1h'); case 'w6h': return w('6h'); case 'w24h': return w('24h');
+    case 'w3d': return w('3d'); case 'w7d': return w('7d');
+    case 'total': return e.total_sold == null ? -1 : e.total_sold;
+    case 'med': return e.median_price == null ? -1 : e.median_price;
+    case 'last': return e.last_sale_at || '';
+    default: return 0;
+  }
+}
+
+function renderHead(){
+  $('head').innerHTML = COLS.map(c => {
+    const arrow = sortKey === c.key ? `<span class="arrow">${sortDir < 0 ? '▼' : '▲'}</span>` : '';
+    return `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label} ${arrow}</th>`;
+  }).join('');
+  $('head').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.key;
+    if (!k) return;
+    if (sortKey === k) sortDir = -sortDir;
+    else { sortKey = k; sortDir = (k === 'name' || k === 'date') ? 1 : -1; }
+    render();
+  });
+}
+
+function velCell(w){
+  if (!w) return '<td class="num vel zero">—</td>';
+  const star = w.partial ? '<span class="star" title="tracking window shorter than this column">*</span>' : '';
+  const cls = w.sold === 0 ? 'zero' : (w.sold >= 10 ? 'hot' : '');
+  const title = w.count ? ` title="${w.count} sale${w.count>1?'s':''}"` : '';
+  return `<td class="num vel ${cls}"${title}>${fmt(w.sold)}${star}</td>`;
+}
+
+function fmtAgo(iso){
+  if (!iso) return '—';
+  const secs = (Date.now() - new Date(iso).getTime())/1000;
+  if (secs < 90) return 'just now';
+  if (secs < 5400) return Math.round(secs/60)+'m ago';
+  if (secs < 172800) return Math.round(secs/3600)+'h ago';
+  return Math.round(secs/86400)+'d ago';
+}
+
+function detailRows(e){
+  let html = '';
+  const secs = e.sections || [];
+  if (secs.length) {
+    const maxSold = Math.max(...secs.map(s => s.sold || 0), 1);
+    html += secs.map(s =>
+      `<div class="sec"><b>${escape(s.section)}</b> — ${fmt(s.sold)} sold in ${s.count} sale${s.count>1?'s':''} (7d)` +
+      `<span class="bar"><i style="width:${Math.round((s.sold||0)/maxSold*100)}%"></i></span>` +
+      `med ${money(s.median)} · last ${fmtAgo(s.last_at)}</div>`).join('');
+  } else {
+    html += '<div class="sec">No sales observed in the last 7 days.</div>';
+  }
+  const rec = e.recent || [];
+  if (rec.length) {
+    html += `<div class="rh"><div class="rhh">Recent sales — newest first (times = when the tracker first saw the sale)</div>` +
+      rec.map(r => {
+        const bits = [escape(r.section || '?')];
+        if (r.row_label) bits.push('row ' + escape(r.row_label));
+        if (r.seats) bits.push('seats ' + escape(r.seats));
+        return `<div class="sale-row">${fmtAgo(r.observed_at)} — ${bits.join(' · ')} · qty ${fmt(r.qty)} @ ${money(r.price)}` +
+               (r.is_ours ? ' <span class="ours">OURS</span>' : '') +
+               (r.baseline ? ' <span class="base" title="from the first fetch — sale time unknown">baseline</span>' : '') +
+               `</div>`;
+      }).join('') + '</div>';
+  }
+  if (e.last_error) html += `<div class="rh"><span class="badge err">last fetch failed</span> ${escape(e.last_error)}</div>`;
+  if (e.watch) html += `<div class="unwatch"><button class="ghost" onclick="unwatch('${escape(e.event_id)}');event.stopPropagation()">Unwatch</button></div>`;
+  return html;
+}
+
+function render(){
+  if (!DATA) return;
+  renderHead();
+  const q = ($('q').value || '').trim().toLowerCase();
+  let evs = (DATA.events || []);
+  if (q) evs = evs.filter(e => ((e.name||'') + ' ' + (e.venue||'')).toLowerCase().includes(q));
+  evs.sort((a,b) => { const va = sortVal(a, sortKey), vb = sortVal(b, sortKey);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir; });
+  if (!evs.length) {
+    $('rows').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">Nothing tracked yet — events appear after the first tick (your listings are auto-tracked; paste a viagogo URL above to watch anything else).</td></tr>`;
+    return;
+  }
+  $('rows').innerHTML = evs.map(e => {
+    const src = (e.listed ? '<span class="badge listed">LISTED</span> ' : '') +
+                (e.watch ? '<span class="badge watch">WATCH</span>' : '') +
+                (e.last_error ? ' <span class="badge err" title="' + escape(e.last_error) + '">!</span>' : '');
+    const when = e.date_iso ? escape(e.date_iso.slice(0,10)) : escape(e.date_text || '—');
+    const opened = open.has(e.event_id);
+    return `<tr class="ev" data-id="${escape(e.event_id)}">
+      <td><b>${escape(e.name)}</b>${e.venue ? `<div class="when">${escape(e.venue)}</div>` : ''}</td>
+      <td class="when">${when}</td>
+      <td>${src}</td>
+      <td class="num">${e.our_listings || '—'}</td>
+      ${velCell((e.windows||{})['1h'])}${velCell((e.windows||{})['6h'])}${velCell((e.windows||{})['24h'])}${velCell((e.windows||{})['3d'])}${velCell((e.windows||{})['7d'])}
+      <td class="num"${e.tracking_since ? ` title="since ${escape(e.tracking_since.slice(0,10))}"` : ''}>${fmt(e.total_sold)}</td>
+      <td class="num">${money(e.median_price)}</td>
+      <td class="when">${fmtAgo(e.last_sale_at)}</td>
+    </tr>` + (opened ? `<tr class="detail"><td colspan="${COLS.length}">${detailRows(e)}</td></tr>` : '');
+  }).join('');
+  $('rows').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
+    const id = tr.dataset.id;
+    open.has(id) ? open.delete(id) : open.add(id);
+    render();
+  });
+}
+
+function renderTotals(){
+  const evs = DATA.events || [];
+  const sum = f => { const v = evs.map(f).filter(x => x != null); return v.length ? v.reduce((a,b)=>a+b,0) : null; };
+  const w = key => sum(e => { const x=(e.windows||{})[key]; return x ? x.sold : null; });
+  const tiles = [
+    ['Events tracked', evs.length, evs.filter(e=>e.watch).length + ' watched'],
+    ['Sold last 24h', w('24h'), 'tickets, market-wide'],
+    ['Sold last 7d', w('7d'), ''],
+    ['Σ since tracking', sum(e => e.total_sold), 'excludes baseline rows'],
+    ['Our sales seen', sum(e => (e.recent||[]).filter(r=>r.is_ours && !r.baseline).length), 'in the recent windows'],
+  ];
+  $('totals').innerHTML = tiles.map(([l,v,h]) =>
+    `<div class="stat"><div class="label">${l}</div><div class="value ${l.includes('24h') ? 'green' : ''}${v ? '' : ' zero'}">${fmt(v)}</div>${h ? `<div class="hint">${h}</div>` : ''}</div>`
+  ).join('');
+  const s = DATA.status || {};
+  $('statusline').textContent = `Tracker: ${s.enabled ? 'on' : 'OFF'} · every ${s.interval_minutes} min · last tick ${fmtAgo(s.at)}` +
+    ` · ${s.fetched??0}/${s.targets??0} fetched, ${s.skipped_fresh??0} fresh-skipped, ${s.new_sales??0} new, ${s.errors??0} errors` +
+    (s.overflows ? ` · ⚠ ${s.overflows} overflow (>10 sales between checks)` : '') +
+    (s.error ? ` · ⚠ ${s.error}` : '');
+  $('meta').textContent = `${evs.length} events`;
+  $('footnote').textContent = 'Data = the "past ten sales" grid behind the magnifier on inv.viagogo (all sellers, USD per ticket; viagogo’s prices there are approximate). Sale times are when the tracker first saw the sale — accurate to the poll interval. +1h/+6h/… sum tickets sold in that window; * = tracking started inside the window. Baseline rows (an event’s first fetch) show in the detail view but never count in windows. Your listed events are tracked automatically; WATCH rows are manual.';
+}
+
+async function post(url, body){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+function flash(box, text){
+  $(box).textContent = text;
+  $(box).style.display = 'block';
+  setTimeout(() => { $(box).style.display = 'none'; }, 6000);
+}
+
+async function addWatch(){
+  const url = ($('addurl').value || '').trim();
+  if (!url) return;
+  $('addbtn').disabled = true;
+  try {
+    const j = await post('/api/vgsales/watch', {url});
+    flash('msgbox', j.warning ? `Added ${j.added} — ${j.warning}` : `Watching ${j.name || j.added} (${j.window} sales in the current feed)`);
+    $('addurl').value = '';
+    await load();
+  } catch (e) {
+    flash('errbox', 'Watch failed: ' + e.message);
+  } finally {
+    $('addbtn').disabled = false;
+  }
+}
+
+async function unwatch(eid){
+  try {
+    await post('/api/vgsales/unwatch', {event_id: eid});
+    flash('msgbox', 'Unwatched ' + eid);
+    await load();
+  } catch (e) {
+    flash('errbox', 'Unwatch failed: ' + e.message);
+  }
+}
+
+async function runNow(){
+  $('runbtn').disabled = true;
+  $('runbtn').textContent = 'Checking…';
+  try {
+    await post('/api/vgsales/run-now');
+    await load();
+  } catch (e) {
+    flash('errbox', 'Run failed: ' + e.message);
+  } finally {
+    $('runbtn').disabled = false;
+    $('runbtn').textContent = 'Check now';
+  }
+}
+
+async function load(){
+  try {
+    const r = await fetch('/api/vgsales');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    DATA = await r.json();
+    $('errbox').style.display = 'none';
+    renderTotals(); render();
+  } catch (e) {
+    $('errbox').textContent = 'Failed to load: ' + e.message;
+    $('errbox').style.display = 'block';
+  }
+}
+$('q').addEventListener('input', render);
+$('addbtn').onclick = addWatch;
+$('addurl').addEventListener('keydown', e => { if (e.key === 'Enter') addWatch(); });
+$('runbtn').onclick = runNow;
+load();
+setInterval(load, 120000);
+</script>
+</body>
+</html>

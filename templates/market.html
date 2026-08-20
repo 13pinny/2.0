@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Israel Market</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df; --cyan: #0f766e;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.zero { color: var(--muted); }
+  .stat .partial { font-size: 9px; color: var(--amber); letter-spacing: 1px; margin-top: 3px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+  .chip { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--muted); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 4px 12px; border-radius: 14px; cursor: pointer; }
+  .chip.on { color: var(--accent); border-color: var(--accent); }
+  input[type=text] { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; }
+  input#q { width: 220px; }
+  input#addUrl { width: 320px; max-width: 60vw; }
+  button.act { background: var(--bg-2); border: 1px solid var(--accent); color: var(--accent); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 14px; border-radius: 6px; cursor: pointer; }
+  button.act:disabled { opacity: .5; cursor: wait; }
+  .manual-list { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .manual-list .x { color: var(--red); cursor: pointer; margin-left: 6px; text-decoration: none; }
+  .hidden-list { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .hidden-list .back { color: var(--accent); cursor: pointer; margin-left: 5px; text-decoration: none; }
+  a.mute { color: var(--line-2); text-decoration: none; margin-left: 7px; font-size: 11px; visibility: hidden; }
+  tbody tr:hover a.mute { visibility: visible; }
+  a.mute:hover { color: var(--red); }
+  @media (hover: none) { a.mute { visibility: visible; } }
+  #hideMenu { position: absolute; display: none; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.15); z-index: 30; padding: 6px; }
+  #hideMenu .title { font-size: 10px; color: var(--muted); padding: 2px 8px 6px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #hideMenu button { display: block; width: 100%; text-align: left; background: none; border: 0; font: inherit; font-size: 12px; color: var(--text); padding: 6px 10px; border-radius: 5px; cursor: pointer; }
+  #hideMenu button:hover { background: var(--bg-3); color: var(--red); }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); white-space: nowrap; cursor: pointer; user-select: none; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th .arrow { color: var(--accent); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tbody tr.hotrow td { background: rgba(86, 211, 100, 0.06); }
+  tbody tr.hotrow:hover td { background: rgba(86, 211, 100, 0.11); }
+  a.tm-link { color: var(--accent); text-decoration: none; }
+  a.tm-link:hover { text-decoration: underline; }
+  .when { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .src { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+  .src.kupat { color: var(--cyan); }
+  .src.ticketmaster { color: var(--accent); }
+  .src.tickchak { color: var(--purple); }
+  .src.zappa { color: var(--orange); }
+  .src.pacha { color: #e91e63; }
+  .src.dice { color: #00c2ff; }
+  .src.posh { color: #b3115a; }
+  .src.leap { color: #0b4fa8; }
+  .src.eventim { color: #12662f; }
+  .src.shotgun { color: #7a3ecb; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; }
+  .badge.available { background: #16a34a; }
+  .badge.lasttickets { background: #d97706; }
+  .badge.soldout { background: #dc2626; }
+  .badge.closed { background: #8a949e; }
+  .badge.unknown { background: #888; }
+  .badge.waitlist { background: #7c3aed; }
+  .pct { font-size: 10px; color: var(--muted); }
+  .vel { font-variant-numeric: tabular-nums; }
+  .vel.zero { color: var(--muted); }
+  .vel.hot { color: var(--green); font-weight: 600; }
+  .vel .star { color: var(--amber); }
+  button.watchbtn { background: var(--bg-2); border: 1px solid var(--accent); color: var(--accent); font: inherit; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; padding: 2px 10px; border-radius: 10px; cursor: pointer; white-space: nowrap; }
+  button.watchbtn:hover { background: var(--accent); color: #fff; }
+  button.watchbtn:disabled { opacity: .5; cursor: wait; }
+  button.watchbtn.failed { border-color: var(--red); color: var(--red); }
+  a.watchon { color: var(--green); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; text-decoration: none; white-space: nowrap; }
+  a.watchon:hover { text-decoration: underline; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  .note { font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>ISRAEL MARKET</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market" class="active">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+
+  <h2>Tickets sold (whole market)</h2>
+  <p class="sub" id="totalsSub">—</p>
+  <div class="stats" id="totals"></div>
+
+  <h2>Events</h2>
+  <div class="controls" id="chips"></div>
+  <div class="controls">
+    <input type="text" id="q" placeholder="filter by name / venue…" />
+    <input type="text" id="addUrl" placeholder="tickchak or dice.fm event URL to track…" />
+    <button class="act" id="addBtn">Track</button>
+    <span class="note" id="addNote"></span>
+  </div>
+  <div class="manual-list" id="manualList"></div>
+  <div class="hidden-list" id="hiddenList"></div>
+  <div id="hideMenu"></div>
+  <div class="tablewrap">
+  <table>
+    <thead>
+      <tr id="head"></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+  <p class="sub" id="footnote"></p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const WIN_LABELS = { '1h':'Last hour', '6h':'Last 6 hours', '24h':'Last 24 hours', '3d':'Last 3 days', '7d':'Last 7 days' };
+const SRC_LABELS = { kupat:'Kupat', ticketmaster:'TM', tickchak:'Tickchak', zappa:'Zappa', pacha:'Pacha', dice:'DICE',
+                     posh:'Posh', leap:'Leap', eventim:'Eventim', shotgun:'Shotgun' };
+const CUR_SYMBOLS = { ILS:'₪', USD:'$' };
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+const HOT_24H = 25;   // 24h-sold at/above this highlights the row
+
+let DATA = null;
+let srcFilter = 'all';
+let sortKey = 'w24h';
+let sortDir = -1;
+
+const COLS = [
+  { key:'name',  label:'Event' },
+  { key:'venue', label:'Venue' },
+  { key:'date',  label:'Date' },
+  { key:'src',   label:'Source' },
+  { key:'status',label:'Status' },
+  { key:'left',  label:'Left', num:true },
+  { key:'w1h',   label:'+1h', num:true },
+  { key:'w6h',   label:'+6h', num:true },
+  { key:'w24h',  label:'+24h', num:true },
+  { key:'w3d',   label:'+3d', num:true },
+  { key:'w7d',   label:'+7d', num:true },
+  { key:'scum',  label:'Σ Sold', num:true },
+  { key:'price', label:'Min', num:true },
+  { key:'watch', label:'' },
+];
+// Sources that have a drop-checker module — the WATCH button shows for these.
+const WATCHABLE = new Set(['ticketmaster','kupat','tickchak','dice']);
+
+function fmtAgo(iso){
+  if (!iso) return '';
+  const secs = (Date.now() - new Date(iso).getTime())/1000;
+  if (secs < 90) return 'just now';
+  if (secs < 5400) return Math.round(secs/60)+'m ago';
+  if (secs < 129600) return Math.round(secs/3600)+'h ago';
+  return Math.round(secs/86400)+'d ago';
+}
+
+function velCell(wv){
+  if (!wv || wv.sold == null) return '<td class="num vel zero">—</td>';
+  const cls = wv.sold > 0 ? 'vel hot' : 'vel zero';
+  const star = wv.partial ? '<span class="star" title="limited history — tracked for less than this window">*</span>' : '';
+  return `<td class="num ${cls}">${fmt(wv.sold)}${star}</td>`;
+}
+
+function watchCell(s){
+  if (s.watched)
+    return '<td><a class="watchon" href="/watchers" title="already on the watchers page">✓ watching</a></td>';
+  if (!WATCHABLE.has(s.source)) return '<td></td>';
+  const tip = s.source === 'ticketmaster' ? 'watch all dates of this event for drops' : 'watch this event for drops';
+  return `<td><button class="watchbtn" data-src="${escape(s.source)}" data-code="${escape(s.event_code)}" data-perf="${escape(s.perf_code)}" title="${tip}">watch</button></td>`;
+}
+
+function sortVal(s, key){
+  const w = k => { const v = (s.windows||{})[k]; return v && v.sold != null ? v.sold : -1; };
+  switch(key){
+    case 'name': return (s.name||'').toLowerCase();
+    case 'venue': return (s.venue||'').toLowerCase();
+    case 'date': return s.first_date_ms || Infinity;
+    case 'src': return s.source;
+    case 'status': return s.status||'';
+    case 'left': return s.available == null ? -1 : s.available;
+    case 'w1h': return w('1h');
+    case 'w6h': return w('6h');
+    case 'w24h': return w('24h');
+    case 'w3d': return w('3d');
+    case 'w7d': return w('7d');
+    case 'scum': return s.sold_cum == null ? -1 : s.sold_cum;
+    case 'price': return s.min_price == null ? Infinity : s.min_price;
+    case 'watch': return s.watched ? 1 : 0;
+    default: return 0;
+  }
+}
+
+function renderHead(){
+  $('head').innerHTML = COLS.map(c => {
+    const arrow = sortKey === c.key ? `<span class="arrow">${sortDir < 0 ? '▼' : '▲'}</span>` : '';
+    return `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label} ${arrow}</th>`;
+  }).join('');
+  $('head').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.key;
+    if (sortKey === k) sortDir = -sortDir;
+    else { sortKey = k; sortDir = (k === 'name' || k === 'venue' || k === 'src' || k === 'date') ? 1 : -1; }
+    render();
+  });
+}
+
+function render(){
+  if (!DATA) return;
+  renderHead();
+  const q = ($('q').value || '').trim().toLowerCase();
+  let rows = (DATA.shows || []).filter(s => s.status !== 'past');
+  if (srcFilter !== 'all') rows = rows.filter(s => s.source === srcFilter);
+  if (q) rows = rows.filter(s => ((s.name||'') + ' ' + (s.venue||'')).toLowerCase().includes(q));
+  rows.sort((a,b) => {
+    const va = sortVal(a, sortKey), vb = sortVal(b, sortKey);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir;
+  });
+  if (!rows.length) {
+    $('rows').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">Nothing tracked yet — the first sweep populates this within the hour (or POST /api/market/run-now).</td></tr>`;
+    return;
+  }
+  $('rows').innerHTML = rows.map(s => {
+    const total = s.total, avail = s.available;
+    const pct = (total && avail != null) ? ((total - avail) / total * 100).toFixed(1) : null;
+    const leftCell = avail == null ? '—' :
+      (total != null ? `<div>${fmt(avail)} / ${fmt(total)}</div><div class="pct">${pct}% sold</div>` : fmt(avail));
+    const st = s.status || 'unknown';
+    const stLabel = st === 'lasttickets' ? 'Last tickets' : st === 'soldout' ? 'Sold out' : st.charAt(0).toUpperCase()+st.slice(1);
+    const w24 = (s.windows||{})['24h'];
+    const hot = w24 && w24.sold >= HOT_24H ? ' class="hotrow"' : '';
+    const name = s.name || s.event_code;
+    const err = s.last_error ? ` title="${escape(s.last_error)}"` : '';
+    return `<tr${hot}${err}>
+      <td><a class="tm-link" href="${escape(s.url||'#')}" target="_blank" rel="noopener">${escape(name)}</a><a class="mute" href="#" data-src="${escape(s.source)}" data-code="${escape(s.event_code)}" data-name="${escape(name)}" title="hide this event">✕</a></td>
+      <td class="when">${escape(s.venue||'')}</td>
+      <td class="when">${escape((s.date_text||'').slice(0,16))}</td>
+      <td><span class="src ${s.source}">${SRC_LABELS[s.source]||s.source}</span></td>
+      <td><span class="badge ${st}">${stLabel}</span></td>
+      <td class="num">${leftCell}</td>
+      ${velCell((s.windows||{})['1h'])}
+      ${velCell((s.windows||{})['6h'])}
+      ${velCell((s.windows||{})['24h'])}
+      ${velCell((s.windows||{})['3d'])}
+      ${velCell((s.windows||{})['7d'])}
+      <td class="num"${s.tracked_from ? ` title="sold since tracking began ${escape(s.tracked_from.slice(0,10))}"` : ''}>${s.sold_cum != null ? fmt(s.sold_cum) : '—'}</td>
+      <td class="num">${s.min_price != null ? (CUR_SYMBOLS[s.currency] || '₪') + fmt(s.min_price) : '—'}</td>
+      ${watchCell(s)}
+    </tr>`;
+  }).join('');
+}
+
+function renderChips(){
+  const counts = {};
+  (DATA.shows||[]).filter(s => s.status !== 'past').forEach(s => counts[s.source] = (counts[s.source]||0)+1);
+  const srcs = ['all', ...Object.keys(SRC_LABELS).filter(s => counts[s])];
+  $('chips').innerHTML = srcs.map(s =>
+    `<button class="chip ${srcFilter===s?'on':''}" data-src="${s}">${s==='all' ? 'All' : SRC_LABELS[s]}${s==='all' ? '' : ' · '+counts[s]}</button>`
+  ).join('');
+  $('chips').querySelectorAll('.chip').forEach(b => b.onclick = () => { srcFilter = b.dataset.src; renderChips(); render(); });
+}
+
+function fmtUntil(iso){
+  if (!iso) return 'always';
+  const days = Math.round((new Date(iso).getTime() - Date.now()) / 86400000);
+  if (days <= 1) return 'until tomorrow';
+  return `${days} more days`;
+}
+
+function renderHidden(){
+  const entries = (DATA && DATA.hidden) || [];
+  $('hiddenList').innerHTML = entries.length
+    ? `Hidden (${entries.length}): ` + entries.map(h =>
+        `${escape(h.name || h.event_code)} <span class="note">(${fmtUntil(h.hidden_until)})</span>` +
+        `<a class="back" href="#" data-src="${escape(h.source)}" data-code="${escape(h.event_code)}" title="unhide">↩</a>`
+      ).join(' · ')
+    : '';
+  $('hiddenList').querySelectorAll('.back').forEach(a => a.onclick = async ev => {
+    ev.preventDefault();
+    await fetch('/api/market/unhide', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({source: a.dataset.src, event_code: a.dataset.code})});
+    load();
+  });
+}
+
+const HIDE_CHOICES = [['1d','Hide for 1 day'],['1w','Hide for 1 week'],['1m','Hide for 1 month'],['always','Hide always']];
+let hideTarget = null;
+
+function openHideMenu(a){
+  hideTarget = {source: a.dataset.src, event_code: a.dataset.code, name: a.dataset.name};
+  const m = $('hideMenu');
+  m.innerHTML = `<div class="title">${escape(hideTarget.name)}</div>` +
+    HIDE_CHOICES.map(([d, label]) => `<button data-d="${d}">${label}</button>`).join('');
+  m.querySelectorAll('button').forEach(b => b.onclick = async () => {
+    m.style.display = 'none';
+    await fetch('/api/market/hide', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({...hideTarget, duration: b.dataset.d})});
+    load();
+  });
+  const r = a.getBoundingClientRect();
+  m.style.display = 'block';
+  m.style.left = Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - 190) + 'px';
+  m.style.top = (r.bottom + window.scrollY + 4) + 'px';
+}
+
+document.addEventListener('click', ev => {
+  const a = ev.target.closest('a.mute');
+  if (a) { ev.preventDefault(); openHideMenu(a); return; }
+  if (!ev.target.closest('#hideMenu')) $('hideMenu').style.display = 'none';
+});
+
+async function loadManual(){
+  try {
+    const r = await fetch('/api/market/manual', {cache:'no-store'});
+    const d = await r.json();
+    const entries = d.entries || [];
+    $('manualList').innerHTML = entries.length
+      ? 'Tracked manually: ' + entries.map(e =>
+          `${escape(e.code)} (${escape(e.source || 'tickchak')} ${e.kind})<a class="x" href="#" data-id="${e.id}" title="stop tracking">✕</a>`
+        ).join(' · ')
+      : '';
+    $('manualList').querySelectorAll('.x').forEach(a => a.onclick = async ev => {
+      ev.preventDefault();
+      await fetch('/api/market/remove', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id: Number(a.dataset.id)})});
+      loadManual();
+    });
+  } catch (e) { /* non-fatal */ }
+}
+
+async function addManual(){
+  const url = ($('addUrl').value || '').trim();
+  if (!url) return;
+  $('addBtn').disabled = true;
+  $('addNote').textContent = 'adding…';
+  try {
+    const r = await fetch('/api/market/add', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+    const d = await r.json();
+    if (d.error) { $('addNote').textContent = d.error; }
+    else {
+      $('addNote').textContent = d.warning || `tracking ${d.added.code} (${d.added.kind})`;
+      $('addUrl').value = '';
+      await Promise.all([load(), loadManual()]);
+    }
+  } catch (e) {
+    $('addNote').textContent = 'failed: ' + e;
+  } finally {
+    $('addBtn').disabled = false;
+  }
+}
+
+async function load(){
+  let d;
+  try {
+    const r = await fetch('/api/market', {cache:'no-store'});
+    d = await r.json();
+  } catch (e) {
+    $('errbox').style.display = 'block';
+    $('errbox').textContent = 'Failed to load /api/market: ' + e;
+    return;
+  }
+  $('errbox').style.display = 'none';
+  DATA = d;
+  const wins = d.windows || ['1h','6h','24h','3d','7d'];
+
+  $('totals').innerHTML = wins.map(k => {
+    const t = (d.totals || {})[k] || {};
+    const zero = !t.sold ? ' zero' : '';
+    const partial = t.partial ? '<div class="partial">* limited history</div>' : '';
+    return `<div class="stat"><div class="label">${WIN_LABELS[k] || k}</div>` +
+           `<div class="value${zero}">${fmt(t.sold)}</div>${partial}</div>`;
+  }).join('');
+
+  const live = (d.shows||[]).filter(s => s.status !== 'past');
+  const sweep = d.last_sweep || {};
+  const sweepTxt = sweep.running ? 'sweep running…' : (sweep.at ? 'sweep ' + fmtAgo(sweep.at) : 'sweep pending');
+  const errTxt = Object.entries(sweep.errors||{}).map(([s,e]) => `${s}: ${e}`).join(' · ');
+  $('totalsSub').textContent = `${live.length} events/dates tracked · ${sweepTxt}` + (errTxt ? ` · ⚠ ${errTxt}` : '');
+  $('meta').textContent = `${live.length} tracked`;
+  const since = live.map(s=>s.tracking_since).filter(Boolean).sort()[0];
+  $('footnote').textContent = since
+    ? `* "limited history" = the window is longer than how long that event has been tracked. Oldest data: ${new Date(since).toLocaleString()}. Hourly sweep; watched events also get 10-min snapshots. Σ Sold = actual sales counted since tracking began (Pacha only; hover for the start date).`
+    : 'First sweep pending — velocity columns fill in as snapshots accrue.';
+
+  renderChips();
+  renderHidden();
+  render();
+}
+
+$('rows').addEventListener('click', async ev => {
+  const b = ev.target.closest('button.watchbtn');
+  if (!b) return;
+  b.disabled = true;
+  b.textContent = 'adding…';
+  try {
+    const r = await fetch('/api/market/watch', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({source: b.dataset.src, event_code: b.dataset.code, perf_code: b.dataset.perf})});
+    const d = await r.json();
+    if (!r.ok && r.status !== 409) {   // 409 = already watching — treat as success
+      b.textContent = 'failed';
+      b.classList.add('failed');
+      b.title = d.error || ('HTTP ' + r.status);
+      b.disabled = false;
+      return;
+    }
+    await load();   // re-render; the row now shows "✓ watching"
+  } catch (e) {
+    b.textContent = 'failed';
+    b.classList.add('failed');
+    b.title = String(e);
+    b.disabled = false;
+  }
+});
+
+$('q').addEventListener('input', render);
+$('addBtn').addEventListener('click', addManual);
+$('addUrl').addEventListener('keydown', e => { if (e.key === 'Enter') addManual(); });
+
+load();
+loadManual();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

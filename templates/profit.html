@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Profit</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
+    --pink: #f06595;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 28px 0 10px; color: var(--text); }
+  h2:first-of-type { margin-top: 0; }
+  h2 .count { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 11px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 2px; letter-spacing: 0.5px; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  select:focus { outline: none; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 18px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  tbody tr:hover td { background: var(--bg-3); }
+  .bar-cell { display: inline-block; min-width: 60px; height: 4px; background: var(--line); position: relative; vertical-align: middle; margin-right: 6px; }
+  .bar-cell .fill { position: absolute; top: 0; left: 0; bottom: 0; }
+  .bar-cell .fill.lysted { background: var(--accent); }
+  .bar-cell .fill.viagogo { background: var(--orange); }
+  .bar-cell .fill.jerujam { background: var(--purple); }
+  .bar-cell .fill.crowdvolt { background: var(--pink); }
+  .src-mix { display: inline-flex; height: 4px; background: var(--line); width: 100px; vertical-align: middle; }
+  .src-mix span { display: inline-block; height: 100%; }
+  .src-mix .lysted { background: var(--accent); }
+  .src-mix .viagogo { background: var(--orange); }
+  .src-mix .jerujam { background: var(--purple); }
+  .src-mix .crowdvolt { background: var(--pink); }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .muted { color: var(--muted); }
+  .pct { font-size: 10px; letter-spacing: 0.5px; opacity: 0.75; }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>PROFIT</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit" class="active">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Tickets</div><div class="value" id="t-tickets">0</div></div>
+    <div class="stat"><div class="label">Sales</div><div class="value" id="t-sales">0</div></div>
+    <div class="stat"><div class="label">Events</div><div class="value" id="t-events">0</div></div>
+    <div class="stat amber"><div class="label">My Cost</div><div class="value" id="t-cost">$0</div></div>
+    <div class="stat green"><div class="label">Total Sales</div><div class="value" id="t-total">$0</div></div>
+    <div class="stat green"><div class="label">My Payout</div><div class="value" id="t-payout">$0</div></div>
+    <div class="stat"><div class="label">My ROI</div><div class="value" id="t-roi">—</div></div>
+    <div class="stat green"><div class="label">My Profit</div><div class="value" id="t-profit">$0</div><div class="sub" id="t-pct">—</div></div>
+  </div>
+
+  <div class="bar" style="margin-bottom:6px;">
+    <span class="muted" style="font-size:10px;letter-spacing:1.5px;align-self:center;">FILTER BY</span>
+    <div class="pill-bar" id="basis-pills" style="display:inline-flex;gap:4px;margin:0;">
+      <button type="button" class="pill active" data-basis="sale">Sale date</button>
+      <button type="button" class="pill" data-basis="event">Event date</button>
+    </div>
+    <div class="pill-bar" id="range-pills" style="display:inline-flex;gap:4px;margin:0;">
+      <button type="button" class="pill" data-range="3">Last 3</button>
+      <button type="button" class="pill" data-range="7">Last 7</button>
+      <button type="button" class="pill" data-range="14">Last 14</button>
+      <button type="button" class="pill" data-range="30">Last 30</button>
+      <button type="button" class="pill" data-range="ytd">YTD</button>
+      <button type="button" class="pill active" data-range="all">All time</button>
+      <button type="button" class="pill" data-range="custom">Custom</button>
+    </div>
+    <span id="custom-range" style="display:none; gap:4px; align-items:center;">
+      <input type="date" id="date-from" style="font-size:11px;padding:5px 8px;background:var(--bg-2);color:var(--text);border:1px solid var(--line);">
+      <span class="muted" style="font-size:11px;">→</span>
+      <input type="date" id="date-to" style="font-size:11px;padding:5px 8px;background:var(--bg-2);color:var(--text);border:1px solid var(--line);">
+    </span>
+  </div>
+
+  <div class="bar">
+    <select id="q-source">
+      <option value="all">SRC: ALL</option>
+      <option value="lysted">LYSTED</option>
+      <option value="viagogo">VIAGOGO</option>
+      <option value="crowdvolt">CROWDVOLT</option>
+      <option value="jerujam">JJT</option>
+    </select>
+  </div>
+
+  <h2>BY SOURCE</h2>
+  <table>
+    <thead><tr><th>SOURCE</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num">PROFIT</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
+    <tbody id="srcbody"></tbody>
+  </table>
+
+  <h2>DAILY <span class="count" id="d-count"></span></h2>
+  <table>
+    <thead><tr>
+      <th>DATE</th><th>MIX</th><th class="num">SALES</th><th class="num">TICKETS</th>
+      <th class="num">REVENUE</th><th class="num">COST</th>
+      <th class="num">PROFIT</th><th class="num">MARGIN</th><th class="num">PAYOUT</th>
+    </tr></thead>
+    <tbody id="dbody"></tbody>
+  </table>
+  <div id="dempty" class="empty" style="display:none">no daily data</div>
+
+  <h2 style="display:flex; align-items:baseline; gap:14px;">
+    // MONTHLY
+    <span class="pill-bar" style="display:inline-flex; gap:4px; margin:0;">
+      <button type="button" class="pill" id="mview-event">By event date</button>
+      <button type="button" class="pill" id="mview-sale">By sale date</button>
+    </span>
+    <span class="muted" id="mview-hint" style="font-size:11px;"></span>
+  </h2>
+  <style>
+    .pill-bar .pill { font-family: inherit; font-size: 10px; letter-spacing: 1.5px; padding: 5px 12px; border: 1px solid var(--line); background: var(--bg-2); color: var(--muted); cursor: pointer; text-transform: uppercase; }
+    .pill-bar .pill:hover { background: #e9edf2; color: var(--text); }
+    .pill-bar .pill.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.06); }
+  </style>
+  <table>
+    <thead><tr><th>MONTH</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num">PROFIT</th><th class="num">EXPENSES</th><th class="num">UNSOLD</th><th class="num">NET</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
+    <tbody id="mbody"></tbody>
+  </table>
+</main>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const moneyShort = (n) => {
+  if (n == null) return "—";
+  const a = Math.abs(n);
+  if (a >= 1e6) return "$" + (n/1e6).toFixed(1) + "M";
+  if (a >= 1e3) return "$" + (n/1e3).toFixed(1) + "K";
+  return money(n);
+};
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+let _data = null;
+let _sales = [];
+// Default to event-date buckets — that's the canonical "May profit"
+// the user wants and what the Maaser obligation reads from. The toggle
+// flips it for cash-flow inspection.
+let _monthView = (typeof localStorage !== "undefined" && localStorage.getItem("profit.monthView")) || "event";
+
+// Global date filter state. Drives both the top metric boxes (from raw
+// _sales) and the Daily table (from pre-aggregated _data.days).
+let _dateBasis = "sale";  // "sale" | "event"
+let _dateRange = "all";
+let _dateFrom = "";
+let _dateTo = "";
+
+function _srcLabel(s) {
+  return s === "jerujam" ? "JJT" : (s || "").toUpperCase();
+}
+function _payout(r) {
+  return (r.payout != null) ? r.payout : r.sale_price;
+}
+
+function _rowDate(r) {
+  return _dateBasis === "event"
+    ? (r.event_date_iso || (r.event_date ? String(r.event_date).slice(0,10) : ""))
+    : (r.sale_date_iso || (r.sale_date ? String(r.sale_date).slice(0,10) : ""));
+}
+
+function _inDateRangeIso(iso) {
+  if (_dateRange === "all") return true;
+  if (!iso) return false;
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return false;
+  const now = new Date(); now.setHours(0,0,0,0);
+  if (_dateRange === "ytd") return d.getFullYear() === now.getFullYear() && d <= now;
+  if (_dateRange === "custom") {
+    if (_dateFrom && iso < _dateFrom) return false;
+    if (_dateTo && iso > _dateTo) return false;
+    return true;
+  }
+  const days = Number(_dateRange);
+  if (!Number.isFinite(days) || days <= 0) return true;
+  const min = new Date(now); min.setDate(min.getDate() - (days - 1));
+  return d >= min && d <= now;
+}
+
+function _inDateRangeRow(r) { return _inDateRangeIso(_rowDate(r)); }
+
+function profitClass(n) { return n == null ? "muted" : (n >= 0 ? "pos" : "neg"); }
+
+function render() {
+  if (!_data) return;
+  const src = document.getElementById("q-source").value;
+
+  // Top 8 metric boxes come from raw sales — that's the only place we can
+  // count unique events, and it lets us honor the basis toggle (sale vs
+  // event date) without rebucketing the aggregated data on the server.
+  const fSales = _sales.filter(r => {
+    if (src !== "all" && r.source !== src) return false;
+    return _inDateRangeRow(r);
+  });
+  const tickets = fSales.reduce((s, r) => s + (r.qty || 0), 0);
+  const eventsN = new Set(fSales.map(r => (r.event_name || "") + "|" + (r.event_date_iso || ""))).size;
+  const cost = fSales.reduce((s, r) => s + (r.cost || 0), 0);
+  const total = fSales.reduce((s, r) => s + (r.sale_price || 0), 0);
+  const payout = fSales.reduce((s, r) => s + (_payout(r) || 0), 0);
+  const profit = payout - cost;
+  const roi = cost ? (profit / cost) * 100 : null;
+  const tpct = total ? (profit / total * 100) : null;
+  document.getElementById("t-tickets").textContent = tickets;
+  document.getElementById("t-sales").textContent = fSales.length;
+  document.getElementById("t-events").textContent = eventsN;
+  document.getElementById("t-cost").textContent = money(cost);
+  document.getElementById("t-total").textContent = money(total);
+  document.getElementById("t-payout").textContent = money(payout);
+  document.getElementById("t-roi").textContent = roi == null ? "—" : (roi >= 0 ? "+" : "") + roi.toFixed(1) + "%";
+  const tp = document.getElementById("t-profit");
+  tp.textContent = money(profit);
+  tp.parentElement.className = "stat " + (profit >= 0 ? "green" : "red");
+  document.getElementById("t-pct").textContent = tpct == null ? "—" : (tpct >= 0 ? "+" : "") + tpct.toFixed(1) + "% margin";
+
+  // Daily table uses the pre-aggregated rows. Each day has its own date,
+  // so the basis toggle doesn't apply here — we always filter by the day's
+  // (sale) date. Source filter is informational (filters days that had at
+  // least one sale from that source).
+  const days = _data.days.filter(r => _inDateRangeIso(r.date)).filter(r => {
+    if (src === "all") return true;
+    return (r.by_source[src] || 0) > 0;
+  });
+
+  // By source table
+  const sb = document.getElementById("srcbody");
+  sb.innerHTML = "";
+  for (const [name, v] of Object.entries(_data.by_source)) {
+    const margin = v.revenue ? (v.profit / v.revenue * 100) : null;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><span class="muted" style="display:inline-block;width:8px;height:8px;background:var(--${name === 'lysted' ? 'accent' : name === 'viagogo' ? 'orange' : name === 'jerujam' ? 'purple' : 'pink'});margin-right:8px;"></span>${_srcLabel(name)}</td>
+      <td class="num">${v.count}</td>
+      <td class="num">${v.qty}</td>
+      <td class="num">${money(v.revenue)}</td>
+      <td class="num">${money(v.cost)}</td>
+      <td class="num ${profitClass(v.profit)}">${money(v.profit)}</td>
+      <td class="num pct ${profitClass(v.profit)}">${margin == null ? "—" : margin.toFixed(1) + "%"}</td>
+      <td class="num">${money(v.payout)}</td>
+    `;
+    sb.appendChild(tr);
+  }
+
+  // Daily
+  const db = document.getElementById("dbody");
+  db.innerHTML = "";
+  for (const r of days) {
+    const margin = r.revenue ? (r.profit / r.revenue * 100) : null;
+    const total = (r.by_source.lysted||0) + (r.by_source.viagogo||0) + (r.by_source.jerujam||0) + (r.by_source.crowdvolt||0);
+    const pct = (n) => total ? (n / total * 100) + "%" : "0%";
+    const mix = `<span class="src-mix">
+      <span class="lysted" style="width:${pct(r.by_source.lysted||0)};"></span>
+      <span class="viagogo" style="width:${pct(r.by_source.viagogo||0)};"></span>
+      <span class="jerujam" style="width:${pct(r.by_source.jerujam||0)};"></span>
+      <span class="crowdvolt" style="width:${pct(r.by_source.crowdvolt||0)};"></span>
+    </span>`;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(r.date)}</td>
+      <td>${mix}</td>
+      <td class="num">${r.count}</td>
+      <td class="num">${r.qty}</td>
+      <td class="num">${money(r.revenue)}</td>
+      <td class="num">${money(r.cost)}</td>
+      <td class="num ${profitClass(r.profit)}">${money(r.profit)}</td>
+      <td class="num pct ${profitClass(r.profit)}">${margin == null ? "—" : margin.toFixed(1) + "%"}</td>
+      <td class="num">${money(r.payout)}</td>
+    `;
+    db.appendChild(tr);
+  }
+  document.getElementById("dempty").style.display = days.length ? "none" : "block";
+  document.getElementById("d-count").textContent = `(${days.length} ${days.length === 1 ? "day" : "days"})`;
+
+  // Monthly — toggle between sale-date and event-date bucketing.
+  const mb = document.getElementById("mbody");
+  mb.innerHTML = "";
+  const monthRows = (_monthView === "sale" ? _data.months : (_data.months_by_event || _data.months)) || [];
+  document.getElementById("mview-event").classList.toggle("active", _monthView === "event");
+  document.getElementById("mview-sale").classList.toggle("active", _monthView === "sale");
+  document.getElementById("mview-hint").textContent =
+    _monthView === "event"
+      ? "= profit attributed to the month each event takes place in"
+      : "= profit by the month each ticket was sold (cash-flow style)";
+  for (const r of monthRows) {
+    const margin = r.revenue ? (r.profit / r.revenue * 100) : null;
+    const net = r.net_profit != null ? r.net_profit : ((r.profit || 0) - (r.expenses || 0) - (r.unsold_cost || 0));
+    const unsoldCell = (r.unsold_cost == null)
+      ? `<td class="num muted">—</td>`
+      : `<td class="num ${r.unsold_cost ? 'neg' : ''}">${r.unsold_cost ? '-' + money(r.unsold_cost) : money(0)}</td>`;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(r.month)}</td>
+      <td class="num">${r.count}</td>
+      <td class="num">${r.qty}</td>
+      <td class="num">${money(r.revenue)}</td>
+      <td class="num">${money(r.cost)}</td>
+      <td class="num ${profitClass(r.profit)}">${money(r.profit)}</td>
+      <td class="num">${money(r.expenses || 0)}</td>
+      ${unsoldCell}
+      <td class="num ${profitClass(net)}">${money(net)}</td>
+      <td class="num pct ${profitClass(r.profit)}">${margin == null ? "—" : margin.toFixed(1) + "%"}</td>
+      <td class="num">${money(r.payout)}</td>
+    `;
+    mb.appendChild(tr);
+  }
+}
+
+async function load() {
+  const [r, sR] = await Promise.all([
+    fetch("/api/profit/daily"),
+    fetch("/api/sales-all"),
+  ]);
+  _data = await r.json();
+  const sJ = await sR.json();
+  _sales = sJ.rows || [];
+  document.getElementById("meta").textContent = `${_data.days.length} days // ${_data.months.length} months`;
+  render();
+}
+
+function _setMonthView(v) {
+  _monthView = v;
+  try { localStorage.setItem("profit.monthView", v); } catch (_) {}
+  if (_data) render();
+}
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("mview-event").addEventListener("click", () => _setMonthView("event"));
+  document.getElementById("mview-sale").addEventListener("click", () => _setMonthView("sale"));
+});
+
+document.getElementById("q-source").addEventListener("change", render);
+
+document.getElementById("basis-pills").addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (!b) return;
+  document.querySelectorAll("#basis-pills .pill").forEach(p => p.classList.toggle("active", p === b));
+  _dateBasis = b.dataset.basis;
+  render();
+});
+document.getElementById("range-pills").addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (!b) return;
+  document.querySelectorAll("#range-pills .pill").forEach(p => p.classList.toggle("active", p === b));
+  _dateRange = b.dataset.range;
+  document.getElementById("custom-range").style.display = _dateRange === "custom" ? "inline-flex" : "none";
+  render();
+});
+for (const id of ["date-from", "date-to"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    _dateFrom = document.getElementById("date-from").value;
+    _dateTo = document.getElementById("date-to").value;
+    if (_dateRange === "custom") render();
+  });
+}
+
+load();
+</script>
+</body>
+</html>
