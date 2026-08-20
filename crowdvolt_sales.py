@@ -334,6 +334,71 @@ def credentials():
     return (token or None), (fingerprint or None)
 
 
+def parse_token_blob(text):
+    """Pull (token, fingerprint) out of whatever cv_token_grab.js produced —
+    the two KARTIS_CV_* lines, or a bare token pasted on its own. Tolerant of
+    quotes, CRLF, leading whitespace and surrounding junk, because this is
+    fed by a human pasting from a browser console."""
+    token = fingerprint = None
+    for line in (text or "").replace("\r", "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            k, v = line.split("=", 1)
+            k, v = k.strip().upper(), v.strip().strip('"').strip("'")
+            if k.endswith("KARTIS_CV_TOKEN") and v:
+                token = v
+            elif k.endswith("KARTIS_CV_FINGERPRINT") and v:
+                fingerprint = v
+        elif token is None and " " not in line and len(line) >= 12:
+            token = line          # a bare cookie value
+    return token, fingerprint
+
+
+def write_credentials(token, fingerprint=None):
+    """Persist .env.crowdvolt with owner-only permissions. Returns the path.
+
+    Creates the file 0600 BEFORE writing, so the token never exists on disk
+    under a laxer mode, not even briefly.
+    """
+    if not token or not str(token).strip():
+        raise CvSalesError("refusing to write an empty CrowdVolt token")
+    token = str(token).strip()
+    if "\n" in token or "\r" in token:
+        raise CvSalesError("token contains a newline — paste looks malformed")
+    body = (f"KARTIS_CV_TOKEN={token}\n"
+            f"KARTIS_CV_FINGERPRINT={(fingerprint or '').strip()}\n")
+    if ENV_FILE.exists():
+        try:
+            ENV_FILE.replace(ENV_FILE.with_suffix(ENV_FILE.suffix + ".prev"))
+        except OSError:
+            pass
+    fd = os.open(str(ENV_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    try:
+        os.chmod(ENV_FILE, 0o600)
+    except OSError:
+        pass
+    return ENV_FILE
+
+
+def token_fingerprint_summary():
+    """Safe-to-display state. NEVER returns the token itself — only its length
+    and last 4 chars, enough to tell two tokens apart in the UI."""
+    token, fp = credentials()
+    if not token:
+        return {"configured": False, "path": str(ENV_FILE)}
+    return {
+        "configured": True,
+        "path": str(ENV_FILE),
+        "length": len(token),
+        "tail": token[-4:],
+        "fingerprint_set": bool(fp),
+    }
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """An expired session answers 302 -> /signup with the reason in the JSON
     body. Following it would turn a clean 'you are logged out' into an

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — CV Token</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da;
+    --green: #1a7f37; --red: #d1242f; --amber: #9a6700;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover { color: var(--accent); }
+  main { padding: 18px 24px 60px; max-width: 760px; }
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+  ol { padding-left: 18px; margin: 0; } li { margin-bottom: 10px; line-height: 1.5; }
+  textarea { width: 100%; min-height: 92px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-3); resize: vertical; }
+  pre.snippet { background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font-size: 11px; overflow-x: auto; white-space: pre; margin: 0 0 8px; }
+  button { font: inherit; font-size: 13px; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-2); cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: .55; cursor: default; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .msg { margin-top: 12px; padding: 10px 12px; border-radius: 6px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+  .msg.ok { background: #e8f5ec; color: var(--green); }
+  .msg.err { background: #fdecee; color: var(--red); }
+  .state { font-size: 13px; color: var(--muted); }
+  .state b { color: var(--text); }
+  code { background: var(--bg-3); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CrowdVolt Token</h1>
+  <div class="nav">
+    <a href="/">Dashboard</a><a href="/sources">Sources</a><a href="/cvpricer">CV Pricer</a>
+  </div>
+</header>
+<main>
+  <div class="card">
+    <h2>Current state</h2>
+    <div class="state" id="state">checking…</div>
+  </div>
+
+  <div class="card">
+    <h2>Why this page exists</h2>
+    <p style="margin:0;line-height:1.6;font-size:13px">
+      CrowdVolt's login sits behind Cloudflare Turnstile, which the Xvfb Chrome
+      on this box never clears — that's a browser-fingerprint problem, not the
+      IP. <code>api.crowdvolt.com</code> itself is not IP-gated, so the fix is
+      to mint the session in a desktop browser where Turnstile passes and carry
+      it here. That's all this page does.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Install a token</h2>
+    <ol>
+      <li>Open <a href="https://www.crowdvolt.com/" target="_blank" rel="noopener">crowdvolt.com</a>
+          in your normal desktop browser, logged in.</li>
+      <li>Press F12 → Console, paste this, hit Enter (it copies to your clipboard):
+        <pre class="snippet" id="snippet"></pre>
+        <button onclick="copySnippet()">Copy snippet</button>
+      </li>
+      <li>Paste the result below and save:
+        <textarea id="blob" placeholder="KARTIS_CV_TOKEN=...&#10;KARTIS_CV_FINGERPRINT=..." spellcheck="false"></textarea>
+        <div class="row">
+          <button class="primary" id="save" onclick="save()">Save &amp; verify</button>
+          <button id="sync" onclick="syncNow()">Sync sales now</button>
+        </div>
+      </li>
+    </ol>
+    <div id="msg"></div>
+  </div>
+</main>
+<script>
+const SNIPPET = `(() => {
+  const c = (document.cookie.split('; ').find(x => x.startsWith('stytch_session=')) || '').split('=')[1];
+  if (!c) { console.error('No stytch_session — logged in on THIS tab?'); return; }
+  const o = \`KARTIS_CV_TOKEN=\${c}\\nKARTIS_CV_FINGERPRINT=\${localStorage.getItem('fingerprint_id') || ''}\`;
+  console.log(o); try { copy(o); console.log('Copied.'); } catch (e) {}
+})();`;
+document.getElementById('snippet').textContent = SNIPPET;
+function copySnippet() { navigator.clipboard.writeText(SNIPPET); }
+
+function show(cls, text) {
+  const m = document.getElementById('msg');
+  m.className = 'msg ' + cls; m.textContent = text;
+}
+async function refresh() {
+  const r = await fetch('/api/cvtoken/status');
+  const s = await r.json();
+  document.getElementById('state').innerHTML = s.configured
+    ? `Token installed — <b>${s.length} chars</b>, ending <b>…${s.tail}</b>, fingerprint ${s.fingerprint_set ? 'set' : 'absent (fine)'}.<br><span style="font-size:12px">${s.path}</span>`
+    : `<b>No token installed.</b> CrowdVolt sales are not syncing over the token transport.`;
+}
+async function save() {
+  const btn = document.getElementById('save'); btn.disabled = true;
+  show('', 'saving…');
+  try {
+    const r = await fetch('/api/cvtoken', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({blob: document.getElementById('blob').value}),
+    });
+    const d = await r.json();
+    if (!r.ok) show('err', d.error || 'failed');
+    else if (!d.ok) show('err', 'Saved, but CrowdVolt rejected it:\n' + (d.error || '')
+                                + '\n\nThe cookie was probably copied from a logged-out tab, or it has already expired.');
+    else { show('ok', 'Token accepted by CrowdVolt.\nSeller tab counts: ' + JSON.stringify(d.counts));
+           document.getElementById('blob').value = ''; }
+  } catch (e) { show('err', String(e)); }
+  btn.disabled = false; refresh();
+}
+async function syncNow() {
+  const btn = document.getElementById('sync'); btn.disabled = true;
+  show('', 'fetching sales…');
+  try {
+    const r = await fetch('/api/cvtoken/sync', {method: 'POST'});
+    const d = await r.json();
+    show(r.ok ? 'ok' : 'err', r.ok ? `Synced ${d.rows} CrowdVolt sales.` : (d.error || 'failed'));
+  } catch (e) { show('err', String(e)); }
+  btn.disabled = false;
+}
+refresh();
+</script>
+</body>
+</html>

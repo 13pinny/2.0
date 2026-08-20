@@ -343,7 +343,13 @@ is happy (your own laptop) and just carry it to the box:
    (F12) -> Console, paste the contents of **`scripts/cv_token_grab.js`**,
    press Enter. It copies the two `KARTIS_CV_*` lines to your clipboard.
 
-2. On the VPS, paste them into the installer, then Ctrl-D:
+2. **Easiest — no shell at all:** open `https://kartis.homes/cvtoken`, paste
+   into the box, hit **Save & verify**. It writes `.env.crowdvolt` 0600,
+   checks the token against CrowdVolt immediately, and has a *Sync sales now*
+   button so you don't wait for the hourly tick. Same basic auth as the rest
+   of the dashboard, and the token is never echoed back to the page.
+
+   Or from a terminal on the VPS, paste them into the installer, then Ctrl-D:
 
    ```sh
    bash /opt/kartis/scripts/setup_crowdvolt_token.sh

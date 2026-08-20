@@ -2160,6 +2160,81 @@ def pricer_page():
     return render_template("pricer.html")
 
 
+@app.route("/cvtoken")
+def cvtoken_page():
+    return render_template("cvtoken.html")
+
+
+@app.route("/api/cvtoken/status")
+def api_cvtoken_status():
+    """Whether a CrowdVolt token is installed. Deliberately returns only the
+    token's length and last 4 chars — enough to tell two tokens apart in the
+    UI, never enough to reuse one."""
+    import crowdvolt_sales
+    return jsonify(crowdvolt_sales.token_fingerprint_summary())
+
+
+@app.route("/api/cvtoken", methods=["POST"])
+def api_cvtoken_save():
+    """Install a CrowdVolt session token pasted from the browser.
+
+    Exists because the token can only be minted in a desktop browser (the
+    CrowdVolt login sits behind Turnstile, which the Xvfb Chrome here never
+    clears) and the box is otherwise only reachable through noVNC. This turns
+    a rotation into: run cv_token_grab.js, paste here, done — no shell.
+
+    The whole app sits behind Caddy basic auth, which is the access control
+    on this route too. The response never echoes the token back.
+    """
+    from flask import request
+    import crowdvolt_sales
+    body = request.get_json(silent=True) or {}
+    token, fingerprint = crowdvolt_sales.parse_token_blob(body.get("blob") or "")
+    if not token:
+        return jsonify({"error": "couldn't find a token in that paste — expected "
+                                 "the two KARTIS_CV_* lines from cv_token_grab.js"}), 400
+    try:
+        crowdvolt_sales.write_credentials(token, fingerprint)
+    except crowdvolt_sales.CvSalesError as e:
+        return jsonify({"error": str(e)}), 400
+    except OSError as e:
+        return jsonify({"error": f"couldn't write the token file: {e}"}), 500
+
+    # Verify immediately: a token that doesn't work should say so here, not
+    # silently produce zero sales an hour from now.
+    try:
+        counts = crowdvolt_sales.check_token()
+    except Exception as e:
+        return jsonify({
+            "saved": True, "ok": False,
+            "error": str(e)[:400],
+            "status": crowdvolt_sales.token_fingerprint_summary(),
+        })
+    return jsonify({
+        "saved": True, "ok": True,
+        "counts": counts,
+        "status": crowdvolt_sales.token_fingerprint_summary(),
+    })
+
+
+@app.route("/api/cvtoken/sync", methods=["POST"])
+def api_cvtoken_sync():
+    """Fetch CrowdVolt sales right now with the installed token and persist
+    them — the 'don't wait an hour for the scheduler' button."""
+    import crowdvolt_sales
+    session = crowdvolt_sales.open_http_session()
+    if session is None:
+        return jsonify({"error": "no CrowdVolt token installed"}), 400
+    try:
+        rows = crowdvolt_sales.fetch_sales(session)
+    except Exception as e:
+        return jsonify({"error": str(e)[:400]}), 502
+    finally:
+        session.close()
+    db.upsert_crowdvolt_sales(rows, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "rows": len(rows)})
+
+
 @app.route("/cvpricer")
 def cvpricer_page():
     return render_template("cvpricer.html")
