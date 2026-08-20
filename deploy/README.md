@@ -384,6 +384,16 @@ proxy bill. When the session does expire the sync says so explicitly
    API rows when a column comes back blank. Once it looks right, trigger a
    resync from the dashboard and check `crowdvolt_sales` in the UI.
 
+## Driving the box from a phone or another machine
+
+`CLAUDE_ON_THE_BOX.md` in this directory sets up Claude Code running on this
+machine with Remote Control, so you can steer it from claude.ai/code or the
+Claude app instead of typing in the noVNC terminal. Relevant because a cloud
+Claude session has no route here at all — no SSH from those sandboxes, only
+HTTP(S) — so an agent that already lives on the box is the only thing that can
+act on it. Read the security section there first: this machine holds live
+marketplace logins and the auto-pricers.
+
 ## Troubleshooting
 
 **`curl http://localhost:9222/json/version` hangs.**
