@@ -35,6 +35,8 @@ import eventim_events
 import leap_events
 import posh_events
 import shotgun_events
+import tao_events
+import tixr_events
 from edm_common import EdmEventsError
 
 SOURCES = {
@@ -42,6 +44,8 @@ SOURCES = {
     leap_events.SOURCE_NAME: leap_events,
     eventim_events.SOURCE_NAME: eventim_events,
     shotgun_events.SOURCE_NAME: shotgun_events,
+    tixr_events.SOURCE_NAME: tixr_events,
+    tao_events.SOURCE_NAME: tao_events,
 }
 
 # Host fragment → source. Checked before the parse_url fallback so a URL is
@@ -51,6 +55,8 @@ _HOST_HINTS = (
     ("leapevents.com", "leap"),
     ("eventim.us", "eventim"),
     ("shotgun.live", "shotgun"),
+    ("tixr.com", "tixr"),
+    ("tickets.taogroup.com", "tao"),
 )
 
 # The events this tracker was built for. Seeded once, on a
@@ -67,6 +73,10 @@ DEFAULT_TRACKED = [
      "?afflky=TheConcourseProject"),
     ("shotgun", "jigitz0912",
      "https://shotgun.live/en/events/jigitz0912"),
+    # Needs the CDP Chrome (DataDome) — errors harmlessly on a box without it.
+    ("tixr", "189343",
+     "https://www.tixr.com/groups/navypiereventcenter/events/"
+     "isoxo-presents-hardcore-diva-189343"),
 ]
 
 
@@ -97,7 +107,8 @@ def parse_target(url):
     if not source:
         raise ValueError(
             f"unsupported EDM event URL: {url!r} — expected posh.vip, "
-            "events.leapevents.com, wl.eventim.us or shotgun.live")
+            "events.leapevents.com, wl.eventim.us, shotgun.live, tixr.com "
+            "or tickets.taogroup.com")
     return source, SOURCES[source].parse_url(s)
 
 
@@ -142,6 +153,92 @@ def fetch_tracked(rows=None):
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+# Sources that watch a whole VENUE CALENDAR instead of a hand-picked event:
+# each exposes discover() -> (entries, errors) where an entry carries
+# event_key / ticket_url / venue / name (see tao_events.discover). Their
+# rows in edm_tracked_events are maintained by sync_catalogs() below and
+# marked with auto_source, so the poll list stays current without anyone
+# pasting URLs. This is the pacha-style half of the tracker.
+CATALOG_SOURCES = {
+    tao_events.SOURCE_NAME: tao_events,
+}
+
+
+def sync_catalogs(source_names=None, now_iso=None, prune=True):
+    """Reconcile the catalog sources' venue listings into the poll list.
+
+    Adds every upcoming event that has a ticket page, prunes the auto-added
+    rows the calendar no longer lists (the show happened, or it was pulled),
+    and leaves hand-added rows alone in both directions.
+
+    Returns {source: {"added": [...], "known": n, "pruned": [...],
+                      "skipped": n, "baseline": bool, "errors": {...}}}.
+
+    `baseline` is True on the very first sync for a source (nothing was
+    auto-tracked yet), which means `added` is a backfill of everything
+    currently on sale rather than news — the caller suppresses its pings,
+    exactly as the pacha monitor's first tick does. Every sync after that,
+    an entry in `added` really is a newly announced show.
+
+    Pruning is skipped for a source whose discover() reported ANY venue
+    error: a calendar that 500s comes back as "no upcoming events", and
+    pruning on that would silently untrack the whole venue — the same
+    reason every other fetcher here treats an empty parse as a failure."""
+    now_iso = now_iso or _now()
+    out = {}
+    for name in (source_names or CATALOG_SOURCES):
+        mod = CATALOG_SOURCES.get(name)
+        if mod is None:
+            continue
+        try:
+            entries, errors = mod.discover()
+        except Exception as e:      # a parser bug must not kill the tick
+            out[name] = {"added": [], "known": 0, "pruned": [], "skipped": 0,
+                         "baseline": False,
+                         "errors": {"discover": f"{type(e).__name__}: {e}"}}
+            continue
+
+        existing = db.edm_tracked_auto_ids(f"{name}:")
+        keep, added, skipped = [], [], 0
+        for entry in entries:
+            if not entry.get("event_key"):
+                skipped += 1        # reservations-only show, nothing to poll
+                continue
+            event_id = f"{name}:{entry['event_key']}"
+            keep.append(event_id)
+            db.edm_tracked_add(
+                name, entry["event_key"], entry.get("ticket_url"), now_iso,
+                label=entry.get("name"),
+                auto_source=f"{name}:{entry.get('venue_key') or 'catalog'}",
+                # Deleting an auto row is futile (the next sync re-adds it),
+                # so pausing is how a human silences one — don't undo it.
+                unpause=False)
+            if event_id not in existing:
+                added.append(event_id)
+        pruned = (db.edm_tracked_auto_prune(f"{name}:", keep)
+                  if prune and not errors else [])
+        out[name] = {"added": added, "known": len(keep), "pruned": pruned,
+                     "skipped": skipped, "baseline": not existing,
+                     "errors": errors}
+    return out
+
+
+def cmd_sync_catalogs(args):
+    results = sync_catalogs()
+    for name, r in results.items():
+        print(f"{name}: {r['known']} upcoming, {len(r['added'])} added"
+              + (" (baseline)" if r["baseline"] else "")
+              + f", {len(r['pruned'])} pruned, "
+                f"{r['skipped']} without a ticket page")
+        for eid in r["added"]:
+            print(f"  + {eid}")
+        for eid in r["pruned"]:
+            print(f"  - {eid}")
+        for where, msg in (r["errors"] or {}).items():
+            print(f"  ERROR {where}: {msg}")
+    return 0
 
 
 def cmd_list(args):
@@ -223,8 +320,13 @@ def cmd_fetch_all(args):
 
 def main(argv):
     p = argparse.ArgumentParser(
-        description="US EDM event trackers (posh / leap / eventim)")
+        description="US EDM event trackers (posh / leap / eventim / "
+                    "shotgun / tixr / tao)")
     p.add_argument("--list", action="store_true", help="list tracked events")
+    p.add_argument("--sync-catalogs", action="store_true", dest="sync_catalogs",
+                   help="reconcile the venue-catalog sources (tao) into the "
+                        "poll list: add newly announced shows, drop the ones "
+                        "that have happened")
     p.add_argument("--add", metavar="URL", help="track an event URL")
     p.add_argument("--label", help="optional note to store with --add")
     p.add_argument("--remove", metavar="EVENT_ID", help="stop tracking")
@@ -253,6 +355,8 @@ def main(argv):
             return cmd_pause(args.resume, False)
         if args.probe:
             return cmd_probe(args)
+        if args.sync_catalogs:
+            return cmd_sync_catalogs(args)
         if args.list:
             return cmd_list(args)
         return cmd_fetch_all(args)

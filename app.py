@@ -240,6 +240,15 @@ EDM_LOW_STOCK_THRESHOLD = int(os.getenv("KARTIS_EDM_LOW_STOCK_THRESHOLD") or 20)
 # /market feed throttle, same reasoning as PACHA_MARKET_SNAPSHOT_MINUTES.
 EDM_MARKET_SNAPSHOT_MINUTES = int(os.getenv("KARTIS_EDM_MARKET_SNAPSHOT_MINUTES") or 10)
 _edm_last_market_at = None
+# Venue-catalog sync (tao_events: the two Marquee NY calendars). This is the
+# new-EVENT radar — it reconciles taogroup.com's listings into the poll list
+# so a newly announced show starts being watched without anyone pasting a
+# URL. It rides the EDM tick but on its own cadence: a show appears on the
+# calendar hours-to-days before anything happens to its price, so polling
+# the two calendars every couple of minutes would be pure waste.
+EDM_CATALOG_SYNC_MINUTES = int(os.getenv("KARTIS_EDM_CATALOG_SYNC_MINUTES") or 10)
+_edm_last_catalog_sync_at = None
+_last_edm_catalogs = {}
 
 # Israeli-sites new-event monitor — polls the kupat.co.il and
 # ticketmaster.co.il listing feeds (kupat_events.py / tm_events.py, pure
@@ -490,6 +499,50 @@ def _edm_market_rows(events, now_iso):
                                      None, ev["total_available"], None, now_iso)
 
 
+def _edm_sync_catalogs(now_iso):
+    """Reconcile the venue-catalog sources (tao) into the tracked list, at
+    most every EDM_CATALOG_SYNC_MINUTES.
+
+    A discovery failure is recorded in _last_edm_catalogs and otherwise
+    ignored: the events already tracked keep polling, and the calendar gets
+    another try on the next sync."""
+    global _edm_last_catalog_sync_at
+    if not edm_events.CATALOG_SOURCES:
+        return
+    now_dt = datetime.now(timezone.utc)
+    if (_edm_last_catalog_sync_at is not None
+            and now_dt - _edm_last_catalog_sync_at
+            < timedelta(minutes=EDM_CATALOG_SYNC_MINUTES)):
+        return
+    _edm_last_catalog_sync_at = now_dt
+
+    results = edm_events.sync_catalogs(now_iso=now_iso)
+    _last_edm_catalogs.clear()
+    _last_edm_catalogs.update({"at": now_iso, **results})
+    for name, r in results.items():
+        for eid in r["added"]:
+            print(f"[edm] {name} catalog: now tracking {eid}")
+        for eid in r["pruned"]:
+            print(f"[edm] {name} catalog: dropped {eid} (no longer listed)")
+        for where, msg in (r["errors"] or {}).items():
+            print(f"[edm] {name} catalog error ({where}): {msg}")
+
+
+def _edm_baseline_sources(seen):
+    """Catalog sources with no observed state at all yet. Their whole
+    listing lands in one tick, and "every show currently on sale" is
+    backfill, not news — so that first tick stores state and pings nothing,
+    exactly like the pacha monitor's. Every tick after it, an event with no
+    stored row really is newly announced and gets its 'new' ping.
+
+    Keyed off edm_seen_events rather than off the sync's own bookkeeping so
+    it stays right however the poll list got populated (a manual
+    `edm_events.py --sync-catalogs` before the first tick, a restored
+    backup, a source added to CATALOG_SOURCES later)."""
+    observed = {r.get("source") for r in seen.values()}
+    return {s for s in edm_events.CATALOG_SOURCES if s not in observed}
+
+
 def _edm_diff(ev, old):
     """Ping kinds for one event given its previous edm_seen_events row.
     Returns a list of kind strings (an event can legitimately emit several
@@ -575,6 +628,10 @@ def run_edm_events():
             _last_edm_events.update(at=now_iso, error=None)
             return
 
+        # Venue-catalog radar first, so a show announced since the last sync
+        # is already in `tracked` and gets its state stored on this tick.
+        _edm_sync_catalogs(now_iso)
+
         tracked = db.edm_tracked_all(include_paused=False)
         events, errors = edm_events.fetch_tracked(tracked)
         for event_id, msg in errors.items():
@@ -583,6 +640,7 @@ def run_edm_events():
 
         seen = db.edm_all_seen()
         muted = db.setting_get_bool("master_muted", default=False)
+        baseline_sources = _edm_baseline_sources(seen)
 
         pings = []  # (kind, ev, old_row)
         for ev in events:
@@ -590,8 +648,11 @@ def run_edm_events():
             if old is None:
                 # Newly tracked: baseline it. The 'new' ping is informational
                 # and carries the current price, so adding an event confirms
-                # in Discord that it's being watched.
-                pings.append(("new", ev, None))
+                # in Discord that it's being watched — except on a catalog
+                # source's very first tick, where the whole venue listing
+                # arrives at once and is backfill, not news.
+                if ev["source"] not in baseline_sources:
+                    pings.append(("new", ev, None))
                 continue
             for kind in _edm_diff(ev, old):
                 pings.append((kind, ev, old))
@@ -637,7 +698,10 @@ def run_edm_events():
                             "price_up", "price_down", "low_stock")}
         _last_edm_events.update(
             at=now_iso, error=None, tracked=len(tracked), events=len(events),
-            baseline=any(k == "new" for k, _, _ in pings),
+            # A catalog source's first tick stores state without a single
+            # 'new' ping, so count the silent baselines too.
+            baseline=(any(k == "new" for k, _, _ in pings)
+                      or bool(baseline_sources & {e["source"] for e in events})),
             errors=errors, notified=notified, **counts)
     except Exception as e:
         _last_edm_events.update(
@@ -5253,6 +5317,8 @@ def api_edm():
         "events": events,
         "low_stock_threshold": EDM_LOW_STOCK_THRESHOLD,
         "sources": sorted(edm_events.SOURCES),
+        "catalog_sources": sorted(edm_events.CATALOG_SOURCES),
+        "catalogs": dict(_last_edm_catalogs),
         "status": {**_last_edm_events,
                    "enabled": EDM_MONITOR_ENABLED,
                    "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES},
@@ -5321,6 +5387,8 @@ def api_edm_events_status():
         "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES,
         "low_stock_threshold": EDM_LOW_STOCK_THRESHOLD,
         "tracked_total": len(db.edm_tracked_all()),
+        "catalog_sync_minutes": EDM_CATALOG_SYNC_MINUTES,
+        "catalogs": dict(_last_edm_catalogs),
     })
 
 
