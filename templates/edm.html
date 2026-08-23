@@ -69,7 +69,6 @@
   .src.leap { background: #e6f0fd; color: #0b4fa8; }
   .src.eventim { background: #e8f5ec; color: #12662f; }
   .src.shotgun { background: #f0e9fb; color: #5b2ea6; }
-  .src.tao { background: #fdf0e3; color: #94500c; }
   .rel { font-size: 10px; color: var(--muted); }
   .vel { font-variant-numeric: tabular-nums; }
   .vel.zero { color: var(--muted); }
@@ -117,9 +116,7 @@
   <p class="sub" id="statusline">—</p>
 
   <h2>Add an event</h2>
-  <p class="sub">Paste a posh.vip, events.leapevents.com, wl.eventim.us, shotgun.live or
-    tickets.taogroup.com event URL. Tao Group rows arrive on their own — the two Marquee NY
-    venue calendars are swept automatically.
+  <p class="sub">Paste a posh.vip, events.leapevents.com, wl.eventim.us or shotgun.live event URL.
      Keep the <code>?afflky=</code> parameter on Eventim links — without it the page lists no tickets.</p>
   <div class="controls">
     <input type="text" id="addurl" placeholder="https://posh.vip/e/… " />
@@ -160,10 +157,6 @@ const SRC_META = {
   shotgun: {label: 'Shotgun',     host: 'shotgun.live',            counts: true},
   eventim: {label: 'Eventim US',  host: 'wl.eventim.us',           counts: 'partial'},
   leap:    {label: 'Leap Events', host: 'events.leapevents.com',   counts: false},
-  // Auto-tracked from the taogroup.com venue calendars, not hand-added:
-  // the sweep adds new shows and drops the ones that have happened.
-  tao:     {label: 'Tao Group',   host: 'tickets.taogroup.com',    counts: false,
-            auto: 'swept from the Marquee NY venue calendars'},
 };
 
 function flash(el, msg) {
@@ -264,8 +257,7 @@ function render() {
       <span class="grp-meta">${bits.join(' · ')}</span>
       <span class="grp-note">${meta.counts === false ? 'no ticket counts published'
         : (meta.counts === 'partial' ? 'counts only near sell-out' : 'live ticket counts')}${
-        FACE_SOURCES.includes(src) ? ' · prices are face value' : ''}${
-        meta.auto ? ' · ' + esc(meta.auto) : ''}</span>
+        FACE_SOURCES.includes(src) ? ' · prices are face value' : ''}</span>
     </td></tr>`);
 
   for (const e of list) {
@@ -294,9 +286,8 @@ function render() {
   }
   $('rows').innerHTML = out.join('');
   $('footnote').innerHTML =
-    'Posh and Shotgun publish remaining ticket counts; Leap and Tao Group publish none and '
-    + 'Eventim only reveals one once a type drops under its per-order limit — those show n/a, '
-    + 'not 0. '
+    'Posh and Shotgun publish remaining ticket counts; Leap publishes none and Eventim '
+    + 'only reveals one once a type drops under its per-order limit — those show n/a, not 0. '
     + 'Prices marked <sup class="nocount">f</sup> are face value; that site adds a booking fee at checkout.';
 
   for (const tr of document.querySelectorAll('tr.ev')) {
