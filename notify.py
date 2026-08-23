@@ -817,6 +817,9 @@ _EDM_SOURCE_LABEL = {
     "posh": "Posh",
     "leap": "Leap Events",
     "eventim": "Eventim US",
+    # tao covers both Marquee rooms, and the venue name is already on the
+    # embed's first line — so the label names the operator, not the room.
+    "tao": "Tao Group",
 }
 
 
@@ -933,7 +936,14 @@ def notify_edm_event(kind, ev, old=None):
         else:
             lines.append("The next release usually costs more.")
     else:  # 'new'
-        title = f"🪩 Now tracking — {name} ({site})"
+        # A catalog source discovers its own events, so 'new' there means
+        # the venue just put a show on the calendar — the headline should
+        # say that, not "someone added a URL".
+        if ev.get("catalog"):
+            title = f"🆕 {site}: {name} just went up"
+            lines.append("New show on the venue calendar.")
+        else:
+            title = f"🪩 Now tracking — {name} ({site})"
         color = 0xE91E63
         if price is not None:
             lines.append(f"From **${price:,.2f}**"
