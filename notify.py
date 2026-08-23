@@ -79,6 +79,52 @@ def _pacha_shocks_webhook():
     return url or _discord_webhook("shocks")
 
 
+# Per-venue "new events" channels. A new-show ping is only useful if you
+# can tell at a glance WHICH room it is, and the shared #new-events channel
+# mixes six venues across two countries — so each of these gets its own.
+# Keys are the routing key each notifier passes (a source name, or a
+# tao_events VENUES key for the two Marquee rooms); values must stay
+# pre-slugged lowercase, because Discord rewrites spaces to dashes on
+# create and that would break webhook_for's reuse-by-name lookup.
+#
+# Anything NOT listed here (zappa, posh/leap/eventim/shotgun/tixr) keeps
+# going to the shared new_events channel — deliberately, since one-off
+# tracked events don't earn a channel each.
+_NEW_EVENTS_CHANNELS = {
+    "pacha":            "pacha-new-events",
+    "kupat":            "kupat-new-events",
+    "tm":               "tm-il-new-events",
+    "barby":            "barby-new-events",
+    "marquee-new-york": "marquee-new-events",
+    "marquee-skydeck":  "skydeck-new-events",
+}
+
+
+def _new_events_webhook(key=None):
+    """Webhook for a new-event ping. Resolution mirrors
+    _pacha_shocks_webhook: an explicit DISCORD_WEBHOOK_<CHANNEL> env var
+    pins a channel; otherwise the bot creates (or reuses) the per-venue
+    channel on first ping — zero manual setup, cached in
+    discord_event_channels; otherwise the shared new_events category, and
+    finally DISCORD_WEBHOOK_URL. An unroutable key or a bot failure
+    therefore degrades to the old shared channel rather than dropping the
+    ping on the floor."""
+    channel = _NEW_EVENTS_CHANNELS.get(key or "")
+    if not channel:
+        return _discord_webhook("new_events")
+    url = os.environ.get("DISCORD_WEBHOOK_" + channel.upper().replace("-", "_"),
+                         "").strip()
+    if url:
+        return url
+    try:
+        import discord_bot  # local import — keeps notify.py free of the db dep
+        url = discord_bot.webhook_for(channel) or ""
+    except Exception as e:
+        print(f"[notify] {channel} bot channel failed: {e}")
+        url = ""
+    return url or _discord_webhook("new_events")
+
+
 def _seat_block(seat):
     """Pick the block/section code from a seat dict, accepting both the
     normalized `block` key (kupat + new ticketmaster) and the raw `b` key
@@ -729,11 +775,13 @@ def notify_pacha_event(kind, ev, old=None):
     Routing: 'price_up' and 'low_stock' are demand signals about an event
     we already know, not new inventory — they go to the 'jumps' channel;
     'price_down' goes to #pacha-shocks (see _pacha_shocks_webhook);
-    'new' and 'onsale' stay in 'new_events'."""
+    'new' and 'onsale' go to the venue's own #pacha-new-events."""
     if kind == "price_down":
         discord_url = _pacha_shocks_webhook()
+    elif kind in ("price_up", "low_stock"):
+        discord_url = _discord_webhook("jumps")
     else:
-        discord_url = _discord_webhook("jumps" if kind in ("price_up", "low_stock") else "new_events")
+        discord_url = _new_events_webhook("pacha")
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
 
@@ -866,7 +914,9 @@ def notify_edm_event(kind, ev, old=None):
 
     Routing mirrors pacha's: the perishable kinds ('price_down', 'restock')
     go to the shocks channel, demand signals ('price_up', 'low_stock') to
-    'jumps', a full sell-out to 'status', the rest to 'new_events'."""
+    'jumps', a full sell-out to 'status', the rest to 'new_events' — or,
+    for a source that names its venue (tao's two Marquee rooms), that
+    venue's own new-events channel."""
     if kind in ("price_down", "restock"):
         discord_url = _pacha_shocks_webhook()
     elif kind in ("price_up", "low_stock"):
@@ -874,7 +924,7 @@ def notify_edm_event(kind, ev, old=None):
     elif kind == "soldout":
         discord_url = _discord_webhook("status")
     else:
-        discord_url = _discord_webhook("new_events")
+        discord_url = _new_events_webhook(ev.get("venue_key"))
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
 
@@ -1032,8 +1082,11 @@ def notify_site_event(kind, ev, old=None):
     a normalized dict from kupat_events/tm_events fetch_events(); an
     `image` URL, when present (kupat homepage banner), is attached as the
     embed graphic. `old` is the previously stored DB row (unused, kept
-    for parity with notify_pacha_event)."""
-    discord_url = _discord_webhook("new_events")
+    for parity with notify_pacha_event).
+
+    Routed to the source's own new-events channel (kupat / TM-IL / barby);
+    zappa has no channel of its own and keeps the shared one."""
+    discord_url = _new_events_webhook(ev.get("source"))
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
 

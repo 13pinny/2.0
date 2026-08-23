@@ -314,6 +314,26 @@ def _row_tier(row):
     ), (edm_common.strip_tags(fee_m.group(1)) if fee_m else None)
 
 
+def _venue_key_for(venue_name, slug):
+    """Which room in VENUES this event belongs to, or None.
+
+    The ticket page names the room (ld+json `location.name`), and the slug
+    is the tiebreaker when it doesn't. Worth the belt and braces: the
+    per-venue Discord routing keys off this, and a missing venue name
+    defaulting Skydeck shows into the Marquee channel would be a silent
+    mis-route rather than a visible failure."""
+    n = (venue_name or "").strip().lower()
+    s = (slug or "").strip().lower()
+    for key, v in VENUES.items():
+        if v["name"].lower() in n:
+            return key
+    if "skydeck" in n or "skydeck" in s:
+        return "marquee-skydeck"
+    if "marquee" in n or s.startswith("marquee-new-york"):
+        return "marquee-new-york"
+    return None
+
+
 def _date_text(ld):
     """Human date in the venue's local clock. `startDate` here carries a
     real UTC offset (...T23:00:00-04:00), so it needs no timezone lookup —
@@ -364,6 +384,9 @@ def fetch_event(slug):
         "event_key": slug,
         "name": (ld.get("name") or "").strip() or slug,
         "venue": venue,
+        # Which VENUES room — notify.py routes the per-venue "new events"
+        # Discord channels off this (Marquee NY and Skydeck get their own).
+        "venue_key": _venue_key_for(venue, slug),
         "date_text": _date_text(ld),
         "start_date": ld.get("startDate"),
         "page_url": url,
