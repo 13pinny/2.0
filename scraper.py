@@ -1073,6 +1073,19 @@ def _parse_int(text):
 # before connecting. The noVNC "open-logins" button reopens them on demand.
 _CDP_STRAY_HOSTS = ("lysted.com", "automatiq.com", "crowdvolt.com", "viagogo.com")
 
+# CrowdVolt tabs get one exemption from the sweep below. From this datacenter
+# IP Cloudflare re-challenges every fresh navigation, so a tab a human cleared
+# in noVNC holds the only usable session — closing it throws that away and the
+# next tick starts back at the interstitial. A tab STILL on the interstitial
+# stays a stray: that is the self-navigating iframe that wedged the attach in
+# the 2026-08-12 outage, so the crash protection is unchanged.
+_CDP_SETTLED_KEEP_HOST = "crowdvolt.com"
+
+
+def _is_cf_interstitial(title):
+    t = (title or "").strip().lower()
+    return "just a moment" in t or "attention required" in t
+
 # Live viagogo browser operations (viagogo_listing/pricer/vgsales lanes).
 # While any is active, pre-connect cleanup must NOT close inv.viagogo.com
 # tabs — with the listing/pricing lock lanes running concurrently, another
@@ -1113,6 +1126,9 @@ def _close_stray_cdp_pages(cdp_url):
     pages = [t for t in targets if t.get("type") == "page"]
     strays = [t for t in pages if t.get("id")
               and any(h in (t.get("url") or "").lower() for h in _CDP_STRAY_HOSTS)]
+    strays = [t for t in strays
+              if not (_CDP_SETTLED_KEEP_HOST in (t.get("url") or "").lower()
+                      and not _is_cf_interstitial(t.get("title")))]
     if _viagogo_ops_active > 0:
         strays = [t for t in strays
                   if "inv.viagogo.com" not in (t.get("url") or "").lower()]

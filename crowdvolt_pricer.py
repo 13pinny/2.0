@@ -180,8 +180,24 @@ class CvSession:
     duplicate tab out from under us (posthog primary-window logic), so a
     dead page is reopened once per call instead of failing the tick."""
 
-    def __init__(self, page):
+    _TOKEN_PROVOKE_URL = "https://www.crowdvolt.com/dashboard/sales"
+
+    def __init__(self, page, owns_page=True):
         self.page = page
+        # Bearer lifted from the SPA's own API calls; see _capture_token.
+        self._token = None
+        # False when we adopted a human-cleared tab: the tick must leave it
+        # open or the next one is back at the Cloudflare interstitial.
+        self.owns_page = owns_page
+
+    def close(self):
+        """Close the page only if this tick opened it."""
+        if not self.owns_page:
+            return
+        try:
+            self.page.close()
+        except Exception:
+            pass
 
     def _reopen(self):
         context = self.page.context
@@ -190,33 +206,85 @@ class CvSession:
         except Exception:
             pass
         self.page = context.new_page()
+        self.owns_page = True
         self.page.goto(HOME_URL, wait_until="domcontentloaded", timeout=45000)
         self.page.wait_for_timeout(3000)
         _settle_challenge(self.page)
 
-    def api(self, url, method="GET", body=None):
+    def _capture_token(self):
+        """Lift the Bearer the SPA itself sends to api.crowdvolt.com.
+
+        CrowdVolt no longer sets the stytch_session cookie the old in-page
+        fetch read (confirmed 2026-08-19: a logged-in dashboard has no such
+        cookie), and its JWT is minted at runtime by POST /api/auth/refresh
+        and kept in memory — not in localStorage. Rather than reproduce that
+        flow, let the app authenticate normally and take the header off its
+        own requests.
+        """
+        got = {"tok": None}
+
+        def _on_req(req):
+            if got["tok"] or "api.crowdvolt.com" not in req.url:
+                return
+            auth = req.headers.get("authorization") or ""
+            if auth.startswith("Bearer "):
+                got["tok"] = auth[7:]
+
+        self.page.on("request", _on_req)
         try:
-            res = self.page.evaluate(_FETCH_JS, {
-                "url": url, "method": method, "body": body,
-                "pokedex": POKEDEX_FALLBACK,
-            })
-        except Exception:
-            if self.page.is_closed():
-                self._reopen()
-                res = self.page.evaluate(_FETCH_JS, {
-                    "url": url, "method": method, "body": body,
-                    "pokedex": POKEDEX_FALLBACK,
-                })
-            else:
-                raise
-        if res["status"] != 200:
+            self.page.goto(self._TOKEN_PROVOKE_URL,
+                           wait_until="domcontentloaded", timeout=45000)
+            _settle_challenge(self.page)
+            for _ in range(15):
+                if got["tok"]:
+                    break
+                self.page.wait_for_timeout(1000)
+        finally:
+            try:
+                self.page.remove_listener("request", _on_req)
+            except Exception:
+                pass
+        if not got["tok"]:
             raise CvPricerError(
-                f"{method} {url.split('?')[0]} -> {res['status']}: "
-                f"{(res['body'] or '')[:200]}")
-        try:
-            return json.loads(res["body"])
-        except (TypeError, ValueError) as e:
-            raise CvPricerError(f"bad JSON from {url.split('?')[0]}: {e}")
+                "no Authorization header seen from crowdvolt.com - the CV "
+                "profile is probably signed out; sign in via noVNC")
+        self._token = got["tok"]
+        return self._token
+
+    def api(self, url, method="GET", body=None):
+        # Requests go through the browser CONTEXT, not page fetch(): the site
+        # now serves a CSP that blocks page-level fetch() to the API host
+        # ("Failed to fetch"), while the context request rides the same
+        # cookies and proxy without being subject to it.
+        for attempt in (1, 2):
+            tok = self._token or self._capture_token()
+            headers = {"Authorization": "Bearer " + tok,
+                       "x-pokedex": POKEDEX_FALLBACK,
+                       "Accept": "application/json"}
+            kwargs = {"method": method, "headers": headers, "timeout": 45000}
+            if body is not None:
+                headers["Content-Type"] = "application/json"
+                kwargs["data"] = json.dumps(body)
+            try:
+                res = self.page.context.request.fetch(url, **kwargs)
+            except Exception:
+                if self.page.is_closed() and attempt == 1:
+                    self._reopen()
+                    continue
+                raise
+            if res.status in (401, 403) and attempt == 1:
+                self._token = None          # expired - re-lift and retry once
+                continue
+            if res.status != 200:
+                raise CvPricerError(
+                    f"{method} {url.split('?')[0]} -> {res.status}: "
+                    f"{res.text()[:200]}")
+            try:
+                return json.loads(res.text())
+            except (TypeError, ValueError) as e:
+                raise CvPricerError(f"bad JSON from {url.split('?')[0]}: {e}")
+        raise CvPricerError(
+            f"{method} {url.split('?')[0]}: auth retry exhausted")
 
     # -- reads --
 
@@ -319,6 +387,20 @@ def open_session(p):
     import scraper
     browser = scraper._connect_over_cdp(p, CDP_URL)
     context = browser.contexts[0]
+    # Adopt a settled CrowdVolt tab if one survived the sweep. Cloudflare
+    # re-challenges every fresh navigation from this datacenter IP, so a tab
+    # cleared by a human in noVNC is the only dependable way in; opening a new
+    # page would discard that clearance. scraper._close_stray_cdp_pages only
+    # spares tabs already past the interstitial, so an adopted one is usable.
+    for pg in context.pages:
+        try:
+            if pg.is_closed() or "crowdvolt.com" not in (pg.url or "").lower():
+                continue
+            if not _looks_challenged(pg):
+                print("[cvpricer] reusing settled CrowdVolt tab")
+                return CvSession(pg, owns_page=False)
+        except Exception:
+            continue
     page = context.new_page()
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=45000)
     page.wait_for_timeout(3000)
@@ -376,10 +458,7 @@ def refresh_book_snapshot(event_uqid):
         try:
             rows = sess.fetch_book(event_uqid)
         finally:
-            try:
-                sess.page.close()
-            except Exception:
-                pass
+            sess.close()
     ours = {r["ask_uqid"] for r in db.cv_listings_all()}
     for r in rows:
         r["is_ours"] = r.get("uqid") in ours
@@ -591,10 +670,7 @@ def run_cv_pricer_tick(dry_run=None):
                         print(f"[cvpricer] notify failed: {e}")
                     counters["changed"] += 1
         finally:
-            try:
-                sess.page.close()
-            except Exception:
-                pass
+            sess.close()
     return counters
 
 

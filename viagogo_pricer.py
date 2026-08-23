@@ -125,6 +125,20 @@ class PricerError(RuntimeError):
     pass
 
 
+# Playwright/patchright attaches a "Call log" to network exceptions that
+# echoes the full outbound request headers — including the live viagogo
+# session cookie — which then lands in the journal in plaintext. Strip any
+# credential-bearing header line before logging the exception.
+_SECRET_HDR_RE = re.compile(
+    r"^(\s*-\s*(?:cookie|authorization|x-api-key|set-cookie)\s*:).*$",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def _safe_err(e):
+    """str(e) with any header line carrying credentials redacted."""
+    return _SECRET_HDR_RE.sub(r"\1 <redacted>", str(e))
+
+
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -723,7 +737,7 @@ def _public_sections_fallback(context, event_id, event_name, our_ids_event,
             for sec, info in raw_sections.items()
         }
     except Exception as e:
-        print(f"[pricer] public fallback failed for {event_id}: {e}")
+        print(f"[pricer] public fallback failed for {event_id}: {_safe_err(e)}")
         return None
 
 
@@ -889,7 +903,7 @@ def run_pricer_tick(dry_run=None):
                     market_raw = fetch_market_raw(page, event_id)
                     market = _parse_market_html(market_raw) or None if market_raw else None
                 except Exception as e:
-                    print(f"[pricer] MarketDataV3 failed for {event_id}: {e}")
+                    print(f"[pricer] MarketDataV3 failed for {event_id}: {_safe_err(e)}")
                 if market:
                     try:
                         db.market_snapshot_set(event_id, json.dumps(market), now)
