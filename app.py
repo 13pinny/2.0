@@ -5395,6 +5395,218 @@ def api_pacha():
     })
 
 
+@app.route("/marquee")
+def marquee_page():
+    return render_template("marquee.html")
+
+
+# tao's two rooms, in the order the page stacks them. Keys match the
+# venue_key tao_events derives (and the auto_source suffix on the tracked
+# rows), so a third Tao room only needs a row in tao_events.VENUES.
+_MARQUEE_VENUE_ORDER = ["marquee-new-york", "marquee-skydeck"]
+
+
+def _tao_venues():
+    """tao_events.VENUES via the EDM registry, so app.py stays decoupled
+    from any single source module. Empty if tao is ever unregistered --
+    /marquee then renders no rooms rather than raising."""
+    mod = edm_events.CATALOG_SOURCES.get("tao")
+    return getattr(mod, "VENUES", {}) if mod else {}
+
+
+# Tao names its GA ladder "General Admission" / "General Admission - Tier N".
+# Everything else on the page is a different PRODUCT, not a rung on that
+# ladder: "GA Fast Pass", "VIP Table Share Experience", "Mastercard VIP".
+# Mixing them destroys the climb figure -- an event selling GA at $30 next
+# to a $200 VIP table reads as a 567% price climb -- so the ladder maths
+# runs over GA rows only. tier_group is always NULL on this source, so the
+# name is all there is to go on.
+_GA_TIER_RE = re.compile(r"^\s*general\s+admission\b", re.I)
+_GA_TIER_NUM_RE = re.compile(r"\btier\s*(\d+)", re.I)
+
+
+def _is_ga_tier(name):
+    n = (name or "")
+    return bool(_GA_TIER_RE.match(n)) and "fast pass" not in n.lower()
+
+
+def _tier_ladder(releases, now):
+    """Turn one event's release-log rows into the demand signal Marquee
+    actually publishes.
+
+    Tao prints no ticket counts anywhere -- the quantity <select> tops out
+    at an unpublished per-order limit -- so there is no "N of M left" and no
+    units-sold velocity to be had. What Tao DOES publish is a numbered GA
+    ladder (Tier 1 -> Tier 2 -> ...), and a tier only steps up once the one
+    below it has sold out. So the ladder timings ARE the sales signal:
+    how many releases have burned through, and how long each one lasted.
+
+    Two things are deliberately reported as unknown rather than guessed:
+
+    - A row whose first_seen_at EQUALS its sold_out_at was already gone the
+      first time we looked. Its true lifetime is unknowable, so hours_open
+      stays None and it's flagged already_gone -- calling that "sold out in
+      0.0h" would invent the hottest possible reading out of no data.
+    - hours_open for a release that was already open when tracking started
+      is a floor, not a fact. The page words those as "at least".
+    """
+    ladder = []
+    for r in releases:
+        first, sold_out = r.get("first_seen_at"), r.get("sold_out_at")
+        already_gone = bool(first and sold_out and first == sold_out)
+        hours = None
+        if first and not already_gone:
+            try:
+                end_t = datetime.fromisoformat(sold_out) if sold_out else now
+                hours = round(
+                    (end_t - datetime.fromisoformat(first)).total_seconds() / 3600, 1)
+            except (TypeError, ValueError):
+                hours = None
+        name = r.get("tier_name")
+        num = _GA_TIER_NUM_RE.search(name or "")
+        ladder.append({
+            "name": name,
+            "is_ga": _is_ga_tier(name),
+            "tier_num": int(num.group(1)) if num else None,
+            "price": r.get("price"),
+            "face_price": r.get("face_price"),
+            "first_seen_at": first,
+            "sold_out_at": sold_out,
+            "hours_open": hours,
+            "closed": bool(sold_out),
+            "already_gone": already_gone,
+        })
+
+    ga = [x for x in ladder if x["is_ga"]]
+    # Burn stats only count releases we actually watched open AND close.
+    burned = [x for x in ga if x["closed"] and not x["already_gone"]
+              and x["hours_open"] is not None]
+    burn = [x["hours_open"] for x in burned]
+    ga_open = [x for x in ga if not x["closed"]]
+    # The climb walks the GA ladder in the order the rungs appeared.
+    ga_priced = [x for x in ga if x["price"] is not None]
+    ga_priced.sort(key=lambda x: (x["first_seen_at"] or "", x["tier_num"] or 0))
+    lo = ga_priced[0]["price"] if ga_priced else None
+    hi = ga_priced[-1]["price"] if ga_priced else None
+    summary = {
+        "releases": len(ga),
+        "products": len(ladder) - len(ga),
+        # Rungs that have closed, split by whether we saw them open.
+        "cleared": len([x for x in ga if x["closed"]]),
+        "cleared_timed": len(burned),
+        "cleared_unseen": len([x for x in ga if x["already_gone"]]),
+        "price_open": lo,
+        "price_top": hi,
+        # Hours the most recently sold-out release lasted -- the freshest
+        # read on how fast this room is moving.
+        "last_burn_hours": burned[-1]["hours_open"] if burned else None,
+        "avg_burn_hours": round(sum(burn) / len(burn), 1) if burn else None,
+        # How long the currently-selling release has been up.
+        "current_open_hours": max((x["hours_open"] for x in ga_open
+                                   if x["hours_open"] is not None), default=None),
+    }
+    # A climb needs two rungs to compare. With one priced GA release --
+    # every event on the day the tracker starts -- lo == hi, and reporting
+    # 0.0% would assert "this event's price has held" when the truth is
+    # "we have not watched it long enough to know".
+    summary["climb_pct"] = (round((hi - lo) / lo * 100, 1)
+                            if len(ga_priced) >= 2 and lo and hi is not None
+                            else None)
+    return ladder, summary
+
+
+@app.route("/api/marquee")
+def api_marquee():
+    """Everything /marquee needs in one call: every tracked Tao Group event
+    grouped by room, its current release + price, and the tier ladder that
+    stands in for the sold-per-window velocity /pacha shows.
+
+    Deliberately NOT reporting counts: lead_available / total_available /
+    sold_cum are structurally None for this source (see _tier_ladder), and
+    surfacing them as 0 would read as "sold out" rather than "unknown".
+    """
+    import json as _json
+    now = datetime.now(timezone.utc)
+    release_log = db.edm_release_log_all()
+    seen = db.edm_all_seen()
+    by_venue = {}
+    for t in db.edm_tracked_all():
+        if t.get("source") != "tao":
+            continue
+        r = seen.get(t["event_id"]) or {}
+        # venue_key comes off auto_source ("tao:marquee-skydeck"); a
+        # hand-added row has none, so fall back to the venue name.
+        vkey = (t.get("auto_source") or "").split(":", 1)[-1]
+        if vkey not in _tao_venues():
+            vkey = next((k for k, v in _tao_venues().items()
+                         if v["name"] == (r.get("venue") or "")), "other")
+        tiers = []
+        if r.get("tiers_json"):
+            try:
+                tiers = _json.loads(r["tiers_json"])
+            except ValueError:
+                pass
+        ladder, summary = _tier_ladder(release_log.get(t["event_id"], []), now)
+        by_venue.setdefault(vkey, []).append({
+            "event_id": t["event_id"], "event_key": t["event_key"],
+            "venue_key": vkey,
+            "venue": r.get("venue") or _tao_venues().get(vkey, {}).get("name"),
+            "name": r.get("name") or t.get("label"),
+            "label": t.get("label"),
+            "date_text": r.get("date_text"), "start_date": r.get("start_date"),
+            "page_url": r.get("page_url") or t.get("url"),
+            "paused": bool(t.get("paused")),
+            "auto": bool(t.get("auto_source")),
+            "on_sale": bool(r.get("on_sale")),
+            "sold_out": bool(r.get("sold_out")),
+            "min_price": r.get("min_price"),
+            "lead_tier": r.get("lead_tier"),
+            "lead_price": r.get("lead_price"),
+            "tiers": tiers,
+            "ladder": ladder,
+            **summary,
+            "first_seen_at": r.get("first_seen_at"),
+            "last_seen_at": r.get("last_seen_at"),
+            "last_error": r.get("last_error"),
+            "tracked_only": not r,
+        })
+
+    venues = []
+    extras = sorted(set(by_venue) - set(_MARQUEE_VENUE_ORDER))
+    for key in _MARQUEE_VENUE_ORDER + extras:
+        evs = by_venue.get(key)
+        if not evs:
+            continue
+        evs.sort(key=lambda e: (e.get("start_date") or "9999", e.get("name") or ""))
+        live = [e for e in evs if e["on_sale"]]
+        priced = [e["lead_price"] for e in live if e["lead_price"] is not None]
+        burns = sorted(e["last_burn_hours"] for e in evs
+                       if e["last_burn_hours"] is not None)
+        venues.append({
+            "key": key,
+            "name": _tao_venues().get(key, {}).get("name") or key,
+            "calendar_url": _tao_venues().get(key, {}).get("calendar_url"),
+            "events": evs,
+            "totals": {
+                "events": len(evs),
+                "on_sale": len(live),
+                "sold_out": len([e for e in evs if e["sold_out"]]),
+                "cleared": sum(e["cleared"] for e in evs),
+                "avg_price": round(sum(priced) / len(priced), 2) if priced else None,
+                "median_burn_hours": burns[len(burns) // 2] if burns else None,
+            },
+        })
+    return jsonify({
+        "venues": venues,
+        "catalogs": dict(_last_edm_catalogs),
+        "status": {**_last_edm_events,
+                   "enabled": EDM_MONITOR_ENABLED,
+                   "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES,
+                   "catalog_sync_minutes": EDM_CATALOG_SYNC_MINUTES},
+        "now": now.isoformat(),
+    })
+
+
 @app.route("/edm")
 def edm_page():
     return render_template("edm.html")
@@ -5414,6 +5626,12 @@ def api_edm():
     seen = db.edm_all_seen()
     events = []
     for t in db.edm_tracked_all():
+        # tao (Marquee NY / Skydeck) has its own dedicated page at /marquee,
+        # where the tier-ladder view its count-less data actually supports
+        # replaces the velocity columns here. The monitor still polls it --
+        # this is a view filter, not a tracking change.
+        if t.get("source") == "tao":
+            continue
         r = seen.get(t["event_id"]) or {}
         windows, _earliest = _sales_windows(
             series_map.get((t["source"], t["event_key"], "0"), []), now)
@@ -5461,9 +5679,10 @@ def api_edm():
     return jsonify({
         "events": events,
         "low_stock_threshold": EDM_LOW_STOCK_THRESHOLD,
-        "sources": sorted(edm_events.SOURCES),
-        "catalog_sources": sorted(edm_events.CATALOG_SOURCES),
-        "catalogs": dict(_last_edm_catalogs),
+        "sources": sorted(set(edm_events.SOURCES) - set(edm_events.CATALOG_SOURCES)),
+        # Catalog sources (tao) are surfaced on /marquee, not here.
+        "catalog_sources": [],
+        "catalogs": {},
         "status": {**_last_edm_events,
                    "enabled": EDM_MONITOR_ENABLED,
                    "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES},

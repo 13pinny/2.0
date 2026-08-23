@@ -100,6 +100,7 @@
     <a href="/vgsales">VG SALES</a>
     <a href="/market">ISRAEL MARKET</a>
     <a href="/pacha">PACHA</a>
+    <a href="/marquee">MARQUEE</a>
     <a href="/edm" class="active">EDM</a>
     <a href="/dice">DICE</a>
     <a href="/watchers">WATCHERS</a>
@@ -117,9 +118,9 @@
   <p class="sub" id="statusline">—</p>
 
   <h2>Add an event</h2>
-  <p class="sub">Paste a posh.vip, events.leapevents.com, wl.eventim.us, shotgun.live or
-    tickets.taogroup.com event URL. Tao Group rows arrive on their own — the two Marquee NY
-    venue calendars are swept automatically.
+  <p class="sub">Paste a posh.vip, events.leapevents.com, wl.eventim.us or shotgun.live
+    event URL. Tao Group (Marquee New York / Skydeck) is swept from the venue calendars
+    automatically and lives on its own page — see <a href="/marquee">MARQUEE</a>.
      Keep the <code>?afflky=</code> parameter on Eventim links — without it the page lists no tickets.</p>
   <div class="controls">
     <input type="text" id="addurl" placeholder="https://posh.vip/e/… " />
@@ -160,10 +161,11 @@ const SRC_META = {
   shotgun: {label: 'Shotgun',     host: 'shotgun.live',            counts: true},
   eventim: {label: 'Eventim US',  host: 'wl.eventim.us',           counts: 'partial'},
   leap:    {label: 'Leap Events', host: 'events.leapevents.com',   counts: false},
-  // Auto-tracked from the taogroup.com venue calendars, not hand-added:
-  // the sweep adds new shows and drops the ones that have happened.
+  // Tao is still polled by this same tick, but it renders on /marquee —
+  // its count-less data suits a tier-ladder view, not the velocity columns
+  // here. Kept in the map so an older cached payload still labels correctly.
   tao:     {label: 'Tao Group',   host: 'tickets.taogroup.com',    counts: false,
-            auto: 'swept from the Marquee NY venue calendars'},
+            auto: 'swept from the Marquee venue calendars — shown on /marquee'},
 };
 
 function flash(el, msg) {
