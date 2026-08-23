@@ -542,18 +542,24 @@ CREATE TABLE IF NOT EXISTS pacha_release_log (
 );
 -- US EDM single-event trackers (posh_events / leap_events / eventim_events
 -- + app.py run_edm_events). Pacha watches a whole venue catalog; these
--- watch NAMED EVENTS on three ticketing platforms, so the set of things to
--- poll is explicit data rather than "whatever the listing page shows".
+-- watch NAMED EVENTS on several ticketing platforms, so the set of things
+-- to poll is explicit data rather than "whatever the listing page shows".
 -- One row per tracked event; delete a row to stop polling it.
+--
+-- The exception is tao_events, which watches Tao Group VENUE CALENDARS the
+-- pacha way and keeps its own rows here in sync: those carry auto_source =
+-- "tao:<venue_key>" and are added/pruned by edm_events.sync_catalogs().
+-- auto_source NULL means a human added the row, and nothing prunes it.
 CREATE TABLE IF NOT EXISTS edm_tracked_events (
     event_id  TEXT PRIMARY KEY,      -- "<source>:<event_key>"
-    source    TEXT NOT NULL,         -- posh | leap | eventim
+    source    TEXT NOT NULL,         -- posh | leap | eventim | shotgun | tao
     event_key TEXT NOT NULL,         -- the source's own id (eventim's keeps
                                      -- its affiliate key — it is load-bearing)
     url       TEXT,                  -- the URL as originally supplied
     label     TEXT,                  -- optional human note
     paused    INTEGER NOT NULL DEFAULT 0,
-    added_at  TEXT NOT NULL
+    added_at  TEXT NOT NULL,
+    auto_source TEXT                 -- catalog that discovered it, or NULL
 );
 -- Latest observed state per tracked EDM event — the row the tick diffs
 -- against. Rows persist after an event is untracked (history).
@@ -1155,6 +1161,13 @@ def init():
         dp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dice_purchases)").fetchall()}
         if "listed_json" not in dp_cols:
             conn.execute("ALTER TABLE dice_purchases ADD COLUMN listed_json TEXT")
+        # Tao Group's venue calendars auto-populate edm_tracked_events, so a
+        # row now records which catalog discovered it. NULL = added by hand
+        # (the original rows, and anything from --add / the /edm Track box),
+        # and only auto rows are ever pruned.
+        et_cols = {row["name"] for row in conn.execute("PRAGMA table_info(edm_tracked_events)").fetchall()}
+        if "auto_source" not in et_cols:
+            conn.execute("ALTER TABLE edm_tracked_events ADD COLUMN auto_source TEXT")
         cb_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cashback_entries)").fetchall()}
         if "source_ref" not in cb_cols:
             conn.execute("ALTER TABLE cashback_entries ADD COLUMN source_ref TEXT")
@@ -2900,22 +2913,61 @@ def edm_tracked_all(include_paused=True):
         return [dict(r) for r in conn.execute(sql).fetchall()]
 
 
-def edm_tracked_add(source, event_key, url, now_iso, label=None):
+def edm_tracked_add(source, event_key, url, now_iso, label=None,
+                    auto_source=None, unpause=True):
     """Track one event. Idempotent: re-adding refreshes the URL/label and
-    un-pauses, but keeps the original added_at."""
+    un-pauses, but keeps the original added_at.
+
+    `auto_source` marks the row as discovered by a venue catalog (see
+    edm_events.sync_catalogs) so the pruner can tell it from a hand-added
+    one. It is only ever SET, never cleared: a catalog re-finding an event
+    someone added by hand must not make it prunable, and a human adding an
+    auto row again is just a no-op refresh.
+
+    `unpause=False` is for those catalog re-syncs: a human pausing an
+    auto-tracked event is the only way to silence it (deleting the row just
+    means the next sync re-adds it), so the sync must not resurrect it
+    every few minutes. A hand `--add` still un-pauses, which is what
+    re-adding an event by hand is asking for."""
     event_id = f"{source}:{event_key}"
     with connect() as conn:
         conn.execute(
             """INSERT INTO edm_tracked_events (event_id, source, event_key,
-                   url, label, paused, added_at)
-               VALUES (?, ?, ?, ?, ?, 0, ?)
+                   url, label, paused, added_at, auto_source)
+               VALUES (?, ?, ?, ?, ?, 0, ?, ?)
                ON CONFLICT(event_id) DO UPDATE SET
                    url = excluded.url,
                    label = COALESCE(excluded.label, edm_tracked_events.label),
-                   paused = 0""",
-            (event_id, source, event_key, url, label, now_iso),
+                   paused = CASE WHEN ? THEN 0 ELSE edm_tracked_events.paused END""",
+            (event_id, source, event_key, url, label, now_iso, auto_source,
+             1 if unpause else 0),
         )
     return event_id
+
+
+def edm_tracked_auto_ids(auto_source_prefix):
+    """event_ids of the rows a catalog added, e.g. prefix 'tao:'. Rows a
+    human added (auto_source NULL) are never included."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT event_id FROM edm_tracked_events "
+            "WHERE auto_source IS NOT NULL AND auto_source LIKE ? || '%'",
+            (auto_source_prefix,)).fetchall()
+    return {r["event_id"] for r in rows}
+
+
+def edm_tracked_auto_prune(auto_source_prefix, keep_event_ids):
+    """Drop catalog-added rows the catalog no longer lists (the show
+    happened, or it was pulled). Hand-added rows are untouchable here, and
+    the observed history in edm_seen_events / edm_release_log stays behind
+    exactly as it does for a manual --remove."""
+    stale = edm_tracked_auto_ids(auto_source_prefix) - set(keep_event_ids)
+    if not stale:
+        return []
+    with connect() as conn:
+        conn.executemany("DELETE FROM edm_tracked_events WHERE event_id = ?",
+                         [(eid,) for eid in stale])
+    return sorted(stale)
 
 
 def edm_tracked_remove(event_id):
