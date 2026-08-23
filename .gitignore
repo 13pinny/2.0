@@ -38,3 +38,6 @@ tm_probe/
 
 # Supervisor log (rolling output from start_supervised.bat)
 supervisor.log
+
+# CrowdVolt refresh cookie cache (live credential)
+cv_session.json

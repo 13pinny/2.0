@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -1005,7 +1006,106 @@ def _parse_crowdvolt_row(cells):
     }
 
 
+def _crowdvolt_sale_status(row):
+    if row.get("is_canceled"):
+        return "Canceled"
+    if row.get("is_complete"):
+        return "Completed"
+    if row.get("is_pending"):
+        return "Pending"
+    return None
+
+
+def _map_crowdvolt_api_sale(row):
+    """One /api/buy_sell_history/sell_delivered row -> a crowdvolt_sales dict.
+
+    Same keys _parse_crowdvolt_row produces, so db.upsert_crowdvolt_sales and
+    everything downstream are unchanged. Field names verified against live
+    data 2026-08-23 (cv_probe/probe_sales_shape.py).
+    """
+    card = row.get("base_card") or {}
+    order_id = (row.get("order_number") or "").strip() or None
+    if not order_id:
+        return None
+    sale_date = card.get("date_placed")
+    sale_date_iso = _parse_crowdvolt_sale_date(sale_date)
+    event_date = card.get("event_date")
+    return {
+        "id": order_id,
+        "order_id": order_id,
+        "sale_date": sale_date,
+        "sale_date_iso": sale_date_iso,
+        "event_name": card.get("event_name"),
+        "event_date": event_date,
+        "event_date_iso": _parse_crowdvolt_event_date(event_date, sale_date_iso),
+        "venue": card.get("event_location"),
+        "qty": row.get("quantity"),
+        # ticket_type_name is the order's own label; base_card.ticket_type is
+        # the listing's. Prefer the order's, fall back to the listing's.
+        "ticket_type": row.get("ticket_type_name") or card.get("ticket_type"),
+        "price_per_ticket": card.get("price"),
+        # all_in_price is the order TOTAL, not per-ticket - same convention
+        # crowdvolt_pricer documents.
+        "sale_price": card.get("all_in_price"),
+        "status": _crowdvolt_sale_status(row),
+        "raw_cells": json.dumps({"api": True, "order_number": order_id,
+                                 "quantity": row.get("quantity"),
+                                 "payout": row.get("payout"),
+                                 "fee": row.get("fee"),
+                                 "event_uqid": card.get("event_uqid")}),
+    }
+
+
+def _fetch_crowdvolt_sales_api():
+    """Delivered sales straight from the API - no browser, no UI.
+
+    CrowdVolt's own /selling page stopped rendering the Completed table
+    (confirmed 2026-08-23 on an account with 25+ delivered sales), so the
+    scrape below finds nothing no matter how long it waits. The API still
+    returns everything.
+
+    Uses whatever cv_refresh_token cv_auth has cached; it does not harvest
+    one itself, so on a cold cache this returns None and the UI path runs.
+    crowdvolt_pricer refreshes that cache every tick.
+    """
+    import cv_auth
+    auth = cv_auth.CvAuth()          # no playwright: cache-only
+    out, seen, offset = [], set(), 0
+    while True:
+        status, raw = auth.call(
+            "https://api.crowdvolt.com/api/buy_sell_history/sell_delivered"
+            f"?limit=25&offset={offset}")
+        if status != 200:
+            raise RuntimeError(f"sell_delivered -> {status}: {(raw or '')[:120]}")
+        rows = json.loads(raw)
+        if not isinstance(rows, list) or not rows:
+            break
+        for r in rows:
+            parsed = _map_crowdvolt_api_sale(r)
+            if parsed and parsed["id"] not in seen:
+                seen.add(parsed["id"])
+                out.append(parsed)
+        if len(rows) < 25:
+            break
+        offset += 25
+        if offset > 2000:            # runaway guard
+            break
+    return out
+
+
 def _scrape_crowdvolt_sales(context):
+    """API first, UI scrape as fallback."""
+    try:
+        rows = _fetch_crowdvolt_sales_api()
+        print(f"[kartis] crowdvolt sales via API: {len(rows)}")
+        return rows
+    except Exception as e:
+        print(f"[kartis] crowdvolt sales API unavailable "
+              f"({type(e).__name__}: {e}) - falling back to the UI scrape")
+    return _scrape_crowdvolt_sales_ui(context)
+
+
+def _scrape_crowdvolt_sales_ui(context):
     # CrowdVolt redesigned the page in May 2026: /dashboard/sales redirects
     # to /selling, the layout swapped from a single table to tabs (Incomplete
     # / Completed), and the ?orderType=completed query param is no longer

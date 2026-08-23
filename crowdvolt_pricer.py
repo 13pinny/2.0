@@ -3,16 +3,18 @@ for the same event + ticket type.
 
 Empirical facts (probed 2026-07-22 through the CDP Chrome, cv_probe/):
 
-* Everything is a JSON API, but Cloudflare 503s any out-of-browser request —
-  so ALL calls run as in-page fetch() from a page parked on www.crowdvolt.com
-  (same trick as kupat's in-page harvest, but cleaner: no UI clicking at all,
-  including the price WRITE).
+* Everything is a JSON API. Cloudflare used to 503 any out-of-browser
+  request, which is why this ran as in-page fetch() from a parked page; as
+  of 2026-08-23 plain HTTP works, so the default transport is cv_auth - no
+  browser, no CSP, no CF challenge. The browser path below is kept as an
+  automatic fallback, and is still the only one that can borrow a
+  clearance a human established in noVNC.
 
-* Auth = `Authorization: Bearer <stytch_session cookie value>` plus the
-  `x-fingerprint-id` (localStorage `fingerprint_id`) and `x-pokedex` headers.
-  what.crowdvolt.com (the book) 503s without the fingerprint headers;
-  api.crowdvolt.com 302s to /signup without the bearer. All three values are
-  read from the live page at call time, so token rotation is free.
+* Auth = `Authorization: Bearer <access_token>`, minted from the long-lived
+  `cv_refresh_token` cookie (POST www.crowdvolt.com/api/auth/refresh). The
+  `stytch_session` cookie the original in-page fetch read no longer exists.
+  api.crowdvolt.com 302s to /signup without the bearer; what.crowdvolt.com
+  also wants a browser-shaped User-Agent. See cv_auth's docstring.
 
 * Our active asks: GET api.crowdvolt.com/api/buy_sell_history/sell_active
   ?limit=N&offset=M — [{ask_uqid, base_card:{event_uqid, event_name,
@@ -54,6 +56,7 @@ from datetime import datetime, timedelta, timezone
 
 from patchright.sync_api import sync_playwright
 
+import cv_auth
 import db
 import notify
 
@@ -379,7 +382,14 @@ def _settle_challenge(page):
             "through the check in the CrowdVolt tab, then sign in if needed")
 
 
-def open_session(p):
+def _open_browser_session(p):
+    """Fallback transport: borrow the logged-in Chrome.
+
+    Kept for the day Cloudflare starts blocking plain HTTP again. It is the
+    only path that can inherit a challenge clearance a human established,
+    but it depends on that tab existing and on CrowdVolt's SPA working, so
+    open_session prefers HTTP.
+    """
     # scraper's hardened connect: pre-closes stray ticketing tabs (a parked
     # tab stuck on a CF challenge has a self-navigating iframe that can
     # crash or WEDGE the attach — the 2026-08-12 outage), real timeout,
@@ -406,6 +416,60 @@ def open_session(p):
     page.wait_for_timeout(3000)
     _settle_challenge(page)
     return CvSession(page)
+
+
+class HttpCvSession(CvSession):
+    """CvSession over plain HTTP - no browser, no CSP, no CF challenge.
+
+    Inherits every read/write helper from the browser-backed parent; only
+    the transport differs. Preferred because it depends on neither a
+    human-cleared tab nor CrowdVolt's web UI rendering, so it keeps working
+    when the SPA does not - which as of 2026-08-23 it does not.
+    """
+
+    def __init__(self, auth):
+        self.auth = auth
+        self.owns_page = False      # nothing to close
+
+    def close(self):
+        pass
+
+    def api(self, url, method="GET", body=None):
+        try:
+            status, raw = self.auth.call(url, method=method, body=body)
+        except cv_auth.CvAuthError as e:
+            raise CvPricerError(str(e))
+        if status != 200:
+            raise CvPricerError(
+                f"{method} {url.split('?')[0]} -> {status}: "
+                f"{(raw or '')[:200]}")
+        try:
+            return json.loads(raw)
+        except (TypeError, ValueError) as e:
+            raise CvPricerError(f"bad JSON from {url.split('?')[0]}: {e}")
+
+
+def open_session(p):
+    """One session per tick: HTTP if it works, browser if it does not.
+
+    The HTTP path still touches a browser, but only to harvest the
+    cv_refresh_token cookie when the cache is cold (~monthly) - not on
+    every tick. Set KARTIS_CV_FORCE_BROWSER=1 to skip it entirely.
+    """
+    if os.getenv("KARTIS_CV_FORCE_BROWSER") == "1":
+        print("[cvpricer] KARTIS_CV_FORCE_BROWSER=1 - using the browser path")
+        return _open_browser_session(p)
+    try:
+        sess = HttpCvSession(cv_auth.CvAuth(playwright=p, cdp_url=CDP_URL))
+        # One cheap authenticated call before the tick commits to this
+        # transport: proves the token mints AND that the API still answers.
+        sess.api(f"{API}/api/buy_sell_history/seller_counts")
+        print("[cvpricer] browserless transport OK")
+        return sess
+    except (CvPricerError, cv_auth.CvAuthError) as e:
+        print(f"[cvpricer] browserless transport unavailable ({e}) - "
+              "falling back to the browser")
+        return _open_browser_session(p)
 
 
 # --- pricing rule ---------------------------------------------------------
