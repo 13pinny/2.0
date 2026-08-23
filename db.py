@@ -145,6 +145,20 @@ CREATE TABLE IF NOT EXISTS event_group_merges (
 );
 CREATE INDEX IF NOT EXISTS idx_event_group_merges_canonical
     ON event_group_merges(canonical_group_key);
+CREATE TABLE IF NOT EXISTS event_group_costs (
+    -- Whole-event cost entered by hand, split evenly across every ticket in
+    -- the group. Used when the platform (CrowdVolt in particular) doesn't
+    -- carry a per-ticket cost across from Dice / Lysted: you paid $800 for
+    -- the 8-ticket block, so every ticket -- sold or still listed -- costs
+    -- $100. group_key is the canonical event_group key (post-merge).
+    -- ticket_count NULL falls back to the auto "tickets bought" count.
+    group_key TEXT PRIMARY KEY,
+    total_cost REAL NOT NULL,
+    ticket_count INTEGER,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS inventory_overrides (
     source TEXT NOT NULL,
     source_id TEXT NOT NULL,
@@ -1845,6 +1859,42 @@ def all_event_group_merges():
             "created_at FROM event_group_merges"
         ).fetchall()
     return {r["raw_group_key"]: dict(r) for r in rows}
+
+
+def set_event_group_cost(group_key, total_cost, ticket_count, note, now_iso):
+    """Upsert the whole-event cost for a group. ticket_count None/0 means
+    "split over however many tickets Kartis thinks you bought"."""
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO event_group_costs
+                (group_key, total_cost, ticket_count, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(group_key) DO UPDATE SET
+                total_cost=excluded.total_cost,
+                ticket_count=excluded.ticket_count,
+                note=excluded.note,
+                updated_at=excluded.updated_at
+            """,
+            (group_key, float(total_cost),
+             int(ticket_count) if ticket_count else None,
+             note or None, now_iso, now_iso),
+        )
+
+
+def delete_event_group_cost(group_key):
+    with connect() as conn:
+        conn.execute("DELETE FROM event_group_costs WHERE group_key = ?", (group_key,))
+
+
+def all_event_group_costs():
+    """Returns {group_key: {total_cost, ticket_count, note, ...}}."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT group_key, total_cost, ticket_count, note, created_at, updated_at "
+            "FROM event_group_costs"
+        ).fetchall()
+    return {r["group_key"]: dict(r) for r in rows}
 
 
 def set_inv_override(source, source_id, field, value, now_iso):

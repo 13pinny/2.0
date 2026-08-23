@@ -1459,6 +1459,37 @@ def _bought_by_event(groups_map):
     return out
 
 
+def _group_cost_per_unit(groups_map):
+    """{event_group_key: cost_per_ticket} from hand-entered whole-event costs.
+
+    The manual escape hatch for when a platform doesn't carry per-ticket cost
+    across (CrowdVolt resales of Dice / Lysted stock, mainly): the user says
+    "the block was $800 for 8 tickets" once on the event group header, and
+    every ticket in that group -- sold rows AND still-listed inventory rows --
+    prices at $100.
+
+    Denominator is the ticket_count the user entered; if they left it blank we
+    fall back to the auto "tickets bought" count that the group header shows.
+    Returns an unrounded per-unit so an $800/3 split doesn't drift; callers
+    round the per-row product to cents.
+    """
+    entries = db.all_event_group_costs()
+    if not entries:
+        return {}
+    bought = None
+    out = {}
+    for key, e in entries.items():
+        denom = e.get("ticket_count") or 0
+        if denom <= 0:
+            if bought is None:
+                bought = _bought_by_event(groups_map)
+            denom = bought.get(key) or 0
+        if denom <= 0:
+            continue
+        out[key] = (e.get("total_cost") or 0) / denom
+    return out
+
+
 def _row_group(mapping, name, iso, venue=None):
     nv = _norm_venue(venue)
     iso_d = _date_only(iso or "")
@@ -1829,11 +1860,19 @@ def _build_unified_inventory():
 
     inv_overrides = db.all_inv_overrides()
     seats_sold_map = db.seats_sold_by_inv()
+    group_cpu = _group_cost_per_unit(groups)
     for r in rows:
         ov = inv_overrides.get((r.get("source"), str(r.get("source_id"))))
         if ov:
             _apply_overrides(r, ov, _INV_NUMERIC)
         r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"), r.get("venue"))
+        # Same whole-event split the sales page applies -- unsold tickets in
+        # the block are carried at the same per-ticket cost as the sold ones.
+        cpu = group_cpu.get(r["event_group"])
+        if cpu is not None and not (ov and ("cost" in ov or "cost_per_unit" in ov)):
+            r["cost_per_unit"] = round(cpu, 2)
+            r["cost"] = round(cpu * (r.get("qty_unsold") or 0), 2)
+            r["cost_source"] = "event_split"
         r["seats_sold_already"] = seats_sold_map.get((r.get("source"), str(r.get("source_id"))), "")
     # Apply user-merged-group display overrides AFTER per-row overrides so a
     # merged event uses the canonical name even if a single row had its own
@@ -2201,11 +2240,19 @@ def _build_combined_sales(only_canceled=False):
 
     sale_overrides = db.all_sale_overrides()
     groups = _event_groups()
+    group_cpu = _group_cost_per_unit(groups)
     for r in out:
         ov = sale_overrides.get((r.get("source"), str(r.get("sale_id"))))
         if ov:
             _apply_overrides(r, ov, _SALE_NUMERIC)
         r["event_group"] = _row_group(groups, r.get("event_name"), r.get("event_date_iso"), r.get("venue"))
+        # Whole-event cost split beats whatever cost the scrapers guessed --
+        # but a cost the user typed on this specific row beats both.
+        cpu = group_cpu.get(r["event_group"])
+        if cpu is not None and not (ov and "cost" in ov):
+            r["cost"] = round(cpu * (r.get("qty") or 0), 2)
+            r["cost_per_unit"] = round(cpu, 2)
+            r["cost_source"] = "event_split"
     _apply_group_displays(out, _event_group_displays())
     return out
 
@@ -2574,10 +2621,26 @@ def api_sales_all():
         "qty": sum((c.get("qty") or 0) for c in canceled_rows),
         "lost_revenue": round(sum((c.get("sale_price") or 0) for c in canceled_rows), 2),
     }
+    # Whole-event cost splits, keyed by event_group. The page uses these to
+    # badge the group header and to price the synthesized "(no detail)"
+    # still-listed rows that have no inventory row of their own.
+    groups = _event_groups()
+    bought = _bought_by_event(groups)
+    group_costs = {}
+    for key, e in db.all_event_group_costs().items():
+        denom = e.get("ticket_count") or bought.get(key) or 0
+        group_costs[key] = {
+            "total_cost": e.get("total_cost"),
+            "ticket_count": e.get("ticket_count"),
+            "effective_count": denom,
+            "per_unit": round((e.get("total_cost") or 0) / denom, 2) if denom else None,
+            "note": e.get("note") or "",
+        }
     return jsonify({
         "rows": rows,
         "totals": totals,
-        "bought_by_event": _bought_by_event(_event_groups()),
+        "bought_by_event": bought,
+        "group_costs": group_costs,
         "last_run": _last_run,
         "unsold": unsold_rows,
         "unsold_totals": unsold_totals,
@@ -2728,6 +2791,67 @@ def api_sales_uncancel():
     return jsonify({"ok": True})
 
 
+@app.route("/api/event-groups/cost", methods=["POST"])
+def api_event_group_cost_set():
+    """Set one whole-event cost and let Kartis split it per ticket.
+
+    The manual path for stock whose per-ticket cost doesn't survive the hop
+    between platforms -- e.g. a Dice or Lysted block relisted on CrowdVolt,
+    where CrowdVolt has no idea what you paid. You enter what the block cost
+    in total and how many tickets it covers; every sold row and every
+    still-listed row in the group then carries total / count each.
+
+    Body: {"group_key": "...", "total_cost": 800, "ticket_count": 8,
+           "note": "optional"}
+    ticket_count may be omitted/0 -- then the group's auto "tickets bought"
+    count is used as the denominator.
+    """
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    group_key = (body.get("group_key") or "").strip()
+    if not group_key:
+        return jsonify({"error": "group_key required"}), 400
+    try:
+        total_cost = float(body.get("total_cost"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "total_cost must be a number"}), 400
+    if total_cost < 0:
+        return jsonify({"error": "total_cost must be >= 0"}), 400
+    raw_count = body.get("ticket_count")
+    ticket_count = None
+    if raw_count not in (None, "", 0, "0"):
+        try:
+            ticket_count = int(raw_count)
+        except (TypeError, ValueError):
+            return jsonify({"error": "ticket_count must be a whole number"}), 400
+        if ticket_count <= 0:
+            return jsonify({"error": "ticket_count must be > 0"}), 400
+    note = (body.get("note") or "").strip() or None
+    db.set_event_group_cost(group_key, total_cost, ticket_count,
+                            note, datetime.now(timezone.utc).isoformat())
+    denom = ticket_count or _bought_by_event(_event_groups()).get(group_key) or 0
+    return jsonify({
+        "ok": True,
+        "group_key": group_key,
+        "total_cost": total_cost,
+        "ticket_count": ticket_count,
+        "effective_count": denom,
+        "per_unit": round(total_cost / denom, 2) if denom else None,
+    })
+
+
+@app.route("/api/event-groups/cost/clear", methods=["POST"])
+def api_event_group_cost_clear():
+    """Drop the whole-event cost split; rows fall back to scraped cost."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    group_key = (body.get("group_key") or "").strip()
+    if not group_key:
+        return jsonify({"error": "group_key required"}), 400
+    db.delete_event_group_cost(group_key)
+    return jsonify({"ok": True, "group_key": group_key})
+
+
 @app.route("/api/event-groups/merge", methods=["POST"])
 def api_event_groups_merge():
     """Merge 2+ raw event groups into one canonical group with a chosen
@@ -2767,15 +2891,36 @@ def api_event_groups_merge():
         if k in canonical_to_raws:
             for raw in canonical_to_raws[k]:
                 expanded.add(raw)
+    now_iso = datetime.now(timezone.utc).isoformat()
     db.merge_event_groups(
         sorted(expanded), canonical_group_key,
         event_name, raw_date, iso, venue,
-        datetime.now(timezone.utc).isoformat(),
+        now_iso,
     )
+    # Carry any whole-event cost splits onto the new canonical key -- the old
+    # keys stop being reachable after the merge, so a split left behind would
+    # silently stop applying. Two merged blocks add up: $800/8 + $300/3 on the
+    # same event becomes $1100/11.
+    all_costs = db.all_event_group_costs()
+    involved = [k for k in (expanded | {canonical_group_key} | set(group_keys)) if k in all_costs]
+    merged_cost = None
+    if involved and not (len(involved) == 1 and involved[0] == canonical_group_key):
+        total = sum(all_costs[k].get("total_cost") or 0 for k in involved)
+        counts = [all_costs[k].get("ticket_count") or 0 for k in involved]
+        # Only keep an explicit denominator if every part had one; otherwise
+        # fall back to the auto bought-count.
+        count = sum(counts) if all(c > 0 for c in counts) else None
+        notes = [all_costs[k].get("note") for k in involved if all_costs[k].get("note")]
+        for k in involved:
+            db.delete_event_group_cost(k)
+        db.set_event_group_cost(canonical_group_key, total, count,
+                                "; ".join(notes) or None, now_iso)
+        merged_cost = {"total_cost": total, "ticket_count": count}
     return jsonify({
         "ok": True,
         "canonical_group_key": canonical_group_key,
         "merged_raw_keys": sorted(expanded),
+        "carried_cost": merged_cost,
     })
 
 

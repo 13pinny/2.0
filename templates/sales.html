@@ -105,6 +105,10 @@
   .grp-check { width: 13px; height: 13px; vertical-align: middle; margin-right: 6px; cursor: pointer; accent-color: var(--accent); }
   .grp-unmerge { background: transparent; border: 1px solid var(--purple); color: var(--purple); padding: 1px 6px; font-size: 9px; letter-spacing: 1.5px; margin-left: 8px; cursor: pointer; font-family: inherit; border-radius: 1px; }
   .grp-unmerge:hover { background: rgba(167,139,250,0.12); }
+  .grp-cost { background: transparent; border: 1px dashed var(--line-2); color: var(--muted); padding: 1px 6px; font-size: 9px; letter-spacing: 1.5px; margin-left: 8px; cursor: pointer; font-family: inherit; border-radius: 1px; }
+  .grp-cost:hover { background: rgba(210,153,34,0.12); border-color: var(--amber); color: var(--amber); }
+  .grp-cost.set { border-style: solid; border-color: var(--amber); color: var(--amber); }
+  tr.group-hdr td:hover .grp-cost { border-color: var(--amber); color: var(--amber); }
   #merge-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--purple); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; z-index: 999; letter-spacing: 0.5px; gap: 12px; align-items: center; }
   #merge-bar.open { display: flex; }
   #merge-bar .bulk-count { color: var(--purple); font-weight: 600; }
@@ -355,6 +359,25 @@
 
 <div id="toast"><span id="toast-msg"></span><button id="toast-undo">Undo</button><span class="kbd">Ctrl+Z</span></div>
 
+<div id="cost-modal-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>// EVENT COST SPLIT <span class="src-tag" id="cost-modal-tag" style="color:var(--amber);border-color:var(--amber);">EVENT</span></span><button class="close" id="cost-close">&times;</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="cost-meta"></div>
+      <label>Total Cost</label><input id="cost-total" type="number" step="0.01" placeholder="what the whole block cost you">
+      <label>Tickets</label><input id="cost-count" type="number" step="1" placeholder="(auto)">
+      <label>Note</label><input id="cost-note" type="text" placeholder="optional — e.g. bought on Dice">
+      <div class="meta-line" id="cost-preview" style="border-bottom:none; margin-bottom:0; padding-bottom:0; color:var(--amber);"></div>
+    </div>
+    <div class="modal-foot">
+      <span class="muted" id="cost-foot-note">Splits evenly over every ticket — sold and still listed.</span>
+      <button id="cost-remove" style="color:var(--red);border-color:var(--red);display:none;">Remove</button>
+      <button id="cost-cancel">Cancel</button>
+      <button class="primary" id="cost-save" style="background:var(--amber);border-color:var(--amber);color:var(--bg);">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="modal-bg" class="modal-bg">
   <div class="modal">
     <h3><span>EDIT SALE <span id="m-src" class="src-tag"></span></span><button class="close" id="m-close">×</button></h3>
@@ -424,6 +447,11 @@ let _expanded = new Set();
 let _selectedGroupKeys = new Set();
 // canonical_group_key set of currently-merged groups (for the ⊟ MERGED badge).
 let _mergedGroupKeys = new Set();
+// event_group → {total_cost, ticket_count, effective_count, per_unit, note}
+// for events whose cost was entered as one whole-block figure and split
+// evenly per ticket. Backend already applied the split to row.cost; this map
+// drives the header badge, the modal, and the synthesized listing rows.
+let _groupCosts = new Map();
 function _eventKey(r) {
   if (r && r.event_group) return r.event_group;
   return ((r?.event_name || "") + "|" + (r?.event_date_iso || r?.event_date || "")).toLowerCase();
@@ -469,7 +497,12 @@ function _roi(r) {
 function _renderListingRow(r) {
   const tr = document.createElement("tr");
   tr.className = "listing-row";
-  const cost = r.cost != null ? r.cost : (r.cost_per_unit ? r.cost_per_unit * (r.qty_unsold || 0) : 0);
+  // Split rows always price off the per-unit: the renderer caps qty_unsold
+  // down to what's actually still listed, so the backend's total would be
+  // stale for a capped row.
+  const cost = (r.cost_source === "event_split" && r.cost_per_unit != null)
+    ? r.cost_per_unit * (r.qty_unsold || 0)
+    : (r.cost != null ? r.cost : (r.cost_per_unit ? r.cost_per_unit * (r.qty_unsold || 0) : 0));
   const list = r.list_price;
   // Synthesized "(no detail)" rows have no source_id — can't delete those.
   const canDelete = !!(r.source && r.source_id);
@@ -619,6 +652,12 @@ function _renderGrouped(tbody, rows, groupOrder) {
     const isMerged = _mergedGroupKeys.has(g.key);
     const checked = _selectedGroupKeys.has(g.key) ? " checked" : "";
     const mergedBadge = isMerged ? `<button class="grp-unmerge" title="Unmerge — split this back into the original groups" data-canonical="${esc(g.key)}">⊟ MERGED</button>` : "";
+    // Whole-event cost split. Shows what's configured, or an invite to set it
+    // when the scrapers couldn't bring a cost across (CrowdVolt, mostly).
+    const gc = _groupCosts.get(g.key);
+    const costBtn = gc
+      ? `<button class="grp-cost set" title="Whole-event cost split evenly over ${gc.effective_count} tickets — click to edit" data-cost-key="${esc(g.key)}" data-bought="${total}" data-name="${esc(g.event_name || "")}">⊙ ${money(gc.total_cost)} / ${gc.effective_count} = ${money(gc.per_unit)} EA</button>`
+      : `<button class="grp-cost" title="Enter one cost for the whole event and split it per ticket" data-cost-key="${esc(g.key)}" data-bought="${total}" data-name="${esc(g.event_name || "")}">$ SPLIT COST</button>`;
     hdr.innerHTML = `
       <td colspan="14">
         <input type="checkbox" class="grp-check" data-grp-key="${esc(g.key)}" title="Select to merge with another event"${checked}>
@@ -626,6 +665,7 @@ function _renderGrouped(tbody, rows, groupOrder) {
         <span class="evt-title">${esc(g.event_name)}</span>
         <span class="evt-meta">${esc(fmtDateTime(g.event_date_iso || g.event_date || ""))} · ${esc(g.venue || "")}</span>
         ${mergedBadge}
+        ${costBtn}
         <span class="evt-stats">
           <span class="ratio">${sold}/${total} sold</span>
           ${money(cost)} cost · ${money(payout)} payout ·
@@ -670,7 +710,12 @@ function _renderGrouped(tbody, rows, groupOrder) {
             row: "",
             qty_unsold: remaining,
             list_price: null,
+            // No inventory row backs this one, so the backend never priced
+            // it — but under a whole-event split we know what each ticket
+            // cost, so fill it in here.
             cost: null,
+            cost_per_unit: gc ? gc.per_unit : null,
+            cost_source: gc ? "event_split" : null,
             delivery_type: "",
           }));
         }
@@ -977,6 +1022,105 @@ document.getElementById("merge-save").addEventListener("click", async () => {
   await load();
 });
 
+// --- Whole-event cost split ---
+// One cost for the whole block, divided evenly across every ticket in the
+// event group. Exists because CrowdVolt (and to a lesser extent Viagogo)
+// don't carry the original per-ticket cost across when stock bought on Dice
+// or Lysted gets relisted there — so the sold rows land with $0 cost and the
+// profit numbers lie. Entering "$800 over 8 tickets" prices every ticket in
+// the group at $100: 3 sold shows $300 cost, the 5 still listed show $500.
+let _costModalKey = null;
+
+function _costPreview() {
+  const totalEl = document.getElementById("cost-total");
+  const countEl = document.getElementById("cost-count");
+  const total = parseFloat(totalEl.value);
+  const count = parseInt(countEl.value || countEl.placeholder.replace(/\D/g, ""), 10);
+  const out = document.getElementById("cost-preview");
+  if (!isFinite(total) || !isFinite(count) || count <= 0) { out.textContent = ""; return; }
+  out.textContent = `${money(total)} ÷ ${count} tickets = ${money(Math.round((total / count) * 100) / 100)} per ticket`;
+}
+
+function openCostModal(key, name, bought) {
+  _costModalKey = key;
+  const gc = _groupCosts.get(key);
+  document.getElementById("cost-modal-tag").textContent = gc ? "EDIT" : "NEW";
+  document.getElementById("cost-meta").textContent =
+    `${name || "this event"} — Kartis counts ${bought} ticket${bought === 1 ? "" : "s"} bought for this event.`;
+  document.getElementById("cost-total").value = gc ? gc.total_cost : "";
+  document.getElementById("cost-count").value = (gc && gc.ticket_count) ? gc.ticket_count : "";
+  document.getElementById("cost-count").placeholder = `auto — ${bought}`;
+  document.getElementById("cost-note").value = gc ? (gc.note || "") : "";
+  document.getElementById("cost-remove").style.display = gc ? "" : "none";
+  _costPreview();
+  document.getElementById("cost-modal-bg").classList.add("open");
+  document.getElementById("cost-total").focus();
+}
+
+function closeCostModal() {
+  document.getElementById("cost-modal-bg").classList.remove("open");
+  _costModalKey = null;
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button.grp-cost");
+  if (!btn) return;
+  e.stopPropagation();
+  openCostModal(
+    btn.getAttribute("data-cost-key"),
+    btn.getAttribute("data-name"),
+    Number(btn.getAttribute("data-bought")) || 0,
+  );
+});
+
+for (const id of ["cost-total", "cost-count"]) {
+  document.getElementById(id).addEventListener("input", _costPreview);
+}
+document.getElementById("cost-close").addEventListener("click", closeCostModal);
+document.getElementById("cost-cancel").addEventListener("click", closeCostModal);
+
+document.getElementById("cost-save").addEventListener("click", async () => {
+  if (!_costModalKey) return;
+  const total = parseFloat(document.getElementById("cost-total").value);
+  if (!isFinite(total) || total < 0) { alert("Enter the total cost for the event"); return; }
+  const rawCount = document.getElementById("cost-count").value.trim();
+  const count = rawCount === "" ? null : parseInt(rawCount, 10);
+  if (rawCount !== "" && (!isFinite(count) || count <= 0)) { alert("Tickets must be a whole number above 0"); return; }
+  const res = await fetch("/api/event-groups/cost", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      group_key: _costModalKey,
+      total_cost: total,
+      ticket_count: count,
+      note: document.getElementById("cost-note").value.trim(),
+    }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    alert("Save failed: " + (j.error || res.status));
+    return;
+  }
+  const j = await res.json();
+  closeCostModal();
+  showToast(`cost split // ${money(j.per_unit)} per ticket`);
+  await load();
+});
+
+document.getElementById("cost-remove").addEventListener("click", async () => {
+  if (!_costModalKey) return;
+  if (!confirm("Remove the cost split? Rows fall back to whatever cost the scrapers found.")) return;
+  const res = await fetch("/api/event-groups/cost/clear", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({group_key: _costModalKey}),
+  });
+  if (!res.ok) { alert("Remove failed"); return; }
+  closeCostModal();
+  showToast("cost split removed");
+  await load();
+});
+
 // Unmerge — clicked on the ⊟ MERGED badge of a previously-merged group.
 document.addEventListener("click", async (e) => {
   const btn = e.target.closest("button.grp-unmerge");
@@ -1068,6 +1212,7 @@ async function load() {
   // Backend computes per-event "tickets bought" already, taking max across
   // overlapping sources — saves us doing it in JS.
   _boughtByEvent = new Map(Object.entries(d.bought_by_event || {}));
+  _groupCosts = new Map(Object.entries(d.group_costs || {}));
   // Bucket the still-listed rows by event_group so we can render them
   // under the corresponding sold rows when the event is expanded.
   _invByEvent = new Map();
@@ -1333,6 +1478,9 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("click", (e) => {
   const hdr = e.target.closest("tr.group-hdr");
   if (!hdr) return;
+  // Buttons and the merge checkbox live inside the header cell — clicking
+  // one shouldn't also toggle the group open/closed.
+  if (e.target.closest("button") || e.target.closest(".grp-check")) return;
   const key = hdr.dataset.key;
   if (!key) return;
   if (_expanded.has(key)) _expanded.delete(key);
