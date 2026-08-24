@@ -1025,6 +1025,53 @@ def connect():
         conn.close()
 
 
+# Bump when the shape of a stored `tm_seat_state.seat_key` changes for any
+# source. Stored keys are compared as opaque strings, so a format change makes
+# every seat look new and the next tick would ping a watcher's entire seat map.
+TM_SEAT_KEY_FORMAT = 2
+
+
+def _migrate_tm_seat_key_format(conn):
+    """Re-baseline ticketmaster watchers when the seat-key format changes.
+
+    Format 2 keys a TM seat by the API's `id` instead of `l` (which is the
+    venue level, not the seat number — see ticketmaster.py's docstring). Old
+    keys are unrecognizable under the new format, so we drop the stored state
+    AND clear `last_check_at`: the tick loops treat "no keys and never
+    checked" as a baseline and stay silent for exactly one round, which is
+    what we want. Leaving `last_check_at` set would instead ping every seat
+    of every TM watcher at once.
+
+    Only `ticketmaster` rows are touched; other sources build their own keys
+    and are unaffected.
+    """
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key = 'tm_seat_key_format'"
+    ).fetchone()
+    try:
+        have = int(row["value"]) if row else 1
+    except (TypeError, ValueError):
+        have = 1
+    if have >= TM_SEAT_KEY_FORMAT:
+        return
+    ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM tm_watchers WHERE source = 'ticketmaster'").fetchall()]
+    for wid in ids:
+        conn.execute("DELETE FROM tm_seat_state WHERE watcher_id = ?", (wid,))
+        conn.execute(
+            "UPDATE tm_watchers SET last_check_at = NULL, last_seat_count = 0 "
+            "WHERE id = ?", (wid,))
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value, updated_at) "
+        "VALUES ('tm_seat_key_format', ?, ?)",
+        (str(TM_SEAT_KEY_FORMAT), _dt.datetime.now(_dt.timezone.utc).isoformat()),
+    )
+    if ids:
+        print(f"[db] seat-key format -> {TM_SEAT_KEY_FORMAT}: re-baselined "
+              f"{len(ids)} ticketmaster watcher(s); next tick is silent.",
+              flush=True)
+
+
 def init():
     with connect() as conn:
         conn.executescript(SCHEMA)
@@ -1084,6 +1131,7 @@ def init():
             # this watcher's DROP pings go to. NULL = shared drops channel.
             # Watchers for the same artist share a name → share a channel.
             conn.execute("ALTER TABLE tm_watchers ADD COLUMN discord_channel TEXT")
+        _migrate_tm_seat_key_format(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS discord_event_channels (

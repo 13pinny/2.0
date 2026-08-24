@@ -9,6 +9,7 @@ Source is detected from the URL (kupat.co.il or ticketmaster.co.il). For
 shorthand FORMAT/PERF, alpha-prefixed event codes route to ticketmaster
 and digit-only ones route to kupat.
 """
+import json
 import re
 import sys
 import uuid
@@ -96,6 +97,11 @@ def cmd_add(url):
         "id": wid, "label": label, "source": src_name,
         "event_code": event_code, "perf_code": perf_code,
         "paused": 0, "muted": 0, "notify_channels": "discord,email",
+        # Same per-source default filter as app.py's _add_one_watcher. Omitting
+        # it stored SQL NULL, which parse_filters reads as "no filters at all"
+        # — so whether a lone returned seat pinged you depended on whether the
+        # watcher was created here or on the dashboard. Keep the two in sync.
+        "filters": json.dumps(getattr(src, "DEFAULT_FILTERS", {"min_group_size": 2})),
         # Same per-event Discord routing default as app.py's _add_one_watcher.
         "discord_channel": (discord_bot.slugify_label(label) or None) if discord_bot.configured() else None,
     }, datetime.now(timezone.utc).isoformat())

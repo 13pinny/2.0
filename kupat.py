@@ -65,6 +65,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 API_BASE = "https://tickets.kupat.co.il/api"
@@ -313,15 +314,56 @@ class BrowserSession:
         return self.api_get_many([path])[path]
 
 
+_shared_session = None
+
+
+@contextmanager
+def shared_session():
+    """Hold ONE BrowserSession open for the duration of the block; every
+    `_browse_capture` inside it reuses that browser instead of launching its
+    own.
+
+    A kupat check is dominated by browser startup, not by the page load —
+    `_browse_capture` was launching and tearing down a whole Chromium per
+    watcher per tick, so N kupat watchers cost N browser boots every minute
+    on a serial tick that only has 60s to spend. Wrapping the tick's watcher
+    loop in this collapses that to one.
+
+    Degrades quietly: if Chromium can't start (no patchright on this box —
+    the dashboard machine has it, a VPS watcher does not) the block still
+    runs and each kupat watcher falls back to its own launch, and fails
+    individually exactly as it did before. Re-entrant, so nesting is safe.
+    """
+    global _shared_session
+    if _shared_session is not None:
+        yield _shared_session
+        return
+    try:
+        session = BrowserSession()
+        session.__enter__()
+    except Exception:
+        yield None
+        return
+    _shared_session = session
+    try:
+        yield session
+    finally:
+        _shared_session = None
+        try:
+            session.__exit__(None, None, None)
+        except Exception:
+            pass
+
+
 def _browse_capture(feature_id, presentation_id, want):
     """Single page-load that captures whichever of the SPA's XHRs you ask for.
 
     `want` is a subset of {"seats", "presentation", "seatplan"}. Returns a
     dict with whatever was captured before timeout, `_missing` listing any
     keys that never arrived (soft-fail; caller decides whether to error).
-    Launches and closes its own browser — ~5-10s per call (the date-row click
-    below has to wait for a second seats-status round-trip); batch callers
-    should hold a BrowserSession instead.
+    Reuses the browser held open by `shared_session()` when there is one;
+    otherwise launches and closes its own — ~5-10s per call (the date-row
+    click below has to wait for a second seats-status round-trip).
     """
     matchers = {}
     if "seats" in want:
@@ -335,11 +377,17 @@ def _browse_capture(feature_id, presentation_id, want):
     if "seatplan" in want:
         matchers["seatplan"] = lambda u: "/seats/seatplan" in u
 
-    with BrowserSession() as session:
-        raw = session.capture(
+    if _shared_session is not None:
+        raw = _shared_session.capture(
             perf_url(feature_id, presentation_id), matchers,
             select_pid=presentation_id,
         )
+    else:
+        with BrowserSession() as session:
+            raw = session.capture(
+                perf_url(feature_id, presentation_id), matchers,
+                select_pid=presentation_id,
+            )
 
     captured = {}
     if "seats" in raw:

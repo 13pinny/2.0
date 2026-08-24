@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import os
@@ -165,6 +166,17 @@ SEAT_COOLDOWN_SECONDS = int(os.getenv("KARTIS_SEAT_COOLDOWN_MINUTES") or 30) * 6
 # request footprint on DICE's anonymous API tiny. Set _ENABLED=0 to disable.
 DICE_SNIPER_SECONDS = int(os.getenv("KARTIS_DICE_SNIPER_SECONDS") or 15)
 DICE_SNIPER_ENABLED = (os.getenv("KARTIS_DICE_SNIPER_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+# Fast poll for the TM-IL sources. Unlike dice's sniper this is not restock-
+# only: every TM source here is cheap pure HTTP (a whole event-level NEXT
+# check is ~1.5-3.5s of small JSON) and the thing being raced is a return
+# landing on a sold-out date, which can be gone inside a minute. The 60s tick
+# was the latency floor for the one source that could afford to beat it.
+# Shares `_tm_lock` with run_tm_check, so a watcher is never fetched twice at
+# once and the loser of a race is a no-op against stored seat state.
+TM_SNIPER_SECONDS = int(os.getenv("KARTIS_TM_SNIPER_SECONDS") or 20)
+TM_SNIPER_ENABLED = (os.getenv("KARTIS_TM_SNIPER_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+TM_SNIPER_SOURCES = {"ticketmaster", "tmdiscover"}
 # Drop-checking can be disabled here when the watcher runs on another machine
 # (e.g. the VPS), so the dashboard still serves inventory/sales without
 # double-pinging Discord. Manual "check now" from the UI still works.
@@ -5168,6 +5180,14 @@ def _purge_past_watchers():
     return deleted
 
 
+def _kupat_session_for(watchers):
+    """Shared kupat browser for a tick, or a no-op when no kupat watcher is
+    in the list. (Keep in sync with watcher_only._kupat_session_for.)"""
+    if any((w.get("source") or "") == "kupat" for w in watchers):
+        return kupat.shared_session()
+    return contextlib.nullcontext()
+
+
 def run_tm_check():
     """Iterate active watchers, run one check each. Lock prevents overlap if
     a tick exceeds the interval. Honors the master_paused setting — when
@@ -5189,16 +5209,20 @@ def run_tm_check():
         now_iso = datetime.now(timezone.utc).isoformat()
         drops = 0
         errors = 0
-        for w in watchers:
-            try:
-                added, err = _check_one_watcher(w, now_iso)
-                if err:
+        # One Chromium for every kupat watcher in this tick instead of one
+        # each — see kupat.shared_session. No-op when none are due.
+        # (Keep in sync with watcher_only.tick.)
+        with _kupat_session_for(watchers):
+            for w in watchers:
+                try:
+                    added, err = _check_one_watcher(w, now_iso)
+                    if err:
+                        errors += 1
+                    if added:
+                        drops += 1
+                except Exception:
                     errors += 1
-                if added:
-                    drops += 1
-            except Exception:
-                errors += 1
-                traceback.print_exc()
+                    traceback.print_exc()
         _last_tm.update(
             at=now_iso, checked=len(watchers), drops=drops, errors=errors, paused=False,
         )
@@ -5228,6 +5252,35 @@ def run_dice_sniper():
             if (w.get("source") or "") == "dice"
             and not w.get("paused")
             and (w.get("last_seat_count") or 0) == 0
+        ]
+        for w in targets:
+            try:
+                _check_one_watcher(w, now_iso)
+            except Exception:
+                traceback.print_exc()
+    finally:
+        _tm_lock.release()
+
+
+def run_tm_sniper():
+    """Fast poll for ticketmaster / tmdiscover watchers (TM_SNIPER_SECONDS).
+
+    Same lock discipline as run_dice_sniper. No last_seat_count gate: a TM
+    event-level watcher always holds per-perf status pseudo-seats so its
+    count is never 0, and the drop worth racing is a seat appearing in a
+    sold-out perf's feed while the rest of the event stays on sale."""
+    if not TM_SNIPER_ENABLED:
+        return
+    if db.setting_get_bool("master_paused", default=False):
+        return
+    if not _tm_lock.acquire(blocking=False):
+        return  # main tick (or a prior sniper run) still holding the lock
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        targets = [
+            w for w in db.tm_active_watchers()
+            if (w.get("source") or "") in TM_SNIPER_SOURCES
+            and not w.get("paused")
         ]
         for w in targets:
             try:
@@ -7695,6 +7748,9 @@ if TM_CHECK_ENABLED:
     if DICE_SNIPER_ENABLED:
         scheduler.add_job(run_dice_sniper, "interval", seconds=DICE_SNIPER_SECONDS,
                           id="dice_sniper", max_instances=1)
+    if TM_SNIPER_ENABLED:
+        scheduler.add_job(run_tm_sniper, "interval", seconds=TM_SNIPER_SECONDS,
+                          id="tm_sniper", max_instances=1)
 else:
     print("[tm_check] disabled via TM_CHECK_ENABLED=0 — drop-checking runs elsewhere (e.g. the VPS watcher)")
 # mail_intake drives the CDP browser too (viagogo event search on kupat/

@@ -54,6 +54,7 @@ CLI probe:  python tm_discover.py [<url-or-slug>]   (add --json)
 """
 import gzip
 import json
+import os
 import re
 import sys
 import time
@@ -97,6 +98,37 @@ STATUS_TEXT = {
     "soon": "בקרוב",
 }
 STATUS_EMOJI = {"onsale": "🟢", "low_availability": "🟠", "new_event": "🆕"}
+
+# --- Live cross-check against ticketmaster.co.il --------------------------
+#
+# `sale_status` is a CMS field on TM-IL's marketing site, not the box office.
+# It goes stale, and when it does this watcher reports a date as gray while
+# tickets are on sale behind it. Measured on NEXT 2026, 2026-08-24:
+#
+#     date    perf        discover sale_status   TM perf status      seats
+#     10.10   MRG17/001   sold_out               s01_onsale          1,195
+#     06.12   MAS03/001   sold_out               s01_onsale              1
+#     10.12   MAS04/001   sold_out               s01_onsale            114
+#
+# Three of fourteen dates wrong, one of them holding 1,195 live seats — a
+# miss this source cannot see on its own, because the CMS is its only input.
+# So every non-buyable entry that carries an eventcode gets a second opinion
+# from ticketmaster.list_performances (the same live, uncached perf list the
+# drop checker gates on).
+#
+# The cross-check may only ever ADD buyability, never remove it: TM being
+# unreachable, slow, or disagreeing the other way leaves the CMS verdict
+# exactly as it stands, so the worst case is the behaviour this source had
+# before. Entries with `eventcode: null` (two of NEXT's Jerusalem dates) have
+# nothing to cross-check against and stay CMS-only.
+CROSSCHECK_ENABLED = (os.getenv("KARTIS_TMDISCOVER_CROSSCHECK") or "1").strip().lower()     not in ("0", "false", "no", "off")
+
+# TM perf-list status → the discover status it corresponds to. Mirrors
+# ticketmaster._ON_SALE_STATUSES — keep the two together.
+_TM_STATUS_TO_DISCOVER = {
+    "s01_onsale": "onsale",
+    "s18_low_availability": "low_availability",
+}
 
 
 class TmDiscoverError(RuntimeError):
@@ -261,6 +293,31 @@ def entry_url(entry):
     return f"{SITE_BASE}/event/{child}" if child else ""
 
 
+def _live_perf_status(entry, memo):
+    """The status TM's own box office reports for this entry's performance,
+    normalized to a discover status — or None when there's nothing to say.
+
+    `memo` is a per-call {event_code: {perf_code: status}} cache, so a series
+    listing several dates under one event code (NEXT lists four under MAS03)
+    costs one perf-list request, not four. Never raises: every failure path
+    returns None, which leaves the CMS verdict untouched.
+    """
+    code = (entry.get("eventcode") or "").strip()
+    perf = str(entry.get("performance_code") or "").strip()
+    if not code or not perf:
+        return None
+    if code not in memo:
+        try:
+            import ticketmaster  # lazy: keeps this module's CLI probe dep-free
+            memo[code] = {
+                str(p.get("performanceCode") or ""): str(p.get("status") or "")
+                for p in ticketmaster.list_performances(code)
+            }
+        except Exception:
+            memo[code] = {}
+    return _TM_STATUS_TO_DISCOVER.get(memo[code].get(perf) or "")
+
+
 def _sorted_entries(payload):
     return sorted(
         payload.get("entries") or [],
@@ -268,15 +325,21 @@ def _sorted_entries(payload):
     )
 
 
-def _seat_block(entry):
+def _seat_block(entry, status=None, via_tm=False):
     """The seat's block text — date, venue and the status box's own wording.
-    The status is part of the key on purpose (see the module docstring)."""
+    The status is part of the key on purpose (see the module docstring).
+
+    `status` overrides the entry's own when the live cross-check disagreed;
+    `via_tm` marks the ping so it's clear the series page still shows this
+    date as gray and the buy link goes straight to the box office.
+    """
     date_text, _ = entry_date(entry)
-    status = entry_status(entry)
+    status = status or entry_status(entry)
     venue = (entry.get("venue_name") or entry.get("venue_key") or "").strip()
     emoji = STATUS_EMOJI.get(status, "🎟️")
     head = " · ".join(p for p in (date_text, venue) if p) or (entry.get("title") or "?")
-    return f"{emoji} {head} — {STATUS_TEXT.get(status, status)}"
+    tail = " (לפי TM — הדף עוד מציג אזל)" if via_tm else ""
+    return f"{emoji} {head} — {STATUS_TEXT.get(status, status)}{tail}"
 
 
 def fetch_selectable_seats(event_code, perf_code="0"):
@@ -285,19 +348,29 @@ def fetch_selectable_seats(event_code, perf_code="0"):
     Non-buyable dates (sold out / no tickets / not yet on sale) produce no
     seat, so a date selling out is a silent removal and a date opening is an
     `added` seat — which is the ping this source exists for.
+
+    A date the CMS calls non-buyable is given a second opinion by TM's live
+    perf list before being dropped (see CROSSCHECK_ENABLED) — add-only, so a
+    TM failure can never turn a buyable date gray.
     """
     payload = _fetch_page(event_code)
     seats = []
+    perf_memo = {}
     for entry in _sorted_entries(payload):
+        status, via_tm = entry_status(entry), False
         if not is_buyable(entry):
-            continue
+            live = _live_perf_status(entry, perf_memo) if CROSSCHECK_ENABLED else None
+            if not live:
+                continue
+            status, via_tm = live, True
         ref, perf = entry_ref(entry)
         seats.append({
-            "block": _seat_block(entry),
+            "block": _seat_block(entry, status=status, via_tm=via_tm),
             "row": ref,
             "seat": perf,
             "price": None,
-            "status": entry_status(entry),
+            "status": status,
+            "via_tm": via_tm,
             "entry_id": entry.get("id"),
             "url": entry_url(entry),
         })

@@ -137,10 +137,20 @@ def _seat_row(seat):
 
 
 def _seat_num(seat):
+    """The seat's number as shown to the reader.
+
+    Sources that publish a real seat LABEL (kupat's seatLabel, tickchak's) put
+    it in `seat` and it renders as-is. Ticketmaster publishes no label — the
+    value there is its internal seat id, used because it is the only stable
+    per-seat identity — so those seats set `seat_ref` and render with a "#"
+    rather than posing as a seat number someone could go and look for.
+    """
     v = seat.get("seat")
     if v is None:
         v = seat.get("l")
-    return str(v) if v is not None else "?"
+    if v is None:
+        return "?"
+    return f"#{v}" if seat.get("seat_ref") else str(v)
 
 
 def _block_info(labels, code):

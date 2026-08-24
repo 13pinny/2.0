@@ -51,6 +51,13 @@ def _seat_row(seat):
     return str(seat.get("row") or seat.get("r") or "")
 
 
+def _seat_perf(seat):
+    """The performance a seat belongs to, for event-level ticketmaster
+    watchers whose snapshot mixes every date of the event. Empty for every
+    other source (one watcher = one performance)."""
+    return str(seat.get("_perf") or "")
+
+
 def parse_filters(raw):
     """Coerce the stored value (JSON string, dict, or None) into a dict.
     Returns None when there are no filters set so callers can fast-path."""
@@ -83,8 +90,15 @@ def parse_filters(raw):
 
 def _build_group_size_map(all_current):
     """For every seat in the current available set, compute the size of the
-    consecutive run it belongs to. Returns {(block, row, seat_num): run_size}.
-    Adjacency: same (block, row) and seat_num diff ≤ 2.
+    consecutive run it belongs to. Returns {(perf, block, row, seat_num):
+    run_size}. Adjacency: same (perf, block, row) and seat_num diff ≤ 2.
+
+    `perf` is part of the bucket key because an event-level ticketmaster
+    watcher's snapshot holds every DATE of the event at once. Without it,
+    seat 8 on the 11.10 show and seat 9 on the 13.10 show merged into one
+    "run" of 2 and passed min_group_size=2 as if they were a pair you could
+    actually sit in. Every other source leaves `_perf` unset, so their
+    buckets are unchanged.
 
     Seats whose number can't be parsed are treated as singletons — safer
     to under-match than to falsely group them with unrelated seats.
@@ -94,10 +108,10 @@ def _build_group_size_map(all_current):
         n = _seat_number(s)
         if n is None:
             continue
-        by_loc.setdefault((_seat_block(s), _seat_row(s)), set()).add(n)
+        by_loc.setdefault((_seat_perf(s), _seat_block(s), _seat_row(s)), set()).add(n)
 
     size_map = {}
-    for (block, row), nums in by_loc.items():
+    for (perf, block, row), nums in by_loc.items():
         ordered = sorted(nums)
         if not ordered:
             continue
@@ -107,10 +121,10 @@ def _build_group_size_map(all_current):
                 run.append(cur)
             else:
                 for n in run:
-                    size_map[(block, row, n)] = len(run)
+                    size_map[(perf, block, row, n)] = len(run)
                 run = [cur]
         for n in run:
-            size_map[(block, row, n)] = len(run)
+            size_map[(perf, block, row, n)] = len(run)
     return size_map
 
 
@@ -187,7 +201,7 @@ def apply(added_seats, all_current, filters_raw, labels=None):
                 # Unparseable seat number → can't be sure it's part of a
                 # group. Treat as a singleton, exclude under min_group>=2.
                 continue
-            run = size_map.get((_seat_block(s), _seat_row(s), n), 1)
+            run = size_map.get((_seat_perf(s), _seat_block(s), _seat_row(s), n), 1)
             if run < min_group:
                 continue
         out.append(s)

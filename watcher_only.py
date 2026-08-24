@@ -13,6 +13,7 @@ headless server you don't have that Chrome and don't want app.py to
 fail on the missing browser at scrape-tick time. This file only pulls
 in `ticketmaster`, `notify`, `labels`, and `db` — no browser deps.
 """
+import contextlib
 import json
 import signal
 import time
@@ -235,6 +236,14 @@ def check_one(w, now_iso):
     return len(added), None
 
 
+def _kupat_session_for(watchers):
+    """Shared kupat browser for a tick, or a no-op when no kupat watcher is
+    in the list. (Keep in sync with app.py._kupat_session_for.)"""
+    if any((w.get("source") or "") == "kupat" for w in watchers):
+        return kupat.shared_session()
+    return contextlib.nullcontext()
+
+
 def tick():
     if not _lock.acquire(blocking=False):
         return
@@ -247,16 +256,20 @@ def tick():
         watchers = db.tm_active_watchers()
         now_iso = datetime.now(timezone.utc).isoformat()
         drops = errors = 0
-        for w in watchers:
-            try:
-                added, err = check_one(w, now_iso)
-                if err:
+        # One Chromium for every kupat watcher in this tick instead of one
+        # each — see kupat.shared_session. No-op when none are due.
+        # (Keep in sync with app.py.run_tm_check.)
+        with _kupat_session_for(watchers):
+            for w in watchers:
+                try:
+                    added, err = check_one(w, now_iso)
+                    if err:
+                        errors += 1
+                    if added:
+                        drops += 1
+                except Exception:
                     errors += 1
-                if added:
-                    drops += 1
-            except Exception:
-                errors += 1
-                traceback.print_exc()
+                    traceback.print_exc()
         _state.update(at=now_iso, checked=len(watchers), drops=drops, errors=errors, paused=False)
         print(f"[{now_iso}] checked={len(watchers)} drops={drops} errors={errors}", flush=True)
     finally:
@@ -265,6 +278,12 @@ def tick():
 
 DICE_SNIPER_SECONDS = int(os.getenv("KARTIS_DICE_SNIPER_SECONDS") or 15)
 DICE_SNIPER_ENABLED = (os.getenv("KARTIS_DICE_SNIPER_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+# Fast poll for the TM-IL sources — see the note in app.py. Pure HTTP and
+# cheap, so unlike dice's sniper it is not gated on being sold out.
+TM_SNIPER_SECONDS = int(os.getenv("KARTIS_TM_SNIPER_SECONDS") or 20)
+TM_SNIPER_ENABLED = (os.getenv("KARTIS_TM_SNIPER_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+TM_SNIPER_SOURCES = {"ticketmaster", "tmdiscover"}
 
 
 def dice_sniper():
@@ -281,6 +300,29 @@ def dice_sniper():
             if (w.get("source") or "") != "dice" or w.get("paused"):
                 continue
             if (w.get("last_seat_count") or 0) != 0:
+                continue
+            try:
+                check_one(w, now_iso)
+            except Exception:
+                traceback.print_exc()
+    finally:
+        _lock.release()
+
+
+def tm_sniper():
+    """Fast poll for ticketmaster / tmdiscover watchers (mirror of
+    app.run_tm_sniper). Shares `_lock` with the main tick so the same watcher
+    is never fetched twice at once."""
+    if not TM_SNIPER_ENABLED:
+        return
+    if db.setting_get_bool("master_paused", default=False):
+        return
+    if not _lock.acquire(blocking=False):
+        return
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for w in db.tm_active_watchers():
+            if (w.get("source") or "") not in TM_SNIPER_SOURCES or w.get("paused"):
                 continue
             try:
                 check_one(w, now_iso)
@@ -311,6 +353,10 @@ def main():
         sched.add_job(dice_sniper, "interval", seconds=DICE_SNIPER_SECONDS,
                       id="dice_sniper", max_instances=1)
         print(f"[kartis-watcher] dice restock-snipe on: every {DICE_SNIPER_SECONDS}s while sold out", flush=True)
+    if TM_SNIPER_ENABLED:
+        sched.add_job(tm_sniper, "interval", seconds=TM_SNIPER_SECONDS,
+                      id="tm_sniper", max_instances=1)
+        print(f"[kartis-watcher] TM-IL snipe on: every {TM_SNIPER_SECONDS}s", flush=True)
     sched.start()
 
     # Run one immediate tick so the user sees activity right away
