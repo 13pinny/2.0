@@ -222,6 +222,45 @@ PRICE_CATALOG_TTL_SECONDS = int(os.getenv("KARTIS_TM_PRICE_CATALOG_TTL") or 60)
 _price_catalog_memo = {}  # (event, perf) -> (fetched_at, frozenset)
 
 
+# --- Perf status gate for PERF-LEVEL watchers ---------------------------
+#
+# `fetch_event_seats` classifies every perf itself before deciding whether to
+# read seats, but a perf-level watcher called `fetch_selectable_seats`
+# directly and got the raw feed with no buyability check whatsoever. On an
+# on-sale perf that is harmless; on a closed one it is not. MRG15/005
+# (22.10.2026, s00_closed) baselined at 14,942 seats and MRG15/006 at 19,930
+# — their whole untouched stadium maps, tracked as though buyable, rewritten
+# into tm_seat_state on every tick. The price gate does not catch this: both
+# perfs have their full pricing configured (44 and 46 blocks), so every seat
+# is in a priced block. Pricing exists because the sale is BUILT, not because
+# it is open — that is precisely what the status string is for.
+#
+# Checked BEFORE the seat request, so a closed perf costs one small perf-list
+# call (memoized per event) instead of a 20k-seat download. Fails open: an
+# unreadable perf list leaves the seats ungated.
+STATUS_GATE_ENABLED = (os.getenv("KARTIS_TM_STATUS_GATE") or "1").strip().lower() not in (
+    "0", "false", "no", "off")
+PERF_STATUS_TTL_SECONDS = int(os.getenv("KARTIS_TM_PERF_STATUS_TTL") or 20)
+_perf_status_memo = {}  # event_code -> (fetched_at, {perf_code: status})
+
+
+def perf_status(event_code, perf_code):
+    """The perf-list `status` string for one performance, or None when it
+    can't be determined. Memoized per EVENT, so several perf-level watchers
+    on the same event share a single request per window."""
+    now = time.time()
+    hit = _perf_status_memo.get(event_code)
+    if not hit or now - hit[0] >= PERF_STATUS_TTL_SECONDS:
+        try:
+            mapping = {str(p.get("performanceCode") or ""): str(p.get("status") or "")
+                       for p in list_performances(event_code)}
+        except Exception:
+            return None
+        hit = (now, mapping)
+        _perf_status_memo[event_code] = hit
+    return hit[1].get(str(perf_code))
+
+
 def fetch_priced_blocks(event_code, perf_code):
     """Block codes that carry a public online price for this performance.
 
@@ -282,7 +321,7 @@ def apply_price_gate(event_code, perf_code, seats):
             if str(s.get("block") or s.get("b") or "") in priced]
 
 
-def fetch_selectable_seats(event_code, perf_code, price_gate=None):
+def fetch_selectable_seats(event_code, perf_code, price_gate=None, status_gate=None):
     """Returns the list of seats currently buyable through the INTERNET channel,
     normalized to the cross-source shape with `block`, `row`, `seat` keys.
 
@@ -291,10 +330,14 @@ def fetch_selectable_seats(event_code, perf_code, price_gate=None):
     `data` (the SPA explicitly maps a null response to "no seats" — see the
     rxjs `catchError(() => of(null))` in the bundle). Hard errors are raised.
 
-    Seats are filtered to blocks that carry a public price (see the price
-    catalog notes above); pass `price_gate=False` to get the raw feed, which
-    `fetch_event_seats` needs so its full-map size guard measures the real
-    feed size rather than the post-gate one.
+    Two buyability gates apply, both opt-out-able because `fetch_event_seats`
+    classifies perfs itself and must bypass them:
+      * `status_gate` — a perf whose perf-list status is not in
+        `_ON_SALE_STATUSES` returns [] before any seat request is made.
+      * `price_gate` — seats are filtered to blocks carrying a public price
+        (see the price catalog notes above). `fetch_event_seats` passes
+        `price_gate=False` on the radar path so its full-map size guard
+        measures the real feed size rather than the post-gate one.
 
     A feed that had seats but keeps none after the gate returns [] WITHOUT
     probing the GA endpoint: "seat map exists, nothing in it is sellable" is
@@ -303,6 +346,10 @@ def fetch_selectable_seats(event_code, perf_code, price_gate=None):
     would fall through and emit a bogus "GA available" pseudo-seat off its
     (equally unsellable) box allocations.
     """
+    if STATUS_GATE_ENABLED if status_gate is None else status_gate:
+        st = perf_status(event_code, perf_code)
+        if st is not None and st not in _ON_SALE_STATUSES:
+            return []
     url = f"{API_HOST}{ISM_PATH}/getAllSelectableSeats/{CHANNEL}/{event_code}/{perf_code}"
     status, raw = _http_get(url)
     try:
@@ -686,7 +733,8 @@ def fetch_event_seats(event_code):
                     # size, not what survives the price gate (a full map that
                     # prices nothing would otherwise measure as 0 and be
                     # re-downloaded every tick forever).
-                    ps = fetch_selectable_seats(event_code, perf_code, price_gate=False)
+                    ps = fetch_selectable_seats(event_code, perf_code,
+                                                price_gate=False, status_gate=False)
                 except Exception as e:
                     per_perf_errors[perf_code] = f"unconfirmed seats: {type(e).__name__}: {e}"
                 else:
@@ -716,7 +764,8 @@ def fetch_event_seats(event_code):
             continue
         attempted += 1
         try:
-            ps = fetch_selectable_seats(event_code, perf_code)
+            # status already classified as available above
+            ps = fetch_selectable_seats(event_code, perf_code, status_gate=False)
             for s in ps:
                 s["_perf"] = perf_code
             seats.extend(ps)
