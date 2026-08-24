@@ -301,21 +301,42 @@ def _live_perf_status(entry, memo):
     listing several dates under one event code (NEXT lists four under MAS03)
     costs one perf-list request, not four. Never raises: every failure path
     returns None, which leaves the CMS verdict untouched.
+
+    Two conditions must BOTH hold to overrule the page: the perf-list status
+    says on sale, AND the performance has a non-empty price catalog.
     """
     code = (entry.get("eventcode") or "").strip()
     perf = str(entry.get("performance_code") or "").strip()
     if not code or not perf:
         return None
+    try:
+        import ticketmaster  # lazy: keeps this module's CLI probe dep-free
+    except Exception:
+        return None
     if code not in memo:
         try:
-            import ticketmaster  # lazy: keeps this module's CLI probe dep-free
             memo[code] = {
                 str(p.get("performanceCode") or ""): str(p.get("status") or "")
                 for p in ticketmaster.list_performances(code)
             }
         except Exception:
             memo[code] = {}
-    return _TM_STATUS_TO_DISCOVER.get(memo[code].get(perf) or "")
+    live = _TM_STATUS_TO_DISCOVER.get(memo[code].get(perf) or "")
+    if not live:
+        return None
+    # An on-sale STATUS is not enough to overrule the page. MAS04/001 and
+    # MAS03/001 both sat at s01_onsale on 2026-08-24 while selling nothing —
+    # MAS04/001 served 112 hospitality seats against an empty price catalog,
+    # so the seat map rendered blank. Reporting those as buyable is exactly
+    # the false positive this cross-check must not produce.
+    #
+    # Fail CLOSED here, unlike the price gate in ticketmaster.py: this path
+    # overrides the site's own "sold out", so it needs positive proof of
+    # sellability. Unknown (catalog unreadable) leaves the page's verdict
+    # standing, which is the safe direction for an add-only check.
+    if ticketmaster.perf_sells_online(code, perf) is not True:
+        return None
+    return live
 
 
 def _sorted_entries(payload):

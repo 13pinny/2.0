@@ -189,7 +189,100 @@ def fetch_performance_detail(event_code, perf_code):
     return payload.get("data") or {}
 
 
-def fetch_selectable_seats(event_code, perf_code):
+# --- Price catalog: which blocks can actually be BOUGHT online ----------
+#
+# `getAllSelectableSeats` reports unsold PHYSICAL seats. That is not the same
+# as purchasable, and the gap is not a rounding error:
+#
+#   MAS04/001  s01_onsale   112 seats in feed →   0 buyable  (2026-08-24)
+#   MRG15/001  low_avail    172 seats in feed → 104 buyable
+#   MRG15/002  low_avail     90 seats in feed →  22 buyable
+#
+# MAS04/001's 112 seats are all H11A/H11B/B11A/B11B/VIPG — hospitality boxes
+# and VIP, sold offline. Its price catalog is EMPTY, so the booking SPA paints
+# a blank seat map while the feed happily reports 112 "AVAILABLE" rows. The
+# same call issued from inside a live browser session returns the identical
+# 112, so this is not an auth artifact — those seats simply are not sold here.
+# On MRG15 the excluded blocks are the SH* accessible/companion allocations
+# (the `l: 0`, `f: 14` rows), which likewise carry no public price.
+#
+# `getPriceByProfiles` is the missing signal: it lists, per purchasable
+# profile, exactly which blocks have an online price. Two rules follow —
+#   * a seat whose block is absent from the catalog is never buyable;
+#   * an EMPTY catalog means the performance sells nothing online at all,
+#     whatever its perf-list status says.
+# Neither replaces the status gate: MRG16/001 is s02_soldout and still has 164
+# seats sitting in priced blocks. Buyable = on-sale status AND priced block.
+#
+# Uncached route on purpose (same reasoning as list_performances): a catalog
+# turning from empty to non-empty is the earliest sign a sale is opening.
+PRICE_GATE_ENABLED = (os.getenv("KARTIS_TM_PRICE_GATE") or "1").strip().lower() not in (
+    "0", "false", "no", "off")
+PRICE_CATALOG_TTL_SECONDS = int(os.getenv("KARTIS_TM_PRICE_CATALOG_TTL") or 60)
+_price_catalog_memo = {}  # (event, perf) -> (fetched_at, frozenset)
+
+
+def fetch_priced_blocks(event_code, perf_code):
+    """Block codes that carry a public online price for this performance.
+
+    Returns a frozenset (possibly empty — meaning nothing sells online), or
+    None when the catalog could not be read. None is deliberately distinct
+    from empty: callers must fail OPEN on it, since a spurious ping beats a
+    silent miss. Failures are not memoized, so a blip retries next tick.
+    """
+    key = (event_code, perf_code)
+    hit = _price_catalog_memo.get(key)
+    now = time.time()
+    if hit and now - hit[0] < PRICE_CATALOG_TTL_SECONDS:
+        return hit[1]
+    url = (f"{API_HOST}/wbtxapi/api/v1/event/getPriceByProfiles/"
+           f"{event_code}/{perf_code}/{CHANNEL}/iw")
+    try:
+        _status, raw = _http_get(url)
+        payload = json.loads(raw)
+        if payload.get("status") != "SUCCESS":
+            raise TicketmasterError(f"getPriceByProfiles said {payload.get('status')}")
+        data = payload.get("data") or {}
+        if not isinstance(data, dict):
+            raise TicketmasterError("getPriceByProfiles unexpected shape")
+        blocks = set()
+        for entries in data.values():
+            for level in (entries or []):
+                if not isinstance(level, dict):
+                    continue
+                for b in (level.get("blocks") or []):
+                    code = str((b or {}).get("code") or "").strip()
+                    if code:
+                        blocks.add(code)
+    except Exception:
+        return None
+    result = frozenset(blocks)
+    _price_catalog_memo[key] = (now, result)
+    return result
+
+
+def perf_sells_online(event_code, perf_code):
+    """True when the perf has at least one block with a public price, False
+    when it demonstrably has none, None when the catalog is unreadable."""
+    priced = fetch_priced_blocks(event_code, perf_code)
+    if priced is None:
+        return None
+    return bool(priced)
+
+
+def apply_price_gate(event_code, perf_code, seats):
+    """Drop seats whose block carries no public price. Fails open (returns
+    the input unchanged) when the catalog can't be read."""
+    if not seats:
+        return list(seats)
+    priced = fetch_priced_blocks(event_code, perf_code)
+    if priced is None:
+        return list(seats)
+    return [s for s in seats
+            if str(s.get("block") or s.get("b") or "") in priced]
+
+
+def fetch_selectable_seats(event_code, perf_code, price_gate=None):
     """Returns the list of seats currently buyable through the INTERNET channel,
     normalized to the cross-source shape with `block`, `row`, `seat` keys.
 
@@ -197,6 +290,18 @@ def fetch_selectable_seats(event_code, perf_code):
     Returns [] when the show has no inventory or the endpoint returns null
     `data` (the SPA explicitly maps a null response to "no seats" — see the
     rxjs `catchError(() => of(null))` in the bundle). Hard errors are raised.
+
+    Seats are filtered to blocks that carry a public price (see the price
+    catalog notes above); pass `price_gate=False` to get the raw feed, which
+    `fetch_event_seats` needs so its full-map size guard measures the real
+    feed size rather than the post-gate one.
+
+    A feed that had seats but keeps none after the gate returns [] WITHOUT
+    probing the GA endpoint: "seat map exists, nothing in it is sellable" is
+    a definite no, not the "this venue has no seat map" case the GA fallback
+    is for. Otherwise MAS04/001, whose 112 hospitality seats all vanish here,
+    would fall through and emit a bogus "GA available" pseudo-seat off its
+    (equally unsellable) box allocations.
     """
     url = f"{API_HOST}{ISM_PATH}/getAllSelectableSeats/{CHANNEL}/{event_code}/{perf_code}"
     status, raw = _http_get(url)
@@ -229,6 +334,26 @@ def fetch_selectable_seats(event_code, perf_code):
             # in row 14 is worse than showing it plainly as a reference.
             "seat_ref": True,
         })
+    gate_on = PRICE_GATE_ENABLED if price_gate is None else price_gate
+    if out and gate_on:
+        out = apply_price_gate(event_code, perf_code, out)
+        if not out:
+            return []
+    if not out and gate_on and perf_sells_online(event_code, perf_code) is False:
+        # Empty seat feed AND an empty price catalog. The GA fallback below
+        # would happily turn this perf's getAllGaBlock rows into an "GA
+        # available" ping, but a perf that prices nothing online is not
+        # selling those either — they are boxes and hospitality. MAS03/001
+        # is exactly this: zero physical seats, an empty catalog, and box
+        # allocations reporting hundreds free, which produced a standing
+        # "GA available" pseudo-seat on a date nobody can buy into.
+        #
+        # Gated on the catalog being demonstrably EMPTY rather than on the
+        # GA block itself being priced: GA blocks legitimately sit outside
+        # getPriceByProfiles even on sellable shows (MRG16 prices 30 blocks,
+        # none of them its HNCA/HNCB GA rows), so requiring the block to be
+        # priced would silence real GA-only events.
+        return []
     if not out:
         # No selectable seats can mean "seated show, sold out" OR "GA
         # (unnumbered) show, which never has a seat map". Check the GA
@@ -557,7 +682,11 @@ def fetch_event_seats(event_code):
         if state != "available":
             if UNCONFIRMED_ENABLED and not _skip_unconfirmed(event_code, perf_code):
                 try:
-                    ps = fetch_selectable_seats(event_code, perf_code)
+                    # Raw feed: the size guard below must see the true feed
+                    # size, not what survives the price gate (a full map that
+                    # prices nothing would otherwise measure as 0 and be
+                    # re-downloaded every tick forever).
+                    ps = fetch_selectable_seats(event_code, perf_code, price_gate=False)
                 except Exception as e:
                     per_perf_errors[perf_code] = f"unconfirmed seats: {type(e).__name__}: {e}"
                 else:
@@ -574,6 +703,8 @@ def fetch_event_seats(event_code):
                         )
                     else:
                         _unconfirmed_skip.pop((event_code, perf_code), None)
+                        if PRICE_GATE_ENABLED:
+                            ps = apply_price_gate(event_code, perf_code, ps)
                         seats.append({
                             "_perf": perf_code, "unconfirmed": True, "_tracking": True,
                             "block": "#tracking", "row": "", "seat": "",
