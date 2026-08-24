@@ -1048,6 +1048,13 @@ def _map_crowdvolt_api_sale(row):
         # crowdvolt_pricer documents.
         "sale_price": card.get("all_in_price"),
         "status": _crowdvolt_sale_status(row),
+        # CrowdVolt's own fee/payout for this order. payout == all_in_price on
+        # every order observed 2026-08-23, so sale_price is already net; the
+        # fee is what /cvfees studies. ticket_source is where the ticket
+        # originated (DICE, AXS, PDF Tickets...) — fee rates differ by it.
+        "fee": row.get("fee"),
+        "payout": row.get("payout"),
+        "ticket_source": card.get("app_name"),
         "raw_cells": json.dumps({"api": True, "order_number": order_id,
                                  "quantity": row.get("quantity"),
                                  "payout": row.get("payout"),

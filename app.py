@@ -2283,6 +2283,119 @@ def cvpricer_page():
     return render_template("cvpricer.html")
 
 
+@app.route("/cvfees")
+def cvfees_page():
+    return render_template("cvfees.html")
+
+
+@app.route("/api/cvfees")
+def api_cvfees():
+    """Fee rows plus the groupings and rule-fit /cvfees renders.
+
+    CrowdVolt publishes no seller fee schedule and the observed rate is not
+    flat (3.3%-8.8%), so the point of this endpoint is to expose the raw
+    numbers next to every grouping that might explain them, rather than to
+    assert a formula.
+    """
+    import math
+
+    rows = db.crowdvolt_fee_rows()
+    total_gross = sum(r["gross"] for r in rows)
+    total_fee = sum(r["fee"] or 0 for r in rows)
+    total_payout = sum(r["payout"] or 0 for r in rows)
+
+    def group(key):
+        acc = {}
+        for r in rows:
+            k = r.get(key) or "(unknown)"
+            g = acc.setdefault(k, {"key": k, "n": 0, "gross": 0.0,
+                                   "fee": 0.0, "rates": []})
+            g["n"] += 1
+            g["gross"] += r["gross"]
+            g["fee"] += r["fee"] or 0
+            if r["rate"] is not None:
+                g["rates"].append(r["rate"])
+        out = []
+        for g in acc.values():
+            rates = g.pop("rates")
+            g["rate"] = (g["fee"] / g["gross"]) if g["gross"] else None
+            g["min_rate"] = min(rates) if rates else None
+            g["max_rate"] = max(rates) if rates else None
+            g["gross"] = round(g["gross"], 2)
+            g["fee"] = round(g["fee"], 2)
+            out.append(g)
+        return sorted(out, key=lambda g: -g["n"])
+
+    # Best-fitting simple rule. Reported with its miss count so a poor fit
+    # reads as "no simple rule", which is the honest answer today.
+    rounders = {"round": lambda x: float(round(x)),
+                "ceil": lambda x: float(math.ceil(x - 1e-9)),
+                "floor": lambda x: float(math.floor(x + 1e-9))}
+    best = None
+    for basis in ("per_ticket", "total"):
+        for name, fn in rounders.items():
+            for i in range(200, 1401):
+                k = i / 20000.0
+                hits = 0
+                for r in rows:
+                    price, qty = r["price_per_ticket"], r["qty"]
+                    pred = (fn(price * k) * qty if basis == "per_ticket"
+                            else fn(price * qty * k))
+                    if abs(pred - (r["fee"] or 0)) < 0.001:
+                        hits += 1
+                if best is None or hits > best["hits"]:
+                    best = {"hits": hits, "basis": basis, "rounding": name,
+                            "rate": k}
+    if best:
+        best["pct"] = round(best["hits"] / len(rows) * 100, 1) if rows else 0
+
+    hist = {}
+    for r in rows:
+        if r["rate"] is None:
+            continue
+        b = round(r["rate"] * 200) / 2.0
+        hist[b] = hist.get(b, 0) + 1
+
+    return jsonify({
+        "rows": rows,
+        "totals": {
+            "orders": len(rows),
+            "tickets": sum(r["qty"] or 0 for r in rows),
+            "gross": round(total_gross, 2),
+            "fee": round(total_fee, 2),
+            "payout": round(total_payout, 2),
+            "rate": (total_fee / total_gross) if total_gross else None,
+            "min_rate": min((r["rate"] for r in rows if r["rate"] is not None),
+                            default=None),
+            "max_rate": max((r["rate"] for r in rows if r["rate"] is not None),
+                            default=None),
+        },
+        "by_source": group("ticket_source"),
+        "by_event": group("event_name"),
+        "by_ticket_type": group("ticket_type"),
+        "by_month": group("sale_date_iso") if False else _cvfees_by_month(rows),
+        "fit": best,
+        "histogram": [{"rate": k, "n": hist[k]} for k in sorted(hist)],
+    })
+
+
+def _cvfees_by_month(rows):
+    acc = {}
+    for r in rows:
+        d = (r.get("sale_date_iso") or "")[:7] or "(unknown)"
+        g = acc.setdefault(d, {"key": d, "n": 0, "gross": 0.0, "fee": 0.0})
+        g["n"] += 1
+        g["gross"] += r["gross"]
+        g["fee"] += r["fee"] or 0
+    out = []
+    for g in acc.values():
+        g["rate"] = (g["fee"] / g["gross"]) if g["gross"] else None
+        g["gross"] = round(g["gross"], 2)
+        g["fee"] = round(g["fee"], 2)
+        out.append(g)
+    return sorted(out, key=lambda g: g["key"])
+
+
 @app.route("/sales")
 def sales_page():
     return render_template("sales.html")

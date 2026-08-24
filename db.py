@@ -1182,6 +1182,16 @@ def init():
         et_cols = {row["name"] for row in conn.execute("PRAGMA table_info(edm_tracked_events)").fetchall()}
         if "auto_source" not in et_cols:
             conn.execute("ALTER TABLE edm_tracked_events ADD COLUMN auto_source TEXT")
+        # CrowdVolt reports the seller fee per order and it is NOT a flat
+        # percentage (observed 3.3%-8.8%, always a whole dollar). Promoted
+        # out of raw_cells so /cvfees can group and fit against it.
+        cs_cols = {row["name"] for row in conn.execute("PRAGMA table_info(crowdvolt_sales)").fetchall()}
+        if "fee" not in cs_cols:
+            conn.execute("ALTER TABLE crowdvolt_sales ADD COLUMN fee REAL")
+        if "payout" not in cs_cols:
+            conn.execute("ALTER TABLE crowdvolt_sales ADD COLUMN payout REAL")
+        if "ticket_source" not in cs_cols:
+            conn.execute("ALTER TABLE crowdvolt_sales ADD COLUMN ticket_source TEXT")
         cb_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cashback_entries)").fetchall()}
         if "source_ref" not in cb_cols:
             conn.execute("ALTER TABLE cashback_entries ADD COLUMN source_ref TEXT")
@@ -2181,10 +2191,12 @@ def upsert_crowdvolt_sales(rows, now_iso):
                 """
                 INSERT INTO crowdvolt_sales (id, order_id, sale_date, sale_date_iso,
                     event_name, event_date, event_date_iso, venue, qty, ticket_type,
-                    price_per_ticket, sale_price, status, raw_cells, last_seen_at)
+                    price_per_ticket, sale_price, status, raw_cells, last_seen_at,
+                    fee, payout, ticket_source)
                 VALUES (:id, :order_id, :sale_date, :sale_date_iso,
                     :event_name, :event_date, :event_date_iso, :venue, :qty, :ticket_type,
-                    :price_per_ticket, :sale_price, :status, :raw_cells, :last_seen_at)
+                    :price_per_ticket, :sale_price, :status, :raw_cells, :last_seen_at,
+                    :fee, :payout, :ticket_source)
                 ON CONFLICT(id) DO UPDATE SET
                     order_id=excluded.order_id,
                     sale_date=excluded.sale_date,
@@ -2199,10 +2211,43 @@ def upsert_crowdvolt_sales(rows, now_iso):
                     sale_price=excluded.sale_price,
                     status=excluded.status,
                     raw_cells=excluded.raw_cells,
-                    last_seen_at=excluded.last_seen_at
+                    last_seen_at=excluded.last_seen_at,
+                    fee=excluded.fee,
+                    payout=excluded.payout,
+                    ticket_source=excluded.ticket_source
                 """,
-                {**r, "last_seen_at": now_iso},
+                {"fee": None, "payout": None, "ticket_source": None,
+                 **r, "last_seen_at": now_iso},
             )
+
+
+def crowdvolt_fee_rows():
+    """Every delivered CrowdVolt sale with the numbers /cvfees reasons about.
+
+    gross is price_per_ticket * qty rather than sale_price: sale_price holds
+    all_in_price, which equals payout on every observed order, so using it
+    would make the fee look like zero.
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT order_id, event_name, event_date_iso, sale_date_iso,
+                   venue, qty, ticket_type, price_per_ticket, sale_price,
+                   fee, payout, ticket_source, status
+            FROM crowdvolt_sales
+            WHERE fee IS NOT NULL AND price_per_ticket > 0 AND qty > 0
+            ORDER BY sale_date_iso DESC, order_id DESC
+            """
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        gross = (d["price_per_ticket"] or 0) * (d["qty"] or 0)
+        d["gross"] = round(gross, 2)
+        d["rate"] = round((d["fee"] or 0) / gross, 6) if gross else None
+        d["fee_per_ticket"] = round((d["fee"] or 0) / d["qty"], 4) if d["qty"] else None
+        out.append(d)
+    return out
 
 
 def all_crowdvolt_sales():
