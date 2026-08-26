@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — DICE</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+    --cyan: #00a3d7;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--cyan); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--cyan); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.green { color: var(--green); }
+  .stat .value.zero { color: var(--muted); }
+  .stat .hint { font-size: 9px; color: var(--muted); letter-spacing: 1px; margin-top: 3px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+  input[type=text] { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; width: 260px; }
+  button.act { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 14px; border-radius: 6px; cursor: pointer; }
+  button.act:hover { border-color: var(--accent); color: var(--accent); }
+  button.act:disabled { opacity: .5; cursor: default; }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); white-space: nowrap; cursor: pointer; user-select: none; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th .arrow { color: var(--accent); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr.ev { cursor: pointer; }
+  tbody tr.ev:hover td { background: var(--bg-3); }
+  tr.detail td { background: var(--bg-2); padding: 6px 10px 12px 26px; font-size: 11px; color: var(--muted); }
+  tr.detail .ty { padding: 2px 0; }
+  tr.detail .ty b { color: var(--text); }
+  tr.detail .ty .off { color: var(--red); }
+  tr.detail .ty .on { color: var(--green); }
+  tr.detail .hh { margin-top: 10px; padding-top: 6px; border-top: 1px dashed var(--line); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 3px; }
+  tr.detail .h-row { padding: 1px 0; }
+  tr.detail .h-row .cur { color: var(--green); }
+  tr.detail .h-row .ended { color: var(--muted); }
+  a.buy { color: #fff; background: var(--cyan); text-decoration: none; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }
+  a.buy.off { background: var(--line-2); color: var(--muted); pointer-events: none; }
+  .when { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .badge.selling { background: #16a34a; }
+  .badge.soldout { background: #dc2626; }
+  .badge.upcoming { background: #7c3aed; }
+  .badge.unknown { background: #9ca3af; }
+  .tier { font-size: 10px; color: var(--purple); }
+  .trk { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  .chg { font-variant-numeric: tabular-nums; }
+  .chg.hot { color: var(--orange); font-weight: 600; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>DICE</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/cvpricer">CV PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/marquee">MARQUEE</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice" class="active">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+
+  <div class="stats" id="totals"></div>
+  <p class="sub" id="statusline">DICE publishes no ticket counts — the tier/price change log below is the demand signal. History accrues from the hourly market sweep and manual refreshes.</p>
+
+  <h2>Purchases &amp; Holdings <span style="font-size:10px;color:var(--muted)">(auto-recorded from forwarded DICE emails · click an event for per-account rows)</span>
+    <button class="act" id="pollBtn" style="margin-left:10px">Poll inbox now</button>
+    <span id="pollNote" style="font-size:10px;color:var(--muted)"></span></h2>
+  <div class="stats" id="ptotals"></div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr>
+      <th>Event</th><th>Venue</th><th>Date</th>
+      <th class="num">Bought</th><th class="num">Transferred</th><th class="num">Sold</th>
+      <th class="num">Avail</th><th class="num">Spend</th><th></th>
+    </tr></thead>
+    <tbody id="prows"><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
+  </table>
+  </div>
+  <p class="sub"><a href="#" id="xferToggle" style="color:var(--accent);text-decoration:none">Show transfer log</a></p>
+  <div class="tablewrap" id="xferwrap" style="display:none">
+  <table>
+    <thead><tr>
+      <th>When</th><th>Account</th><th>Event</th><th class="num">Qty</th><th>To</th><th>Match</th>
+    </tr></thead>
+    <tbody id="xrows"></tbody>
+  </table>
+  </div>
+
+  <h2>Events <span style="font-size:10px;color:var(--muted)">(click a row for types + change history)</span></h2>
+  <div class="controls">
+    <input type="text" id="addUrl" placeholder="paste a dice.fm event URL to track…" style="width:340px;max-width:60vw" />
+    <button class="act" id="addBtn">Track</button>
+    <span class="sub" id="addNote" style="margin:0"></span>
+  </div>
+  <div class="controls">
+    <input type="text" id="q" placeholder="filter by event or venue…" />
+    <button class="act" id="refreshBtn">Refresh now</button>
+    <span class="sub" id="refreshNote" style="margin:0"></span>
+  </div>
+  <p class="sub" id="manualList" style="margin:-4px 0 12px"></p>
+  <div class="tablewrap">
+  <table>
+    <thead><tr id="head"></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+  <p class="sub" id="footnote">Paste a dice.fm event URL above to track it here (no watcher needed). To also get restock/tier-jump pings, add it as a watcher. "Tier" = DICE's current price tier per cheapest on-sale type; a tier jump means the previous release sold through. Changes = logged state changes (tier / price / on-off-sale) across all ticket types.</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const CUR = { USD:'$', GBP:'£', EUR:'€', ILS:'₪' };
+const money = (n, c) => (n == null) ? '—' : (CUR[c] || (c ? c + ' ' : '$')) + n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+
+let DATA = null;
+let sortKey = 'date';
+let sortDir = 1;
+const open = new Set();
+
+const COLS = [
+  { key:'name',   label:'Event' },
+  { key:'venue',  label:'Venue' },
+  { key:'date',   label:'Date' },
+  { key:'status', label:'Status' },
+  { key:'types',  label:'On sale', num:true },
+  { key:'tier',   label:'Tier' },
+  { key:'price',  label:'From', num:true },
+  { key:'chg',    label:'Changes', num:true },
+  { key:'last',   label:'Last change' },
+  { key:'buy',    label:'' },
+];
+
+function cheapestTier(e){
+  const on = (e.types||[]).filter(t => t.status === 'on-sale' && t.price != null);
+  if (!on.length) return null;
+  const t = on.reduce((a,b) => a.price <= b.price ? a : b);
+  return t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index+1) : null);
+}
+
+function sortVal(e, key){
+  switch(key){
+    case 'name': return (e.name||'').toLowerCase();
+    case 'venue': return (e.venue||'').toLowerCase();
+    case 'date': return e.first_date_ms || Infinity;
+    case 'status': return e.status === 'selling' ? 0 : 1;
+    case 'types': return e.types_on_sale || 0;
+    case 'tier': return cheapestTier(e) || '';
+    case 'price': return e.min_price == null ? Infinity : e.min_price;
+    case 'chg': return e.changes || 0;
+    case 'last': return e.last_change_at || '';
+    default: return 0;
+  }
+}
+
+function renderHead(){
+  $('head').innerHTML = COLS.map(c => {
+    const arrow = sortKey === c.key ? `<span class="arrow">${sortDir < 0 ? '▼' : '▲'}</span>` : '';
+    return `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label} ${arrow}</th>`;
+  }).join('');
+  $('head').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.key;
+    if (!k || k === 'buy') return;
+    if (sortKey === k) sortDir = -sortDir;
+    else { sortKey = k; sortDir = (k === 'name' || k === 'venue' || k === 'date') ? 1 : -1; }
+    render();
+  });
+}
+
+function fmtDay(iso){ return iso ? iso.slice(5,10).replace('-','/') : '?'; }
+function fmtAgo(iso){
+  if (!iso) return '—';
+  const secs = (Date.now() - new Date(iso).getTime())/1000;
+  if (secs < 90) return 'just now';
+  if (secs < 5400) return Math.round(secs/60)+'m ago';
+  if (secs < 129600) return Math.round(secs/3600)+'h ago';
+  return Math.round(secs/86400)+'d ago';
+}
+
+function detailRows(e){
+  let html = (e.types||[]).map(t => {
+    const tier = t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index+1) : '');
+    const st = t.status === 'on-sale' ? '<span class="on">on sale</span>' : `<span class="off">${escape(t.status||'?')}</span>`;
+    return `<div class="ty"><b>${escape(t.name)}</b>${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} — ${money(t.price, t.currency)} · ${st}</div>`;
+  }).join('') || `<div class="ty">${
+    e.status === 'soldout' ? 'Sold out — DICE returns no ticket types (waitlist may be open on the event page).'
+    : e.status === 'upcoming' ? 'Not on sale yet — ticket types appear when the sale opens.'
+    : 'No ticket types returned.'}</div>`;
+  const hist = e.history || [];
+  if (hist.length){
+    html += `<div class="hh">Change log — ${hist.length} state${hist.length>1?'s':''} recorded</div>`;
+    html += hist.slice().reverse().map(h => {
+      const tier = h.tier_name || (h.tier_index != null && h.tier_index > 0 ? 'tier ' + (h.tier_index+1) : '');
+      const end = h.ended_at ? `<span class="ended">→ ended ${fmtDay(h.ended_at)}</span>` : '<span class="cur">current</span>';
+      return `<div class="h-row">${fmtDay(h.first_seen_at)} · ${escape(h.type_name)}${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} @ ${money(h.price, h.currency)} · ${escape(h.status||'?')} ${end}</div>`;
+    }).join('');
+  } else {
+    html += `<div class="hh">Change log</div><div class="h-row">Empty — fills in as sweeps/refreshes observe changes.</div>`;
+  }
+  return html;
+}
+
+function render(){
+  if (!DATA) return;
+  renderHead();
+  const q = ($('q').value || '').trim().toLowerCase();
+  let evs = DATA.events || [];
+  if (q) evs = evs.filter(e => ((e.name||'') + ' ' + (e.venue||'')).toLowerCase().includes(q));
+  evs.sort((a,b) => { const va = sortVal(a, sortKey), vb = sortVal(b, sortKey);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir; });
+  if (!evs.length){
+    $('rows').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No DICE events tracked yet — paste a dice.fm URL on the ISRAEL MARKET page or add a watcher.</td></tr>`;
+    return;
+  }
+  $('rows').innerHTML = evs.map(e => {
+    const st = e.status === 'selling' ? '<span class="badge selling">On sale</span>'
+      : e.status === 'soldout' ? '<span class="badge soldout">Sold out</span>'
+      : e.status === 'upcoming' ? '<span class="badge upcoming">Upcoming</span>'
+      : `<span class="badge unknown">${escape(e.status||'?')}</span>`;
+    const tier = cheapestTier(e);
+    const opened = open.has(e.event_code);
+    return `<tr class="ev" data-id="${e.event_code}">
+      <td><b>${escape(e.name || e.event_code)}</b> <span class="trk">${escape(e.tracked_by)}</span></td>
+      <td>${escape(e.venue||'')}</td>
+      <td class="when">${escape(e.date_text||'')}</td>
+      <td>${st}</td>
+      <td class="num">${fmt(e.types_on_sale)}</td>
+      <td>${tier ? `<span class="tier">${escape(tier)}</span>` : '—'}</td>
+      <td class="num">${money(e.min_price, e.currency)}</td>
+      <td class="num chg${(e.changes||0) > 0 ? ' hot' : ''}">${fmt(e.changes||0)}</td>
+      <td class="when">${e.last_change_at ? fmtAgo(e.last_change_at) : '—'}</td>
+      <td><a class="buy${e.status === 'selling' ? '' : ' off'}" href="${escape(e.url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a></td>
+    </tr>` + (opened ? `<tr class="detail"><td colspan="${COLS.length}">${detailRows(e)}</td></tr>` : '');
+  }).join('');
+  $('rows').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
+    const id = tr.dataset.id;
+    open.has(id) ? open.delete(id) : open.add(id);
+    render();
+  });
+}
+
+function renderTotals(){
+  const evs = DATA.events || [];
+  const changed24 = evs.filter(e => e.last_change_at && (Date.now() - new Date(e.last_change_at).getTime()) < 86400e3).length;
+  const tiles = [
+    ['Events tracked', evs.length, 'market + watchers'],
+    ['On sale', evs.filter(e => e.status === 'selling').length, ''],
+    ['Sold out', evs.filter(e => e.status === 'soldout').length, ''],
+    ['Changed last 24h', changed24, 'tier / price / status moves'],
+    ['Σ changes logged', evs.reduce((a,e) => a + (e.changes||0), 0), 'since tracking began'],
+  ];
+  $('totals').innerHTML = tiles.map(([l,v,h]) =>
+    `<div class="stat"><div class="label">${l}</div><div class="value${l==='Changed last 24h' && v ? ' green' : ''}${v ? '' : ' zero'}">${fmt(v)}</div>${h ? `<div class="hint">${h}</div>` : ''}</div>`
+  ).join('');
+  const freshest = evs.map(e => e.fetched_at).filter(Boolean).sort().pop();
+  $('meta').textContent = `${evs.length} events · data ${freshest ? fmtAgo(new Date(freshest*1000).toISOString()) : '—'}`;
+}
+
+async function load(refresh){
+  try {
+    if (refresh){ $('refreshBtn').disabled = true; $('refreshNote').textContent = 'fetching from DICE…'; }
+    const r = refresh
+      ? await fetch('/api/dice/refresh', {method:'POST'})
+      : await fetch('/api/dice', {cache:'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    DATA = await r.json();
+    $('errbox').style.display = 'none';
+    renderTotals(); render();
+    if (refresh) $('refreshNote').textContent = 'refreshed just now';
+  } catch (e) {
+    $('errbox').textContent = 'Failed to load: ' + e.message;
+    $('errbox').style.display = 'block';
+  } finally {
+    $('refreshBtn').disabled = false;
+  }
+}
+async function loadManual(){
+  try {
+    const r = await fetch('/api/market/manual', {cache:'no-store'});
+    const d = await r.json();
+    const dice = (d.entries || []).filter(e => e.source === 'dice');
+    $('manualList').innerHTML = dice.length
+      ? 'Tracked from this page: ' + dice.map(e =>
+          `${escape(e.label && e.label.length < 60 ? e.label : e.code)}<a class="x" href="#" data-id="${e.id}" title="stop tracking" style="color:var(--red);margin-left:5px;text-decoration:none">✕</a>`
+        ).join(' · ')
+      : '';
+    $('manualList').querySelectorAll('.x').forEach(a => a.onclick = async ev => {
+      ev.preventDefault();
+      await fetch('/api/market/remove', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id: Number(a.dataset.id)})});
+      loadManual(); load(false);
+    });
+  } catch (e) { /* non-fatal */ }
+}
+
+async function addManual(){
+  const url = ($('addUrl').value || '').trim();
+  if (!url) return;
+  if (!/dice\.fm/i.test(url)) { $('addNote').textContent = 'paste a dice.fm event URL'; return; }
+  $('addBtn').disabled = true; $('addNote').textContent = 'adding…';
+  try {
+    const r = await fetch('/api/market/add', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    $('addUrl').value = '';
+    $('addNote').textContent = d.warning ? d.warning : 'added';
+    loadManual(); load(false);
+  } catch (e) {
+    $('addNote').textContent = 'Failed: ' + e.message;
+  } finally {
+    $('addBtn').disabled = false;
+  }
+}
+
+// ---- Purchases & Holdings -------------------------------------------
+let PDATA = null;
+const popen = new Set();
+
+function acctShort(a){
+  // DICE accounts are really name+phone identities — append the vault
+  // entry's buyer name and phone last-4 (matched by email) when known.
+  const short = escape((a||'?').replace(/@gmail\.com$/i, ''));
+  const v = (PDATA && PDATA.accounts || {})[(a||'').toLowerCase()];
+  if (!v || (!v.name && !v.phone_last4)) return `<b>${short}</b>`;
+  const bits = [v.name, v.phone_last4 ? '…' + v.phone_last4 : ''].filter(Boolean).map(escape);
+  return `<b>${short}</b> <span style="color:var(--muted);font-size:10px">(${bits.join(' · ')})</span>`;
+}
+
+// ---- "listed on" marker: per-purchase qty split across resale platforms.
+const LISTED_PLATFORMS = [['viagogo','VG'], ['crowdvolt','CV'], ['other','other']];
+const listedOpen = new Set();   // purchase ids with the editor open
+
+function _listedParsed(p){
+  try { return JSON.parse(p.listed_json || '{}') || {}; } catch (e) { return {}; }
+}
+
+function listedChip(p){
+  const listed = _listedParsed(p);
+  const on = LISTED_PLATFORMS.filter(([k]) => listed[k] > 0);
+  // Dropdown value: one platform when the whole allocation is on it,
+  // 'mixed' when split across platforms, '' when unset.
+  const value = on.length === 0 ? '' : on.length === 1 ? on[0][0] : 'mixed';
+  const opts = [['', '— listed on —'], ...LISTED_PLATFORMS.map(([k, lbl]) => [k, lbl]),
+                ['mixed', 'mixed…']]
+    .map(([v, lbl]) => `<option value="${v}"${v === value ? ' selected' : ''}>${lbl}</option>`)
+    .join('');
+  const sum = LISTED_PLATFORMS.reduce((a, [k]) => a + (listed[k]||0), 0);
+  const detail = on.length > 1 ? ` <span style="color:var(--muted);font-size:10px">${on.map(([k, lbl]) => `${lbl} ${listed[k]}`).join(' · ')}</span>` : '';
+  const off = on.length && sum !== p.avail && sum !== p.qty
+    ? ` <span style="color:var(--amber)" title="listed count (${sum}) ≠ avail (${fmt(p.avail)})">⚠</span>` : '';
+  const editor = listedOpen.has(p.id)
+    ? ` <span class="listedbox" data-id="${escape(p.id)}">${LISTED_PLATFORMS.map(([k, lbl]) =>
+        `<label style="margin-right:6px">${lbl} <input type="number" min="0" data-plat="${k}" value="${listed[k]||0}" style="width:42px"></label>`).join('')}<button class="lsave">save</button> <a href="#" class="lcancel">cancel</a></span>`
+    : '';
+  return `<select class="lsel" data-id="${escape(p.id)}" data-qty="${p.avail!=null?p.avail:(p.qty||0)}" style="font:inherit;font-size:10px;background:var(--bg-2);color:var(--text);border:1px solid var(--line-2);border-radius:5px;padding:2px 4px">${opts}</select>${detail}${off}${editor}`;
+}
+
+async function _saveListed(id, body){
+  const r = await fetch(`/api/dice/purchases/${encodeURIComponent(id)}/listed`, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  listedOpen.delete(id);
+  await loadPurchases();
+}
+
+function wireListed(){
+  document.querySelectorAll('.lsel').forEach(sel => {
+    sel.onclick = ev => ev.stopPropagation();   // don't collapse the event row
+    sel.onchange = async ev => {
+      ev.stopPropagation();
+      const id = sel.dataset.id, v = sel.value;
+      if (v === 'mixed'){ listedOpen.add(id); renderPurchases(); return; }
+      listedOpen.delete(id);
+      const body = {};
+      if (v) body[v] = Number(sel.dataset.qty) || 0;   // whole row on one platform
+      try { await _saveListed(id, body); }
+      catch (e) { alert('save failed: ' + e.message); renderPurchases(); }
+    };
+  });
+  document.querySelectorAll('.listedbox').forEach(box => {
+    box.onclick = ev => ev.stopPropagation();
+    const id = box.dataset.id;
+    box.querySelector('.lcancel').onclick = ev => {
+      ev.preventDefault(); listedOpen.delete(id); renderPurchases();
+    };
+    box.querySelector('.lsave').onclick = async () => {
+      const body = {};
+      box.querySelectorAll('input[data-plat]').forEach(i => body[i.dataset.plat] = Number(i.value)||0);
+      try { await _saveListed(id, body); }
+      catch (e) { alert('save failed: ' + e.message); }
+    };
+  });
+}
+
+// ---- match-a-sale: attach scraped viagogo/lysted/crowdvolt sales to a
+// purchase; avail = qty − Σ linked sold qty (transfers stay out of it).
+const saleOpen = new Set();
+const SALES_BY_EV = {};    // event_name -> ranked candidates ('' key = unranked)
+let SALES = null;          // candidates for the currently open picker
+const SRC_LBL = {viagogo:'VG', lysted:'LY', crowdvolt:'CV'};
+
+function saleChip(p){
+  const links = (p.sale_links || []).map(l =>
+    `<span style="white-space:nowrap">${SRC_LBL[l.sale_source]||l.sale_source} ${fmt(l.qty)}${l.order_id ? ' #' + escape(l.order_id) : ''}<a href="#" class="sunlink" data-id="${escape(l.id)}" title="unlink this sale" style="color:var(--red);margin-left:3px;text-decoration:none">✕</a></span>`
+  ).join(' · ');
+  if (saleOpen.has(p.id)){
+    const opts = (SALES || []).map((s, i) => {
+      const left = (s.qty||0) - (s.qty_linked||0);
+      const match = s.score >= 0.9 ? '★ ' : s.score >= 0.6 ? '≈ ' : '';
+      const bits = [match + (SRC_LBL[s.source]||s.source), s.event_name,
+        `${fmt(s.qty)}×${left < (s.qty||0) ? ` (${left} unmatched)` : ''}`,
+        s.sale_price != null ? '$' + s.sale_price : '', s.sale_date_iso || '',
+        s.order_id ? '#' + s.order_id : ''].filter(Boolean);
+      return `<option value="${i}">${escape(bits.join(' · '))}</option>`;
+    }).join('');
+    const body = SALES === null ? 'loading sales…'
+      : !SALES.length ? 'no scraped sales found (last 180d)'
+      : `<select class="ssel" style="max-width:340px">${opts}</select>
+         qty <input type="number" class="sqty" min="1" value="1" style="width:42px">
+         <button class="slink">attach</button>`;
+    return `${links ? links + ' · ' : ''}<span class="salebox" data-id="${escape(p.id)}">${body} <a href="#" class="scancel">cancel</a></span>`;
+  }
+  return `${links ? links + ' · ' : ''}<a href="#" class="saleadd" data-id="${escape(p.id)}" data-ev="${escape(p.event_name||'')}" style="color:var(--muted);text-decoration:none" title="match a scraped resale-platform sale to this purchase">+ sale</a>`;
+}
+
+async function ensureSales(evName){
+  // Ranked per dice event (server scores by artist-name similarity) and
+  // cached per event name so reopening a picker is instant.
+  const key = evName || '';
+  if (SALES_BY_EV[key]) { SALES = SALES_BY_EV[key]; return; }
+  try {
+    const q = key ? '?event_name=' + encodeURIComponent(key) : '';
+    const r = await fetch('/api/dice/sale-candidates' + q, {cache:'no-store'});
+    SALES_BY_EV[key] = r.ok ? ((await r.json()).sales || []) : [];
+  } catch (e) { SALES_BY_EV[key] = []; }
+  SALES = SALES_BY_EV[key];
+}
+
+function wireSales(){
+  document.querySelectorAll('.saleadd').forEach(a => a.onclick = async ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    saleOpen.add(a.dataset.id);
+    SALES = null;
+    renderPurchases();          // shows "loading sales…" if not cached yet
+    await ensureSales(a.dataset.ev);
+    renderPurchases();
+  });
+  document.querySelectorAll('.sunlink').forEach(a => a.onclick = async ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    if (!confirm('Unlink this sale?')) return;
+    try {
+      const r = await fetch(`/api/dice/sale-links/${encodeURIComponent(a.dataset.id)}/delete`, {method:'POST'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      await loadPurchases();
+    } catch (e) { alert('unlink failed: ' + e.message); }
+  });
+  document.querySelectorAll('.salebox').forEach(box => {
+    box.onclick = ev => ev.stopPropagation();
+    const id = box.dataset.id;
+    box.querySelector('.scancel').onclick = ev => {
+      ev.preventDefault(); saleOpen.delete(id); renderPurchases();
+    };
+    const btn = box.querySelector('.slink');
+    if (btn) btn.onclick = async () => {
+      const s = (SALES || [])[Number(box.querySelector('.ssel').value)];
+      if (!s) return;
+      const qty = Number(box.querySelector('.sqty').value) || 0;
+      try {
+        const r = await fetch(`/api/dice/purchases/${encodeURIComponent(id)}/link-sale`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({source: s.source, sale_id: s.id, qty})});
+        if (!r.ok) throw new Error((await r.json()).error || ('HTTP ' + r.status));
+        saleOpen.delete(id);
+        SALES = null;           // refresh qty_linked next open
+        Object.keys(SALES_BY_EV).forEach(k => delete SALES_BY_EV[k]);
+        await loadPurchases();
+      } catch (e) { alert('attach failed: ' + e.message); }
+    };
+    // Preselect the qty of the chosen sale for one-click attaches.
+    const sel = box.querySelector('.ssel');
+    if (sel) sel.onchange = () => {
+      const s = (SALES || [])[Number(sel.value)];
+      if (s) box.querySelector('.sqty').value = Math.max(1, (s.qty||1) - (s.qty_linked||0));
+    };
+  });
+}
+
+function renderPurchases(){
+  if (!PDATA) return;
+  const evs = PDATA.events || [];
+  const tiles = [
+    ['Events held', evs.filter(g => g.held > 0).length, ''],
+    ['Tickets avail', evs.reduce((a,g) => a + (g.avail||0), 0), 'bought − sold'],
+    ['Tickets sold', evs.reduce((a,g) => a + (g.sold||0), 0), 'matched resale sales'],
+    ['Tickets transferred', evs.reduce((a,g) => a + g.transferred, 0), ''],
+    ['Σ spend', '$' + evs.reduce((a,g) => a + g.spend, 0).toLocaleString(undefined,{maximumFractionDigits:0}), 'all recorded purchases'],
+    ['Transfers needing review', PDATA.problem_count || 0, 'unmatched / overflow'],
+  ];
+  $('ptotals').innerHTML = tiles.map(([l,v,h]) =>
+    `<div class="stat"><div class="label">${l}</div><div class="value${l.startsWith('Transfers') && v ? '' : v ? '' : ' zero'}"${l.startsWith('Transfers') && v ? ' style="color:var(--red)"' : ''}>${typeof v === 'number' ? fmt(v) : v}</div>${h ? `<div class="hint">${h}</div>` : ''}</div>`
+  ).join('');
+  if (!evs.length){
+    $('prows').innerHTML = '<tr><td colspan="9" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
+    return;
+  }
+  $('prows').innerHTML = evs.map(g => {
+    const key = g.event_slug || g.event_name;
+    const opened = popen.has(key);
+    const availCls = g.avail > 0 ? 'style="color:var(--green);font-weight:600"' : 'style="color:var(--muted)"';
+    let html = `<tr class="ev" data-pid="${escape(key)}">
+      <td><b>${escape(g.event_name)}</b></td>
+      <td>${escape(g.venue||'')}</td>
+      <td class="when">${escape(g.event_date_iso||'')}</td>
+      <td class="num">${fmt(g.qty)}</td>
+      <td class="num">${fmt(g.transferred)}</td>
+      <td class="num">${fmt(g.sold||0)}</td>
+      <td class="num" ${availCls}>${fmt(g.avail!=null?g.avail:g.qty)}</td>
+      <td class="num">${money(g.spend, 'USD')}</td>
+      <td>${g.url ? `<a class="buy" href="${escape(g.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">DICE</a>` : ''}</td>
+    </tr>`;
+    if (opened){
+      const rows = g.purchases.map(p => {
+        const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
+        return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total), p.currency||'USD')}/tkt · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
+      }).join('');
+      html += `<tr class="detail"><td colspan="9">${rows}</td></tr>`;
+    }
+    return html;
+  }).join('');
+  $('prows').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
+    const id = tr.dataset.pid;
+    popen.has(id) ? popen.delete(id) : popen.add(id);
+    renderPurchases();
+  });
+  wireListed();
+  wireSales();
+}
+
+function renderTransfers(){
+  const xs = (PDATA && PDATA.transfers) || [];
+  $('xrows').innerHTML = xs.length ? xs.map(t => {
+    const m = t.match_status === 'matched'
+      ? '<span class="badge selling">matched</span>'
+      : `<span class="badge soldout">${escape(t.match_status||'?')}</span>`;
+    return `<tr>
+      <td class="when">${escape((t.email_date||'').slice(0,10))}</td>
+      <td>${acctShort(t.account_email)}</td>
+      <td>${escape(t.event_name||'')}</td>
+      <td class="num">${fmt(t.qty)}</td>
+      <td>${escape(t.recipient||'')}</td>
+      <td>${m}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="empty">No transfers recorded.</td></tr>';
+}
+
+async function loadPurchases(){
+  try {
+    const r = await fetch('/api/dice/purchases', {cache:'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    PDATA = await r.json();
+    renderPurchases(); renderTransfers();
+  } catch (e) { /* section-local; main err box stays for the tracker */ }
+}
+
+$('xferToggle').onclick = ev => {
+  ev.preventDefault();
+  const w = $('xferwrap');
+  const show = w.style.display === 'none';
+  w.style.display = show ? '' : 'none';
+  $('xferToggle').textContent = show ? 'Hide transfer log' : 'Show transfer log';
+};
+
+$('q').addEventListener('input', render);
+$('refreshBtn').onclick = () => load(true);
+
+// Poll-inbox-now: kicks the shared mail-intake run (async on the server),
+// watches last_intake until it finishes, then reloads the purchases table.
+$('pollBtn').onclick = async () => {
+  const btn = $('pollBtn'), note = $('pollNote');
+  btn.disabled = true; note.textContent = 'polling inbox…';
+  try {
+    const r = await fetch('/api/pending-intake/poll', {method:'POST'});
+    if (r.status === 429) { note.textContent = 'already running — waiting…'; }
+    else if (!r.ok) throw new Error('HTTP ' + r.status);
+    for (let i = 0; i < 60; i++) {
+      await new Promise(res => setTimeout(res, 2000));
+      const s = await fetch('/api/pending-intake', {cache:'no-store'});
+      if (!s.ok) continue;
+      const li = (await s.json()).last_intake || {};
+      if (!li.running && li.at) {
+        note.textContent = li.error
+          ? 'intake error: ' + li.error
+          : `done — ${li.dice_purchases_saved||0} purchases, ${li.dice_transfers_saved||0} transfers saved`;
+        await loadPurchases();
+        btn.disabled = false;
+        return;
+      }
+    }
+    note.textContent = 'still running — check back shortly';
+  } catch (e) { note.textContent = 'poll failed: ' + e.message; }
+  btn.disabled = false;
+};
+$('addBtn').onclick = addManual;
+$('addUrl').addEventListener('keydown', e => { if (e.key === 'Enter') addManual(); });
+load(false);
+loadManual();
+loadPurchases();
+setInterval(() => load(false), 120000);
+setInterval(loadPurchases, 120000);
+</script>
+</body>
+</html>

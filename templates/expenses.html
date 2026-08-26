@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Expenses</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 24px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.amber .value { color: var(--amber); }
+  .stat.red .value { color: var(--red); }
+  .stat.green .value { color: var(--green); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.month-hdr td { background: var(--bg-2); padding: 9px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; }
+  tr.month-hdr .month-total { float: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  tr.expense-row { cursor: pointer; }
+  .chip { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
+  .chip-auto { color: var(--purple); border-color: var(--purple); }
+  .chip-active { color: var(--green); border-color: var(--green); }
+  .chip-ended { color: var(--muted); border-color: var(--line-2); }
+  .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; color: var(--red); }
+  tbody tr:hover .row-action { opacity: 0.7; }
+  tbody tr .row-action:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+
+  /* modals (cloned from inventory.html) */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 540px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus, .modal-body select:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>KARTIS</h1>
+    <span class="meta" id="lastrun">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses" class="active">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/cvpricer">CV PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/marquee">MARQUEE</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div style="margin-bottom:14px;font-size:11px;letter-spacing:1px;text-transform:uppercase;">
+    <a href="/expenses" style="color:var(--accent);text-decoration:none;margin-right:14px;">Expenses</a>
+    <a href="/owed" style="color:var(--muted);text-decoration:none;">Money Owed →</a>
+  </div>
+
+  <div class="stats">
+    <div class="stat amber"><div class="label">Recurring / Mo</div><div class="value" id="s-recurring">$0</div></div>
+    <div class="stat"><div class="label">This Month</div><div class="value" id="s-thismonth">$0</div></div>
+    <div class="stat"><div class="label">This Year</div><div class="value" id="s-thisyear">$0</div></div>
+    <div class="stat"><div class="label">All-Time</div><div class="value" id="s-alltime">$0</div></div>
+  </div>
+
+  <h2>Subscriptions <button id="add-sub" style="margin-left:14px;font-size:11px;letter-spacing:1px;">+ Add Subscription</button></h2>
+  <table id="sub-table">
+    <thead><tr>
+      <th>NAME</th><th>CATEGORY</th><th class="num">AMOUNT / MO</th><th>STARTED</th><th>STATUS</th><th>NOTES</th><th></th>
+    </tr></thead>
+    <tbody id="sub-tbody"></tbody>
+  </table>
+  <div id="sub-empty" class="empty" style="display:none">no subscriptions yet</div>
+
+  <h2>Expense Log
+    <button id="add-exp" style="margin-left:14px;font-size:11px;letter-spacing:1px;">+ Add Expense</button>
+    <input type="search" id="q-search" placeholder="search vendor category" style="margin-left:14px;font-size:11px;width:240px;">
+    <select id="q-month" style="margin-left:8px;font-size:11px;"><option value="all">ALL MONTHS</option></select>
+  </h2>
+  <table id="exp-table">
+    <thead><tr>
+      <th>DATE</th><th>VENDOR</th><th>CATEGORY</th><th class="num">AMOUNT</th><th>NOTES</th><th></th>
+    </tr></thead>
+    <tbody id="exp-tbody"></tbody>
+  </table>
+  <div id="exp-empty" class="empty" style="display:none">no expenses yet</div>
+</main>
+
+<!-- Subscription add/edit modal -->
+<div id="sub-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span id="sub-title">ADD SUBSCRIPTION</span><button class="close" id="sub-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Recurring monthly charges (proxies, software, etc.) auto-post to the expense log each month.</div>
+      <label>Name *</label><input id="sub-name" type="text" placeholder="e.g. Bright Data Proxy">
+      <label>Category</label>
+      <select id="sub-category">
+        <option value="">(none)</option>
+        <option value="proxy">Proxy</option>
+        <option value="software">Software</option>
+        <option value="hosting">Hosting</option>
+        <option value="other">Other</option>
+      </select>
+      <label>Amount / mo *</label><input id="sub-amount" type="number" step="0.01" min="0" placeholder="USD">
+      <label>Started *</label><input id="sub-started" type="date">
+      <label>Ended</label><input id="sub-ended" type="date" placeholder="leave blank if active">
+      <label>Notes</label><input id="sub-notes" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <span class="muted">ctrl+enter saves</span>
+      <button id="sub-cancel">Cancel</button>
+      <button class="primary" id="sub-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Expense add/edit modal -->
+<div id="exp-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span id="exp-title">ADD EXPENSE</span><button class="close" id="exp-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="exp-meta">One-off charge. Use this for anything that isn't a monthly subscription.</div>
+      <label>Date *</label><input id="exp-date" type="date">
+      <label>Vendor</label><input id="exp-vendor" type="text" placeholder="e.g. Domain registrar">
+      <label>Category</label>
+      <select id="exp-category">
+        <option value="">(none)</option>
+        <option value="proxy">Proxy</option>
+        <option value="software">Software</option>
+        <option value="hosting">Hosting</option>
+        <option value="hardware">Hardware</option>
+        <option value="fees">Fees</option>
+        <option value="other">Other</option>
+      </select>
+      <label>Amount *</label><input id="exp-amount" type="number" step="0.01" min="0" placeholder="USD">
+      <label>Notes</label><input id="exp-notes" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <span class="muted">ctrl+enter saves</span>
+      <button id="exp-cancel">Cancel</button>
+      <button class="primary" id="exp-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => "$" + (n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const today = () => new Date().toISOString().slice(0,10);
+
+let _state = { subscriptions: [], expenses: [], totals_by_month: {}, summary: {} };
+let _editingSubId = null;
+let _editingExpId = null;
+
+async function load() {
+  const res = await fetch("/api/expenses");
+  if (!res.ok) { console.error("failed to load"); return; }
+  _state = await res.json();
+  render();
+}
+
+function render() {
+  $("s-recurring").textContent = fmt(_state.summary.recurring_monthly);
+  $("s-thismonth").textContent = fmt(_state.summary.this_month);
+  $("s-thisyear").textContent = fmt(_state.summary.this_year);
+  $("s-alltime").textContent = fmt(_state.summary.all_time);
+  if (_state.last_run && _state.last_run.at) {
+    $("lastrun").textContent = "last_scrape=" + new Date(_state.last_run.at).toLocaleString();
+  }
+  renderSubs();
+  renderMonthFilter();
+  renderExpenses();
+}
+
+function renderSubs() {
+  const tbody = $("sub-tbody");
+  tbody.innerHTML = "";
+  if (!_state.subscriptions.length) {
+    $("sub-empty").style.display = "";
+    return;
+  }
+  $("sub-empty").style.display = "none";
+  for (const s of _state.subscriptions) {
+    const tr = document.createElement("tr");
+    tr.dataset.id = s.id;
+    const active = !s.ended_at_iso;
+    tr.innerHTML = `
+      <td>${escape(s.name || "")}</td>
+      <td>${escape(s.category || "")}</td>
+      <td class="num">${fmt(s.amount)}</td>
+      <td>${escape(s.started_at_iso || "")}</td>
+      <td><span class="chip ${active ? "chip-active" : "chip-ended"}">${active ? "ACTIVE" : "ENDED " + s.ended_at_iso}</span></td>
+      <td>${escape(s.notes || "")}</td>
+      <td><button class="row-action" data-act="del-sub" title="Delete subscription">×</button></td>
+    `;
+    tr.addEventListener("dblclick", () => openSubModal(s));
+    tbody.appendChild(tr);
+  }
+}
+
+function renderMonthFilter() {
+  const sel = $("q-month");
+  const cur = sel.value;
+  const months = Object.keys(_state.totals_by_month).sort().reverse();
+  sel.innerHTML = '<option value="all">ALL MONTHS</option>' +
+    months.map(m => `<option value="${m}">${m} (${fmt(_state.totals_by_month[m])})</option>`).join("");
+  sel.value = months.includes(cur) ? cur : "all";
+}
+
+function renderExpenses() {
+  const search = ($("q-search").value || "").toLowerCase().trim();
+  const month = $("q-month").value;
+  const tbody = $("exp-tbody");
+  tbody.innerHTML = "";
+  let rows = _state.expenses.slice();
+  if (month !== "all") rows = rows.filter(r => (r.date_iso || "").slice(0,7) === month);
+  if (search) {
+    rows = rows.filter(r =>
+      (r.vendor || "").toLowerCase().includes(search) ||
+      (r.category || "").toLowerCase().includes(search) ||
+      (r.notes || "").toLowerCase().includes(search)
+    );
+  }
+  if (!rows.length) {
+    $("exp-empty").style.display = "";
+    return;
+  }
+  $("exp-empty").style.display = "none";
+
+  // Group by month with subtotal headers
+  let curMonth = null;
+  let monthTotal = 0;
+  let monthRows = [];
+  const flushMonth = () => {
+    if (!curMonth) return;
+    const hdr = document.createElement("tr");
+    hdr.className = "month-hdr";
+    hdr.innerHTML = `<td colspan="6">${curMonth}<span class="month-total">${fmt(monthTotal)}</span></td>`;
+    tbody.appendChild(hdr);
+    monthRows.forEach(r => tbody.appendChild(r));
+  };
+  for (const r of rows) {
+    const m = (r.date_iso || "").slice(0,7);
+    if (m !== curMonth) {
+      flushMonth();
+      curMonth = m;
+      monthTotal = 0;
+      monthRows = [];
+    }
+    monthTotal += (r.amount || 0);
+    const tr = document.createElement("tr");
+    tr.className = "expense-row";
+    tr.dataset.id = r.id;
+    const isAuto = !!r.subscription_id;
+    tr.innerHTML = `
+      <td>${escape(r.date_iso || "")}</td>
+      <td>${escape(r.vendor || "")} ${isAuto ? '<span class="chip chip-auto">AUTO</span>' : ''}</td>
+      <td>${escape(r.category || "")}</td>
+      <td class="num">${fmt(r.amount)}</td>
+      <td>${escape(r.notes || "")}</td>
+      <td><button class="row-action" data-act="del-exp" title="Delete expense">×</button></td>
+    `;
+    tr.addEventListener("dblclick", () => openExpModal(r));
+    monthRows.push(tr);
+  }
+  flushMonth();
+}
+
+function escape(s) {
+  return String(s || "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+}
+
+// --- subscription modal ---
+function openSubModal(sub) {
+  _editingSubId = sub ? sub.id : null;
+  $("sub-title").textContent = sub ? "// EDIT SUBSCRIPTION" : "// ADD SUBSCRIPTION";
+  $("sub-name").value = sub ? (sub.name || "") : "";
+  $("sub-category").value = sub ? (sub.category || "") : "";
+  $("sub-amount").value = sub ? (sub.amount || "") : "";
+  $("sub-started").value = sub ? (sub.started_at_iso || "") : today();
+  $("sub-ended").value = sub ? (sub.ended_at_iso || "") : "";
+  $("sub-notes").value = sub ? (sub.notes || "") : "";
+  $("sub-bg").classList.add("open");
+  setTimeout(() => $("sub-name").focus(), 30);
+}
+function closeSubModal() { $("sub-bg").classList.remove("open"); _editingSubId = null; }
+async function saveSubModal() {
+  const name = $("sub-name").value.trim();
+  const amount = parseFloat($("sub-amount").value);
+  const started = $("sub-started").value;
+  if (!name) { alert("Name required"); return; }
+  if (!amount || amount <= 0) { alert("Amount must be > 0"); return; }
+  if (!started) { alert("Started date required"); return; }
+  const body = {
+    id: _editingSubId,
+    name, amount,
+    category: $("sub-category").value,
+    started_at_iso: started,
+    ended_at_iso: $("sub-ended").value || null,
+    notes: $("sub-notes").value.trim(),
+  };
+  const url = _editingSubId ? "/api/expenses/sub-edit" : "/api/expenses/sub-add";
+  const res = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return; }
+  closeSubModal();
+  await load();
+}
+
+// --- expense modal ---
+function openExpModal(exp) {
+  _editingExpId = exp ? exp.id : null;
+  $("exp-title").textContent = exp ? "// EDIT EXPENSE" : "// ADD EXPENSE";
+  $("exp-meta").textContent = exp && exp.subscription_id
+    ? "Auto-posted from subscription. You can edit the amount/notes for this month only."
+    : "One-off charge. Use this for anything that isn't a monthly subscription.";
+  $("exp-date").value = exp ? (exp.date_iso || "") : today();
+  $("exp-vendor").value = exp ? (exp.vendor || "") : "";
+  $("exp-category").value = exp ? (exp.category || "") : "";
+  $("exp-amount").value = exp ? (exp.amount || "") : "";
+  $("exp-notes").value = exp ? (exp.notes || "") : "";
+  $("exp-bg").classList.add("open");
+  setTimeout(() => $("exp-vendor").focus(), 30);
+}
+function closeExpModal() { $("exp-bg").classList.remove("open"); _editingExpId = null; }
+async function saveExpModal() {
+  const date_iso = $("exp-date").value;
+  const amount = parseFloat($("exp-amount").value);
+  if (!date_iso) { alert("Date required"); return; }
+  if (!amount || amount <= 0) { alert("Amount must be > 0"); return; }
+  const body = {
+    id: _editingExpId,
+    date_iso, amount,
+    vendor: $("exp-vendor").value.trim(),
+    category: $("exp-category").value,
+    notes: $("exp-notes").value.trim(),
+  };
+  const url = _editingExpId ? "/api/expenses/edit" : "/api/expenses/add";
+  const res = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return; }
+  closeExpModal();
+  await load();
+}
+
+// --- delete handlers ---
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".row-action");
+  if (!btn) return;
+  const tr = btn.closest("tr");
+  const id = tr && tr.dataset.id;
+  if (!id) return;
+  if (btn.dataset.act === "del-sub") {
+    if (!confirm("Delete this subscription?\nPast auto-posted expense rows will be kept as historical record.")) return;
+    await fetch("/api/expenses/sub-delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id}) });
+  } else if (btn.dataset.act === "del-exp") {
+    if (!confirm("Delete this expense?")) return;
+    await fetch("/api/expenses/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id}) });
+  } else { return; }
+  await load();
+});
+
+$("add-sub").addEventListener("click", () => openSubModal(null));
+$("add-exp").addEventListener("click", () => openExpModal(null));
+$("sub-close").addEventListener("click", closeSubModal);
+$("sub-cancel").addEventListener("click", closeSubModal);
+$("sub-save").addEventListener("click", saveSubModal);
+$("exp-close").addEventListener("click", closeExpModal);
+$("exp-cancel").addEventListener("click", closeExpModal);
+$("exp-save").addEventListener("click", saveExpModal);
+$("sub-bg").addEventListener("click", e => { if (e.target.id === "sub-bg") closeSubModal(); });
+$("exp-bg").addEventListener("click", e => { if (e.target.id === "exp-bg") closeExpModal(); });
+$("q-search").addEventListener("input", renderExpenses);
+$("q-month").addEventListener("change", renderExpenses);
+
+document.addEventListener("keydown", (e) => {
+  const subOpen = $("sub-bg").classList.contains("open");
+  const expOpen = $("exp-bg").classList.contains("open");
+  if (!subOpen && !expOpen) return;
+  if (e.key === "Escape") {
+    if (subOpen) closeSubModal();
+    if (expOpen) closeExpModal();
+  } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    if (subOpen) saveSubModal();
+    if (expOpen) saveExpModal();
+  }
+});
+
+load();
+</script>
+</body>
+</html>

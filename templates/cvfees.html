@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — CV Fees</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  h2 .hint { font-size: 11px; letter-spacing: 0; text-transform: none; color: var(--muted); font-weight: 400; margin-left: 10px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .note { background: var(--bg-3); border: 1px solid var(--line); padding: 10px 12px; margin-bottom: 14px; font-size: 12px; line-height: 1.55; color: var(--muted); }
+  .note b { color: var(--text); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .stat.plain .value { color: var(--text); }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; }
+  table { border-collapse: collapse; width: 100%; background: var(--bg-2); border: 1px solid var(--line); font-size: 12px; }
+  th, td { padding: 7px 9px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { background: var(--bg-3); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); font-weight: 600; position: sticky; top: 0; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--accent); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: var(--bg-3); }
+  .scroll { max-height: 620px; overflow: auto; border: 1px solid var(--line); }
+  .scroll table { border: 0; }
+  .bar-row { display: flex; align-items: center; gap: 8px; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .bar-row .lab { width: 52px; text-align: right; color: var(--muted); }
+  .bar-row .track { flex: 1; background: var(--bg-3); height: 14px; position: relative; }
+  .bar-row .fill { background: var(--accent); height: 100%; }
+  .bar-row .n { width: 30px; color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 6px; border: 1px solid var(--line-2); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  .hi { color: var(--red); font-weight: 600; }
+  .lo { color: var(--green); font-weight: 600; }
+  .miss { color: var(--amber); }
+  .fit { border: 1px solid var(--line); background: var(--bg-2); padding: 12px 14px; font-size: 12px; line-height: 1.6; }
+  .fit code { background: var(--bg-3); padding: 1px 5px; font-size: 12px; }
+  .muted { color: var(--muted); }
+  .bar { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>Kartis</h1>
+    <span class="meta" id="meta">loading…</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/cvpricer">CV PRICER</a>
+    <a href="/cvfees" class="active">CV FEES</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+  </nav>
+</header>
+
+<main>
+  <div id="err" class="err" style="display:none"></div>
+
+  <div class="note">
+    CrowdVolt publishes no seller fee schedule. Every fee observed so far is a
+    <b>whole dollar</b>, and the effective rate moves with the ticket price
+    rather than staying flat — so the rate looks erratic even though the
+    underlying charge may not be. This page shows the raw numbers and every
+    grouping that might explain them.
+    <b>Gross</b> here is list price × qty; <b>payout</b> is what CrowdVolt
+    actually paid you, and <code>gross − fee = payout</code> on every order.
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <h2>Rule fit <span class="hint">best simple formula found, and how much of the data it actually explains</span></h2>
+  <div class="fit" id="fit">—</div>
+
+  <h2>Rate distribution <span class="hint">each bar is a half-percent bucket</span></h2>
+  <div id="hist"></div>
+
+  <div class="cols">
+    <div>
+      <h2>By ticket source <span class="hint">where the ticket came from — all sales are on CrowdVolt</span></h2>
+      <div id="by_source"></div>
+    </div>
+    <div>
+      <h2>By ticket type</h2>
+      <div id="by_ticket_type"></div>
+    </div>
+    <div>
+      <h2>By month <span class="hint">would show a pricing change</span></h2>
+      <div id="by_month"></div>
+    </div>
+    <div>
+      <h2>By event <span class="hint">top 15 by order count</span></h2>
+      <div id="by_event"></div>
+    </div>
+  </div>
+
+  <h2>Every order <span class="hint">click a column to sort · “pred” is the best-fit rule’s prediction</span></h2>
+  <div class="bar">
+    <input id="filter" placeholder="filter by event, source, type or order…" style="min-width:280px" />
+    <label class="muted"><input type="checkbox" id="onlyMisses" /> only rows the rule gets wrong</label>
+    <button id="csv">Download CSV</button>
+  </div>
+  <div class="scroll"><table id="tbl">
+    <thead><tr>
+      <th class="sortable" data-k="order_id">Order</th>
+      <th class="sortable" data-k="sale_date_iso">Sold</th>
+      <th class="sortable" data-k="event_name">Event</th>
+      <th class="sortable" data-k="ticket_source">Source</th>
+      <th class="sortable" data-k="ticket_type">Type</th>
+      <th class="sortable num" data-k="qty">Qty</th>
+      <th class="sortable num" data-k="price_per_ticket">Price</th>
+      <th class="sortable num" data-k="gross">Gross</th>
+      <th class="sortable num" data-k="fee">Fee</th>
+      <th class="sortable num" data-k="fee_per_ticket">Fee/tkt</th>
+      <th class="sortable num" data-k="rate">Rate</th>
+      <th class="sortable num" data-k="payout">Payout</th>
+      <th class="num">Pred</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const money = v => v == null ? "—" : "$" + Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const pct = v => v == null ? "—" : (v * 100).toFixed(2) + "%";
+let DATA = null, sortKey = "sale_date_iso", sortDir = -1;
+
+function predict(r, fit) {
+  if (!fit) return null;
+  const f = {round: Math.round, ceil: Math.ceil, floor: Math.floor}[fit.rounding];
+  if (!f) return null;
+  return fit.basis === "per_ticket"
+    ? f(r.price_per_ticket * fit.rate) * r.qty
+    : f(r.price_per_ticket * r.qty * fit.rate);
+}
+
+function statCard(label, value, cls) {
+  return `<div class="stat ${cls || ""}"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+}
+
+function renderStats(t) {
+  $("#stats").innerHTML = [
+    statCard("Orders", t.orders, "plain"),
+    statCard("Tickets", t.tickets, "plain"),
+    statCard("Gross", money(t.gross), "plain"),
+    statCard("Fees paid", money(t.fee), "red"),
+    statCard("Net payout", money(t.payout), "green"),
+    statCard("Blended rate", pct(t.rate), "amber"),
+    statCard("Lowest rate", pct(t.min_rate), "green"),
+    statCard("Highest rate", pct(t.max_rate), "red"),
+  ].join("");
+}
+
+function renderFit(fit, n) {
+  if (!fit) { $("#fit").textContent = "no data"; return; }
+  const basis = fit.basis === "per_ticket" ? "per-ticket price" : "order total";
+  const formula = fit.basis === "per_ticket"
+    ? `${fit.rounding}(price × ${(fit.rate * 100).toFixed(3)}%) × qty`
+    : `${fit.rounding}(price × qty × ${(fit.rate * 100).toFixed(3)}%)`;
+  const good = fit.pct >= 90;
+  $("#fit").innerHTML = `
+    Best fit across every rounding rule and rate from 1%–7%, applied to the ${basis}:
+    <div style="margin:8px 0"><code>fee = ${formula}</code></div>
+    Reproduces <b class="${good ? "lo" : "hi"}">${fit.hits} of ${n}</b> fees exactly
+    (${fit.pct}%).
+    ${good
+      ? `That is a strong fit — treat this as the rule.`
+      : `<b>That is a poor fit</b>, so a single rate does not explain the data.
+         Look at the groupings below: if one dimension splits cleanly, CrowdVolt
+         is likely applying different rates per segment rather than charging at
+         random. The “Pred” column shows where the rule misses.`}`;
+}
+
+function renderHist(hist) {
+  if (!hist.length) { $("#hist").innerHTML = ""; return; }
+  const max = Math.max(...hist.map(h => h.n));
+  $("#hist").innerHTML = hist.map(h => `
+    <div class="bar-row">
+      <span class="lab">${h.rate.toFixed(1)}%</span>
+      <span class="track"><span class="fill" style="width:${h.n / max * 100}%"></span></span>
+      <span class="n">${h.n}</span>
+    </div>`).join("");
+}
+
+function renderGroup(el, rows, limit) {
+  const list = limit ? rows.slice(0, limit) : rows;
+  if (!list.length) { el.innerHTML = '<div class="muted">no data</div>'; return; }
+  el.innerHTML = `<table><thead><tr>
+      <th></th><th class="num">n</th><th class="num">Gross</th>
+      <th class="num">Fee</th><th class="num">Rate</th><th class="num">Spread</th>
+    </tr></thead><tbody>` + list.map(g => `
+      <tr>
+        <td>${g.key}</td>
+        <td class="num">${g.n}</td>
+        <td class="num">${money(g.gross)}</td>
+        <td class="num">${money(g.fee)}</td>
+        <td class="num"><b>${pct(g.rate)}</b></td>
+        <td class="num muted">${g.min_rate != null ? pct(g.min_rate) + " – " + pct(g.max_rate) : "—"}</td>
+      </tr>`).join("") + `</tbody></table>`;
+}
+
+function visibleRows() {
+  const q = ($("#filter").value || "").toLowerCase().trim();
+  const onlyMisses = $("#onlyMisses").checked;
+  let rows = DATA.rows.slice();
+  if (q) {
+    rows = rows.filter(r => [r.event_name, r.ticket_source, r.ticket_type, r.order_id]
+      .some(v => (v || "").toLowerCase().includes(q)));
+  }
+  if (onlyMisses) {
+    rows = rows.filter(r => {
+      const p = predict(r, DATA.fit);
+      return p != null && Math.abs(p - r.fee) >= 0.001;
+    });
+  }
+  rows.sort((a, b) => {
+    const x = a[sortKey], y = b[sortKey];
+    if (x == null) return 1;
+    if (y == null) return -1;
+    return (typeof x === "number" ? x - y : String(x).localeCompare(String(y))) * sortDir;
+  });
+  return rows;
+}
+
+function renderTable() {
+  const rows = visibleRows();
+  $("#tbl").tBodies[0].innerHTML = rows.map(r => {
+    const p = predict(r, DATA.fit);
+    const miss = p != null && Math.abs(p - r.fee) >= 0.001;
+    return `<tr>
+      <td>${r.order_id}</td>
+      <td class="muted">${r.sale_date_iso || "—"}</td>
+      <td>${r.event_name || "—"}</td>
+      <td><span class="pill">${r.ticket_source || "?"}</span></td>
+      <td class="muted">${r.ticket_type || "—"}</td>
+      <td class="num">${r.qty}</td>
+      <td class="num">${money(r.price_per_ticket)}</td>
+      <td class="num">${money(r.gross)}</td>
+      <td class="num">${money(r.fee)}</td>
+      <td class="num">${money(r.fee_per_ticket)}</td>
+      <td class="num ${r.rate >= 0.07 ? "hi" : r.rate <= 0.045 ? "lo" : ""}">${pct(r.rate)}</td>
+      <td class="num">${money(r.payout)}</td>
+      <td class="num ${miss ? "miss" : "muted"}">${p == null ? "—" : money(p) + (miss ? " ✕" : " ✓")}</td>
+    </tr>`;
+  }).join("");
+  $("#meta").textContent = `${rows.length} of ${DATA.rows.length} orders`;
+}
+
+function toCsv() {
+  const cols = ["order_id", "sale_date_iso", "event_name", "ticket_source",
+                "ticket_type", "qty", "price_per_ticket", "gross", "fee",
+                "fee_per_ticket", "rate", "payout"];
+  const esc = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  const lines = [cols.join(",")].concat(
+    visibleRows().map(r => cols.map(c => esc(r[c])).join(",")));
+  const blob = new Blob([lines.join("\n")], {type: "text/csv"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "crowdvolt-fees.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function load() {
+  try {
+    const res = await fetch("/api/cvfees");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    DATA = await res.json();
+  } catch (e) {
+    $("#err").style.display = "block";
+    $("#err").textContent = "Could not load fee data: " + e.message;
+    return;
+  }
+  if (!DATA.rows.length) {
+    $("#err").style.display = "block";
+    $("#err").textContent = "No fee data yet — fees are recorded on the next CrowdVolt sales sync.";
+  }
+  renderStats(DATA.totals);
+  renderFit(DATA.fit, DATA.rows.length);
+  renderHist(DATA.histogram || []);
+  renderGroup($("#by_source"), DATA.by_source || []);
+  renderGroup($("#by_ticket_type"), DATA.by_ticket_type || []);
+  renderGroup($("#by_month"), DATA.by_month || []);
+  renderGroup($("#by_event"), DATA.by_event || [], 15);
+  renderTable();
+}
+
+document.querySelectorAll("th.sortable").forEach(th => {
+  th.addEventListener("click", () => {
+    const k = th.dataset.k;
+    sortDir = (k === sortKey) ? -sortDir : -1;
+    sortKey = k;
+    renderTable();
+  });
+});
+$("#filter").addEventListener("input", renderTable);
+$("#onlyMisses").addEventListener("change", renderTable);
+$("#csv").addEventListener("click", toCsv);
+load();
+</script>
+</body>
+</html>

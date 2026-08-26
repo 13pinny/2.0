@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — GA Tracker</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df; --cyan: #0f766e;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.zero { color: var(--muted); }
+  .stat .partial { font-size: 9px; color: var(--amber); letter-spacing: 1px; margin-top: 3px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 57px; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tfoot td { border-top: 2px solid var(--line-2); font-weight: 700; }
+  a.tm-link { color: var(--accent); text-decoration: none; }
+  a.tm-link:hover { text-decoration: underline; }
+  .when { color: var(--muted); font-size: 11px; }
+  .price { font-size: 10px; color: var(--muted); }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; }
+  .badge.available { background: #16a34a; }
+  .badge.lasttickets { background: #d97706; }
+  .badge.soldout { background: #dc2626; }
+  .badge.unknown { background: #888; }
+  .vel { font-variant-numeric: tabular-nums; }
+  .vel.zero { color: var(--muted); }
+  .vel.hot { color: var(--green); font-weight: 600; }
+  .vel .star { color: var(--amber); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  /* Add bar + per-row management */
+  .addbar { display: flex; gap: 8px; margin: 0 0 20px; flex-wrap: wrap; align-items: center; }
+  .addbar input { flex: 1; min-width: 320px; font-family: inherit; font-size: 12px; padding: 8px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); }
+  .addbar input:focus { outline: none; border-color: var(--accent); }
+  button { font-family: inherit; font-size: 12px; padding: 7px 12px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { background: #0a5cc2; }
+  button.danger { color: var(--red); border-color: #f2b8b5; }
+  button.danger:hover { background: #fdecea; }
+  .addmsg { font-size: 11px; }
+  .addmsg.ok { color: var(--green); }
+  .addmsg.bad { color: var(--red); }
+  td.manage { white-space: nowrap; }
+  td.manage button { padding: 3px 8px; font-size: 11px; margin-left: 4px; }
+  select.chan { font-size: 11px; padding: 4px 6px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); }
+  .switch { position: relative; display: inline-block; width: 34px; height: 18px; vertical-align: middle; margin-left: 6px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider { position: absolute; cursor: pointer; inset: 0; background: var(--line-2); transition: .2s; border-radius: 18px; }
+  .switch .slider:before { position: absolute; content: ""; height: 12px; width: 12px; left: 3px; top: 3px; background: var(--text); transition: .2s; border-radius: 50%; }
+  .switch input:checked + .slider { background: var(--orange); }
+  .switch input:checked + .slider:before { transform: translateX(16px); background: #fff; }
+  tr.paused td { opacity: .45; }
+  .errdot { color: var(--red); font-size: 10px; margin-left: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>GA TRACKER</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/cvpricer">CV PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga" class="active">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/marquee">MARQUEE</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+
+  <div class="addbar">
+    <input id="addUrl" placeholder="Paste a kupat or ticketmaster.co.il GA show URL  (…/booking/features/…?prsntId=…  or  …/performance/EVENT/PERF/ALL/iw)" />
+    <button id="addBtn" class="primary">+ Add GA show</button>
+    <span class="addmsg" id="addMsg"></span>
+  </div>
+
+  <h2>Tickets sold (all GA shows)</h2>
+  <p class="sub" id="totalsSub">—</p>
+  <div class="stats" id="totals"></div>
+
+  <h2>GA shows</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Show</th>
+        <th>Date</th>
+        <th>Status</th>
+        <th class="num">Left</th>
+        <th class="num">+1h</th>
+        <th class="num">+6h</th>
+        <th class="num">+24h</th>
+        <th class="num">+3d</th>
+        <th class="num">+7d</th>
+        <th>Alerts</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+    <tfoot id="foot"></tfoot>
+  </table>
+  <p class="sub" id="footnote"></p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const WIN_LABELS = { '1h':'Last hour', '6h':'Last 6 hours', '24h':'Last 24 hours', '3d':'Last 3 days', '7d':'Last 7 days' };
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+
+function fmtAgo(iso){
+  if (!iso) return '';
+  const secs = (Date.now() - new Date(iso).getTime())/1000;
+  if (secs < 90) return 'just now';
+  if (secs < 5400) return Math.round(secs/60)+'m ago';
+  if (secs < 129600) return Math.round(secs/3600)+'h ago';
+  return Math.round(secs/86400)+'d ago';
+}
+
+function velCell(wv){
+  if (!wv || wv.sold == null) return '<td class="num vel zero">—</td>';
+  const cls = wv.sold > 0 ? 'vel hot' : 'vel zero';
+  const star = wv.partial ? '<span class="star" title="limited history — fewer than this many hours/days tracked so far">*</span>' : '';
+  return `<td class="num ${cls}">${fmt(wv.sold)}${star}</td>`;
+}
+
+function priceOf(types){
+  const vals = Object.values(types || {}).map(v => v && v.price).filter(p => p != null);
+  if (!vals.length) return '';
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  return lo === hi ? `₪${lo}` : `₪${lo}–${hi}`;
+}
+
+async function load(){
+  let d;
+  try {
+    const r = await fetch('/api/ga', {cache:'no-store'});
+    d = await r.json();
+  } catch (e) {
+    $('errbox').style.display = 'block';
+    $('errbox').textContent = 'Failed to load /api/ga: ' + e;
+    return;
+  }
+  $('errbox').style.display = 'none';
+  const wins = d.windows || ['1h','6h','24h','3d','7d'];
+
+  $('totals').innerHTML = wins.map(k => {
+    const t = (d.totals || {})[k] || {};
+    const zero = !t.sold ? ' zero' : '';
+    const partial = t.partial ? '<div class="partial">* limited history</div>' : '';
+    return `<div class="stat"><div class="label">${WIN_LABELS[k] || k}</div>` +
+           `<div class="value${zero}">${fmt(t.sold)}</div>${partial}</div>`;
+  }).join('');
+
+  const ls = (d.last_sync || {}).at;
+  $('totalsSub').textContent = `${(d.shows||[]).length} GA shows · snapshot ${ls ? fmtAgo(ls) : 'pending'} · auto-refreshes`;
+  $('meta').textContent = `${(d.shows||[]).length} GA shows tracked`;
+
+  const rows = d.shows || [];
+  if (!rows.length) {
+    $('rows').innerHTML = `<tr><td colspan="11" class="empty">No GA shows tracked yet. Paste a kupat or ticketmaster.co.il GA show URL above to add one.</td></tr>`;
+    $('foot').innerHTML = '';
+    return;
+  }
+  $('rows').innerHTML = rows.map(s => {
+    const price = priceOf(s.festival_types);
+    const url = s.source === 'ticketmaster'
+      ? `https://www.ticketmaster.co.il/performance/${escape(s.event_code)}/${escape(s.perf_code)}/ALL/iw`
+      : `https://tickets.kupat.co.il/booking/features/${escape(s.event_code)}?prsntId=${escape(s.perf_code)}`;
+    const st = s.status || 'unknown';
+    const name = s.event_name || s.label || s.event_code;
+    const left = (s.available != null)
+      ? (s.total != null ? `${fmt(s.available)} / ${fmt(s.total)}` : fmt(s.available))
+      : '—';
+    const err = s.last_check_error ? `<span class="errdot" title="${escape(s.last_check_error)}">⚠</span>` : '';
+    return `<tr class="${s.paused ? 'paused' : ''}">
+      <td><a class="tm-link" href="${url}" target="_blank" rel="noopener">${escape(name)}</a>${price ? ` <span class="price">${price}</span>` : ''}${err}</td>
+      <td class="when">${escape((s.when||'').slice(0,10))}</td>
+      <td><span class="badge ${st}">${st === 'lasttickets' ? 'Last tickets' : st === 'soldout' ? 'Sold out' : st.charAt(0).toUpperCase()+st.slice(1)}</span></td>
+      <td class="num">${left}</td>
+      ${velCell(s.windows['1h'])}
+      ${velCell(s.windows['6h'])}
+      ${velCell(s.windows['24h'])}
+      ${velCell(s.windows['3d'])}
+      ${velCell(s.windows['7d'])}
+      <td class="manage">${chanSelect(s.id, s.notify_channels)}<label class="switch" title="mute (keep tracking, no pings)"><input type="checkbox" data-act="mute" data-id="${s.id}" ${s.muted ? 'checked' : ''}><span class="slider"></span></label></td>
+      <td class="manage"><button data-act="toggle" data-id="${s.id}" data-paused="${s.paused ? 0 : 1}">${s.paused ? 'Resume' : 'Pause'}</button><button class="danger" data-act="remove" data-id="${s.id}">Remove</button></td>
+    </tr>`;
+  }).join('');
+
+  const sumLeft = rows.reduce((a,s)=>a+(s.available||0),0);
+  $('foot').innerHTML = `<tr>
+    <td>TOTAL</td><td></td><td></td>
+    <td class="num">${fmt(sumLeft)} left</td>
+    ${wins.map(k => velCell((d.totals||{})[k])).join('')}
+  </tr>`;
+
+  const since = rows.map(s=>s.tracking_since).filter(Boolean).sort()[0];
+  $('footnote').textContent = since
+    ? `"Sold" = drop in tickets-left between snapshots. * = window longer than tracking history (since ${new Date(since).toLocaleString()}); fills in over time. Kupat GA exposes only tickets-left (no total); TM shows left / allocation-capacity.`
+    : 'Sales tracking just started — rolling-window numbers fill in over the next minutes/days.';
+}
+
+function chanSelect(id, cur){
+  const opts = [['discord,email','D + E'], ['discord','Discord'], ['email','Email'], ['','Off']];
+  return `<select class="chan" data-act="chan" data-id="${id}">`
+    + opts.map(([v,t]) => `<option value="${v}" ${v === (cur||'') ? 'selected' : ''}>${t}</option>`).join('')
+    + `</select>`;
+}
+async function post(path, body){
+  return fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+}
+
+$('addBtn').addEventListener('click', async () => {
+  const url = $('addUrl').value.trim();
+  const msg = $('addMsg');
+  if (!url) { msg.textContent = 'paste a URL first'; msg.className = 'addmsg bad'; return; }
+  $('addBtn').disabled = true; msg.textContent = 'Adding…'; msg.className = 'addmsg';
+  try {
+    const r = await post('/api/watchers/add', {url});
+    const dd = await r.json();
+    if (r.ok) {
+      $('addUrl').value = '';
+      msg.textContent = dd.warning ? ('Added — note: ' + dd.warning) : 'Added ✓';
+      msg.className = 'addmsg ok';
+      setTimeout(load, 400);
+    } else {
+      msg.textContent = dd.error || ('failed (' + r.status + ')');
+      msg.className = 'addmsg bad';
+    }
+  } catch (e) { msg.textContent = 'error: ' + e; msg.className = 'addmsg bad'; }
+  finally { $('addBtn').disabled = false; }
+});
+$('addUrl').addEventListener('keydown', e => { if (e.key === 'Enter') $('addBtn').click(); });
+
+// Delegated row controls (the rows are rebuilt every refresh; the #rows
+// container persists, so one listener each survives reloads).
+$('rows').addEventListener('change', e => {
+  const el = e.target, id = el.dataset.id;
+  if (!id) return;
+  if (el.dataset.act === 'chan') post('/api/watchers/update', {id, notify_channels: el.value});
+  else if (el.dataset.act === 'mute') post('/api/watchers/update', {id, muted: el.checked});
+});
+$('rows').addEventListener('click', async e => {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const id = el.dataset.id;
+  if (el.dataset.act === 'toggle') { await post('/api/watchers/toggle', {id, paused: el.dataset.paused === '1'}); load(); }
+  else if (el.dataset.act === 'remove') {
+    if (!confirm('Remove this GA show and its watcher?')) return;
+    await post('/api/watchers/delete', {id}); load();
+  }
+});
+
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
