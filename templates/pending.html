@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Pending Inventory</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  .sub-nav { margin-bottom: 14px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; }
+  .sub-nav a { color: var(--muted); text-decoration: none; margin-right: 14px; }
+  .sub-nav a:hover, .sub-nav a.active { color: var(--accent); }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  tr.pending-row { cursor: pointer; }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+  .row-action { width: 22px; height: 22px; border-radius: 0; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; }
+  .row-attach { color: var(--muted); }
+  .row-attach.has-files { color: var(--accent); opacity: 0.95 !important; }
+  .row-del { color: var(--red); }
+  .row-sell { color: var(--green); }
+  tbody tr:hover .row-action { opacity: 0.7; }
+  tbody tr .row-attach:hover { opacity: 1; background: rgba(88,166,255,0.1); border-color: var(--accent); }
+  tbody tr .row-sell:hover { opacity: 1; background: rgba(86,211,100,0.1); border-color: var(--green); }
+  tbody tr .row-del:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 540px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 110px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus, .modal-body select:focus { outline: none; border-color: var(--accent); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+
+  .att-list { padding: 12px 18px; border-bottom: 1px dashed var(--line); }
+  .att-list .att-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; }
+  .att-list .att-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .att-list .att-item .size { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+  .att-list .att-item a { color: var(--accent); text-decoration: none; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--line); padding: 3px 8px; }
+  .att-list .att-item a:hover { background: #e9edf2; }
+  .att-list .att-item button.del { background: transparent; color: var(--red); border: 1px solid var(--line); padding: 3px 8px; font-size: 11px; cursor: pointer; }
+  .att-list .att-item button.del:hover { background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .att-empty { color: var(--muted); font-size: 11px; padding: 6px 0; font-style: italic; }
+  .att-upload { padding: 12px 18px; display: flex; gap: 8px; align-items: center; }
+  .att-upload input[type="file"] { flex: 1; font-family: inherit; font-size: 11px; color: var(--text); }
+
+  /* Inbox panel */
+  .inbox-card { background: var(--bg-2); border: 1px solid var(--line); margin-bottom: 14px; }
+  .inbox-card .ic-head { display: flex; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); align-items: center; flex-wrap: wrap; }
+  .inbox-card .ic-head .from { color: var(--muted); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .inbox-card .ic-head .provider { font-size: 10px; padding: 1px 6px; border: 1px solid var(--accent); color: var(--accent); letter-spacing: 1.5px; text-transform: uppercase; }
+  .inbox-card .ic-head .provider.unknown { border-color: var(--line-2); color: var(--muted); }
+  .inbox-card .ic-head .when { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+  .inbox-card .ic-head .warn { color: var(--amber); font-size: 10px; letter-spacing: 1px; padding: 1px 6px; border: 1px solid var(--amber); }
+  .inbox-card .ic-subject { padding: 8px 14px; font-size: 12px; color: var(--muted); border-bottom: 1px dashed var(--line); }
+  .inbox-card .ic-subject b { color: var(--text); font-weight: 600; }
+  .inbox-card .ic-body { padding: 12px 14px; display: grid; grid-template-columns: 100px 1fr 100px 1fr; gap: 6px 12px; align-items: center; }
+  .inbox-card .ic-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .inbox-card .ic-body input { font-family: inherit; font-size: 12px; padding: 6px 9px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .inbox-card .ic-body input:focus { outline: none; border-color: var(--accent); }
+  .inbox-card .ic-files { padding: 8px 14px; border-top: 1px dashed var(--line); display: flex; flex-wrap: wrap; gap: 6px; }
+  .inbox-card .ic-files a { color: var(--accent); text-decoration: none; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--line); padding: 3px 8px; }
+  .inbox-card .ic-files a:hover { background: #e9edf2; }
+  .inbox-card .ic-files .none { color: var(--muted); font-size: 11px; font-style: italic; }
+  .inbox-card .ic-foot { padding: 10px 14px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .inbox-card .ic-foot button { font-family: inherit; font-size: 11px; padding: 6px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .inbox-card .ic-foot button.confirm { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .inbox-card .ic-foot button.confirm:hover { background: #0a5cc2; }
+  .inbox-card .ic-foot button.reject { color: var(--red); border-color: var(--red); }
+  .inbox-card .ic-foot button.reject:hover { background: rgba(248,81,73,0.1); }
+  .inbox-empty { color: var(--muted); padding: 18px 14px; text-align: center; font-size: 11px; font-style: italic; border: 1px dashed var(--line); margin-bottom: 14px; }
+  .provider.status-awaiting_approval { border-color: var(--accent); color: var(--accent); }
+  .provider.status-creating { border-color: var(--amber); color: var(--amber); }
+  .provider.status-error { border-color: var(--red); color: var(--red); }
+  .provider.status-no_match { border-color: var(--orange); color: var(--orange); }
+  .vg-card .ic-subject .other-match { font-size: 11px; margin-left: 8px; }
+  .vg-card .ic-foot button.confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>KARTIS</h1>
+    <span class="meta" id="lastrun">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/" class="active">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/cvpricer">CV PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/marquee">MARQUEE</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="sub-nav">
+    <a href="/">← All Inventory</a>
+    <a href="/pending" class="active">Pending Only</a>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="label">Pending Listings</div><div class="value" id="s-rows">0</div></div>
+    <div class="stat"><div class="label">Pending Tickets</div><div class="value" id="s-tickets">0</div></div>
+    <div class="stat amber"><div class="label">Cash Tied</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat"><div class="label">With Files</div><div class="value" id="s-files">0</div></div>
+  </div>
+
+  <h2>Inbox
+    <button id="poll-now" style="margin-left:14px;font-size:11px;letter-spacing:1px;">Poll Now</button>
+    <span id="poll-status" style="margin-left:14px;font-size:10px;letter-spacing:1px;color:var(--muted);"></span>
+  </h2>
+  <div id="inbox-container"></div>
+
+  <h2>Viagogo Matches
+    <span style="margin-left:14px;font-size:10px;letter-spacing:1px;color:var(--muted);">Kupat purchases auto-matched + priced at 5x USD — review before a draft listing is created</span>
+  </h2>
+  <div id="viagogo-container"></div>
+
+  <h2>Pending Inventory
+    <button id="add-pending" style="margin-left:14px;font-size:11px;letter-spacing:1px;">+ Add Pending</button>
+    <input type="search" id="q-search" placeholder="search event venue section" style="margin-left:14px;font-size:11px;width:240px;">
+  </h2>
+
+  <table>
+    <thead><tr>
+      <th>EVENT</th><th>DATE</th><th>VENUE</th>
+      <th>SECTION</th><th>ROW</th><th>SEATS</th>
+      <th class="num">QTY</th><th class="num">/EA</th><th class="num">COST</th>
+      <th>NOTE</th><th></th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">no pending tickets</div>
+</main>
+
+<!-- Add/edit pending modal -->
+<div id="pend-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span id="pend-title">ADD PENDING TICKET</span><button class="close" id="pend-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Tickets you have but haven't listed yet — auto-clears once Lysted/Viagogo picks them up.</div>
+      <label>Event Name *</label><div style="position:relative">
+        <input id="pend-event_name" type="text" placeholder="required" autocomplete="off" style="width:100%;">
+        <ul id="pend-event-suggest" hidden style="position:absolute;top:100%;left:0;right:0;margin:0;padding:0;list-style:none;background:var(--bg-3);border:1px solid var(--line);max-height:220px;overflow-y:auto;z-index:200;font-size:12px;"></ul>
+      </div>
+      <label>Event Date</label><input id="pend-event_date" type="date">
+      <label>Venue</label><input id="pend-venue" type="text">
+      <label>Section</label><input id="pend-section" type="text">
+      <label>Row</label><input id="pend-row" type="text">
+      <label>Seats</label><input id="pend-seats" type="text" placeholder="e.g. 12, 13 or 12-15 (optional)">
+      <label>Qty *</label><input id="pend-qty" type="number" step="1" min="1" value="1">
+      <label>Cost / ticket</label><input id="pend-cost_per_unit" type="number" step="0.01" placeholder="enter either this...">
+      <label>Total cost</label><input id="pend-total_cost" type="number" step="0.01" placeholder="...or this — auto-syncs">
+      <label>Email</label><input id="pend-email" type="text" placeholder="which inbox (for your records)">
+      <label>Note</label><input id="pend-note" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <span class="muted">ctrl+enter saves</span>
+      <button id="pend-cancel">Cancel</button>
+      <button class="primary" id="pend-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Record sale modal -->
+<div id="sell-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>MARK AS SOLD</span><button class="close" id="sell-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line" id="sell-meta"></div>
+      <label id="sell-seats-label" style="align-self:start;">Seats sold</label>
+      <div>
+        <div id="sell-autofill" style="display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:6px;flex-wrap:wrap;">
+          <span class="muted" style="color:var(--muted);letter-spacing:1px;text-transform:uppercase;font-size:10px;">Start at</span>
+          <input id="sell-autofill-start" type="number" step="1" min="1" style="width:70px;font-family:inherit;font-size:12px;padding:4px 6px;background:var(--bg-3);color:var(--text);border:1px solid var(--line);">
+          <button type="button" id="sell-fill-seq" style="font-family:inherit;font-size:10px;padding:4px 8px;letter-spacing:1px;text-transform:uppercase;background:var(--bg-3);color:var(--text);border:1px solid var(--line);cursor:pointer;">Seq</button>
+          <button type="button" id="sell-fill-odd" style="font-family:inherit;font-size:10px;padding:4px 8px;letter-spacing:1px;text-transform:uppercase;background:var(--bg-3);color:var(--text);border:1px solid var(--line);cursor:pointer;">Odd</button>
+          <button type="button" id="sell-fill-even" style="font-family:inherit;font-size:10px;padding:4px 8px;letter-spacing:1px;text-transform:uppercase;background:var(--bg-3);color:var(--text);border:1px solid var(--line);cursor:pointer;">Even</button>
+          <label style="margin-left:auto;display:inline-flex;gap:4px;align-items:center;cursor:pointer;color:var(--muted);font-size:10px;letter-spacing:1px;text-transform:uppercase;">
+            <input type="checkbox" id="sell-show-all-seats" style="cursor:pointer;"> show all
+          </label>
+        </div>
+        <div id="sell-seats-checks" style="display:flex;flex-wrap:wrap;gap:6px 12px;font-size:11px;"></div>
+        <input id="sell-seats-text" type="text" placeholder="optional — leave blank if you don't track seat numbers" style="font-family:inherit;font-size:12px;padding:7px 10px;background:var(--bg-3);color:var(--text);border:1px solid var(--line);width:100%;display:none;">
+      </div>
+      <label>Qty</label><input id="sell-qty" type="number" step="1" min="1">
+      <label>Sale Price</label><input id="sell-price" type="number" step="0.01" placeholder="leave blank for $0">
+      <label>Sale Date</label><input id="sell-date" type="date">
+      <label>Platform</label>
+      <select id="sell-platform">
+        <option value="lysted">Lysted</option>
+        <option value="viagogo">Viagogo</option>
+        <option value="crowdvolt">CrowdVolt</option>
+        <option value="jjt">JJT</option>
+        <option value="other">Other / Manual</option>
+        <option value="loss">Did not sell (loss)</option>
+      </select>
+      <label>Note</label><input id="sell-note" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <button id="sell-loss" style="color:var(--red);border-color:var(--red);" title="Mark as full loss">Mark Loss</button>
+      <span class="muted" style="margin-right:auto;align-self:center;font-size:10px;letter-spacing:1px;">cost auto-applied</span>
+      <button id="sell-cancel">Cancel</button>
+      <button class="primary" id="sell-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Attachments modal (mirrors inventory.html) -->
+<div id="att-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>ATTACHMENTS <span id="att-event" style="font-size:10px;padding:1px 6px;border:1px solid var(--line);color:var(--muted);"></span></span><button class="close" id="att-close">×</button></h3>
+    <div class="att-list" id="att-list"></div>
+    <div class="att-upload">
+      <input type="file" id="att-file">
+      <button class="primary" id="att-upload" style="font-family:inherit;font-size:11px;padding:7px 14px;letter-spacing:1.5px;text-transform:uppercase;background:var(--accent);color:var(--bg);border:1px solid var(--accent);cursor:pointer;">Upload</button>
+    </div>
+    <div class="modal-foot">
+      <span class="muted">Files survive in OneDrive even if the ticket is deleted.</span>
+      <button id="att-done">Done</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = n => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = s => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+const today = () => new Date().toISOString().slice(0,10);
+
+let _rows = [];
+let _editingId = null;
+let _attCurrentTicket = null;
+
+async function load() {
+  setupEventAutocomplete();
+  const [invR, intakeR, vgR] = await Promise.all([
+    fetch("/api/inventory-all"),
+    fetch("/api/pending-intake"),
+    fetch("/api/viagogo-push"),
+  ]);
+  if (!invR.ok) { console.error("failed to load inventory"); return; }
+  const d = await invR.json();
+  _rows = (d.rows || []).filter(r => r.source === "manual");
+  if (d.last_run && d.last_run.at) {
+    $("lastrun").textContent = "last_scrape=" + new Date(d.last_run.at).toLocaleString();
+  }
+  if (intakeR.ok) {
+    const ind = await intakeR.json();
+    renderInbox(ind.rows || [], ind.last_intake || {});
+  }
+  if (vgR.ok) {
+    const vgd = await vgR.json();
+    renderViagogoPush(vgd.rows || []);
+  }
+  render();
+}
+
+function renderInbox(rows, lastIntake) {
+  const container = $("inbox-container");
+  if (lastIntake && lastIntake.at) {
+    const summary = `last poll ${new Date(lastIntake.at).toLocaleString()} · fetched ${lastIntake.fetched || 0} · saved ${lastIntake.saved || 0}` + (lastIntake.error ? ` · err: ${lastIntake.error}` : "");
+    $("poll-status").textContent = summary;
+  }
+  if (!rows.length) {
+    container.innerHTML = '<div class="inbox-empty">inbox is empty — forwarded purchase emails will land here</div>';
+    return;
+  }
+  container.innerHTML = "";
+  for (const r of rows) {
+    const card = document.createElement("div");
+    card.className = "inbox-card";
+    card.dataset.id = r.id;
+    const provider = r.provider || "unknown";
+    const warnings = (r.parse_warnings || "").split(",").filter(Boolean);
+    const atts = r.attachments || [];
+    const when = r.email_received_at ? new Date(r.email_received_at).toLocaleString() : "";
+    card.innerHTML = `
+      <div class="ic-head">
+        <span class="provider ${provider === 'unknown' ? 'unknown' : ''}">${esc(provider)}</span>
+        <span class="from" title="${esc(r.email_from || '')}">${esc(r.email_from || '')}</span>
+        <span class="when">${esc(when)}</span>
+        ${warnings.map(w => `<span class="warn">${esc(w.replace(/_/g, ' '))}</span>`).join("")}
+      </div>
+      <div class="ic-subject"><b>Subject:</b> ${esc(r.email_subject || '')}</div>
+      <div class="ic-body">
+        <label>Event *</label><input data-f="event_name" type="text" value="${esc(r.event_name || '')}" style="grid-column: span 3;">
+        <label>Date</label><input data-f="event_date_iso" type="date" value="${esc(r.event_date_iso || '')}">
+        <label>Venue</label><input data-f="venue" type="text" value="${esc(r.venue || '')}">
+        <label>Section</label><input data-f="section" type="text" value="${esc(r.section || '')}">
+        <label>Row</label><input data-f="row" type="text" value="${esc(r.row_label || '')}">
+        <label>Seats</label><input data-f="seats" type="text" value="${esc(r.seats || '')}">
+        <label>Qty *</label><input data-f="qty" type="number" min="1" value="${r.qty ?? ''}">
+        <label>Cost / ea</label><input data-f="cost_per_unit" type="number" step="0.01" value="${r.cost_per_unit ?? ''}">
+        <label>Total cost</label><input data-f="cost_total" type="number" step="0.01" value="${r.cost ?? ''}">
+      </div>
+      <div class="ic-files">
+        ${atts.length
+          ? atts.map(a => `<a href="/api/attachments/${esc(a.id)}/download" title="${esc(a.filename)}">📎 ${esc(a.filename)}</a>`).join("")
+          : '<span class="none">no PDFs attached</span>'}
+      </div>
+      <div class="ic-foot">
+        <button class="reject" data-act="reject">Reject</button>
+        <button class="confirm" data-act="confirm">Confirm → Pending</button>
+      </div>
+    `;
+    container.appendChild(card);
+  }
+}
+
+// --- viagogo draft-listing matches ---------------------------------------
+function renderViagogoPush(rows) {
+  const container = $("viagogo-container");
+  const active = rows.filter(r => !["created", "rejected"].includes(r.status));
+  if (!active.length) {
+    container.innerHTML = '<div class="inbox-empty">no viagogo matches waiting on review</div>';
+    return;
+  }
+  container.innerHTML = "";
+  for (const r of active) {
+    const card = document.createElement("div");
+    card.className = "inbox-card vg-card";
+    card.dataset.id = r.id;
+    const candidates = r.candidates || [];
+    const noMatch = r.status === "no_match";
+    const when = r.created_at ? new Date(r.created_at).toLocaleString() : "";
+    const eventOptions = candidates.map(c => `<option value="${esc(c.event_id)}" ${c.event_id === r.chosen_event_id ? "selected" : ""}>${esc(c.event_name)} — ${esc(c.venue || "")} (${esc(c.date || "")})</option>`).join("");
+    card.innerHTML = `
+      <div class="ic-head">
+        <span class="provider status-${esc(r.status)}">${esc(r.status.replace(/_/g, " "))}</span>
+        <span class="from" title="${esc(r.chosen_venue || r.venue || "")}">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
+        <span class="when">${esc(when)}</span>
+        ${r.error ? `<span class="warn" title="${esc(r.error)}">${esc(r.error.slice(0, 60))}</span>` : ""}
+      </div>
+      <div class="ic-subject">
+        ${noMatch
+          ? `No viagogo match — searched <em>${esc(r.event_name || r.venue || "?")}</em>. Teach the English name below to retry.`
+          : `Kupat: ₪${Number(r.cost_per_unit || 0).toFixed(2)}/ea × ${r.qty || 0} &nbsp;→&nbsp; viagogo price $${Number(r.website_price_usd || 0).toFixed(2)}/ea (5x, fx ${r.fx_rate ? Number(r.fx_rate).toFixed(4) : "?"})`}
+      </div>
+      <div class="ic-body" style="grid-template-columns: 110px 1fr 110px 1fr;">
+        ${noMatch ? `
+        <label>Hebrew name</label><input type="text" value="${esc(r.event_name || "")}" readonly style="opacity:0.6;" title="Kupat event name (Hebrew)">
+        <label>English name *</label><input data-f="teach_english" type="text" placeholder="e.g. Eden Ben Zaken" style="grid-column: span 1;">
+        <div style="grid-column: span 4; text-align: right; margin: -4px 0 4px;">
+          <button class="confirm" data-act="vg-teach" style="padding: 4px 12px; font-size: 12px;">Teach &amp; Re-search</button>
+        </div>
+        ` : ""}
+        <label>viagogo Event</label>
+        <select data-f="event_id" style="grid-column: span 3;">
+          <option value="">— select —</option>
+          ${eventOptions}
+        </select>
+        <label>Section *</label><input data-f="section" type="text" value="${esc(r.suggested_viagogo_section || "")}" placeholder="exact viagogo section name (kupat: ${esc(r.section || "?")})">
+        <label>Ticket Type</label>
+        <select data-f="ticket_type">
+          <option value="E-Tickets">E-Tickets</option>
+          <option value="Paper Tickets">Paper Tickets</option>
+        </select>
+        <label>Qty</label><input data-f="available_tickets" type="number" min="1" value="${r.qty ?? ""}">
+        <label>Website $/ea</label><input data-f="website_price" type="number" step="0.01" value="${r.website_price_usd ?? ""}">
+        <label>Face value $/ea</label><input data-f="face_value" type="number" step="0.01" value="${r.cost_usd_per_ticket ?? ""}">
+        <label>Row</label><input data-f="row" type="text" value="${esc(r.row_label || "")}">
+        <label>Seats (kupat)</label><input data-f="seats_display" type="text" value="${esc(r.seats || "")}" readonly style="opacity:0.6;">
+      </div>
+      <div class="ic-foot">
+        <button class="reject" data-act="vg-reject">Reject</button>
+        <button class="confirm" data-act="vg-approve" ${noMatch ? "disabled" : ""}>Approve → Create Draft Listing</button>
+      </div>
+    `;
+    container.appendChild(card);
+  }
+}
+
+async function approveViagogoPush(card) {
+  const id = card.dataset.id;
+  const f = {};
+  card.querySelectorAll("[data-f]").forEach(el => { f[el.dataset.f] = el.value; });
+  if (!f.event_id) { alert("Pick the matching viagogo event first"); return; }
+  if (!f.section || !f.section.trim()) { alert("Section is required — type the exact viagogo section name"); return; }
+  const body = {
+    id,
+    event_id: f.event_id,
+    section: f.section.trim(),
+    ticket_type: f.ticket_type || "E-Tickets",
+    available_tickets: parseInt(f.available_tickets || "0", 10),
+    website_price: parseFloat(f.website_price || "0"),
+    face_value: parseFloat(f.face_value || "0"),
+    row: (f.row || "").trim(),
+  };
+  if (!confirm(`Create a DRAFT (unpublished) viagogo listing — ${body.available_tickets} × $${body.website_price.toFixed(2)} in "${body.section}"?`)) return;
+  const res = await fetch("/api/viagogo-push/approve", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Approve failed: " + (e.error || res.status)); return; }
+  await load();
+  setTimeout(() => load(), 8000);
+}
+
+async function rejectViagogoPush(card) {
+  const id = card.dataset.id;
+  if (!confirm("Reject this viagogo match? No listing will be created.")) return;
+  const res = await fetch("/api/viagogo-push/reject", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id}) });
+  if (!res.ok) { alert("Reject failed"); return; }
+  await load();
+}
+
+async function teachViagogoPushName(card) {
+  const id = card.dataset.id;
+  const hebrew = (card.querySelector("input[value]")?.value || "").trim();
+  const english = (card.querySelector("input[data-f='teach_english']")?.value || "").trim();
+  if (!english) { alert("Type the English artist name first"); return; }
+  const btn = card.querySelector("[data-act='vg-teach']");
+  if (btn) btn.disabled = true;
+  const res = await fetch("/api/kupat-name-map", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({hebrew, english, push_id: id}),
+  });
+  if (!res.ok) { alert("Failed to save name mapping"); if (btn) btn.disabled = false; return; }
+  // Re-search runs async on server; poll twice to catch it.
+  await load();
+  setTimeout(() => load(), 5000);
+}
+
+function _readCardFields(card) {
+  const fields = {};
+  card.querySelectorAll("input[data-f]").forEach(el => {
+    const k = el.dataset.f;
+    fields[k] = el.value;
+  });
+  // If they only filled total cost (not /ea), derive cost_per_unit from qty
+  const qty = parseInt(fields.qty || "0", 10);
+  const cpu = parseFloat(fields.cost_per_unit);
+  const total = parseFloat(fields.cost_total);
+  if ((!isFinite(cpu) || cpu === 0) && isFinite(total) && qty > 0) {
+    fields.cost_per_unit = total / qty;
+  }
+  return fields;
+}
+
+async function pollNow() {
+  $("poll-status").textContent = "polling...";
+  const res = await fetch("/api/pending-intake/poll", {method: "POST"});
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    $("poll-status").textContent = "poll failed: " + (e.error || res.status);
+    return;
+  }
+  // Give the background thread a moment, then refresh.
+  setTimeout(() => load(), 1500);
+}
+
+async function confirmIntake(card) {
+  const id = card.dataset.id;
+  const fields = _readCardFields(card);
+  const body = {
+    id,
+    event_name: (fields.event_name || "").trim(),
+    event_date_iso: (fields.event_date_iso || "").trim(),
+    venue: (fields.venue || "").trim(),
+    section: (fields.section || "").trim(),
+    row: (fields.row || "").trim(),
+    seats: (fields.seats || "").trim(),
+    qty: parseInt(fields.qty || "0", 10),
+    cost_per_unit: isFinite(parseFloat(fields.cost_per_unit)) ? parseFloat(fields.cost_per_unit) : null,
+  };
+  if (!body.event_name) { alert("Event name required"); return; }
+  if (!body.qty || body.qty <= 0) { alert("Qty must be > 0"); return; }
+  const res = await fetch("/api/pending-intake/confirm", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Confirm failed: " + (e.error || res.status)); return; }
+  await load();
+}
+
+async function rejectIntake(card) {
+  const id = card.dataset.id;
+  if (!confirm("Reject this email? The PDF will also be deleted.")) return;
+  const res = await fetch("/api/pending-intake/reject", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id})});
+  if (!res.ok) { alert("Reject failed"); return; }
+  await load();
+}
+
+function render() {
+  const q = ($("q-search").value || "").toLowerCase().trim();
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const nq = norm(q);
+
+  let rows = _rows.slice();
+  if (nq) {
+    rows = rows.filter(r =>
+      norm(r.event_name).includes(nq) ||
+      norm(r.venue).includes(nq) ||
+      norm(r.section).includes(nq) ||
+      norm(r.row).includes(nq)
+    );
+  }
+  rows.sort((a, b) => (a.event_date_iso || "zzz").localeCompare(b.event_date_iso || "zzz"));
+
+  $("s-rows").textContent = rows.length;
+  $("s-tickets").textContent = rows.reduce((s, r) => s + (r.qty_unsold || 0), 0);
+  $("s-cost").textContent = money(rows.reduce((s, r) => s + (r.cost || 0), 0));
+  $("s-files").textContent = rows.filter(r => (r.attachments || []).length).length;
+
+  const tbody = $("tbody");
+  tbody.innerHTML = "";
+  if (!rows.length) { $("empty").style.display = ""; return; }
+  $("empty").style.display = "none";
+
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.className = "pending-row";
+    tr.dataset.id = r.source_id;
+    const costPer = r.cost_per_unit != null ? r.cost_per_unit : (r.qty_unsold ? (r.cost || 0) / r.qty_unsold : null);
+    const attCount = (r.attachments || []).length;
+    tr.innerHTML = `
+      <td>${esc(r.event_name)}</td>
+      <td>${esc(r.event_date)}</td>
+      <td>${esc(r.venue)}</td>
+      <td>${esc(r.section)}</td>
+      <td>${esc(r.row)}</td>
+      <td>${esc(r.seats)}</td>
+      <td class="num">${r.qty_unsold ?? ""}</td>
+      <td class="num">${money(costPer)}</td>
+      <td class="num">${money(r.cost)}</td>
+      <td>${esc(r.delivery_type || "")}</td>
+      <td style="white-space:nowrap;">
+        <button class="row-action row-attach ${attCount ? 'has-files' : ''}" title="Attach files">📎${attCount ? ' ' + attCount : ''}</button>
+        <button class="row-action row-sell" title="Mark as sold">$</button>
+        <button class="row-action row-del" title="Delete">×</button>
+      </td>
+    `;
+    tr._row = r;
+    tr.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button")) return;
+      openPendingModal(r);
+    });
+    tbody.appendChild(tr);
+  }
+}
+
+// --- pending add/edit ----------------------------------------------------
+function openPendingModal(row) {
+  _editingId = row ? row.source_id : null;
+  $("pend-title").textContent = row ? "// EDIT PENDING TICKET" : "// ADD PENDING TICKET";
+  $("pend-event_name").value = row?.event_name || "";
+  $("pend-event_date").value = row?.event_date_iso || "";
+  $("pend-venue").value = row?.venue || "";
+  $("pend-section").value = row?.section || "";
+  $("pend-row").value = row?.row || "";
+  $("pend-seats").value = row?.seats || "";
+  $("pend-qty").value = row?.qty_unsold ?? 1;
+  $("pend-cost_per_unit").value = row?.cost_per_unit ?? "";
+  $("pend-total_cost").value = row?.cost ?? "";
+  $("pend-email").value = row?.email || "";
+  $("pend-note").value = row?.delivery_type || "";
+  hideEventSuggest();
+  $("pend-bg").classList.add("open");
+  setTimeout(() => $("pend-event_name").focus(), 30);
+}
+
+function closePendingModal() {
+  $("pend-bg").classList.remove("open");
+  _editingId = null;
+  hideEventSuggest();
+}
+
+// --- event-name autocomplete on the pending modal ------------------------
+let _suggestItems = [];
+let _suggestActive = -1;
+let _suggestTimer = null;
+let _suggestBlurTimer = null;
+
+function hideEventSuggest() {
+  const ul = $("pend-event-suggest");
+  if (ul) { ul.hidden = true; ul.innerHTML = ""; }
+  _suggestItems = [];
+  _suggestActive = -1;
+}
+
+function renderSuggestList() {
+  const ul = $("pend-event-suggest");
+  if (!ul) return;
+  if (!_suggestItems.length) { ul.hidden = true; ul.innerHTML = ""; return; }
+  ul.innerHTML = _suggestItems.map((s, i) => {
+    const date = s.event_date_iso || "";
+    const venue = s.venue || "";
+    const meta = [date, venue].filter(Boolean).join(" · ");
+    return `<li data-i="${i}" class="suggest-item${i === _suggestActive ? ' active' : ''}" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line);${i === _suggestActive ? 'background:var(--bg-2);' : ''}">
+      <span style="color:var(--text);">${esc(s.event_name)}</span>
+      ${meta ? `<span style="color:var(--muted);margin-left:8px;font-size:11px;">${esc(meta)}</span>` : ''}
+    </li>`;
+  }).join("");
+  ul.hidden = false;
+}
+
+async function fetchEventSuggestions(q) {
+  try {
+    const res = await fetch("/api/events/suggest?q=" + encodeURIComponent(q));
+    if (!res.ok) return [];
+    const d = await res.json();
+    return d.suggestions || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function pickSuggestion(idx) {
+  const s = _suggestItems[idx];
+  if (!s) return;
+  $("pend-event_name").value = s.event_name || "";
+  if (s.event_date_iso) $("pend-event_date").value = s.event_date_iso;
+  if (s.venue) $("pend-venue").value = s.venue;
+  hideEventSuggest();
+}
+
+function setupEventAutocomplete() {
+  const inp = $("pend-event_name");
+  const ul = $("pend-event-suggest");
+  if (!inp || !ul || inp._wired) return;
+  inp._wired = true;
+  inp.addEventListener("input", () => {
+    const v = inp.value.trim();
+    clearTimeout(_suggestTimer);
+    if (v.length < 2) { hideEventSuggest(); return; }
+    _suggestTimer = setTimeout(async () => {
+      _suggestItems = await fetchEventSuggestions(v);
+      _suggestActive = _suggestItems.length ? 0 : -1;
+      renderSuggestList();
+    }, 150);
+  });
+  inp.addEventListener("keydown", (e) => {
+    if (ul.hidden || !_suggestItems.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      _suggestActive = (_suggestActive + 1) % _suggestItems.length;
+      renderSuggestList();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      _suggestActive = (_suggestActive - 1 + _suggestItems.length) % _suggestItems.length;
+      renderSuggestList();
+    } else if (e.key === "Enter") {
+      if (_suggestActive >= 0) {
+        e.preventDefault();
+        pickSuggestion(_suggestActive);
+      }
+    } else if (e.key === "Escape") {
+      hideEventSuggest();
+    }
+  });
+  inp.addEventListener("blur", () => {
+    clearTimeout(_suggestBlurTimer);
+    _suggestBlurTimer = setTimeout(hideEventSuggest, 120);
+  });
+  ul.addEventListener("mousedown", (e) => {
+    const li = e.target.closest("li.suggest-item");
+    if (!li) return;
+    e.preventDefault();
+    const idx = parseInt(li.dataset.i, 10);
+    if (Number.isFinite(idx)) pickSuggestion(idx);
+  });
+}
+
+async function savePendingModal() {
+  const event_name = $("pend-event_name").value.trim();
+  const qty = parseInt($("pend-qty").value || "0", 10);
+  if (!event_name) { alert("Event name required"); return; }
+  if (!qty || qty <= 0) { alert("Qty must be > 0"); return; }
+  let cpu = parseFloat($("pend-cost_per_unit").value);
+  const total = parseFloat($("pend-total_cost").value);
+  if (!cpu && total && qty) cpu = total / qty;
+  const body = {
+    event_name,
+    event_date: $("pend-event_date").value || "",
+    event_date_iso: $("pend-event_date").value || "",
+    venue: $("pend-venue").value.trim(),
+    section: $("pend-section").value.trim(),
+    row: $("pend-row").value.trim(),
+    seats: $("pend-seats").value.trim(),
+    qty,
+    cost_per_unit: isFinite(cpu) ? cpu : null,
+    email: $("pend-email").value.trim(),
+    note: $("pend-note").value.trim(),
+  };
+  if (_editingId) {
+    // No edit endpoint exists for manual_inventory yet — fall back to delete + re-add.
+    // Per repo conventions we'd add /api/inventory/manual-edit, but to keep this
+    // page self-contained we just reuse manual-add and manual-delete.
+    await fetch("/api/inventory/manual-delete", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:_editingId})});
+  }
+  const res = await fetch("/api/inventory/manual-add", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return; }
+  closePendingModal();
+  await load();
+}
+
+// --- attachments modal (mirrors inventory.html) --------------------------
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function renderAttList(items) {
+  const list = $("att-list");
+  if (!items || !items.length) { list.innerHTML = '<div class="att-empty">no files attached yet</div>'; return; }
+  list.innerHTML = items.map(a => `
+    <div class="att-item" data-id="${esc(a.id)}">
+      <span class="name" title="${esc(a.filename)}">${esc(a.filename)}</span>
+      <span class="size">${fmtBytes(a.size_bytes)}</span>
+      <a href="/api/attachments/${esc(a.id)}/download">Download</a>
+      <button class="del" data-id="${esc(a.id)}">×</button>
+    </div>
+  `).join("");
+}
+
+async function refreshAttModal() {
+  if (!_attCurrentTicket) return;
+  await load();
+  const row = _rows.find(r => r.source_id === _attCurrentTicket);
+  renderAttList(row ? (row.attachments || []) : []);
+}
+
+function openAttModal(row) {
+  _attCurrentTicket = row.source_id;
+  $("att-event").textContent = row.event_name || "";
+  renderAttList(row.attachments || []);
+  $("att-file").value = "";
+  $("att-bg").classList.add("open");
+}
+
+function closeAttModal() {
+  $("att-bg").classList.remove("open");
+  _attCurrentTicket = null;
+}
+
+// --- record sale (mark pending as sold) ----------------------------------
+let _sellRow = null;
+function _parseSeats(s) {
+  if (!s) return null;
+  const out = [];
+  for (let part of s.split(",")) {
+    part = part.trim();
+    if (!part) continue;
+    const range = part.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (range) {
+      const a = parseInt(range[1], 10);
+      const b = parseInt(range[2], 10);
+      if (!Number.isFinite(a) || !Number.isFinite(b) || a > b) return null;
+      for (let i = a; i <= b; i++) out.push(String(i));
+    } else if (/^\d+$/.test(part)) {
+      out.push(part);
+    } else {
+      return null;
+    }
+  }
+  return out.length ? out : null;
+}
+function _renderSellSeats(row) {
+  const wrap = $("sell-seats-checks");
+  const fallback = $("sell-seats-text");
+  const seatsRaw = row && row.seats ? String(row.seats) : "";
+  const parsed = _parseSeats(seatsRaw);
+  const showAll = $("sell-show-all-seats") && $("sell-show-all-seats").checked;
+  const soldParsed = _parseSeats(row && row.seats_sold_already ? String(row.seats_sold_already) : "") || [];
+  const soldSet = new Set(soldParsed);
+  const visible = (parsed || []).filter(s => showAll || !soldSet.has(s));
+  if (parsed && parsed.length && visible.length) {
+    wrap.style.display = "flex";
+    fallback.style.display = "none";
+    fallback.value = "";
+    wrap.innerHTML = visible.map(seat => `
+      <label style="display:inline-flex;gap:4px;align-items:center;cursor:pointer;color:var(--text);">
+        <input type="checkbox" class="sell-seat-cb" data-seat="${esc(seat)}" style="cursor:pointer;">
+        ${esc(seat)}
+      </label>
+    `).join("");
+  } else {
+    wrap.style.display = "none";
+    wrap.innerHTML = "";
+    fallback.style.display = "block";
+    fallback.value = parsed && parsed.length ? "" : seatsRaw;
+  }
+}
+function _selectedSeats() {
+  const fallback = $("sell-seats-text");
+  if (fallback.style.display !== "none") return fallback.value.trim();
+  return [...document.querySelectorAll(".sell-seat-cb:checked")].map(cb => cb.dataset.seat).join(", ");
+}
+function _autoFillSeats(pattern) {
+  const start = parseInt($("sell-autofill-start").value, 10);
+  const qty = parseInt($("sell-qty").value, 10) || 0;
+  if (!Number.isFinite(start) || start < 1 || qty < 1) return;
+  const step = pattern === "seq" ? 1 : 2;
+  // "even" from an odd start jumps to the next even number; "odd" from an even start
+  // jumps to the next odd number. Sequential ignores parity.
+  let offset = 0;
+  if (pattern === "even" && start % 2 === 1) offset = 1;
+  if (pattern === "odd" && start % 2 === 0) offset = 1;
+  const seats = [];
+  for (let i = 0; i < qty; i++) seats.push(String(start + offset + i * step));
+
+  const checkboxes = [...document.querySelectorAll(".sell-seat-cb")];
+  const have = new Set(checkboxes.map(cb => cb.dataset.seat));
+  const allPresent = checkboxes.length > 0 && seats.every(s => have.has(s));
+  if (allPresent) {
+    checkboxes.forEach(cb => { cb.checked = seats.includes(cb.dataset.seat); });
+  } else {
+    $("sell-seats-checks").style.display = "none";
+    const fb = $("sell-seats-text");
+    fb.style.display = "block";
+    fb.value = seats.join(", ");
+  }
+}
+function openSellModal(row) {
+  _sellRow = row;
+  $("sell-qty").value = row.qty_unsold || 1;
+  $("sell-qty").max = row.qty_unsold || 1;
+  $("sell-price").value = "";
+  $("sell-date").value = today();
+  $("sell-platform").value = "viagogo";
+  $("sell-note").value = "";
+  $("sell-show-all-seats").checked = false;
+  _renderSellSeats(row);
+  // Prefill "Start at" with the lowest remaining unsold numeric seat (if any).
+  const allParsed = _parseSeats(row.seats || "") || [];
+  const soldParsed = _parseSeats(row.seats_sold_already || "") || [];
+  const soldSet = new Set(soldParsed);
+  const remaining = allParsed.filter(s => !soldSet.has(s)).map(s => parseInt(s, 10)).filter(n => Number.isFinite(n));
+  $("sell-autofill-start").value = remaining.length ? String(Math.min(...remaining)) : "";
+  $("sell-meta").textContent = `${row.event_name || "?"} · ${row.event_date_iso || row.event_date || ""} · ${row.section || ""}${row.row ? "/" + row.row : ""} · cost/ea ${row.cost_per_unit != null ? "$" + Number(row.cost_per_unit).toFixed(2) : "?"}`;
+  $("sell-bg").classList.add("open");
+  setTimeout(() => $("sell-qty").focus(), 30);
+}
+function closeSellModal() {
+  $("sell-bg").classList.remove("open");
+  _sellRow = null;
+}
+async function saveSellModal(asLoss) {
+  if (!_sellRow) return;
+  const qty = parseInt($("sell-qty").value, 10);
+  const platformSel = $("sell-platform").value;
+  const isLoss = asLoss || platformSel === "loss";
+  const priceRaw = $("sell-price").value.trim();
+  const sale_price = isLoss ? 0 : (priceRaw === "" ? 0 : parseFloat(priceRaw.replace(/[$,]/g, "")));
+  const sale_date = $("sell-date").value || today();
+  const platform = isLoss ? "loss" : platformSel;
+  const note = $("sell-note").value.trim();
+  if (!qty || qty < 1 || qty > (_sellRow.qty_unsold || 0)) {
+    alert(`Qty must be between 1 and ${_sellRow.qty_unsold}`);
+    return;
+  }
+  const seats = _selectedSeats();
+  const res = await fetch("/api/sales/manual-record", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      inv_source: _sellRow.source,
+      inv_source_id: String(_sellRow.source_id),
+      qty, sale_price, sale_date, platform, note,
+      is_loss: isLoss,
+      seats,
+    }),
+  });
+  if (!res.ok) { alert("Failed to record sale"); return; }
+  closeSellModal();
+  await load();
+}
+
+// --- delete --------------------------------------------------------------
+async function deletePending(id) {
+  if (!confirm("Delete this pending ticket?")) return;
+  const res = await fetch("/api/inventory/manual-delete", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({id}) });
+  if (!res.ok) { alert("Delete failed"); return; }
+  await load();
+}
+
+// --- event wiring --------------------------------------------------------
+document.addEventListener("click", async (e) => {
+  // Inbox confirm/reject (event-delegated since cards re-render on poll/load)
+  const icBtn = e.target.closest(".inbox-card .ic-foot button");
+  if (icBtn) {
+    e.stopPropagation();
+    const card = icBtn.closest(".inbox-card");
+    if (icBtn.dataset.act === "confirm") await confirmIntake(card);
+    else if (icBtn.dataset.act === "reject") await rejectIntake(card);
+    else if (icBtn.dataset.act === "vg-approve") await approveViagogoPush(card);
+    else if (icBtn.dataset.act === "vg-reject") await rejectViagogoPush(card);
+    else if (icBtn.dataset.act === "vg-teach") await teachViagogoPushName(card);
+    return;
+  }
+  const att = e.target.closest(".row-attach");
+  if (att) {
+    e.stopPropagation();
+    const tr = att.closest("tr");
+    const row = tr && tr._row;
+    if (row) openAttModal(row);
+    return;
+  }
+  const sell = e.target.closest(".row-sell");
+  if (sell) {
+    e.stopPropagation();
+    const tr = sell.closest("tr");
+    const row = tr && tr._row;
+    if (row) openSellModal(row);
+    return;
+  }
+  const del = e.target.closest(".row-del");
+  if (del) {
+    e.stopPropagation();
+    const tr = del.closest("tr");
+    const id = tr && tr.dataset.id;
+    if (id) await deletePending(id);
+    return;
+  }
+  if (e.target.id === "att-bg") { closeAttModal(); return; }
+  if (e.target.id === "pend-bg") { closePendingModal(); return; }
+  if (e.target.id === "sell-bg") { closeSellModal(); return; }
+  const attDel = e.target.closest("#att-list button.del");
+  if (attDel) {
+    e.stopPropagation();
+    if (!confirm("Delete this attachment?")) return;
+    const id = attDel.dataset.id;
+    const res = await fetch("/api/attachments/delete", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({id}) });
+    if (!res.ok) { alert("Delete failed"); return; }
+    await refreshAttModal();
+  }
+});
+
+$("poll-now").addEventListener("click", pollNow);
+$("add-pending").addEventListener("click", () => openPendingModal(null));
+$("pend-close").addEventListener("click", closePendingModal);
+$("pend-cancel").addEventListener("click", closePendingModal);
+$("pend-save").addEventListener("click", savePendingModal);
+$("att-close").addEventListener("click", closeAttModal);
+$("att-done").addEventListener("click", closeAttModal);
+$("q-search").addEventListener("input", render);
+$("sell-close").addEventListener("click", closeSellModal);
+$("sell-cancel").addEventListener("click", closeSellModal);
+$("sell-save").addEventListener("click", () => saveSellModal(false));
+$("sell-fill-seq").addEventListener("click", () => _autoFillSeats("seq"));
+$("sell-fill-odd").addEventListener("click", () => _autoFillSeats("odd"));
+$("sell-fill-even").addEventListener("click", () => _autoFillSeats("even"));
+$("sell-show-all-seats").addEventListener("change", () => { if (_sellRow) _renderSellSeats(_sellRow); });
+$("sell-loss").addEventListener("click", () => {
+  if (!confirm("Mark this batch as unsold (full cost loss)?")) return;
+  saveSellModal(true);
+});
+$("sell-seats-checks").addEventListener("change", (e) => {
+  if (!e.target.classList.contains("sell-seat-cb")) return;
+  const n = document.querySelectorAll(".sell-seat-cb:checked").length;
+  if (n > 0) $("sell-qty").value = n;
+});
+
+$("att-upload").addEventListener("click", async () => {
+  if (!_attCurrentTicket) return;
+  const input = $("att-file");
+  const f = input.files && input.files[0];
+  if (!f) { alert("Pick a file first"); return; }
+  const fd = new FormData();
+  fd.append("ticket_id", _attCurrentTicket);
+  fd.append("file", f);
+  const btn = $("att-upload");
+  btn.disabled = true; btn.textContent = "...";
+  try {
+    const res = await fetch("/api/inventory/manual-attach", { method: "POST", body: fd });
+    if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Upload failed: " + (e.error || res.status)); return; }
+    input.value = "";
+    await refreshAttModal();
+  } finally { btn.disabled = false; btn.textContent = "Upload"; }
+});
+
+document.addEventListener("keydown", (e) => {
+  const pendOpen = $("pend-bg").classList.contains("open");
+  const attOpen = $("att-bg").classList.contains("open");
+  if (e.key === "Escape") {
+    if (pendOpen) closePendingModal();
+    if (attOpen) closeAttModal();
+  } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && pendOpen) {
+    savePendingModal();
+  }
+});
+
+load();
+</script>
+</body>
+</html>

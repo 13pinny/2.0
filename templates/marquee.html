@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — Marquee</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+    --cyan: #0f766e; --pink: #e91e63;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--cyan); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  h2 .vmeta { font-size: 10px; color: var(--muted); letter-spacing: 1px; font-weight: 400; text-transform: none; }
+  h2 a.cal { font-size: 10px; color: var(--accent); text-decoration: none; letter-spacing: 1px; font-weight: 400; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--cyan); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.green { color: var(--green); }
+  .stat .value.zero { color: var(--muted); }
+  .stat .hint { font-size: 9px; color: var(--muted); letter-spacing: 1px; margin-top: 3px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+  input[type=text] { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; width: 220px; }
+  .pill { font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 12px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--muted); border-radius: 14px; cursor: pointer; }
+  .pill.active { border-color: var(--cyan); color: var(--cyan); background: rgba(15,118,110,0.08); }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); white-space: nowrap; cursor: pointer; user-select: none; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th .arrow { color: var(--accent); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr.ev { cursor: pointer; }
+  tbody tr.ev:hover td { background: var(--bg-3); }
+  tbody tr.hotrow td { background: rgba(234, 88, 12, 0.07); }
+  tbody tr.hotrow:hover td { background: rgba(234, 88, 12, 0.13); }
+  tbody tr.pausedrow td { opacity: 0.55; }
+  tr.tiers td { background: var(--bg-2); padding: 4px 10px 10px 26px; font-size: 11px; color: var(--muted); }
+  tr.tiers .tier { padding: 2px 0; }
+  tr.tiers .tier b { color: var(--text); }
+  tr.tiers .rh { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
+  tr.tiers .rh .rhh { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 3px; }
+  tr.tiers .rel-row { padding: 1px 0; }
+  tr.tiers .rel-row .so { color: var(--red); }
+  tr.tiers .rel-row .op { color: var(--green); }
+  tr.tiers .rel-row .burn { color: var(--orange); font-weight: 600; }
+  tr.tiers .note { margin-top: 8px; font-size: 10px; color: var(--muted); font-style: italic; }
+  a.buy { color: #fff; background: var(--cyan); text-decoration: none; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }
+  a.buy.off { background: var(--line-2); color: var(--muted); pointer-events: none; }
+  .when { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .badge.available { background: #16a34a; }
+  .badge.soldout { background: #dc2626; }
+  .badge.closed { background: #7c3aed; }
+  .badge.paused { background: #6e7681; }
+  .rel { font-size: 10px; color: var(--muted); }
+  .burn { font-variant-numeric: tabular-nums; }
+  .burn.hot { color: var(--orange); font-weight: 600; }
+  .burn.zero { color: var(--muted); }
+  .climb { font-variant-numeric: tabular-nums; }
+  .climb.up { color: var(--orange); font-weight: 600; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  .banner { background: #eef6ff; border: 1px solid #b6d8fb; color: #0b4a83; padding: 8px 12px; margin-bottom: 14px; font-size: 11px; line-height: 1.5; border-radius: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>MARQUEE</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/cvpricer">CV PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/marquee" class="active">MARQUEE</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="err" id="errbox"></div>
+  <div class="banner">
+    <b>Why there are no ticket counts here.</b> Tao publishes none — the quantity
+    dropdown only reveals an unpublished per-order limit, so "N of M left" and
+    units-sold-per-hour don't exist for these rooms. What Tao does publish is the
+    numbered GA ladder, and a tier only steps up once the one below it sells out.
+    So <b>burn time</b> — how long each release lasted — is the sales signal, and
+    the price climb is the demand curve. Pings for these events already go to
+    <b>#jumps</b> (price climbs) and <b>#shocks</b> (price drops, restocks).
+  </div>
+
+  <div class="stats" id="totals"></div>
+  <p class="sub" id="statusline">—</p>
+
+  <div class="controls">
+    <span id="venuepills"></span>
+    <input type="text" id="q" placeholder="filter by artist…" />
+  </div>
+
+  <div id="venues"></div>
+  <p class="sub" id="footnote"></p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+const money = n => (n == null) ? '—' : '$' + n.toLocaleString();
+
+// Burn/open durations come back as hours. Render them the way you'd say
+// them out loud, and never round a sub-hour burn away to "0h".
+function dur(h){
+  if (h == null) return '—';
+  if (h < 1) return Math.max(1, Math.round(h * 60)) + 'm';
+  if (h < 48) return (h < 10 ? h.toFixed(1) : Math.round(h)) + 'h';
+  return (h / 24).toFixed(1) + 'd';
+}
+
+let DATA = null;
+let sortKey = 'date';
+let sortDir = 1;
+let venueFilter = 'all';
+const open = new Set();
+
+const COLS = [
+  { key:'name',   label:'Event' },
+  { key:'date',   label:'Date' },
+  { key:'status', label:'Status' },
+  { key:'tier',   label:'Current release' },
+  { key:'price',  label:'Price', num:true },
+  { key:'cleared',label:'Tiers gone', num:true },
+  { key:'burn',   label:'Last burn', num:true },
+  { key:'avg',    label:'Avg burn', num:true },
+  { key:'onfor',  label:'On tier for', num:true },
+  { key:'climb',  label:'Climb', num:true },
+  { key:'buy',    label:'' },
+];
+
+function sortVal(e, key){
+  switch(key){
+    case 'name': return (e.name||'').toLowerCase();
+    case 'date': return e.start_date || '9999';
+    case 'status': return e.sold_out ? 2 : (e.on_sale ? 0 : 1);
+    case 'tier': return (e.lead_tier||'').toLowerCase();
+    case 'price': return e.lead_price == null ? Infinity : e.lead_price;
+    case 'cleared': return e.cleared == null ? -1 : e.cleared;
+    // Fastest burn is the interesting end, so sort ascending by default and
+    // push unknowns to the far end rather than letting them win the top.
+    case 'burn': return e.last_burn_hours == null ? Infinity : e.last_burn_hours;
+    case 'avg': return e.avg_burn_hours == null ? Infinity : e.avg_burn_hours;
+    case 'onfor': return e.current_open_hours == null ? -1 : e.current_open_hours;
+    case 'climb': return e.climb_pct == null ? -1 : e.climb_pct;
+    default: return 0;
+  }
+}
+
+function statusBadge(e){
+  if (e.paused) return '<span class="badge paused">Paused</span>';
+  if (e.tracked_only) return '<span class="badge closed">Pending</span>';
+  if (e.sold_out) return '<span class="badge soldout">Sold out</span>';
+  if (!e.on_sale) return '<span class="badge closed">Not selling</span>';
+  return '<span class="badge available">On sale</span>';
+}
+
+function ladderRows(e){
+  const lad = e.ladder || [];
+  let html = '';
+  if (!(e.tiers||[]).length) {
+    html += '<div class="tier">No tier data yet — fills in on the next check.</div>';
+  } else {
+    html += e.tiers.map(t => {
+      const face = (t.face_price != null && t.price != null && t.face_price !== t.price)
+        ? ` <span class="rel">(face ${money(t.face_price)})</span>` : '';
+      const state = t.sold_out ? ' — <span class="so">sold out</span>' : '';
+      return `<div class="tier"><b>${escape(t.name || 'Tickets')}</b> ${money(t.price)}${face}${state}</div>`;
+    }).join('');
+  }
+  if (lad.length) {
+    const day = iso => iso ? iso.slice(5,10).replace('-','/') : '?';
+    const lines = lad.map(r => {
+      // A tier that was already sold out the first time we looked has no
+      // knowable lifetime — say so rather than printing a burn figure.
+      const end = r.already_gone
+        ? `<span class="so">already sold out when tracking started</span>`
+        : r.closed
+          ? `<span class="so">sold out ${day(r.sold_out_at)}</span> · lasted <span class="burn">${dur(r.hours_open)}</span>`
+          : `<span class="op">open</span> · up <span class="burn">${dur(r.hours_open)}</span> so far`;
+      // Non-GA rows (Fast Pass, VIP tables) are separate products, not rungs
+      // on the ladder — they're excluded from every burn/climb figure.
+      const tag = r.is_ga ? '' : ' <span class="rel">(separate product)</span>';
+      return `<div class="rel-row">${escape(r.name)}${tag}${r.price != null ? ' @ ' + money(r.price) : ''}` +
+             ` · first seen ${day(r.first_seen_at)} · ${end}</div>`;
+    }).join('');
+    const walk = (e.climb_pct != null)
+      ? ` · price ${money(e.price_open)} → ${money(e.price_top)} (${e.climb_pct > 0 ? '+' : ''}${e.climb_pct}%)` : '';
+    const extra = e.products ? ` · ${e.products} other product${e.products>1?'s':''}` : '';
+    const unseen = e.cleared_unseen
+      ? ` · ${e.cleared_unseen} already gone when tracking started` : '';
+    html += `<div class="rh"><div class="rhh">GA ladder — ${e.releases} release${e.releases===1?'':'s'}, ${e.cleared} sold through${unseen}${extra}${walk}</div>${lines}` +
+            `<div class="note">Burn time is measured from the first check that saw the tier, so a release already open when tracking started reads shorter than it really was. Only the General Admission ladder counts toward burn and climb — Fast Pass and VIP tables are priced independently.</div></div>`;
+  }
+  return html;
+}
+
+function eventRow(e){
+  // "Hot" = the last release burned through in under a day; that's the room
+  // moving fast, which is the whole reason to watch these two calendars.
+  const hot = e.last_burn_hours != null && e.last_burn_hours <= 24;
+  const opened = open.has(e.event_id);
+  const cls = 'ev' + (hot ? ' hotrow' : '') + (e.paused ? ' pausedrow' : '');
+  const tierCell = e.lead_tier
+    ? `<div>${escape(e.lead_tier)}</div>` +
+      (e.releases > 1 ? `<div class="rel">${e.cleared} of ${e.releases} gone</div>` : '')
+    : '<span class="rel">—</span>';
+  const climb = e.climb_pct == null ? '—'
+    : `<span class="climb${e.climb_pct > 0 ? ' up' : ''}">${e.climb_pct > 0 ? '+' : ''}${e.climb_pct}%</span>`;
+  const err = e.last_error
+    ? `<div class="rel" title="${escape(e.last_error)}" style="color:var(--red)">fetch error</div>` : '';
+  return `<tr class="${cls}" data-id="${escape(e.event_id)}">
+    <td><b>${escape(e.name || e.event_key)}</b>${err}</td>
+    <td class="when">${escape((e.date_text||'').replace(' | ', ' '))}</td>
+    <td>${statusBadge(e)}</td>
+    <td>${tierCell}</td>
+    <td class="num">${money(e.lead_price)}</td>
+    <td class="num">${fmt(e.cleared)}</td>
+    <td class="num burn${hot ? ' hot' : ''}">${dur(e.last_burn_hours)}</td>
+    <td class="num burn">${dur(e.avg_burn_hours)}</td>
+    <td class="num burn">${dur(e.current_open_hours)}</td>
+    <td class="num">${climb}</td>
+    <td><a class="buy${e.on_sale ? '' : ' off'}" href="${escape(e.page_url || '#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">TICKETS</a></td>
+  </tr>` + (opened ? `<tr class="tiers"><td colspan="${COLS.length}">${ladderRows(e)}</td></tr>` : '');
+}
+
+function headHtml(){
+  return COLS.map(c => {
+    const arrow = sortKey === c.key ? `<span class="arrow">${sortDir < 0 ? '▼' : '▲'}</span>` : '';
+    return `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label} ${arrow}</th>`;
+  }).join('');
+}
+
+function renderPills(){
+  const vs = DATA.venues || [];
+  const pills = [['all', 'All']].concat(vs.map(v => [v.key, v.name]));
+  $('venuepills').innerHTML = pills.map(([k, label]) =>
+    `<button class="pill${venueFilter === k ? ' active' : ''}" data-v="${escape(k)}">${escape(label)}</button>`
+  ).join(' ');
+  $('venuepills').querySelectorAll('.pill').forEach(b => b.onclick = () => {
+    venueFilter = b.dataset.v; render();
+  });
+}
+
+function render(){
+  if (!DATA) return;
+  renderPills();
+  const q = ($('q').value || '').trim().toLowerCase();
+  const vs = (DATA.venues || []).filter(v => venueFilter === 'all' || v.key === venueFilter);
+  if (!vs.length) {
+    $('venues').innerHTML = `<div class="empty">Nothing tracked yet — the catalog sync adds Marquee shows automatically every ${(DATA.status||{}).catalog_sync_minutes || 10} minutes.</div>`;
+    return;
+  }
+  $('venues').innerHTML = vs.map(v => {
+    let evs = v.events || [];
+    if (q) evs = evs.filter(e => (e.name||'').toLowerCase().includes(q));
+    evs = evs.slice().sort((a,b) => {
+      const va = sortVal(a, sortKey), vb = sortVal(b, sortKey);
+      return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir;
+    });
+    const t = v.totals || {};
+    const meta = `${t.events} events · ${t.on_sale} on sale · ${t.sold_out} sold out` +
+      (t.avg_price != null ? ` · avg ${money(t.avg_price)}` : '') +
+      (t.median_burn_hours != null ? ` · median burn ${dur(t.median_burn_hours)}` : '');
+    const body = evs.length
+      ? evs.map(eventRow).join('')
+      : `<tr><td colspan="${COLS.length}" class="empty">No events match.</td></tr>`;
+    return `<h2>${escape(v.name)} <span class="vmeta">${escape(meta)}</span>` +
+      (v.calendar_url ? ` <a class="cal" href="${escape(v.calendar_url)}" target="_blank" rel="noopener">calendar ↗</a>` : '') +
+      `</h2><div class="tablewrap"><table><thead><tr>${headHtml()}</tr></thead><tbody>${body}</tbody></table></div>`;
+  }).join('');
+
+  $('venues').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.key;
+    if (!k || k === 'buy') return;
+    if (sortKey === k) sortDir = -sortDir;
+    // Names/dates/tiers read best ascending; the burn columns are most
+    // useful fastest-first, which is also ascending. Everything else
+    // (price, climb, counts) wants the big numbers on top.
+    else { sortKey = k; sortDir = ['name','date','tier','burn','avg'].includes(k) ? 1 : -1; }
+    render();
+  });
+  $('venues').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
+    const id = tr.dataset.id;
+    open.has(id) ? open.delete(id) : open.add(id);
+    render();
+  });
+}
+
+function fmtAgo(iso){
+  if (!iso) return '—';
+  const secs = (Date.now() - new Date(iso).getTime())/1000;
+  if (secs < 90) return 'just now';
+  if (secs < 5400) return Math.round(secs/60)+'m ago';
+  return Math.round(secs/3600)+'h ago';
+}
+
+function renderTotals(){
+  const evs = (DATA.venues||[]).flatMap(v => v.events || []);
+  const burns = evs.map(e => e.last_burn_hours).filter(x => x != null).sort((a,b)=>a-b);
+  const priced = evs.filter(e => e.on_sale && e.lead_price != null).map(e => e.lead_price);
+  const tiles = [
+    ['Events tracked', evs.length, (DATA.venues||[]).map(v => `${v.name.replace('Marquee ','')} ${v.totals.events}`).join(' · ')],
+    ['On sale now', evs.filter(e => e.on_sale).length, evs.filter(e => e.sold_out).length + ' sold out'],
+    ['Releases sold through', evs.reduce((a,e) => a + (e.cleared||0), 0), 'each one = a tier that cleared'],
+    ['Median burn', burns.length ? dur(burns[Math.floor(burns.length/2)]) : null, 'how long a release lasts'],
+    ['Avg lead price', priced.length ? money(Math.round(priced.reduce((a,b)=>a+b,0)/priced.length)) : null, 'all-in, current release'],
+  ];
+  $('totals').innerHTML = tiles.map(([l,v,h]) => {
+    const txt = (v == null) ? '—' : (typeof v === 'number' ? fmt(v) : v);
+    return `<div class="stat"><div class="label">${l}</div><div class="value${v ? '' : ' zero'}">${txt}</div>${h ? `<div class="hint">${escape(h)}</div>` : ''}</div>`;
+  }).join('');
+
+  const s = DATA.status || {};
+  const cats = DATA.catalogs || {};
+  const catErrs = Object.entries(cats).filter(([k,v]) => k !== 'at' && v && v.error);
+  $('statusline').textContent =
+    `Monitor: ${s.enabled ? 'on' : 'OFF'} · every ${s.interval_minutes} min · calendar sync every ${s.catalog_sync_minutes} min · last check ${fmtAgo(s.at)}` +
+    (s.error ? ` · ⚠ ${s.error}` : '') +
+    (catErrs.length ? ` · ⚠ calendar: ${catErrs.map(([k,v]) => k + ' ' + v.error).join('; ')}` : '') +
+    ` · pings last tick: ${['new','onsale','price_up','price_down','soldout'].map(k => `${k} ${s[k]??0}`).join(', ')}`;
+  $('meta').textContent = `${evs.length} events · ${(DATA.venues||[]).length} rooms`;
+  $('footnote').textContent =
+    'Tiers gone = releases that have sold out. Last burn = how long the most recent sold-out release lasted; Avg burn averages every cleared release; On tier for = how long the current release has been up. Climb = cheapest release price then vs now. Prices are all-in (Tao publishes face alongside — shown in the expanded ladder when they differ). Rows highlight when the last release burned through in under a day. Shows that sell only through SevenRooms have no ticket page and never appear here.';
+}
+
+async function load(){
+  try {
+    const r = await fetch('/api/marquee');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    DATA = await r.json();
+    $('errbox').style.display = 'none';
+    renderTotals(); render();
+  } catch (e) {
+    $('errbox').textContent = 'Failed to load: ' + e.message;
+    $('errbox').style.display = 'block';
+  }
+}
+$('q').addEventListener('input', render);
+load();
+setInterval(load, 120000);
+</script>
+</body>
+</html>

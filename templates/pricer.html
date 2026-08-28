@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Pricer</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --orange: #ea580c;
+    --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 24px 0 10px; color: var(--text); }
+  h2:first-child { margin-top: 0; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.red .value { color: var(--red); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  .bar.boxed { border: 1px solid var(--line); padding: 10px 12px; }
+  .bar label { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover td { background: var(--bg-3); }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line-2); color: var(--muted); border-radius: 1px; letter-spacing: 1px; text-transform: uppercase; white-space: nowrap; }
+  .status.active { color: var(--green); border-color: var(--green); }
+  .status.paused { color: var(--amber); border-color: var(--amber); }
+  .status.dry { color: var(--purple); border-color: var(--purple); }
+  .status.deact { color: var(--red); border-color: var(--red); }
+  /* deactivated on inv = red tint; fully sold = greyed out */
+  tr.row-deact td { background: #fdecea; }
+  tr.row-deact:hover td { background: #fbdbd7; }
+  tr.row-gone td { opacity: 0.55; }
+  .empty { color: var(--muted); padding: 28px; text-align: center; font-size: 12px; }
+  .act-lower { color: var(--green); }
+  .act-dry { color: var(--purple); }
+  .act-pause { color: var(--amber); }
+  .act-err { color: var(--red); }
+  .act-skip { color: var(--muted); }
+  .warn { background: #fbf3d9; border: 1px solid var(--amber); color: var(--amber); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tablewrap table { min-width: 760px; }
+  .seclink { color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
+  .vschip { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 10px; border: 1px solid var(--purple); color: var(--purple); border-radius: 1px; white-space: nowrap; }
+  #mpanel-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 50; }
+  #mpanel { position: fixed; top: 5vh; left: 50%; transform: translateX(-50%); width: min(680px, 94vw); max-height: 88vh; overflow-y: auto; background: var(--bg-2); border: 1px solid var(--line-2); z-index: 51; padding: 16px; }
+  #mpanel h3 { margin: 0 0 2px; font-size: 14px; }
+  #mpanel .sub { color: var(--muted); font-size: 11px; margin-bottom: 12px; }
+  #mpanel .sec { border: 1px solid var(--line); margin-bottom: 8px; }
+  #mpanel .sec-head { display: flex; align-items: center; gap: 10px; padding: 9px 10px; background: var(--bg-3); cursor: pointer; }
+  #mpanel .sec-head input { width: 18px; height: 18px; }
+  #mpanel .sec-head .nm { font-weight: 700; flex: 1; }
+  #mpanel .sec-head .cheap { color: var(--muted); font-size: 11px; }
+  .tierchip { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 9px; letter-spacing: 1px; border-radius: 1px; vertical-align: 1px; }
+  .tierchip.same { border: 1px solid var(--purple); color: var(--purple); }
+  .tierchip.up { border: 1px solid var(--amber); color: var(--amber); }
+  #mp-tiers { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; align-items: center; }
+  #mp-tiers .lbl { font-size: 10px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-right: 2px; }
+  .tierbtn { padding: 4px 9px; font-size: 11px; border: 1px solid var(--line-2); background: var(--bg-2); border-radius: 12px; cursor: pointer; white-space: nowrap; }
+  .tierbtn:hover { background: var(--bg-3); }
+  .tierbtn.on { border-color: var(--green); color: var(--green); font-weight: 700; }
+  #mpanel .mrow { display: flex; justify-content: space-between; padding: 4px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
+  #mpanel .mrow.owned { color: var(--green); }
+  #mpanel .mrow.owned::after { content: "YOURS"; font-size: 9px; letter-spacing: 1px; border: 1px solid var(--green); padding: 0 4px; margin-left: 8px; }
+  #mpanel .actions { display: flex; gap: 10px; margin-top: 14px; }
+  @media (max-width: 700px) {
+    #mpanel { top: 0; left: 0; transform: none; width: 100vw; max-height: 100vh; height: 100vh; }
+  }
+  .only-mobile { display: none; }
+
+  /* ---- phone layout (iPhone 14 = 390pt wide) ---- */
+  @media (max-width: 700px) {
+    header { display: block; padding: 10px 14px 8px;
+             padding-top: calc(10px + env(safe-area-inset-top)); }
+    header .left { justify-content: space-between; display: flex; }
+    header .nav { display: flex; overflow-x: auto; white-space: nowrap;
+                  margin-top: 8px; padding-bottom: 2px;
+                  -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    header .nav::-webkit-scrollbar { display: none; }
+    header .nav a { margin-left: 0; margin-right: 16px; font-size: 12px; padding: 6px 0; }
+    main { padding: 12px 12px calc(40px + env(safe-area-inset-bottom)); }
+    .stats { grid-template-columns: repeat(3, 1fr); }
+    .stat { padding: 8px 10px; }
+    .stat .value { font-size: 17px; }
+    .stat .label { font-size: 9px; letter-spacing: 1px; }
+    /* iOS zooms into inputs under 16px — keep them at 16 on phones */
+    input, select, button { font-size: 16px; }
+    input[type="checkbox"] { width: 22px; height: 22px; }
+    button { padding: 12px 14px; }
+    .bar.boxed { gap: 12px; }
+    #p-run { width: 100%; }
+
+    /* tables become stacked cards */
+    .tablewrap { overflow-x: visible; }
+    .tablewrap table { min-width: 0; width: 100%; }
+    .tablewrap thead { display: none; }
+    .tablewrap tr { display: grid; grid-template-columns: repeat(3, 1fr);
+                    gap: 8px 12px; padding: 12px 10px;
+                    border-bottom: 1px solid var(--line-2); }
+    .tablewrap td { display: block; padding: 0; border: none; text-align: left; }
+    .tablewrap td.num { text-align: left; }
+    .tablewrap td::before { content: attr(data-label); display: block;
+                            font-size: 9px; color: var(--muted);
+                            letter-spacing: 1px; text-transform: uppercase;
+                            margin-bottom: 2px; }
+    .tablewrap td:not([data-label])::before { content: none; }
+    .tablewrap td.c-wide { grid-column: 1 / -1; }
+    .tablewrap td:empty { display: none; }
+    .only-desktop { display: none !important; }
+    .only-mobile { display: inline; }
+    .p-floor { width: 100% !important; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>PRICER</h1>
+    <span class="meta" id="p-status">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer" class="active">PRICER</a>
+    <a href="/cvpricer">CV PRICER</a>
+    <a href="/cvfees">CV FEES</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/marquee">MARQUEE</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+<div id="errbox" class="err" style="display:none"></div>
+<div id="drywarn" class="warn" style="display:none">DRY RUN is on — the pricer logs and pings what it <b>would</b> do, but never touches viagogo. Untick it below to go live.</div>
+
+<div class="stats">
+  <div class="stat"><div class="label">Auto Listings</div><div class="value" id="s-enabled">0</div></div>
+  <div class="stat amber"><div class="label">Paused</div><div class="value" id="s-paused">0</div></div>
+  <div class="stat green"><div class="label">Changed Last Tick</div><div class="value" id="s-changed">0</div></div>
+  <div class="stat"><div class="label">Skipped Last Tick</div><div class="value" id="s-skipped">0</div></div>
+  <div class="stat red"><div class="label">Errors Last Tick</div><div class="value" id="s-errors">0</div></div>
+</div>
+
+<div class="bar boxed">
+  <button id="p-master" title="Global kill switch — nothing runs while this is off" style="font-weight:700; letter-spacing:1px; min-width:130px;">PRICER: …</button>
+  <label title="Log + notify what would change, without touching viagogo"><input type="checkbox" id="p-dryrun"> dry run</label>
+  <label title="How far below the cheapest competitor to price, in USD">undercut $<input type="number" inputmode="decimal" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
+  <label title="Hard brake: never drop a listing more than this inside the sliding window — it holds and pings you instead. Untick the box to suspend the cap on ALL listings (they may then follow the market straight down to their floors)."><input type="checkbox" id="p-dropcap"> max drop <input type="number" inputmode="numeric" id="p-maxdrop" step="1" min="1" max="90" style="width:58px; padding:4px 6px;">%<span id="p-dropwin" style="color:var(--muted);">/12h</span></label>
+  <label title="Don't chase listings that only have 1 ticket — a lone single isn't real competition"><input type="checkbox" id="p-nosingles"> ignore 1-ticket rivals</label>
+  <button id="p-run">Run pricer now</button>
+</div>
+
+<h2>LISTINGS</h2>
+<div class="bar">
+  <input type="search" id="p-search" placeholder="search event venue section" style="flex:1; min-width:200px;">
+  <label title="Filter by where the show is">region
+    <select id="p-region" style="padding:5px 6px;">
+      <option value="all">all</option>
+      <option value="il">🇮🇱 Israel</option>
+      <option value="row">rest of world</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="p-onlyauto"> auto-priced only</label>
+  <label title="Fully-sold and deactivated (red toggle on inv.viagogo) listings are hidden by default — there's nothing to price on them"><input type="checkbox" id="p-showgone"> show sold out + deactivated</label>
+</div>
+<div class="tablewrap">
+<table>
+  <thead><tr>
+    <th>EVENT</th><th>DATE</th><th>SECTION</th>
+    <th class="num">AVAIL</th><th class="num" title="What you paid per ticket (face value)">COST /EA</th>
+    <th class="num">PRICE</th><th class="num">PROCEEDS</th>
+    <th title="Auto-pricer on/off — set a floor first">AUTO</th>
+    <th class="num" title="Never price below this (USD)">FLOOR</th>
+    <th>STATE</th><th class="num" title="Last price the pricer set">LAST SET</th>
+  </tr></thead>
+  <tbody id="ptbody"></tbody>
+</table>
+</div>
+<div id="pempty" class="empty" style="display:none">no viagogo listings with tickets available</div>
+
+<h2>ACTIVITY</h2>
+<div class="tablewrap">
+<table>
+  <thead><tr>
+    <th>EVENT / WHEN</th><th>SECTION</th><th>ACTION</th>
+    <th class="num">OLD</th><th class="num">NEW</th><th class="num">COMPETITOR</th><th>DETAIL</th>
+  </tr></thead>
+  <tbody id="plogbody"></tbody>
+</table>
+</div>
+<div id="plogempty" class="empty" style="display:none">no pricer activity yet</div>
+
+<div id="mpanel-overlay"></div>
+<div id="mpanel" style="display:none">
+  <h3 id="mp-title">—</h3>
+  <div class="sub" id="mp-sub">—</div>
+  <div id="mp-tiers"></div>
+  <div id="mp-sections"></div>
+  <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:12px; color:var(--amber);" title="This listing may follow the market straight down to its floor — the global %/12h brake is ignored for it">
+    <input type="checkbox" id="mp-nocap"> no drop cap for this listing (floor still applies)
+  </label>
+  <div class="actions">
+    <button id="mp-save" style="color:var(--green); border-color:var(--green); font-weight:700;">Save</button>
+    <button id="mp-refresh" title="Live fetch from viagogo (~30s)">Refresh market</button>
+    <button id="mp-close">Close</button>
+  </div>
+</div>
+</main>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+let _rows = [];      // /api/viagogo rows (already merged with pricer config)
+let _byId = {};      // listing_id -> row, for the activity table
+
+// Location detection: Israeli shows carry Hebrew artist/venue names, or sit
+// at a known IL venue/city. Buyer-facing viagogo data has no country field, so
+// we sniff the event name + venue string.
+const _IL_PLACES = /(israel|tel[\s-]?aviv|jerusalem|haifa|caesarea|rishon|netanya|be'?er[\s-]?sheva|ramat[\s-]?gan|nokia|menora|bloomfield|sultan|hangar\s*11|live[\s-]?park|ganei[\s-]?yehoshua|pais\s*arena|zappa|barby|amphi|ra'?anana|herzliya|ashdod|ashkelon|eilat|nazareth|hayarkon|expo\s*tel|shuni|yarkon)/i;
+function isIsrael(r) {
+  const hay = ((r.event_name || "") + " " + (r.venue || ""));
+  return new RegExp("[\\u0590-\\u05FF]").test(hay) || _IL_PLACES.test(hay);
+}
+
+// inv.viagogo auto-unpublishes a listing the moment it fully sells, so
+// published=false alone does NOT mean "deactivated" — list_state is the real
+// signal (active / soldout / stale / inactive). A partly-sold listing (2 of 4
+// gone) stays active with available=2 and is still worth pricing.
+const isSoldOut = (r) => !(r.available > 0);
+const isDeactivated = (r) => !isSoldOut(r) &&
+  (((r.list_state || "").toLowerCase() === "inactive") || r.published === 0);
+
+function _isPast(iso) {
+  if (!iso) return false;                    // unknown date — keep it visible
+  const d = new Date(iso);
+  const today = new Date(); today.setHours(0,0,0,0);
+  return d < today;
+}
+
+function renderListings() {
+  const search = (document.getElementById("p-search").value || "").toLowerCase();
+  const onlyAuto = document.getElementById("p-onlyauto").checked;
+  const region = document.getElementById("p-region").value;
+  const showGone = document.getElementById("p-showgone").checked;
+  // The scrape mirror never forgets: listings deleted on inv.viagogo keep
+  // their last-seen row forever (history feeds /sources totals). Only show
+  // rows seen by a recent read — within 3h of the freshest row, so a
+  // stopped scraper shifts the reference instead of blanking the page.
+  const seenMs = (r) => { const d = new Date(r.last_seen_at || 0); return isNaN(d) ? 0 : d.getTime(); };
+  const freshestMs = _rows.reduce((m, r) => Math.max(m, seenMs(r)), 0);
+  const seenCutoffMs = freshestMs ? freshestMs - 3 * 3600 * 1000 : null;
+  const rows = _rows.filter(r => {
+    if (seenCutoffMs && seenMs(r) < seenCutoffMs) return false;  // deleted on inv
+    if (_isPast(r.event_date_iso)) return false;   // past events can't sell
+    if (onlyAuto && !r.pricer_enabled && !r.pricer_paused) return false;
+    if (region !== "all") { const il = isIsrael(r); if (region === "il" && !il) return false; if (region === "row" && il) return false; }
+    // Nothing to price once it's fully sold or switched off on inv — hide both
+    // unless you ask to see them. (Previously sold-out rows lingered forever
+    // whenever the pricer was still enabled on them.)
+    if (!showGone && (isSoldOut(r) || isDeactivated(r))) return false;
+    if (search && !((r.event_name||"") + " " + (r.venue||"") + " " + (r.section||"")).toLowerCase().includes(search)) return false;
+    return true;
+  }).sort((a,b) => {
+    // Israel first, then by date — keeps the two regions in separate blocks
+    const ia = isIsrael(a) ? 0 : 1, ib = isIsrael(b) ? 0 : 1;
+    if (ia !== ib) return ia - ib;
+    return (a.event_date_iso||"zzz").localeCompare(b.event_date_iso||"zzz");
+  });
+  const tbody = document.getElementById("ptbody");
+  tbody.innerHTML = "";
+  for (const r of rows) {
+    const gone = isSoldOut(r), deact = isDeactivated(r);
+    let chip;
+    if (deact) {
+      chip = `<span class="status deact" title="Deactivated on inv.viagogo — the red toggle is off, so it isn't listed for sale">deactivated</span>`;
+    } else if (gone) {
+      chip = `<span class="status">sold out</span>`;
+    } else if (r.pricer_paused) {
+      chip = `<span class="status paused">paused${r.pricer_paused_reason === "manual_change" ? ": manual" : ""}</span> <a href="#" class="p-resume" data-id="${esc(r.id)}" style="color:var(--accent); font-size:10px;">resume</a>`;
+    } else if (r.pricer_enabled) {
+      chip = `<span class="status active">active</span>`;
+    } else {
+      chip = `<span class="status">off</span>`;
+    }
+    const tr = document.createElement("tr");
+    if (deact) tr.className = "row-deact";
+    else if (gone) tr.className = "row-gone";
+    tr.innerHTML = `
+      <td class="c-wide">${esc(r.event_name)}<div style="color:var(--muted); font-size:10px;">${esc(r.venue)}<span class="only-mobile"> · ${esc(r.event_date)}</span></div></td>
+      <td class="only-desktop">${esc(r.event_date)}</td>
+      <td data-label="section"><span class="seclink" data-id="${esc(r.id)}" title="Open the market — see every listing on this event and pick who to undercut">${esc((r.section||"").split("\n")[0])}</span>${(() => {
+        const nSec = (r.pricer_compete_sections||[]).length, nInc = (r.pricer_compete_include||[]).length, nExc = (r.pricer_compete_exclude||[]).length;
+        const bits = [];
+        if (nSec) bits.push(`+${nSec} section${nSec > 1 ? "s" : ""}`);
+        if (nInc) bits.push(`+${nInc} pick${nInc > 1 ? "s" : ""}`);
+        if (nExc) bits.push(`−${nExc}`);
+        return bits.length ? `<span class="vschip" title="${esc((r.pricer_compete_sections||[]).join(", "))}">vs ${bits.join(" ")}</span>` : "";
+      })()}</td>
+      <td class="num" data-label="avail">${r.available ?? ""}${r.sold ? `<div style="color:var(--muted); font-size:10px;">${r.sold} sold</div>` : ""}</td>
+      <td class="num" data-label="cost /ea" style="color:var(--amber);">${money(r.face_value)}</td>
+      <td class="num" data-label="price">${money(r.price)}</td>
+      <td class="num" data-label="proceeds">${money(r.proceeds)}</td>
+      <td data-label="auto"><input type="checkbox" class="p-auto" data-id="${esc(r.id)}" ${r.pricer_enabled ? "checked" : ""}></td>
+      <td class="num" data-label="floor $"><input type="number" inputmode="decimal" class="p-floor" data-id="${esc(r.id)}" step="0.01" min="0" value="${r.pricer_floor ?? ""}" placeholder="—" style="width:74px; padding:3px 6px;"></td>
+      <td data-label="state">${chip}</td>
+      <td class="num" data-label="last set">${r.pricer_last_set_price != null ? money(r.pricer_last_set_price) : "—"}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("pempty").style.display = rows.length ? "none" : "block";
+
+  tbody.querySelectorAll(".p-auto").forEach(cb => cb.addEventListener("change", async (e) => {
+    const id = e.target.dataset.id;
+    const floorInput = tbody.querySelector(`.p-floor[data-id="${CSS.escape(id)}"]`);
+    const floor = parseFloat(floorInput?.value);
+    if (e.target.checked && (!floor || floor <= 0)) {
+      alert("Set a floor price (USD) before enabling auto-pricing on a listing.");
+      e.target.checked = false;
+      return;
+    }
+    const body = { listing_id: id, enabled: e.target.checked };
+    if (floor > 0) body.floor_price = floor;
+    const res = await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+    if (!res.ok) { alert((await res.json()).error || "failed"); e.target.checked = !e.target.checked; return; }
+    loadAll();
+  }));
+  tbody.querySelectorAll(".p-floor").forEach(inp => inp.addEventListener("change", async (e) => {
+    const floor = parseFloat(e.target.value);
+    if (!floor || floor <= 0) return;
+    await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ listing_id: e.target.dataset.id, floor_price: floor }) });
+  }));
+  tbody.querySelectorAll(".p-resume").forEach(a => a.addEventListener("click", async (e) => {
+    e.preventDefault();
+    await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ listing_id: e.target.dataset.id, resume: true }) });
+    loadAll();
+  }));
+  tbody.querySelectorAll(".seclink").forEach(el => el.addEventListener("click", (e) => {
+    openMarketPanel(e.target.dataset.id);
+  }));
+}
+
+// ---- market panel: pick which sections a listing competes with ----
+const normSec = (s) => (s || "").trim().split("\n")[0].replace(/\s+/g, " ").toLowerCase();
+let _mpListing = null;   // the /api/viagogo row the panel is open for
+
+async function fetchJsonSafe(url, opts) {
+  // A deploy restart or proxy hiccup mid-request yields an empty/HTML body;
+  // raw res.json() then throws "Unexpected end of JSON input". Read text and
+  // parse defensively so callers get {ok, status, data|null} instead.
+  try {
+    const res = await fetch(url, opts);
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (e) { /* HTML error page */ }
+    return { ok: res.ok, status: res.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: null, neterr: String(e) };
+  }
+}
+
+async function openMarketPanel(listingId, forceRefresh = false) {
+  const row = _byId[String(listingId)];
+  if (!row) return;
+  _mpListing = row;
+  document.getElementById("mpanel-overlay").style.display = "block";
+  const panel = document.getElementById("mpanel");
+  panel.style.display = "block";
+  document.getElementById("mp-title").textContent = row.event_name + " — " + (row.section || "").split("\n")[0];
+  const sub = document.getElementById("mp-sub");
+  sub.textContent = "loading market...";
+  document.getElementById("mp-sections").innerHTML = "";
+  document.getElementById("mp-tiers").innerHTML = "";
+  const base = `/api/pricer/market/${encodeURIComponent(row.event_id)}`;
+  let r;
+  if (forceRefresh) {
+    r = await fetchJsonSafe(base + "/refresh", { method: "POST" });
+  } else {
+    r = await fetchJsonSafe(base);
+    if (!r.data) {                    // server mid-restart? one quiet retry
+      sub.textContent = "loading market... (retrying)";
+      await new Promise(s => setTimeout(s, 2000));
+      r = await fetchJsonSafe(base);
+    }
+  }
+  if (!r.data) {
+    sub.textContent = "// market load failed (" +
+      (r.status ? "HTTP " + r.status : (r.neterr || "empty response")) +
+      ") — the server may have been restarting; close and try again";
+    return;
+  }
+  if (!r.ok) {
+    sub.textContent = "// " + (forceRefresh ? "refresh" : "load") + " failed: " + (r.data.error || r.status);
+    return;
+  }
+  renderMarketPanel(row, r.data);
+}
+
+function renderMarketPanel(row, data) {
+  const sub = document.getElementById("mp-sub");
+  if (!data.rows || !data.rows.length) {
+    sub.textContent = "// no market snapshot yet — hit Refresh market (needs ~30s), or wait for the next pricer tick";
+    return;
+  }
+  const age = data.fetched_at ? Math.round((Date.now() - new Date(data.fetched_at)) / 60000) : null;
+  sub.textContent = `${data.rows.length} listings // fetched ${age != null ? age + "m ago" : "?"} — tick the sections this listing should undercut`;
+  document.getElementById("mp-nocap").checked = !!row.pricer_no_drop_cap;
+  const ownSec = normSec(row.section);
+  const chosen = new Set((row.pricer_compete_sections || []).map(normSec));
+  // group rows by section
+  const groups = new Map();
+  for (const r of data.rows) {
+    const key = normSec(r.section);
+    if (!groups.has(key)) groups.set(key, { name: (r.section || "").trim(), rows: [] });
+    groups.get(key).rows.push(r);
+  }
+  for (const g of groups.values()) {
+    const prices = g.rows.filter(r => r.price != null).map(r => r.price);
+    g.from = prices.length ? Math.min(...prices) : null;
+    g.area = (g.rows.find(r => (r.venue_area || "").trim()) || {}).venue_area || "";
+  }
+  // your tier = viagogo's venue-area grouping for your own section
+  const ownGroup = groups.get(ownSec);
+  const ownArea = (ownGroup?.area || "").trim().toLowerCase();
+  const ownFrom = ownGroup?.from ?? null;
+  const wrap = document.getElementById("mp-sections");
+  wrap.innerHTML = "";
+  const fpOf = (secKey, r) => JSON.stringify({ s: secKey, r: (r.row || "").trim().toLowerCase(), q: r.qty ?? null });
+  const includes = new Set((row.pricer_compete_include || []).map(f => JSON.stringify({ s: normSec(f.s), r: (f.r || "").trim().toLowerCase(), q: f.q ?? null })));
+  const excludes = new Set((row.pricer_compete_exclude || []).map(f => JSON.stringify({ s: normSec(f.s), r: (f.r || "").trim().toLowerCase(), q: f.q ?? null })));
+  // price order, cheapest first — same read as the inv magnifier
+  const sorted = [...groups.entries()].sort((a, b) => (a[1].from ?? 1e9) - (b[1].from ?? 1e9));
+  for (const [key, g] of sorted) {
+    const own = key === ownSec;
+    const sectionOn = own || chosen.has(key);
+    const sameTier = !own && ownArea && (g.area || "").trim().toLowerCase() === ownArea;
+    const pricier = !own && ownFrom != null && g.from != null && g.from > ownFrom;
+    const badges =
+      (own ? ' <span style="color:var(--muted); font-weight:400; font-size:10px;">(your section)</span>' : "")
+      + (sameTier ? ' <span class="tierchip same" title="viagogo groups this section in the same venue area as yours — same level">YOUR TIER</span>' : "")
+      + (pricier ? ' <span class="tierchip up" title="Prices from above your section — likely better seats (closer to the stage)">↑ PRICIER</span>' : "");
+    const div = document.createElement("div");
+    div.className = "sec";
+    div.innerHTML = `
+      <label class="sec-head">
+        <input type="checkbox" class="mp-sec" data-sec="${esc(key)}" ${sectionOn ? "checked" : ""}>
+        <span class="nm">${esc(g.name)}${badges}</span>
+        <span class="cheap">${g.rows.length}× · from ${g.from != null ? money(g.from) : "—"}</span>
+      </label>
+      ${g.rows.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)).map(r => {
+        if (r.is_ours) return `
+        <div class="mrow owned">
+          <span>${r.qty ?? "?"} ticket${r.qty === 1 ? "" : "s"}${r.row ? " · row " + esc(r.row) : ""}</span>
+          <span>${r.price != null ? money(r.price) : "—"}</span>
+        </div>`;
+        const fp = fpOf(key, r);
+        const on = (sectionOn && !excludes.has(fp)) || includes.has(fp);
+        return `
+        <label class="mrow" style="cursor:pointer;">
+          <span><input type="checkbox" class="mp-row" data-sec="${esc(key)}" data-fp="${esc(fp)}" ${on ? "checked" : ""} style="width:16px;height:16px;margin-right:8px;vertical-align:-3px;">${r.qty ?? "?"} ticket${r.qty === 1 ? "" : "s"}${r.row ? " · row " + esc(r.row) : ""}</span>
+          <span>${r.price != null ? money(r.price) : "—"}</span>
+        </label>`;
+      }).join("")}
+    `;
+    wrap.appendChild(div);
+  }
+  // section box = select-all for its rows; row boxes set the section box state
+  const syncSection = (secCb) => {
+    const rows = [...wrap.querySelectorAll(`.mp-row[data-sec="${CSS.escape(secCb.dataset.sec)}"]`)];
+    if (!rows.length) return;
+    const on = rows.filter(cb => cb.checked).length;
+    secCb.checked = on === rows.length;
+    secCb.indeterminate = on > 0 && on < rows.length;
+  };
+  wrap.querySelectorAll(".mp-sec").forEach(secCb => {
+    syncSection(secCb);
+    secCb.addEventListener("change", () => {
+      wrap.querySelectorAll(`.mp-row[data-sec="${CSS.escape(secCb.dataset.sec)}"]`)
+        .forEach(cb => { cb.checked = secCb.checked; });
+      secCb.indeterminate = false;
+      refreshTierBtns();
+    });
+  });
+  wrap.querySelectorAll(".mp-row").forEach(cb => cb.addEventListener("change", () => {
+    syncSection(wrap.querySelector(`.mp-sec[data-sec="${CSS.escape(cb.dataset.sec)}"]`));
+    refreshTierBtns();
+  }));
+
+  // ---- tier quick-picks (Upper / Middle / Lower / …) ----
+  // viagogo's venue_area is the "level" grouping; one tap checks every section
+  // in that tier so you don't hand-pick each one. Own section is left alone.
+  const tierMap = new Map();               // tier label -> Set(section keys)
+  for (const [key, g] of groups) {
+    if (key === ownSec) continue;
+    const t = (g.area || "").trim();
+    if (!t) continue;
+    if (!tierMap.has(t)) tierMap.set(t, new Set());
+    tierMap.get(t).add(key);
+  }
+  const tierBar = document.getElementById("mp-tiers");
+  tierBar.innerHTML = "";
+  const secRowsOn = (key) => {
+    const rows = [...wrap.querySelectorAll(`.mp-row[data-sec="${CSS.escape(key)}"]`)];
+    if (!rows.length) {   // section holds only our rows — use its section box
+      const sc = wrap.querySelector(`.mp-sec[data-sec="${CSS.escape(key)}"]`);
+      return { on: sc && sc.checked ? 1 : 0, total: 1 };
+    }
+    return { on: rows.filter(cb => cb.checked).length, total: rows.length };
+  };
+  const tierFullyOn = (keys) => [...keys].every(k => { const s = secRowsOn(k); return s.on === s.total; });
+  let refreshTierBtns = () => {};
+  if (tierMap.size) {
+    const lbl = document.createElement("span");
+    lbl.className = "lbl"; lbl.textContent = "select tier:";
+    tierBar.appendChild(lbl);
+    const btns = [];
+    for (const [tier, keys] of tierMap) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "tierbtn"; b.textContent = tier;
+      b.addEventListener("click", () => {
+        const turnOn = !tierFullyOn(keys);   // toggle: if all on, clear; else fill
+        for (const key of keys) {
+          wrap.querySelectorAll(`.mp-row[data-sec="${CSS.escape(key)}"]`).forEach(cb => { cb.checked = turnOn; });
+          const sc = wrap.querySelector(`.mp-sec[data-sec="${CSS.escape(key)}"]`);
+          if (sc) { sc.checked = turnOn; sc.indeterminate = false; }
+        }
+        refreshTierBtns();
+      });
+      btns.push([b, keys]);
+      tierBar.appendChild(b);
+    }
+    refreshTierBtns = () => { for (const [b, keys] of btns) b.classList.toggle("on", tierFullyOn(keys)); };
+    refreshTierBtns();
+  }
+}
+
+function closeMarketPanel() {
+  document.getElementById("mpanel").style.display = "none";
+  document.getElementById("mpanel-overlay").style.display = "none";
+  _mpListing = null;
+}
+
+document.getElementById("mp-close").addEventListener("click", closeMarketPanel);
+document.getElementById("mpanel-overlay").addEventListener("click", closeMarketPanel);
+document.getElementById("mp-refresh").addEventListener("click", async (e) => {
+  if (!_mpListing) return;
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "refreshing... (~30s)";
+  try { await openMarketPanel(_mpListing.id, true); }
+  finally { btn.disabled = false; btn.textContent = "Refresh market"; }
+});
+document.getElementById("mp-save").addEventListener("click", async () => {
+  if (!_mpListing) return;
+  const own = normSec(_mpListing.section);
+  // Derive the whole config from the row boxes: all-on section → dynamic
+  // section pick (future listings included); partial non-own section →
+  // individual includes; unticked rows in your own section → excludes.
+  const sections = [], include = [], exclude = [];
+  for (const secCb of document.querySelectorAll("#mpanel .mp-sec")) {
+    const key = secCb.dataset.sec;
+    const rows = [...document.querySelectorAll(`#mpanel .mp-row[data-sec="${CSS.escape(key)}"]`)];
+    const onRows = rows.filter(cb => cb.checked);
+    if (key === own) {
+      rows.filter(cb => !cb.checked).forEach(cb => exclude.push(JSON.parse(cb.dataset.fp)));
+      continue;
+    }
+    if (!rows.length) {                       // section with only our rows
+      if (secCb.checked) sections.push(key);
+      continue;
+    }
+    if (onRows.length === rows.length) sections.push(key);
+    else onRows.forEach(cb => include.push(JSON.parse(cb.dataset.fp)));
+  }
+  const res = await fetch("/api/pricer/config", { method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ listing_id: _mpListing.id, compete_sections: sections,
+                           compete_include: include, compete_exclude: exclude,
+                           no_drop_cap: document.getElementById("mp-nocap").checked }) });
+  if (!res.ok) { alert((await res.json()).error || "save failed"); return; }
+  closeMarketPanel();
+  loadAll();
+});
+
+function renderLog(log) {
+  const tbody = document.getElementById("plogbody");
+  tbody.innerHTML = "";
+  const cls = (a) => a === "lower" || a === "floor_clamp" ? "act-lower"
+    : a === "dry_run" ? "act-dry"
+    : a === "pause_manual" || a === "manual_adopt" ? "act-pause"
+    : a === "error" || a === "fetch_failed" ? "act-err" : "act-skip";
+  for (const e of log) {
+    const row = _byId[e.listing_id] || {};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="c-wide"><b>${esc(row.event_name || e.event_id || e.listing_id)}</b><div style="color:var(--muted); font-size:10px;">${e.created_at ? new Date(e.created_at).toLocaleString() : ""}<span class="only-mobile"> · ${esc((e.section||"").split("\n")[0])}</span></div></td>
+      <td class="only-desktop">${esc((e.section||"").split("\n")[0])}</td>
+      <td data-label="action" class="${cls(e.action)}">${esc(e.action)}${e.dry_run ? ' <span class="status dry">dry</span>' : ""}</td>
+      <td class="num" data-label="old">${e.old_price != null ? money(e.old_price) : "—"}</td>
+      <td class="num" data-label="new">${e.new_price != null ? money(e.new_price) : "—"}</td>
+      <td class="num" data-label="competitor">${e.competitor_price != null ? money(e.competitor_price) : "—"}</td>
+      <td class="c-wide" data-label="detail" style="color:var(--muted);">${esc(e.detail || "")}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("plogempty").style.display = log.length ? "none" : "block";
+}
+
+async function loadAll() {
+  const err = document.getElementById("errbox");
+  try {
+    const [vres, sres] = await Promise.all([fetch("/api/viagogo"), fetch("/api/pricer/status")]);
+    const vdata = await vres.json();
+    const s = await sres.json();
+    _rows = vdata.rows || [];
+    _byId = Object.fromEntries(_rows.map(r => [String(r.id), r]));
+
+    _masterOn = !!s.master_enabled;
+    const master = document.getElementById("p-master");
+    master.textContent = _masterOn ? "PRICER: ON" : "PRICER: OFF";
+    master.style.color = _masterOn ? "var(--green)" : "var(--red)";
+    master.style.borderColor = _masterOn ? "var(--green)" : "var(--red)";
+    const dryrun = document.getElementById("p-dryrun");
+    const undercut = document.getElementById("p-undercut");
+    const maxdrop = document.getElementById("p-maxdrop");
+    if (document.activeElement !== dryrun) dryrun.checked = !!s.dry_run;
+    if (document.activeElement !== undercut) undercut.value = s.undercut;
+    if (document.activeElement !== maxdrop) maxdrop.value = s.max_drop_pct;
+    document.getElementById("p-dropwin").textContent = "/" + (s.drop_window_hours ?? 12) + "h";
+    const dropcap = document.getElementById("p-dropcap");
+    if (document.activeElement !== dropcap) dropcap.checked = !!s.drop_cap_enabled;
+    maxdrop.disabled = !s.drop_cap_enabled;
+    const nosingles = document.getElementById("p-nosingles");
+    if (document.activeElement !== nosingles) nosingles.checked = !!s.ignore_singles;
+    document.getElementById("drywarn").style.display = (s.master_enabled && s.dry_run) ? "block" : "none";
+
+    const cfgs = Object.values(s.configs || {});
+    document.getElementById("s-enabled").textContent = cfgs.filter(c => c.enabled && !c.paused).length;
+    document.getElementById("s-paused").textContent = cfgs.filter(c => c.paused).length;
+    const L = s.last || {};
+    document.getElementById("s-changed").textContent = L.changed ?? 0;
+    document.getElementById("s-skipped").textContent = L.skipped ?? 0;
+    document.getElementById("s-errors").textContent = L.errors ?? 0;
+
+    const bits = [];
+    if (!s.master_enabled) bits.push("MASTER OFF");
+    if (L.running) bits.push("running...");
+    else if (L.at) bits.push("last_tick=" + new Date(L.at).toLocaleString());
+    else bits.push("not_run_yet");
+    if (L.dry_run != null && L.at) bits.push(L.dry_run ? "dry_run" : "LIVE");
+    bits.push(`every ${s.interval_minutes}m`);
+    document.getElementById("p-status").textContent = bits.join(" // ");
+
+    if (L.error) { err.style.display = "block"; err.textContent = "// pricer error: " + L.error; }
+    else err.style.display = "none";
+
+    renderListings();
+    renderLog(s.log || []);
+  } catch (e) {
+    err.style.display = "block";
+    err.textContent = "// failed to load: " + e;
+  }
+}
+
+let _masterOn = false;
+document.getElementById("p-master").addEventListener("click", async () => {
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ master_enabled: !_masterOn }) });
+  loadAll();
+});
+document.getElementById("p-dryrun").addEventListener("change", async (e) => {
+  if (!e.target.checked && !confirm("Turn OFF dry run? The pricer will start making real price changes on viagogo.")) {
+    e.target.checked = true;
+    return;
+  }
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ dry_run: e.target.checked }) });
+  loadAll();
+});
+document.getElementById("p-undercut").addEventListener("change", async (e) => {
+  const u = parseFloat(e.target.value);
+  if (!u || u <= 0) return;
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ undercut: u }) });
+});
+document.getElementById("p-dropcap").addEventListener("change", async (e) => {
+  if (!e.target.checked && !confirm("Turn OFF the drop cap for ALL listings? They may follow the market straight down to their floors.")) {
+    e.target.checked = true;
+    return;
+  }
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ drop_cap_enabled: e.target.checked }) });
+  loadAll();
+});
+document.getElementById("p-maxdrop").addEventListener("change", async (e) => {
+  const pct = parseFloat(e.target.value);
+  if (!pct || pct < 1 || pct > 90) return;
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ max_drop_pct: pct }) });
+});
+document.getElementById("p-nosingles").addEventListener("change", async (e) => {
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ ignore_singles: e.target.checked }) });
+  loadAll();
+});
+document.getElementById("p-run").addEventListener("click", async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = "running...";
+  await fetch("/api/pricer/run-now", { method: "POST" });
+  setTimeout(() => { btn.disabled = false; btn.textContent = "Run pricer now"; loadAll(); }, 6000);
+});
+for (const id of ["p-search", "p-onlyauto", "p-region", "p-showgone"]) {
+  document.getElementById(id).addEventListener("input", renderListings);
+  document.getElementById(id).addEventListener("change", renderListings);
+}
+loadAll();
+setInterval(loadAll, 15000);
+</script>
+</body>
+</html>
