@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — Series</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+    --cyan: #0f766e; --vg: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--vg); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin: 0 0 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--vg); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.green { color: var(--green); }
+  .stat .value.red { color: var(--red); }
+  .stat .value.zero { color: var(--muted); }
+  .stat .hint { font-size: 9px; color: var(--muted); letter-spacing: 1px; margin-top: 3px; }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg); white-space: nowrap; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:hover { background: var(--bg-3); }
+  tfoot td { padding: 9px 10px; border-top: 2px solid var(--line-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--green); } .neg { color: var(--red); } .dim { color: var(--muted); }
+  .tag { display: inline-block; font-size: 9px; letter-spacing: 1px; text-transform: uppercase; padding: 2px 7px; border-radius: 10px; border: 1px solid var(--line-2); color: var(--muted); background: var(--bg-2); white-space: nowrap; }
+  .tag.ok { color: var(--green); border-color: #a6e0b6; background: #eaf6ee; }
+  .tag.warn { color: var(--amber); border-color: #e8d08a; background: #fdf6e3; }
+  .tag.bad { color: var(--red); border-color: #f0b3b7; background: #fdecee; }
+  .tag.info { color: var(--accent); border-color: #b6d5f5; background: #eaf2fd; }
+  /* Cap grid: one row per date, one cell per account, so an account that is
+     full or over is visible at a glance before the next buy. */
+  .capgrid { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); font-size: 11px; overflow-x: auto; }
+  .capgrid > div { background: var(--bg-2); padding: 7px 9px; white-space: nowrap; }
+  .capgrid .hd { background: var(--bg); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+  .capgrid .datecell { background: var(--bg); font-weight: 600; }
+  .cap-ok { color: var(--muted); }
+  .cap-near { color: var(--amber); font-weight: 600; }
+  .cap-full { color: var(--orange); font-weight: 700; }
+  .cap-over { color: #fff; background: var(--red) !important; font-weight: 700; }
+  .cap-none { color: var(--line-2); }
+  .alerts { border: 1px solid var(--line); background: var(--bg-2); padding: 0; margin-bottom: 8px; }
+  .alerts .row { display: flex; gap: 10px; align-items: baseline; padding: 9px 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
+  .alerts .row:last-child { border-bottom: 0; }
+  .alerts .row .what { color: var(--muted); font-size: 11px; }
+  .empty { padding: 26px; text-align: center; color: var(--muted); font-size: 12px; border: 1px solid var(--line); background: var(--bg-2); }
+  code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; background: var(--bg-3); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>Series</h1>
+    <div class="meta" id="meta">loading…</div>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/series" class="active">SERIES</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/pending">PENDING</a>
+    <a href="/tools">TOOLS</a>
+  </nav>
+</header>
+
+<main>
+  <div id="body"><div class="empty">Loading…</div></div>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const money = (n) => (n === null || n === undefined) ? "—"
+  : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const pct = (n) => (n === null || n === undefined) ? "—" : Number(n).toFixed(1) + "%";
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const dshort = (iso) => { const [y,m,d] = (iso||"").split("-"); return d && m ? `${+d}/${+m}` : iso; };
+
+function capClass(c, cap) {
+  if (c.qty > cap) return "cap-over";
+  if (c.qty === cap) return "cap-full";
+  if (c.qty >= cap - 1) return "cap-near";
+  return "cap-ok";
+}
+
+function render(rep) {
+  const t = rep.totals, cap = rep.cap_per_account;
+  $("#meta").textContent =
+    `${rep.series} · ${rep.by_date.length} dates · ${t.accounts} accounts · cap ${cap}/account/event`;
+
+  // ---- headline P&L -------------------------------------------------------
+  let h = `<h2>Position</h2>
+  <p class="sub">Proceeds are net of viagogo's seller commission. ROI is measured on the cost of the tickets that actually sold.</p>
+  <div class="stats">
+    <div class="stat"><div class="label">Bought</div><div class="value">${t.tickets_bought}</div><div class="hint">${money(t.total_spend)} spent</div></div>
+    <div class="stat"><div class="label">Sold</div><div class="value">${t.tickets_sold}</div><div class="hint">${pct(t.sell_through)} sell-through</div></div>
+    <div class="stat"><div class="label">Proceeds</div><div class="value green">${money(t.proceeds)}</div><div class="hint">net of fees</div></div>
+    <div class="stat"><div class="label">Profit on sold</div><div class="value ${t.profit >= 0 ? "green" : "red"}">${money(t.profit)}</div><div class="hint">cost of sold ${money(t.cost_of_sold)}</div></div>
+    <div class="stat"><div class="label">ROI</div><div class="value ${t.roi >= 0 ? "green" : "red"}">${pct(t.roi)}</div><div class="hint">on sold tickets</div></div>
+    <div class="stat"><div class="label">Still holding</div><div class="value">${t.tickets_unsold}</div><div class="hint">${money(t.cost_unsold)} at risk</div></div>
+    <div class="stat"><div class="label">Net position</div><div class="value ${t.net_position >= 0 ? "green" : "red"}">${money(t.net_position)}</div><div class="hint">proceeds − total spend</div></div>
+  </div>`;
+
+  // ---- alerts -------------------------------------------------------------
+  const over = rep.caps.filter(c => c.state === "over");
+  const dupes = rep.blocks.filter(b => b.duplicate_listing);
+  const unlisted = rep.blocks.filter(b => !b.listed);
+  const inactive = rep.blocks.filter(b => b.list_states.includes("inactive"));
+  const alerts = [];
+  over.forEach(c => alerts.push([`<span class="tag bad">over cap</span>`,
+    `<b>${esc(c.account)}</b> holds ${c.qty} on ${dshort(c.event_date_iso)} — ${c.qty - cap} over the ${cap} limit.`]));
+  dupes.forEach(b => alerts.push([`<span class="tag warn">oversupply</span>`,
+    `${dshort(b.event_date_iso)} ${esc(b.section)} row ${esc(b.row_label)} — ${b.listing_count} listings covering ${b.listed_available} tickets against ${b.qty} owned. You are competing with yourself.`]));
+  unlisted.forEach(b => alerts.push([`<span class="tag bad">not listed</span>`,
+    `${dshort(b.event_date_iso)} ${esc(b.section)} row ${esc(b.row_label)} — ${b.qty} tickets with no viagogo listing.`]));
+  inactive.forEach(b => alerts.push([`<span class="tag warn">inactive</span>`,
+    `${dshort(b.event_date_iso)} ${esc(b.section)} row ${esc(b.row_label)} — listing toggled off, invisible to buyers.`]));
+  rep.orphan_listings.forEach(o => alerts.push([`<span class="tag info">unaccounted</span>`,
+    `${dshort(o.event_date_iso)} ${esc(o.section)}${o.row_label ? " row " + esc(o.row_label) : ""} — ${o.available} listed on viagogo with no purchase behind it${o.list_state ? " (" + esc(o.list_state) + ")" : ""}.`]));
+
+  h += `<h2>Needs attention</h2>`;
+  h += alerts.length
+    ? `<div class="alerts">` + alerts.map(([tag, msg]) => `<div class="row">${tag}<div>${msg}</div></div>`).join("") + `</div>`
+    : `<div class="empty">Nothing flagged — every block is listed, within cap, and matched.</div>`;
+
+  // ---- cap grid -----------------------------------------------------------
+  const accounts = [...new Set(rep.caps.map(c => c.account))].sort();
+  const byKey = {};
+  rep.caps.forEach(c => byKey[c.event_date_iso + "|" + c.account] = c);
+  h += `<h2>Account cap</h2>
+  <p class="sub">Tickets owned per account per date, against the limit of ${cap}. Blank means that account has nothing on that date.</p>
+  <div class="capgrid" style="grid-template-columns: 90px repeat(${accounts.length}, minmax(90px, 1fr));">
+    <div class="hd">Date</div>` +
+    accounts.map(a => `<div class="hd">${esc(a)}</div>`).join("");
+  rep.by_date.forEach(d => {
+    h += `<div class="datecell">${dshort(d.event_date_iso)}</div>`;
+    accounts.forEach(a => {
+      const c = byKey[d.event_date_iso + "|" + a];
+      h += c
+        ? `<div class="${capClass(c, cap)}">${c.qty}<span style="opacity:.6"> / ${cap}</span></div>`
+        : `<div class="cap-none">·</div>`;
+    });
+  });
+  h += `</div>`;
+
+  // ---- per date -----------------------------------------------------------
+  h += `<h2>By date</h2><div class="tablewrap"><table>
+    <thead><tr><th>Date</th><th>Venue</th><th class="num">Bought</th><th class="num">Sold</th>
+    <th class="num">Unsold</th><th class="num">Cost</th><th class="num">Proceeds</th>
+    <th class="num">Profit</th><th class="num">ROI</th></tr></thead><tbody>`;
+  rep.by_date.forEach(d => {
+    h += `<tr><td><b>${dshort(d.event_date_iso)}</b></td><td class="dim">${esc(d.venue)}</td>
+      <td class="num">${d.qty}</td><td class="num">${d.sold_qty || `<span class="dim">0</span>`}</td>
+      <td class="num">${d.unsold_qty}</td><td class="num">${money(d.total_cost)}</td>
+      <td class="num">${d.proceeds ? money(d.proceeds) : `<span class="dim">—</span>`}</td>
+      <td class="num ${d.profit > 0 ? "pos" : d.profit < 0 ? "neg" : "dim"}">${d.profit ? money(d.profit) : "—"}</td>
+      <td class="num">${pct(d.roi)}</td></tr>`;
+  });
+  h += `</tbody><tfoot><tr><td colspan="2">TOTAL</td><td class="num">${t.tickets_bought}</td>
+    <td class="num">${t.tickets_sold}</td><td class="num">${t.tickets_unsold}</td>
+    <td class="num">${money(t.total_spend)}</td><td class="num">${money(t.proceeds)}</td>
+    <td class="num ${t.profit >= 0 ? "pos" : "neg"}">${money(t.profit)}</td>
+    <td class="num">${pct(t.roi)}</td></tr></tfoot></table></div>`;
+
+  // ---- blocks -------------------------------------------------------------
+  h += `<h2>Blocks</h2>
+  <p class="sub">One row per purchased block, matched to viagogo on date + section + row. Seat numbers are recorded but never matched on.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Date</th><th>Section</th><th>Row</th><th>Account</th><th class="num">Qty</th>
+    <th class="num">Unit</th><th class="num">Cost</th><th>Listed</th><th>PDFs</th>
+    <th class="num">Sold</th><th class="num">Proceeds</th><th class="num">Profit</th><th class="num">ROI</th></tr></thead><tbody>`;
+  rep.blocks.forEach(b => {
+    const listed = !b.listed ? `<span class="tag bad">no</span>`
+      : b.duplicate_listing ? `<span class="tag warn">${b.listing_count}× dup</span>`
+      : b.list_states.includes("inactive") ? `<span class="tag warn">inactive</span>`
+      : `<span class="tag ok">yes</span>`;
+    const pdfs = b.etickets === 1 ? `<span class="tag ok">attached</span>`
+      : b.etickets === 0 ? `<span class="tag bad">missing</span>`
+      : `<span class="tag">unknown</span>`;
+    h += `<tr>
+      <td>${dshort(b.event_date_iso)}</td><td>${esc(b.section)}</td><td>${esc(b.row_label)}</td>
+      <td>${b.accounts.map(esc).join(", ")}</td>
+      <td class="num">${b.qty}</td><td class="num">${money(b.unit_cost)}</td><td class="num">${money(b.total_cost)}</td>
+      <td>${listed}</td><td>${pdfs}</td>
+      <td class="num">${b.sold_qty ? b.sold_qty : `<span class="dim">0</span>`}</td>
+      <td class="num">${b.proceeds ? money(b.proceeds) : `<span class="dim">—</span>`}</td>
+      <td class="num ${b.profit > 0 ? "pos" : b.profit < 0 ? "neg" : "dim"}">${b.sold_qty ? money(b.profit) : "—"}</td>
+      <td class="num">${pct(b.roi)}</td></tr>`;
+  });
+  h += `</tbody></table></div>`;
+
+  $("#body").innerHTML = h;
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/series");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const rep = await r.json();
+    if (!rep.blocks || !rep.blocks.length) {
+      $("#body").innerHTML = `<div class="empty">No purchases yet. Import the sheet with
+        <code>python scripts/import_series_sheet.py &lt;csv&gt;</code>.</div>`;
+      $("#meta").textContent = "empty";
+      return;
+    }
+    render(rep);
+  } catch (e) {
+    $("#body").innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+    $("#meta").textContent = "error";
+  }
+}
+load();
+</script>
+</body>
+</html>

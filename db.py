@@ -798,6 +798,42 @@ CREATE TABLE IF NOT EXISTS todo_suggestion_dismissals (
 -- Kupat section name (Hebrew) -> viagogo section name, per venue. Not a
 -- literal translation (e.g. Caesarea's "יציע תחתון 1" lists as viagogo's
 -- "Middle Tier 1") so this is a taught lookup, not a hardcoded formula.
+-- /series page: one row per purchased block for a multi-date concert series
+-- (first use: NEXT). Imported once from the user's Google Sheet, then owned
+-- here — email intake appends, the page edits. Matched to viagogo listings and
+-- sales on (event_date_iso, section, row_label); seats are deliberately NOT
+-- part of the key because the user does not put seat numbers on viagogo.
+CREATE TABLE IF NOT EXISTS series_purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    series         TEXT NOT NULL DEFAULT 'NEXT',
+    event_date_iso TEXT NOT NULL,
+    venue          TEXT NOT NULL DEFAULT '',
+    section        TEXT NOT NULL DEFAULT '',   -- as the user writes it ("upper 3")
+    row_label      TEXT NOT NULL DEFAULT '',
+    seats          TEXT DEFAULT '',            -- kept for reference, never matched on
+    qty            INTEGER NOT NULL DEFAULT 0,
+    unit_cost      REAL,
+    total_cost     REAL,
+    account        TEXT NOT NULL DEFAULT '',   -- canonical account (aliases resolved)
+    marketplace    TEXT DEFAULT 'viagogo',
+    listed         INTEGER DEFAULT 0,          -- pushed to viagogo yet
+    etickets       INTEGER,                    -- PDFs attached: 1 yes / 0 no / NULL unknown
+    source         TEXT DEFAULT 'sheet',       -- sheet | email | manual
+    intake_id      TEXT,                       -- pending_intake.id when source='email'
+    note           TEXT DEFAULT '',
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_series_purchases_key
+    ON series_purchases(series, event_date_iso, section, row_label);
+
+-- Account nickname variants ("pbtign" -> "pbtsign") so the per-event cap counts
+-- one human account once. Deliberately NOT linked to vault_accounts.
+CREATE TABLE IF NOT EXISTS series_account_alias (
+    alias      TEXT PRIMARY KEY,
+    canonical  TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS viagogo_section_map (
     venue TEXT NOT NULL,
     kupat_section TEXT NOT NULL,
@@ -4290,3 +4326,90 @@ def cv_market_snapshot_get(event_uqid):
             (str(event_uqid),),
         ).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------- /series ---
+# Multi-date concert series tracking (NEXT and any later run). The page owns
+# this data; the sheet it came from is a dead archive.
+
+SERIES_CAP_PER_ACCOUNT = 9
+
+
+def series_alias_map():
+    """alias -> canonical account name. Lower-cased on both sides."""
+    with connect() as conn:
+        rows = conn.execute("SELECT alias, canonical FROM series_account_alias").fetchall()
+    return {r["alias"].strip().lower(): r["canonical"].strip().lower() for r in rows}
+
+
+def series_alias_set(alias, canonical, now_iso):
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO series_account_alias (alias, canonical, updated_at) "
+            "VALUES (?,?,?) ON CONFLICT(alias) DO UPDATE SET "
+            "canonical=excluded.canonical, updated_at=excluded.updated_at",
+            (alias.strip().lower(), canonical.strip().lower(), now_iso))
+
+
+def series_canonical_account(name, aliases=None):
+    n = (name or "").strip().lower()
+    if aliases is None:
+        aliases = series_alias_map()
+    return aliases.get(n, n)
+
+
+def series_purchases_all(series="NEXT"):
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM series_purchases WHERE series=? "
+            "ORDER BY event_date_iso, section, row_label", (series,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def series_purchases_all_any_series():
+    """Distinct (series, date, venue) triples across every tracked series.
+    Used to decide whether an emailed purchase belongs to one of them."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT series, event_date_iso, venue FROM series_purchases "
+            "ORDER BY event_date_iso").fetchall()
+    return [dict(r) for r in rows]
+
+
+def series_purchase_insert(rec, now_iso):
+    """Insert one purchased block. Returns the new row id."""
+    cols = ("series", "event_date_iso", "venue", "section", "row_label", "seats",
+            "qty", "unit_cost", "total_cost", "account", "marketplace", "listed",
+            "etickets", "source", "intake_id", "note")
+    vals = [rec.get(c) for c in cols]
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO series_purchases (%s, created_at, updated_at) VALUES (%s,?,?)"
+            % (",".join(cols), ",".join("?" * len(cols))), (*vals, now_iso, now_iso))
+        return cur.lastrowid
+
+
+def series_purchase_exists(series, event_date_iso, section, row_label, qty, account):
+    """Dedupe guard for email intake — same block, same account, same size."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM series_purchases WHERE series=? AND event_date_iso=? "
+            "AND lower(section)=lower(?) AND lower(row_label)=lower(?) AND qty=? "
+            "AND lower(account)=lower(?)",
+            (series, event_date_iso, section or "", row_label or "", qty or 0,
+             account or "")).fetchone()
+    return row["id"] if row else None
+
+
+def series_purchase_update(pid, fields, now_iso):
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=?" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE series_purchases SET {sets}, updated_at=? WHERE id=?",
+                     (*fields.values(), now_iso, pid))
+
+
+def series_purchase_delete(pid):
+    with connect() as conn:
+        conn.execute("DELETE FROM series_purchases WHERE id=?", (pid,))

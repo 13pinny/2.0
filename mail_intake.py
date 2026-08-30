@@ -26,6 +26,7 @@ from email.utils import parsedate_to_datetime
 import attachments as attachments_mod
 import cashback_email
 import db
+import series
 import dice_email
 import fx
 import notify
@@ -1335,6 +1336,7 @@ def run_intake():
     cashback_saved = 0
     dice_purchases_saved = 0
     dice_transfers_saved = 0
+    series_saved = 0
     skipped_dupe = 0
     skipped_provider = 0
     errors = 0
@@ -1410,6 +1412,14 @@ def run_intake():
                 "status": "new",
             }
             db.insert_pending_intake(row, datetime.now(timezone.utc).isoformat())
+            # If this purchase is for a date we already track on /series, append
+            # it there too. Failure here must never lose the intake row, so it
+            # is caught separately from the viagogo push below.
+            try:
+                if series.record_from_intake(fields, fields.get("buyer_email"), intake_id):
+                    series_saved += 1
+            except Exception:
+                pass
             if provider in ("kupat", "tickchak", "ticketmaster_il"):
                 try:
                     _push_kupat_to_viagogo(intake_id, fields)
@@ -1443,6 +1453,7 @@ def run_intake():
         "cashback_saved": cashback_saved,
         "dice_purchases_saved": dice_purchases_saved,
         "dice_transfers_saved": dice_transfers_saved,
+        "series_saved": series_saved,
         "skipped_dupe": skipped_dupe,
         "skipped_provider": skipped_provider,
         "errors": errors,

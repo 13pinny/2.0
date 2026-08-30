@@ -38,6 +38,7 @@ import edm_events
 import pacha_events
 import pacha_tickets
 import scraper
+import series
 import tickchak
 import tickchak_pdf
 import ticketmaster
@@ -2538,6 +2539,96 @@ def api_events_suggest():
             for (name, iso, venue) in items
         ]
     })
+
+
+@app.route("/series")
+def series_page():
+    return render_template("series.html")
+
+
+@app.route("/api/series")
+def api_series():
+    from flask import request
+    name = (request.args.get("series") or "NEXT").strip()
+    return jsonify(series.build(name))
+
+
+@app.route("/api/series/purchase", methods=["POST"])
+def api_series_purchase_add():
+    """Add a block by hand. Email intake uses db.series_purchase_insert directly."""
+    from flask import request
+    body = request.get_json(force=True, silent=True) or {}
+    required = ("event_date_iso", "qty", "account")
+    missing = [k for k in required if not body.get(k)]
+    if missing:
+        return jsonify({"ok": False, "error": f"missing: {', '.join(missing)}"}), 400
+    now = datetime.now(timezone.utc).isoformat()
+    aliases = db.series_alias_map()
+    qty = int(body.get("qty") or 0)
+    unit = body.get("unit_cost")
+    total = body.get("total_cost")
+    if total in (None, "") and unit not in (None, ""):
+        total = float(unit) * qty
+    rec = {
+        "series": (body.get("series") or "NEXT").strip(),
+        "event_date_iso": body["event_date_iso"].strip(),
+        "venue": (body.get("venue") or "").strip(),
+        "section": (body.get("section") or "").strip(),
+        "row_label": (body.get("row_label") or "").strip(),
+        "seats": (body.get("seats") or "").strip(),
+        "qty": qty,
+        "unit_cost": float(unit) if unit not in (None, "") else None,
+        "total_cost": float(total) if total not in (None, "") else None,
+        "account": db.series_canonical_account(body["account"], aliases),
+        "marketplace": (body.get("marketplace") or "viagogo").strip(),
+        "listed": 1 if body.get("listed") else 0,
+        "etickets": body.get("etickets"),
+        "source": (body.get("source") or "manual").strip(),
+        "intake_id": body.get("intake_id"),
+        "note": (body.get("note") or "").strip(),
+    }
+    pid = db.series_purchase_insert(rec, now)
+    return jsonify({"ok": True, "id": pid})
+
+
+@app.route("/api/series/purchase/<int:pid>", methods=["POST"])
+def api_series_purchase_update(pid):
+    from flask import request
+    body = request.get_json(force=True, silent=True) or {}
+    allowed = ("event_date_iso", "venue", "section", "row_label", "seats", "qty",
+               "unit_cost", "total_cost", "account", "marketplace", "listed",
+               "etickets", "note")
+    fields = {k: body[k] for k in allowed if k in body}
+    if "account" in fields:
+        fields["account"] = db.series_canonical_account(fields["account"])
+    if not fields:
+        return jsonify({"ok": False, "error": "nothing to update"}), 400
+    db.series_purchase_update(pid, fields, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True})
+
+
+@app.route("/api/series/purchase/<int:pid>/delete", methods=["POST"])
+def api_series_purchase_delete(pid):
+    db.series_purchase_delete(pid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/series/alias", methods=["POST"])
+def api_series_alias():
+    """Teach the page that two nicknames are one account, so the 9-cap counts
+    them together."""
+    from flask import request
+    body = request.get_json(force=True, silent=True) or {}
+    alias, canonical = (body.get("alias") or "").strip(), (body.get("canonical") or "").strip()
+    if not alias or not canonical:
+        return jsonify({"ok": False, "error": "alias and canonical required"}), 400
+    now = datetime.now(timezone.utc).isoformat()
+    db.series_alias_set(alias, canonical, now)
+    # Re-point existing rows so the cap math updates immediately.
+    for row in db.series_purchases_all((body.get("series") or "NEXT").strip()):
+        if (row.get("account") or "").lower() == alias.lower():
+            db.series_purchase_update(row["id"], {"account": canonical.lower()}, now)
+    return jsonify({"ok": True})
 
 
 @app.route("/profit")
