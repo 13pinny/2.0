@@ -4005,6 +4005,160 @@ def api_owed_delete():
     return jsonify({"ok": True})
 
 
+# --- Unmapped tickets (bought, not yet listed) ---------------------------
+# Standalone hand-entry ledger for tickets we own but haven't listed, either
+# because we haven't gotten to it or because no secondary market exists yet.
+# The `listed` checkbox is a latch, not a delete -- checked rows sink to a
+# LISTED block at the bottom of /unmapped so the purchase record survives.
+
+_UNMAPPED_TEXT_FIELDS = (
+    "event_name", "event_date", "venue", "section", "row_label", "seats",
+    "purchase_source", "account", "email", "phone", "card", "link", "reason",
+    "notes",
+)
+
+
+def _unmapped_extra_json(value):
+    """Normalize the free-form extra-fields blob to a JSON object string.
+    Accepts a dict from the page or a pre-serialized string; anything else
+    (or an empty map) stores NULL so the column stays cheap to test."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if not isinstance(value, dict):
+        return None
+    clean = {}
+    for k, v in value.items():
+        k = str(k).strip()
+        if k:
+            clean[k] = "" if v is None else str(v).strip()
+    return json.dumps(clean, ensure_ascii=False) if clean else None
+
+
+def _unmapped_payload(body):
+    """Shared add/edit field coercion. Returns only the keys present in
+    `body` so edit can do partial updates."""
+    out = {}
+    for k in _UNMAPPED_TEXT_FIELDS:
+        if k in body:
+            out[k] = (body.get(k) or "").strip()
+    if "qty" in body:
+        try:
+            out["qty"] = int(body.get("qty") or 0) or None
+        except (TypeError, ValueError):
+            out["qty"] = None
+    if "cost_per_unit" in body:
+        v = body.get("cost_per_unit")
+        try:
+            out["cost_per_unit"] = float(v) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            out["cost_per_unit"] = None
+    if "extra" in body:
+        out["extra_json"] = _unmapped_extra_json(body.get("extra"))
+    # Derive the sortable ISO date from the free-text one when the page
+    # didn't send it, same as /api/inventory/manual-add.
+    if "event_date" in body or "event_date_iso" in body:
+        iso = (body.get("event_date_iso") or "").strip()
+        if not iso and out.get("event_date"):
+            iso = _date_only(_parse_event_date(out["event_date"])) or ""
+        out["event_date_iso"] = iso
+    return out
+
+
+@app.route("/unmapped")
+def unmapped_page():
+    return render_template("unmapped.html")
+
+
+@app.route("/api/unmapped")
+def api_unmapped():
+    items = db.all_unmapped_tickets()
+    atts = db.list_attachments_for_owners("unmapped", [i["id"] for i in items])
+    for it in items:
+        it["attachments"] = atts.get(it["id"], [])
+        try:
+            it["extra"] = json.loads(it.get("extra_json") or "{}")
+        except ValueError:
+            it["extra"] = {}
+    return jsonify({"items": items, "last_run": _last_run, "last_backup": _last_backup})
+
+
+@app.route("/api/unmapped/add", methods=["POST"])
+def api_unmapped_add():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    fields = _unmapped_payload(body)
+    if not fields.get("event_name"):
+        return jsonify({"error": "event_name required"}), 400
+    row = {k: fields.get(k) for k in db.UNMAPPED_FIELDS}
+    row["id"] = "unm-" + uuid.uuid4().hex[:12]
+    db.insert_unmapped_ticket(row, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "id": row["id"]})
+
+
+@app.route("/api/unmapped/edit", methods=["POST"])
+def api_unmapped_edit():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    fields = _unmapped_payload(body)
+    if "event_name" in fields and not fields["event_name"]:
+        return jsonify({"error": "event_name cannot be blank"}), 400
+    db.update_unmapped_ticket(id_, fields, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True})
+
+
+@app.route("/api/unmapped/listed", methods=["POST"])
+def api_unmapped_listed():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.set_unmapped_listed(id_, bool(body.get("listed")), datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True})
+
+
+@app.route("/api/unmapped/delete", methods=["POST"])
+def api_unmapped_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    id_ = (body.get("id") or "").strip()
+    if not id_:
+        return jsonify({"error": "id required"}), 400
+    db.delete_unmapped_ticket(id_)
+    # Same convention as /api/inventory/manual-delete: drop the DB rows but
+    # leave the PDFs on disk so OneDrive still has them.
+    db.delete_attachments_for_owner("unmapped", id_)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/unmapped/attach", methods=["POST"])
+def api_unmapped_attach():
+    from flask import request
+    ticket_id = (request.form.get("ticket_id") or "").strip()
+    if not ticket_id:
+        return jsonify({"error": "ticket_id required"}), 400
+    if ticket_id not in {t["id"] for t in db.all_unmapped_tickets()}:
+        return jsonify({"error": "unknown ticket_id"}), 404
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "file required"}), 400
+    f.stream.seek(0, 2)
+    size = f.stream.tell()
+    f.stream.seek(0)
+    if size > attachments_mod.MAX_BYTES:
+        return jsonify({"error": f"file too large (>{attachments_mod.MAX_BYTES} bytes)"}), 413
+    row = attachments_mod.save_upload("unmapped", ticket_id, f)
+    return jsonify({"ok": True, "attachment": row})
+
+
 # --- Cashback ledger -----------------------------------------------------
 # Manual log of credit-card cashback rewards. Purely informational — does
 # not feed into Maaser (user opted out: cashback is treated as a rebate,
