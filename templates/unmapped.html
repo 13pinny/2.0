@@ -93,6 +93,8 @@
   .modal-body input, .modal-body select, .modal-body textarea { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
   .modal-body input:focus, .modal-body select:focus, .modal-body textarea:focus { outline: none; border-color: var(--accent); }
   .modal-body .wide { grid-column: 2 / -1; }
+  .modal-body .split { grid-column: 2 / -1; font-size: 10px; color: var(--muted); letter-spacing: 1px; min-height: 12px; margin-top: -4px; }
+  .modal-body .split b { color: var(--text); font-weight: 600; }
   .modal-body .section { grid-column: 1 / -1; color: var(--muted); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; padding-top: 10px; margin-top: 4px; border-top: 1px dashed var(--line); }
   .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); }
   .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
@@ -222,7 +224,9 @@
       <label>Row</label><input id="f-row_label" type="text">
       <label>Seats</label><input id="f-seats" type="text" placeholder="e.g. 12,13">
       <label>Qty</label><input id="f-qty" type="number" min="1" step="1">
-      <label>Cost / ticket</label><input id="f-cost_per_unit" type="number" step="0.01" min="0">
+      <label>Cost / ticket</label><input id="f-cost_per_unit" type="number" step="0.01" min="0" placeholder="enter either this…">
+      <label>Total cost</label><input id="f-cost_total" type="number" step="0.01" min="0" placeholder="…or the batch total">
+      <div id="cost-split" class="split"></div>
       <label>Why not listed</label>
       <select id="f-reason">
         <option value="">—</option>
@@ -430,6 +434,42 @@ function readExtras() {
   return out;
 }
 
+// Cost can be entered per-ticket or as a batch total; each keeps the other
+// in sync live. `_costMode` remembers which box the user actually drove, so
+// on save we send THAT one and let the server divide at full precision --
+// round-tripping a rounded per-ticket value would lose money on a total that
+// doesn't divide evenly (e.g. $100 over 3 tickets).
+let _costMode = "per";
+
+function syncCost(from) {
+  if (from) _costMode = from;
+  const qty = parseInt($("f-qty").value || "0", 10);
+  const per = parseFloat($("f-cost_per_unit").value);
+  const tot = parseFloat($("f-cost_total").value);
+  // Assigning .value from script fires no `input` event, so this can't loop.
+  if (_costMode === "total" && isFinite(tot)) {
+    $("f-cost_per_unit").value = qty > 0 ? +(tot / qty).toFixed(4) : "";
+  } else if (_costMode === "per" && isFinite(per)) {
+    $("f-cost_total").value = qty > 0 ? +(per * qty).toFixed(2) : "";
+  } else if (!isFinite(per) && !isFinite(tot)) {
+    $("f-cost_per_unit").value = "";
+    $("f-cost_total").value = "";
+  }
+  renderSplit();
+}
+
+function renderSplit() {
+  const qty = parseInt($("f-qty").value || "0", 10);
+  const per = parseFloat($("f-cost_per_unit").value);
+  const tot = parseFloat($("f-cost_total").value);
+  const el = $("cost-split");
+  if (!isFinite(per) && !isFinite(tot)) { el.innerHTML = ""; return; }
+  if (!qty) { el.innerHTML = "enter a qty to split the total"; return; }
+  const t = isFinite(tot) ? tot : per * qty;
+  const p = qty > 0 ? t / qty : 0;
+  el.innerHTML = `<b>${money(t)}</b> over <b>${qty}</b> ticket${qty === 1 ? "" : "s"} = <b>${money(p)}</b> each`;
+}
+
 function openModal(item) {
   _editingId = item ? item.id : null;
   $("tk-title").textContent = item ? "// EDIT TICKET" : "// ADD TICKET";
@@ -437,6 +477,11 @@ function openModal(item) {
   $("f-event_date_iso").value = item ? (item.event_date_iso || "") : "";
   $("f-qty").value = item && item.qty ? item.qty : "";
   $("f-cost_per_unit").value = item && item.cost_per_unit != null ? item.cost_per_unit : "";
+  // Existing rows store per-ticket, so open in per-ticket mode and derive the
+  // total for display.
+  _costMode = "per";
+  $("f-cost_total").value = "";
+  syncCost();
   const xr = $("extra-rows");
   xr.innerHTML = "";
   const extras = Object.entries((item && item.extra) || {});
@@ -457,7 +502,12 @@ async function saveModal() {
   // the rest of the app, which keeps both forms.
   body.event_date = iso;
   body.qty = $("f-qty").value;
-  body.cost_per_unit = $("f-cost_per_unit").value;
+  if (_costMode === "total" && $("f-cost_total").value !== "") {
+    body.cost_per_unit = "";
+    body.cost_total = $("f-cost_total").value;
+  } else {
+    body.cost_per_unit = $("f-cost_per_unit").value;
+  }
   if (!body.event_name) { alert("Event name is required"); return; }
   if (_editingId) body.id = _editingId;
   const url = _editingId ? "/api/unmapped/edit" : "/api/unmapped/add";
@@ -575,6 +625,9 @@ $("tk-close").addEventListener("click", closeModal);
 $("tk-cancel").addEventListener("click", closeModal);
 $("tk-save").addEventListener("click", saveModal);
 $("tk-bg").addEventListener("click", e => { if (e.target.id === "tk-bg") closeModal(); });
+$("f-cost_per_unit").addEventListener("input", () => syncCost("per"));
+$("f-cost_total").addEventListener("input", () => syncCost("total"));
+$("f-qty").addEventListener("input", () => syncCost());
 $("extra-add").addEventListener("click", () => $("extra-rows").appendChild(extraRow("", "")));
 $("att-close").addEventListener("click", closeAttModal);
 $("att-done").addEventListener("click", closeAttModal);

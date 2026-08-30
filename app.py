@@ -4039,9 +4039,16 @@ def _unmapped_extra_json(value):
     return json.dumps(clean, ensure_ascii=False) if clean else None
 
 
-def _unmapped_payload(body):
+def _unmapped_payload(body, existing_qty=None):
     """Shared add/edit field coercion. Returns only the keys present in
-    `body` so edit can do partial updates."""
+    `body` so edit can do partial updates.
+
+    Cost can arrive either way: `cost_per_unit` (per ticket) or `cost_total`
+    (what the whole batch cost). Only cost_per_unit is stored -- a total is
+    divided by qty here, so the division happens once, at full precision,
+    against the qty that actually applies. `existing_qty` lets an edit that
+    sends a total without a qty still divide by the row's current qty.
+    """
     out = {}
     for k in _UNMAPPED_TEXT_FIELDS:
         if k in body:
@@ -4057,6 +4064,16 @@ def _unmapped_payload(body):
             out["cost_per_unit"] = float(v) if v not in (None, "") else None
         except (TypeError, ValueError):
             out["cost_per_unit"] = None
+    if body.get("cost_total") not in (None, "") and not out.get("cost_per_unit"):
+        # Batch cost split evenly per ticket, the same shape as the
+        # event_group_costs split on /sales.
+        try:
+            batch = float(body["cost_total"])
+        except (TypeError, ValueError):
+            batch = None
+        qty = out["qty"] if "qty" in out else existing_qty
+        if batch is not None and qty:
+            out["cost_per_unit"] = batch / qty
     if "extra" in body:
         out["extra_json"] = _unmapped_extra_json(body.get("extra"))
     # Derive the sortable ISO date from the free-text one when the page
@@ -4065,7 +4082,8 @@ def _unmapped_payload(body):
         iso = (body.get("event_date_iso") or "").strip()
         if not iso and out.get("event_date"):
             iso = _date_only(_parse_event_date(out["event_date"])) or ""
-        out["event_date_iso"] = iso
+        # NULL, not "", so the "undated last" ordering actually catches it.
+        out["event_date_iso"] = iso or None
     return out
 
 
@@ -4107,7 +4125,10 @@ def api_unmapped_edit():
     id_ = (body.get("id") or "").strip()
     if not id_:
         return jsonify({"error": "id required"}), 400
-    fields = _unmapped_payload(body)
+    existing = db.get_unmapped_ticket(id_)
+    if not existing:
+        return jsonify({"error": "unknown id"}), 404
+    fields = _unmapped_payload(body, existing_qty=existing.get("qty"))
     if "event_name" in fields and not fields["event_name"]:
         return jsonify({"error": "event_name cannot be blank"}), 400
     db.update_unmapped_ticket(id_, fields, datetime.now(timezone.utc).isoformat())

@@ -2567,9 +2567,16 @@ def all_unmapped_tickets():
     with connect() as conn:
         rows = conn.execute(
             "SELECT * FROM unmapped_tickets "
-            "ORDER BY listed, event_date_iso IS NULL, event_date_iso, created_at DESC"
+            "ORDER BY listed, (event_date_iso IS NULL OR event_date_iso = ''), "
+            "event_date_iso, created_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_unmapped_ticket(id_):
+    with connect() as conn:
+        r = conn.execute("SELECT * FROM unmapped_tickets WHERE id = ?", (id_,)).fetchone()
+    return dict(r) if r else None
 
 
 def update_unmapped_ticket(id_, fields, now_iso):
