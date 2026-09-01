@@ -192,6 +192,40 @@ CREATE TABLE IF NOT EXISTS manual_inventory (
     matched_at TEXT,
     created_at TEXT NOT NULL
 );
+-- Hand-entered tickets that are BOUGHT but not yet listed anywhere -- either
+-- the user hasn't gotten to it or no secondary market exists yet. Unlike
+-- manual_inventory (which is the pending-intake promotion target and feeds
+-- /inventory + profit), this is a standalone scratch ledger: free-form
+-- purchase metadata (account/email/phone/card/link + arbitrary extra_json
+-- key-values) plus a `listed` latch that drops the row to the bottom of
+-- /unmapped instead of deleting it. Attachments hang off owner_type
+-- 'unmapped'.
+CREATE TABLE IF NOT EXISTS unmapped_tickets (
+    id TEXT PRIMARY KEY,
+    event_name TEXT,
+    event_date TEXT,
+    event_date_iso TEXT,
+    venue TEXT,
+    section TEXT,
+    row_label TEXT,
+    seats TEXT,
+    qty INTEGER,
+    cost_per_unit REAL,
+    purchase_source TEXT,
+    account TEXT,
+    email TEXT,
+    phone TEXT,
+    card TEXT,
+    link TEXT,
+    reason TEXT,
+    notes TEXT,
+    extra_json TEXT,
+    listed INTEGER NOT NULL DEFAULT 0,
+    listed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_unmapped_listed ON unmapped_tickets(listed, event_date_iso);
 CREATE TABLE IF NOT EXISTS manual_sales (
     id TEXT PRIMARY KEY,
     inv_source TEXT,
@@ -2543,6 +2577,66 @@ def update_owed_item(id_, fields):
 def delete_owed_item(id_):
     with connect() as conn:
         conn.execute("DELETE FROM owed_items WHERE id = ?", (id_,))
+
+
+# --- Unmapped tickets (bought, not yet listed) ---------------------------
+
+UNMAPPED_FIELDS = (
+    "event_name", "event_date", "event_date_iso", "venue", "section",
+    "row_label", "seats", "qty", "cost_per_unit", "purchase_source",
+    "account", "email", "phone", "card", "link", "reason", "notes",
+    "extra_json",
+)
+
+
+def insert_unmapped_ticket(row, now_iso):
+    payload = {k: row.get(k) for k in UNMAPPED_FIELDS}
+    payload.update({"id": row["id"], "created_at": now_iso, "updated_at": now_iso})
+    cols = ", ".join(("id",) + UNMAPPED_FIELDS + ("listed", "listed_at", "created_at", "updated_at"))
+    vals = ", ".join([":id"] + [f":{k}" for k in UNMAPPED_FIELDS] + ["0", "NULL", ":created_at", ":updated_at"])
+    with connect() as conn:
+        conn.execute(f"INSERT INTO unmapped_tickets ({cols}) VALUES ({vals})", payload)
+
+
+def all_unmapped_tickets():
+    """Unlisted first, then listed; each block by event date (undated last)."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM unmapped_tickets "
+            "ORDER BY listed, (event_date_iso IS NULL OR event_date_iso = ''), "
+            "event_date_iso, created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_unmapped_ticket(id_):
+    with connect() as conn:
+        r = conn.execute("SELECT * FROM unmapped_tickets WHERE id = ?", (id_,)).fetchone()
+    return dict(r) if r else None
+
+
+def update_unmapped_ticket(id_, fields, now_iso):
+    if not fields:
+        return
+    fields = {**fields, "updated_at": now_iso}
+    sets = ", ".join(f"{k}=:{k}" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE unmapped_tickets SET {sets} WHERE id=:_id", {**fields, "_id": id_})
+
+
+def set_unmapped_listed(id_, listed, now_iso):
+    """Flip the listed latch. Un-checking clears listed_at so the row reads as
+    never-listed rather than carrying a stale timestamp."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE unmapped_tickets SET listed=?, listed_at=?, updated_at=? WHERE id=?",
+            (1 if listed else 0, now_iso if listed else None, now_iso, id_),
+        )
+
+
+def delete_unmapped_ticket(id_):
+    with connect() as conn:
+        conn.execute("DELETE FROM unmapped_tickets WHERE id = ?", (id_,))
 
 
 def insert_cashback_entry(row, now_iso):

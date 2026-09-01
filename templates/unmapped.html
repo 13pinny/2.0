@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Unmapped</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 14px; }
+  h2 .count { font-size: 10px; border: 1px solid var(--line-2); padding: 1px 6px; letter-spacing: 1px; }
+  .blurb { color: var(--muted); font-size: 11px; letter-spacing: 0.5px; margin-bottom: 14px; }
+  input, select, button, textarea { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .stat { background: var(--bg-2); border: 1px solid var(--line); padding: 10px 16px; min-width: 130px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .stat .value { font-size: 20px; font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .stat.amber .value { color: var(--amber); }
+  .stat.green .value { color: var(--green); }
+
+  .toolbar { display: flex; gap: 10px; align-items: center; margin: 16px 0 4px; flex-wrap: wrap; }
+  .toolbar .grow { flex: 1; min-width: 160px; }
+  .toolbar button.primary { background: var(--accent); color: #fff; border-color: var(--accent); letter-spacing: 1.5px; text-transform: uppercase; font-size: 11px; padding: 7px 14px; }
+  .toolbar button.primary:hover { background: #0a5cc2; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.center, td.center { text-align: center; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr.tk-row { cursor: pointer; }
+  tbody tr.tk-row:hover > td { background: var(--bg-3); }
+  tbody tr.listed > td { color: var(--muted); }
+  tbody tr.listed .ev { text-decoration: line-through; }
+  .ev { font-weight: 600; }
+  .sub { color: var(--muted); font-size: 10px; letter-spacing: 0.5px; }
+  .list-check { width: 16px; height: 16px; cursor: pointer; accent-color: var(--green); }
+
+  .chip { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; white-space: nowrap; }
+  .chip-todo { color: var(--orange); border-color: var(--orange); }
+  .chip-nomarket { color: var(--purple); border-color: var(--purple); }
+  .chip-listed { color: var(--green); border-color: var(--green); }
+  a.link { color: var(--accent); text-decoration: none; }
+  a.link:hover { text-decoration: underline; }
+
+  .row-action { width: 22px; height: 22px; background: transparent; border: 1px solid transparent; cursor: pointer; font-size: 12px; line-height: 18px; padding: 0; opacity: 0; transition: opacity 0.1s, background 0.1s; margin-right: 2px; color: var(--red); }
+  tbody tr:hover .row-action { opacity: 0.7; }
+  tbody tr .row-action:hover { opacity: 1; background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .row-attach { color: var(--muted); width: auto; padding: 0 5px; }
+  .row-attach.has-files { color: var(--accent); opacity: 0.95 !important; }
+  tbody tr .row-attach:hover { opacity: 1; background: rgba(9,105,218,0.1); border-color: var(--accent); }
+
+  tr.detail > td { background: var(--bg-2); border-bottom: 1px solid var(--line-2); padding: 12px 16px; }
+  tr.detail .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px 20px; }
+  tr.detail .f { display: flex; flex-direction: column; gap: 2px; }
+  tr.detail .f .k { font-size: 9px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  tr.detail .f .v { font-size: 12px; word-break: break-word; }
+  tr.detail .f .v.none { color: var(--muted); font-style: italic; }
+  tr.detail .files { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  tr.detail .files a { color: var(--accent); text-decoration: none; font-size: 11px; border: 1px solid var(--line); padding: 3px 8px; }
+  tr.detail .files a:hover { background: var(--bg-3); }
+  tr.detail .files .none { color: var(--muted); font-size: 11px; font-style: italic; }
+  tr.detail .acts { margin-top: 12px; display: flex; gap: 8px; }
+  tr.detail .acts button { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 6px 12px; }
+
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 40px 20px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 620px; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .modal h3 .close { background: transparent; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0; }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 130px 1fr 130px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select, .modal-body textarea { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 0; width: 100%; }
+  .modal-body input:focus, .modal-body select:focus, .modal-body textarea:focus { outline: none; border-color: var(--accent); }
+  .modal-body .wide { grid-column: 2 / -1; }
+  .modal-body .split { grid-column: 2 / -1; font-size: 10px; color: var(--muted); letter-spacing: 1px; min-height: 12px; margin-top: -4px; }
+  .modal-body .split b { color: var(--text); font-weight: 600; }
+  .modal-body .section { grid-column: 1 / -1; color: var(--muted); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; padding-top: 10px; margin-top: 4px; border-top: 1px dashed var(--line); }
+  .modal-body .meta-line { grid-column: 1 / -1; color: var(--muted); font-size: 11px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); }
+  .modal-foot button { font-family: inherit; font-size: 11px; padding: 7px 14px; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  .modal-foot button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .modal-foot button.primary:hover { background: #0a5cc2; }
+  .modal-foot .muted { color: var(--muted); margin-right: auto; align-self: center; font-size: 10px; letter-spacing: 1px; }
+
+  /* free-form extra key/value fields */
+  #extra-rows { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; }
+  .xrow { display: grid; grid-template-columns: 160px 1fr 26px; gap: 8px; align-items: center; }
+  .xrow button { background: transparent; border: 1px solid var(--line); color: var(--red); padding: 5px 0; font-size: 12px; }
+  #extra-add { grid-column: 1 / -1; justify-self: start; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; padding: 5px 10px; }
+
+  .att-list { padding: 12px 18px; border-bottom: 1px dashed var(--line); }
+  .att-list .att-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; }
+  .att-list .att-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .att-list .att-item .size { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+  .att-list .att-item a { color: var(--accent); text-decoration: none; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--line); padding: 3px 8px; }
+  .att-list .att-item a:hover { background: #e9edf2; }
+  .att-list .att-item button.del { background: transparent; color: var(--red); border: 1px solid var(--line); padding: 3px 8px; font-size: 11px; cursor: pointer; }
+  .att-list .att-item button.del:hover { background: rgba(248,81,73,0.1); border-color: var(--red); }
+  .att-empty { color: var(--muted); font-size: 11px; padding: 6px 0; font-style: italic; }
+  .att-upload { padding: 12px 18px; display: flex; gap: 8px; align-items: center; }
+  .att-upload input[type="file"] { flex: 1; font-family: inherit; font-size: 11px; color: var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>KARTIS</h1>
+    <span class="meta" id="lastrun">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/profit">PROFIT</a>
+    <a href="/expenses">EXPENSES</a>
+    <a href="/cashback">CASHBACK</a>
+    <a href="/maaser">MAASER</a>
+    <a href="/pricer">PRICER</a>
+    <a href="/cvpricer">CV PRICER</a>
+    <a href="/listings">LISTINGS</a>
+    <a href="/unmapped" class="active">UNMAPPED</a>
+    <a href="/vgsales">VG SALES</a>
+    <a href="/festival">CHUTZOT HAYOTZER</a>
+    <a href="/ga">GA</a>
+    <a href="/market">ISRAEL MARKET</a>
+    <a href="/pacha">PACHA</a>
+    <a href="/marquee">MARQUEE</a>
+    <a href="/edm">EDM</a>
+    <a href="/dice">DICE</a>
+    <a href="/watchers">WATCHERS</a>
+    <a href="/todos">TO-DO</a>
+    <a href="/tools">TOOLS</a>
+    <a href="/vault">VAULT</a>
+    <a href="/tm">TM ACCTS</a>
+  </nav>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Unlisted Rows</div><div class="value" id="s-rows">0</div></div>
+    <div class="stat"><div class="label">Unlisted Tickets</div><div class="value" id="s-tickets">0</div></div>
+    <div class="stat amber"><div class="label">Cash Tied</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat green"><div class="label">Listed</div><div class="value" id="s-listed">0</div></div>
+  </div>
+
+  <div class="toolbar">
+    <button class="primary" id="add-btn">+ Add Ticket</button>
+    <input class="grow" type="search" id="q" placeholder="filter — event, venue, account, email, card, note…">
+  </div>
+
+  <h2>Not Listed Yet <span class="count" id="c-open">0</span></h2>
+  <div class="blurb">
+    Tickets you own that aren't on a marketplace yet. Click a row to expand the full purchase record.
+    Tick <b>LISTED</b> once it's up on a marketplace — the row drops to the bottom instead of being deleted.
+  </div>
+  <table id="open-table">
+    <thead><tr>
+      <th class="center" style="width:52px">LISTED</th>
+      <th>EVENT</th>
+      <th>DATE</th>
+      <th>SEC / ROW / SEATS</th>
+      <th class="num">QTY</th>
+      <th class="num">COST / EA</th>
+      <th class="num">TOTAL</th>
+      <th>BOUGHT ON</th>
+      <th>ACCOUNT</th>
+      <th>WHY</th>
+      <th style="width:70px"></th>
+    </tr></thead>
+    <tbody id="open-tbody"></tbody>
+  </table>
+  <div id="open-empty" class="empty" style="display:none">nothing unmapped — everything you've entered is listed</div>
+
+  <h2>Listed <span class="count" id="c-listed">0</span></h2>
+  <div class="blurb">Confirmed live on a marketplace. Untick to send one back up top.</div>
+  <table id="done-table">
+    <thead><tr>
+      <th class="center" style="width:52px">LISTED</th>
+      <th>EVENT</th>
+      <th>DATE</th>
+      <th>SEC / ROW / SEATS</th>
+      <th class="num">QTY</th>
+      <th class="num">COST / EA</th>
+      <th class="num">TOTAL</th>
+      <th>BOUGHT ON</th>
+      <th>ACCOUNT</th>
+      <th>LISTED AT</th>
+      <th style="width:70px"></th>
+    </tr></thead>
+    <tbody id="done-tbody"></tbody>
+  </table>
+  <div id="done-empty" class="empty" style="display:none">nothing marked listed yet</div>
+</main>
+
+<!-- Add / edit modal -->
+<div id="tk-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span id="tk-title">ADD TICKET</span><button class="close" id="tk-close">×</button></h3>
+    <div class="modal-body">
+      <div class="meta-line">Only the event name is required — fill in whatever else you have.</div>
+      <label>Event *</label><input id="f-event_name" class="wide" type="text" placeholder="e.g. Fred again.. — Tel Aviv">
+      <label>Date</label><input id="f-event_date_iso" type="date">
+      <label>Venue</label><input id="f-venue" type="text">
+      <label>Section</label><input id="f-section" type="text">
+      <label>Row</label><input id="f-row_label" type="text">
+      <label>Seats</label><input id="f-seats" type="text" placeholder="e.g. 12,13">
+      <label>Qty</label><input id="f-qty" type="number" min="1" step="1">
+      <label>Cost / ticket</label><input id="f-cost_per_unit" type="number" step="0.01" min="0" placeholder="enter either this…">
+      <label>Total cost</label><input id="f-cost_total" type="number" step="0.01" min="0" placeholder="…or the batch total">
+      <div id="cost-split" class="split"></div>
+      <label>Why not listed</label>
+      <select id="f-reason">
+        <option value="">—</option>
+        <option value="not_yet">Haven't gotten to it</option>
+        <option value="no_secondary">Not on secondaries yet</option>
+        <option value="other">Other (see notes)</option>
+      </select>
+
+      <div class="section">Purchase details</div>
+      <label>Bought on</label><input id="f-purchase_source" type="text" placeholder="e.g. Dice / Kupat / TM">
+      <label>Account</label><input id="f-account" type="text" placeholder="account name or #">
+      <label>Email</label><input id="f-email" type="text">
+      <label>Phone</label><input id="f-phone" type="text">
+      <label>Card</label><input id="f-card" type="text" placeholder="label only — e.g. Amex ••1005">
+      <label>Ticket link</label><input id="f-link" type="url" placeholder="https://…">
+      <label>Notes</label><textarea id="f-notes" class="wide" rows="2"></textarea>
+
+      <div class="section">Anything else</div>
+      <div id="extra-rows"></div>
+      <button id="extra-add" type="button">+ Add field</button>
+    </div>
+    <div class="modal-foot">
+      <span class="muted">ctrl+enter saves · full card numbers belong in /vault</span>
+      <button id="tk-cancel">Cancel</button>
+      <button class="primary" id="tk-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Attachments modal -->
+<div id="att-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>ATTACHMENTS <span id="att-event" style="font-size:10px;padding:1px 6px;border:1px solid var(--line);color:var(--muted);"></span></span><button class="close" id="att-close">×</button></h3>
+    <div class="att-list" id="att-list"></div>
+    <div class="att-upload">
+      <input type="file" id="att-file">
+      <button class="primary" id="att-upload" style="font-family:inherit;font-size:11px;padding:7px 14px;letter-spacing:1.5px;text-transform:uppercase;background:var(--accent);color:#fff;border:1px solid var(--accent);cursor:pointer;">Upload</button>
+    </div>
+    <div class="modal-foot">
+      <span class="muted">Files survive in OneDrive even if the ticket is deleted.</span>
+      <button id="att-done">Done</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+const money = n => n == null || n === "" ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+
+const TEXT_FIELDS = ["event_name", "venue", "section", "row_label", "seats",
+                     "purchase_source", "account", "email", "phone", "card",
+                     "link", "reason", "notes"];
+
+let _rows = [];
+let _editingId = null;
+let _attTicket = null;
+const _expanded = new Set();
+
+function total(r) {
+  if (r.cost_per_unit == null || !r.qty) return null;
+  return r.cost_per_unit * r.qty;
+}
+
+async function load() {
+  const res = await fetch("/api/unmapped");
+  if (!res.ok) { console.error("failed to load /api/unmapped"); return; }
+  const data = await res.json();
+  _rows = data.items || [];
+  if (data.last_run && data.last_run.at) {
+    $("lastrun").textContent = "last_scrape=" + new Date(data.last_run.at).toLocaleString();
+  }
+  render();
+}
+
+function visible() {
+  const q = ($("q").value || "").trim().toLowerCase();
+  if (!q) return _rows;
+  return _rows.filter(r => {
+    const hay = [r.event_name, r.venue, r.section, r.row_label, r.seats,
+                 r.purchase_source, r.account, r.email, r.phone, r.card,
+                 r.link, r.notes, ...Object.entries(r.extra || {}).flat()]
+                .join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+function reasonChip(r) {
+  if (r.reason === "not_yet") return '<span class="chip chip-todo">TO DO</span>';
+  if (r.reason === "no_secondary") return '<span class="chip chip-nomarket">NO MARKET</span>';
+  if (r.reason === "other") return '<span class="sub">other</span>';
+  return "";
+}
+
+function detailRow(r, cols) {
+  const f = (k, v, cls) => `<div class="f"><span class="k">${esc(k)}</span><span class="v ${v ? "" : "none"} ${cls || ""}">${v || "—"}</span></div>`;
+  const link = r.link
+    ? `<a class="link" href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.link)}</a>` : "";
+  const extras = Object.entries(r.extra || {}).map(([k, v]) => f(k, esc(v))).join("");
+  const atts = r.attachments || [];
+  const tr = document.createElement("tr");
+  tr.className = "detail";
+  tr.dataset.detailFor = r.id;
+  tr.innerHTML = `<td colspan="${cols}">
+    <div class="grid">
+      ${f("Bought on", esc(r.purchase_source))}
+      ${f("Account", esc(r.account))}
+      ${f("Email", esc(r.email))}
+      ${f("Phone", esc(r.phone))}
+      ${f("Card", esc(r.card))}
+      ${f("Venue", esc(r.venue))}
+      ${f("Qty", r.qty || "")}
+      ${f("Cost / ticket", r.cost_per_unit == null ? "" : money(r.cost_per_unit))}
+      ${f("Total cost", total(r) == null ? "" : money(total(r)))}
+      ${f("Link", link)}
+      ${f("Added", r.created_at ? new Date(r.created_at).toLocaleString() : "")}
+      ${r.listed_at ? f("Listed at", new Date(r.listed_at).toLocaleString()) : ""}
+      ${extras}
+      ${f("Notes", esc(r.notes))}
+    </div>
+    <div class="files">
+      <span class="k" style="font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;">Files</span>
+      ${atts.length
+        ? atts.map(a => `<a href="/api/attachments/${esc(a.id)}/download" title="${esc(a.filename)}">📎 ${esc(a.filename)}</a>`).join("")
+        : '<span class="none">no files attached</span>'}
+    </div>
+    <div class="acts">
+      <button data-act="edit">Edit</button>
+      <button data-act="attach">Attach file</button>
+      ${r.link ? `<button data-act="open">Open link</button>` : ""}
+    </div>
+  </td>`;
+  return tr;
+}
+
+function ticketRow(r, listed) {
+  const tr = document.createElement("tr");
+  tr.className = "tk-row" + (listed ? " listed" : "");
+  tr.dataset.id = r.id;
+  const attCount = (r.attachments || []).length;
+  const lastCell = listed
+    ? (r.listed_at ? new Date(r.listed_at).toLocaleDateString() : "—")
+    : reasonChip(r);
+  tr.innerHTML = `
+    <td class="center"><input type="checkbox" class="list-check" ${listed ? "checked" : ""} title="${listed ? "Un-list" : "Mark listed on marketplaces"}"></td>
+    <td><span class="ev">${esc(r.event_name || "")}</span>${r.venue ? `<div class="sub">${esc(r.venue)}</div>` : ""}</td>
+    <td>${esc(r.event_date_iso || r.event_date || "")}</td>
+    <td>${[r.section, r.row_label, r.seats].filter(Boolean).map(esc).join(" / ") || "—"}</td>
+    <td class="num">${r.qty || "—"}</td>
+    <td class="num">${money(r.cost_per_unit)}</td>
+    <td class="num">${money(total(r))}</td>
+    <td>${esc(r.purchase_source || "")}</td>
+    <td>${esc(r.account || r.email || "")}</td>
+    <td>${lastCell}</td>
+    <td style="white-space:nowrap">
+      <button class="row-action row-attach ${attCount ? "has-files" : ""}" data-act="attach" title="Attach files">📎${attCount ? " " + attCount : ""}</button>
+      <button class="row-action" data-act="del" title="Delete">×</button>
+    </td>`;
+  return tr;
+}
+
+function fillTable(tbody, emptyEl, rows, listed, cols) {
+  tbody.innerHTML = "";
+  emptyEl.style.display = rows.length ? "none" : "";
+  for (const r of rows) {
+    tbody.appendChild(ticketRow(r, listed));
+    if (_expanded.has(r.id)) tbody.appendChild(detailRow(r, cols));
+  }
+}
+
+function render() {
+  const rows = visible();
+  const open = rows.filter(r => !r.listed);
+  const done = rows.filter(r => r.listed);
+
+  $("s-rows").textContent = open.length;
+  $("s-tickets").textContent = open.reduce((a, r) => a + (r.qty || 0), 0);
+  $("s-cost").textContent = money(open.reduce((a, r) => a + (total(r) || 0), 0));
+  $("s-listed").textContent = done.length;
+  $("c-open").textContent = open.length;
+  $("c-listed").textContent = done.length;
+
+  fillTable($("open-tbody"), $("open-empty"), open, false, 11);
+  fillTable($("done-tbody"), $("done-empty"), done, true, 11);
+}
+
+// --- add / edit modal ----------------------------------------------------
+
+function extraRow(k, v) {
+  const div = document.createElement("div");
+  div.className = "xrow";
+  div.innerHTML = `<input class="xk" type="text" placeholder="label" value="${esc(k || "")}">
+                   <input class="xv" type="text" placeholder="value" value="${esc(v || "")}">
+                   <button type="button" title="Remove">×</button>`;
+  div.querySelector("button").addEventListener("click", () => div.remove());
+  return div;
+}
+
+function readExtras() {
+  const out = {};
+  for (const row of $("extra-rows").querySelectorAll(".xrow")) {
+    const k = row.querySelector(".xk").value.trim();
+    if (k) out[k] = row.querySelector(".xv").value.trim();
+  }
+  return out;
+}
+
+// Cost can be entered per-ticket or as a batch total; each keeps the other
+// in sync live. `_costMode` remembers which box the user actually drove, so
+// on save we send THAT one and let the server divide at full precision --
+// round-tripping a rounded per-ticket value would lose money on a total that
+// doesn't divide evenly (e.g. $100 over 3 tickets).
+let _costMode = "per";
+
+function syncCost(from) {
+  if (from) _costMode = from;
+  const qty = parseInt($("f-qty").value || "0", 10);
+  const per = parseFloat($("f-cost_per_unit").value);
+  const tot = parseFloat($("f-cost_total").value);
+  // Assigning .value from script fires no `input` event, so this can't loop.
+  if (_costMode === "total" && isFinite(tot)) {
+    $("f-cost_per_unit").value = qty > 0 ? +(tot / qty).toFixed(4) : "";
+  } else if (_costMode === "per" && isFinite(per)) {
+    $("f-cost_total").value = qty > 0 ? +(per * qty).toFixed(2) : "";
+  } else if (!isFinite(per) && !isFinite(tot)) {
+    $("f-cost_per_unit").value = "";
+    $("f-cost_total").value = "";
+  }
+  renderSplit();
+}
+
+function renderSplit() {
+  const qty = parseInt($("f-qty").value || "0", 10);
+  const per = parseFloat($("f-cost_per_unit").value);
+  const tot = parseFloat($("f-cost_total").value);
+  const el = $("cost-split");
+  if (!isFinite(per) && !isFinite(tot)) { el.innerHTML = ""; return; }
+  if (!qty) { el.innerHTML = "enter a qty to split the total"; return; }
+  const t = isFinite(tot) ? tot : per * qty;
+  const p = qty > 0 ? t / qty : 0;
+  el.innerHTML = `<b>${money(t)}</b> over <b>${qty}</b> ticket${qty === 1 ? "" : "s"} = <b>${money(p)}</b> each`;
+}
+
+function openModal(item) {
+  _editingId = item ? item.id : null;
+  $("tk-title").textContent = item ? "// EDIT TICKET" : "// ADD TICKET";
+  for (const k of TEXT_FIELDS) $("f-" + k).value = item ? (item[k] || "") : "";
+  $("f-event_date_iso").value = item ? (item.event_date_iso || "") : "";
+  $("f-qty").value = item && item.qty ? item.qty : "";
+  $("f-cost_per_unit").value = item && item.cost_per_unit != null ? item.cost_per_unit : "";
+  // Existing rows store per-ticket, so open in per-ticket mode and derive the
+  // total for display.
+  _costMode = "per";
+  $("f-cost_total").value = "";
+  syncCost();
+  const xr = $("extra-rows");
+  xr.innerHTML = "";
+  const extras = Object.entries((item && item.extra) || {});
+  if (!extras.length) xr.appendChild(extraRow("", ""));
+  else for (const [k, v] of extras) xr.appendChild(extraRow(k, v));
+  $("tk-bg").classList.add("open");
+  setTimeout(() => $("f-event_name").focus(), 30);
+}
+
+function closeModal() { $("tk-bg").classList.remove("open"); _editingId = null; }
+
+async function saveModal() {
+  const body = { extra: readExtras() };
+  for (const k of TEXT_FIELDS) body[k] = $("f-" + k).value.trim();
+  const iso = $("f-event_date_iso").value;
+  body.event_date_iso = iso;
+  // The free-text `event_date` mirrors the picker so rows read the same as
+  // the rest of the app, which keeps both forms.
+  body.event_date = iso;
+  body.qty = $("f-qty").value;
+  if (_costMode === "total" && $("f-cost_total").value !== "") {
+    body.cost_per_unit = "";
+    body.cost_total = $("f-cost_total").value;
+  } else {
+    body.cost_per_unit = $("f-cost_per_unit").value;
+  }
+  if (!body.event_name) { alert("Event name is required"); return; }
+  if (_editingId) body.id = _editingId;
+  const url = _editingId ? "/api/unmapped/edit" : "/api/unmapped/add";
+  const res = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return; }
+  closeModal();
+  await load();
+}
+
+// --- attachments modal ---------------------------------------------------
+
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function renderAttList(items) {
+  const list = $("att-list");
+  if (!items || !items.length) { list.innerHTML = '<div class="att-empty">no files attached yet</div>'; return; }
+  list.innerHTML = items.map(a => `
+    <div class="att-item" data-id="${esc(a.id)}">
+      <span class="name" title="${esc(a.filename)}">${esc(a.filename)}</span>
+      <span class="size">${fmtBytes(a.size_bytes)}</span>
+      <a href="/api/attachments/${esc(a.id)}/download">Download</a>
+      <button class="del" data-id="${esc(a.id)}">×</button>
+    </div>`).join("");
+}
+
+async function refreshAttModal() {
+  if (!_attTicket) return;
+  await load();
+  const row = _rows.find(r => r.id === _attTicket);
+  renderAttList(row ? (row.attachments || []) : []);
+}
+
+function openAttModal(row) {
+  _attTicket = row.id;
+  $("att-event").textContent = row.event_name || "";
+  renderAttList(row.attachments || []);
+  $("att-file").value = "";
+  $("att-bg").classList.add("open");
+}
+
+function closeAttModal() { $("att-bg").classList.remove("open"); _attTicket = null; }
+
+// --- events --------------------------------------------------------------
+
+async function post(url, body) {
+  const res = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Failed: " + (e.error || res.status)); return false; }
+  return true;
+}
+
+document.addEventListener("click", async (e) => {
+  // attachment delete inside the modal
+  const attDel = e.target.closest(".att-item button.del");
+  if (attDel) {
+    if (!confirm("Delete this attachment?")) return;
+    await post("/api/attachments/delete", { id: attDel.dataset.id });
+    await refreshAttModal();
+    return;
+  }
+
+  // listed checkbox
+  const chk = e.target.closest(".list-check");
+  if (chk) {
+    const id = chk.closest("tr").dataset.id;
+    if (await post("/api/unmapped/listed", { id, listed: chk.checked })) await load();
+    else chk.checked = !chk.checked;
+    return;
+  }
+
+  // detail-panel buttons
+  const act = e.target.closest("tr.detail .acts button");
+  if (act) {
+    const id = act.closest("tr.detail").dataset.detailFor;
+    const row = _rows.find(r => r.id === id);
+    if (!row) return;
+    if (act.dataset.act === "edit") openModal(row);
+    else if (act.dataset.act === "attach") openAttModal(row);
+    else if (act.dataset.act === "open") window.open(row.link, "_blank", "noopener");
+    return;
+  }
+
+  // row buttons
+  const btn = e.target.closest("tr.tk-row .row-action");
+  if (btn) {
+    const id = btn.closest("tr").dataset.id;
+    const row = _rows.find(r => r.id === id);
+    if (!row) return;
+    if (btn.dataset.act === "attach") openAttModal(row);
+    else if (btn.dataset.act === "del") {
+      if (!confirm(`Delete "${row.event_name || id}"? Attached files stay on disk.`)) return;
+      await post("/api/unmapped/delete", { id });
+      _expanded.delete(id);
+      await load();
+    }
+    return;
+  }
+
+  // row click toggles the detail panel
+  const tr = e.target.closest("tr.tk-row");
+  if (tr) {
+    const id = tr.dataset.id;
+    if (_expanded.has(id)) _expanded.delete(id); else _expanded.add(id);
+    render();
+  }
+});
+
+$("add-btn").addEventListener("click", () => openModal(null));
+$("q").addEventListener("input", render);
+$("tk-close").addEventListener("click", closeModal);
+$("tk-cancel").addEventListener("click", closeModal);
+$("tk-save").addEventListener("click", saveModal);
+$("tk-bg").addEventListener("click", e => { if (e.target.id === "tk-bg") closeModal(); });
+$("f-cost_per_unit").addEventListener("input", () => syncCost("per"));
+$("f-cost_total").addEventListener("input", () => syncCost("total"));
+$("f-qty").addEventListener("input", () => syncCost());
+$("extra-add").addEventListener("click", () => $("extra-rows").appendChild(extraRow("", "")));
+$("att-close").addEventListener("click", closeAttModal);
+$("att-done").addEventListener("click", closeAttModal);
+$("att-bg").addEventListener("click", e => { if (e.target.id === "att-bg") closeAttModal(); });
+
+$("att-upload").addEventListener("click", async () => {
+  if (!_attTicket) return;
+  const input = $("att-file");
+  const f = input.files && input.files[0];
+  if (!f) { alert("Pick a file first"); return; }
+  const fd = new FormData();
+  fd.append("ticket_id", _attTicket);
+  fd.append("file", f);
+  const btn = $("att-upload");
+  btn.disabled = true; btn.textContent = "...";
+  try {
+    const res = await fetch("/api/unmapped/attach", { method: "POST", body: fd });
+    if (!res.ok) { const e = await res.json().catch(()=>({})); alert("Upload failed: " + (e.error || res.status)); return; }
+    input.value = "";
+    await refreshAttModal();
+  } finally { btn.disabled = false; btn.textContent = "Upload"; }
+});
+
+document.addEventListener("keydown", (e) => {
+  const tkOpen = $("tk-bg").classList.contains("open");
+  const attOpen = $("att-bg").classList.contains("open");
+  if (e.key === "Escape") {
+    if (tkOpen) closeModal();
+    if (attOpen) closeAttModal();
+  } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && tkOpen) {
+    saveModal();
+  }
+});
+
+load();
+</script>
+</body>
+</html>
