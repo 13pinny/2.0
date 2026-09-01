@@ -284,6 +284,30 @@ def _group_by_perf(seats):
     return groups
 
 
+def _seats_when(seats, limit=3):
+    """The date(s) the pinged seats actually belong to, or None.
+
+    Multi-date sources (tmdiscover series pages) put one pseudo-seat per date
+    behind a single watcher, so the event-level `meta.firstPerfText` is the
+    series' OPENING night — not the date that just went on sale. Any seat
+    carrying its own `date_text` therefore wins over the event meta; without
+    this a ping for 22.10 reads "When: 11.10".
+
+    Distinct dates are kept in seat order (already chronological from the
+    source) and capped, since one tick can open several dates at once.
+    """
+    dates = []
+    for s in seats:
+        d = (s.get("date_text") or "").strip()
+        if d and d not in dates:
+            dates.append(d)
+    if not dates:
+        return None
+    if len(dates) <= limit:
+        return " · ".join(dates)
+    return " · ".join(dates[:limit]) + f" · +{len(dates) - limit} more"
+
+
 def _total_price(seats, labels):
     """Sum of public prices for the listed seats. Returns None if any seat
     has an unknown block (we don't want to under-report)."""
@@ -395,9 +419,11 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
     meta = ((labels or {}).get("meta")) or {}
     event_name = meta.get("eventName") or ""
     venue = meta.get("venueName") or ""
-    # Prefer the source's venue-local time string (kupat/tickchak) so we
-    # don't shift it through UTC; fall back to the epoch for ticketmaster.
-    when = meta.get("firstPerfText") or ""
+    # Per-seat dates first — on a multi-date watcher the event meta describes
+    # the series, not the date that dropped (see _seats_when). Otherwise the
+    # source's venue-local time string (kupat/tickchak), so we don't shift it
+    # through UTC; fall back to the epoch for ticketmaster.
+    when = _seats_when(added_seats) or meta.get("firstPerfText") or ""
     if not when and meta.get("firstPerfMs"):
         try:
             from datetime import datetime, timezone

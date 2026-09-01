@@ -73,6 +73,9 @@
   tr.group-hdr .evt-meta { color: var(--muted); margin-left: 10px; font-size: 11px; vertical-align: middle; }
   tr.group-hdr .evt-stats { float: right; color: var(--muted); font-size: 11px; padding-top: 3px; }
   tr.group-hdr .evt-stats .ratio { color: var(--text); margin-right: 12px; }
+  /* Lifetime half of the split ratio — muted so the window count leads. */
+  tr.group-hdr .evt-stats .ratio .ratio-all { color: var(--muted); }
+  tr.group-hdr .evt-stats .ratio .ratio-all::before { content: "·"; margin: 0 5px; }
   tr.group-hdr .evt-stats .pos { color: var(--green); }
   tr.group-hdr .evt-stats .neg { color: var(--red); }
   tr.listing-hdr td { background: #eaeef3; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 12px; border-top: 1px dashed var(--line); cursor: default; }
@@ -231,6 +234,7 @@
       <option value="viagogo">VIAGOGO</option>
       <option value="crowdvolt">CROWDVOLT</option>
       <option value="jerujam">JJT</option>
+      <option value="manual">MANUAL</option>
     </select>
     <select id="q-new">
       <option value="all">SHOW: ALL</option>
@@ -438,6 +442,10 @@ let _rows = [];
 // manual / Viagogo available+sold, max across sources to avoid double-
 // counting overlapping inventory tracked in two systems). Backend-supplied.
 let _boughtByEvent = new Map();
+// Per-event-group lifetime tickets sold — built from the UNFILTERED _rows so
+// it stays the same number no matter which date / source / new-only filter is
+// active. Lets the group header show "2/10 in last 3d · 4/10 overall".
+let _soldAllByEvent = new Map();
 // Per-event-group list of currently-unsold inventory rows. Used to render
 // "still listed" rows under each event's sold rows when expanded.
 let _invByEvent = new Map();
@@ -611,6 +619,34 @@ function _inDateRange(r) {
   return d >= min && d <= now;
 }
 
+// Trailing phrase for the period half of the group header ratio, e.g.
+// "2/10 in last 3d". Empty string when there is no meaningful window.
+function _rangeLabel() {
+  if (_dateRange === "all") return "";
+  if (_dateRange === "ytd") return "YTD";
+  if (_dateRange === "custom") return "in range";
+  const days = Number(_dateRange);
+  return Number.isFinite(days) && days > 0 ? `in last ${days}d` : "";
+}
+
+// The period half only earns its place when a window is actually selected AND
+// the range is being tested against the sale date. On the event-date basis
+// "2 in last 3d" would mean "events happening soon", not "recently sold", so
+// we drop it and show the lifetime ratio alone.
+function _showPeriodSplit() {
+  return _dateBasis === "sale" && !!_rangeLabel();
+}
+
+// Lifetime sold per event group, from every row on file — deliberately not
+// _filterRows(), so the "overall" number never moves when a filter changes.
+function _rebuildSoldAll() {
+  _soldAllByEvent = new Map();
+  for (const r of _rows) {
+    const k = _eventKey(r);
+    _soldAllByEvent.set(k, (_soldAllByEvent.get(k) || 0) + (r.qty || 0));
+  }
+}
+
 function _renderGrouped(tbody, rows, groupOrder) {
   const groups = new Map();
   for (const r of rows) {
@@ -637,10 +673,12 @@ function _renderGrouped(tbody, rows, groupOrder) {
     });
   }
   for (const g of ordered) {
+    // sold = tickets sold inside the current filter; soldAll = lifetime.
     const sold = g.rows.reduce((s, r) => s + (r.qty || 0), 0);
-    // Backend-supplied total bought; fall back to sold count if the event
-    // isn't in the map (e.g. a sale with no purchase record on file).
-    const total = Math.max(sold, _boughtByEvent.get(g.key) || 0);
+    const soldAll = Math.max(sold, _soldAllByEvent.get(g.key) || 0);
+    // Backend-supplied total bought; fall back to the lifetime sold count if
+    // the event isn't in the map (e.g. a sale with no purchase record on file).
+    const total = Math.max(soldAll, _boughtByEvent.get(g.key) || 0);
     const cost = g.rows.reduce((s, r) => s + (r.cost || 0), 0);
     const payout = g.rows.reduce((s, r) => s + (_payout(r) || 0), 0);
     const profit = payout - cost;
@@ -660,6 +698,12 @@ function _renderGrouped(tbody, rows, groupOrder) {
     const costBtn = gc
       ? `<button class="grp-cost set" title="Whole-event cost split evenly over ${gc.effective_count} tickets — click to edit" data-cost-key="${esc(g.key)}" data-bought="${total}" data-name="${esc(g.event_name || "")}">⊙ ${money(gc.total_cost)} / ${gc.effective_count} = ${money(gc.per_unit)} EA</button>`
       : `<button class="grp-cost" title="Enter one cost for the whole event and split it per ticket" data-cost-key="${esc(g.key)}" data-bought="${total}" data-name="${esc(g.event_name || "")}">$ SPLIT COST</button>`;
+    // With a sale-date window active, split the ratio into the window count
+    // and the lifetime count; otherwise the two are the same number, so show
+    // the lifetime one alone.
+    const ratioText = _showPeriodSplit()
+      ? `${sold}/${total} ${_rangeLabel()} <span class="ratio-all">${soldAll}/${total} overall</span>`
+      : `${soldAll}/${total} sold`;
     hdr.innerHTML = `
       <td colspan="14">
         <input type="checkbox" class="grp-check" data-grp-key="${esc(g.key)}" title="Select to merge with another event"${checked}>
@@ -669,7 +713,7 @@ function _renderGrouped(tbody, rows, groupOrder) {
         ${mergedBadge}
         ${costBtn}
         <span class="evt-stats">
-          <span class="ratio">${sold}/${total} sold</span>
+          <span class="ratio">${ratioText}</span>
           ${money(cost)} cost · ${money(payout)} payout ·
           <span class="${profCls}">${profSign}${money(profit)} profit${cost ? ` · ${profSign}${((profit / cost) * 100).toFixed(1)}% ROI` : ""}</span>
         </span>
@@ -685,7 +729,7 @@ function _renderGrouped(tbody, rows, groupOrder) {
       // JeruJam ticket whose copies were sold via Lysted), so we cap the
       // displayed qty per row down to what's actually still out there.
       const listings = _invByEvent.get(g.key) || [];
-      const totalUnsold = Math.max(0, total - sold);
+      const totalUnsold = Math.max(0, total - soldAll);
       if (totalUnsold > 0) {
         const subhdr = document.createElement("tr");
         subhdr.className = "listing-hdr";
@@ -1145,6 +1189,7 @@ document.addEventListener("click", async (e) => {
 
 const _searchNorm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 function render() {
+  _rebuildSoldAll();
   const q = document.getElementById("q-search").value;
   const sort = document.getElementById("q-sort").value;
   const filtered = _filterRows();

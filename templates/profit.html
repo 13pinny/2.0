@@ -55,12 +55,14 @@
   .bar-cell .fill.viagogo { background: var(--orange); }
   .bar-cell .fill.jerujam { background: var(--purple); }
   .bar-cell .fill.crowdvolt { background: var(--pink); }
+  .bar-cell .fill.manual { background: var(--muted); }
   .src-mix { display: inline-flex; height: 4px; background: var(--line); width: 100px; vertical-align: middle; }
   .src-mix span { display: inline-block; height: 100%; }
   .src-mix .lysted { background: var(--accent); }
   .src-mix .viagogo { background: var(--orange); }
   .src-mix .jerujam { background: var(--purple); }
   .src-mix .crowdvolt { background: var(--pink); }
+  .src-mix .manual { background: var(--muted); }
   .pos { color: var(--green); }
   .neg { color: var(--red); }
   .muted { color: var(--muted); }
@@ -141,12 +143,13 @@
       <option value="viagogo">VIAGOGO</option>
       <option value="crowdvolt">CROWDVOLT</option>
       <option value="jerujam">JJT</option>
+      <option value="manual">MANUAL</option>
     </select>
   </div>
 
   <h2>BY SOURCE</h2>
   <table>
-    <thead><tr><th>SOURCE</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num">PROFIT</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
+    <thead><tr><th>SOURCE</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num" title="Payout − cost. Platform fees are already taken out, so this is what the sale actually cleared — same basis as the PROFIT box above and the one on /sales.">PROFIT</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
     <tbody id="srcbody"></tbody>
   </table>
 
@@ -155,7 +158,7 @@
     <thead><tr>
       <th>DATE</th><th>MIX</th><th class="num">SALES</th><th class="num">TICKETS</th>
       <th class="num">REVENUE</th><th class="num">COST</th>
-      <th class="num">PROFIT</th><th class="num">MARGIN</th><th class="num">PAYOUT</th>
+      <th class="num" title="Payout − cost. Platform fees are already taken out, so this is what the sale actually cleared — same basis as the PROFIT box above and the one on /sales.">PROFIT</th><th class="num">MARGIN</th><th class="num">PAYOUT</th>
     </tr></thead>
     <tbody id="dbody"></tbody>
   </table>
@@ -175,7 +178,7 @@
     .pill-bar .pill.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.06); }
   </style>
   <table>
-    <thead><tr><th>MONTH</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num">PROFIT</th><th class="num">EXPENSES</th><th class="num">UNSOLD</th><th class="num">NET</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
+    <thead><tr><th>MONTH</th><th class="num">SALES</th><th class="num">TICKETS</th><th class="num">REVENUE</th><th class="num">COST</th><th class="num" title="Payout − cost. Platform fees are already taken out, so this is what the sale actually cleared — same basis as the PROFIT box above and the one on /sales.">PROFIT</th><th class="num">EXPENSES</th><th class="num">UNSOLD</th><th class="num">NET</th><th class="num">MARGIN</th><th class="num">PAYOUT</th></tr></thead>
     <tbody id="mbody"></tbody>
   </table>
 </main>
@@ -207,6 +210,11 @@ let _dateTo = "";
 function _srcLabel(s) {
   return s === "jerujam" ? "JJT" : (s || "").toUpperCase();
 }
+// Swatch colour per source. `manual` is deliberately grey — it's hand-entered
+// rather than scraped. Anything unrecognised falls back to grey too.
+const SRC_COLOR = {lysted: "accent", viagogo: "orange", jerujam: "purple",
+                   crowdvolt: "pink", manual: "muted"};
+function _srcColor(s) { return SRC_COLOR[s] || "muted"; }
 function _payout(r) {
   return (r.payout != null) ? r.payout : r.sale_price;
 }
@@ -286,7 +294,7 @@ function render() {
     const margin = v.revenue ? (v.profit / v.revenue * 100) : null;
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><span class="muted" style="display:inline-block;width:8px;height:8px;background:var(--${name === 'lysted' ? 'accent' : name === 'viagogo' ? 'orange' : name === 'jerujam' ? 'purple' : 'pink'});margin-right:8px;"></span>${_srcLabel(name)}</td>
+      <td><span class="muted" style="display:inline-block;width:8px;height:8px;background:var(--${_srcColor(name)});margin-right:8px;"></span>${_srcLabel(name)}</td>
       <td class="num">${v.count}</td>
       <td class="num">${v.qty}</td>
       <td class="num">${money(v.revenue)}</td>
@@ -303,14 +311,15 @@ function render() {
   db.innerHTML = "";
   for (const r of days) {
     const margin = r.revenue ? (r.profit / r.revenue * 100) : null;
-    const total = (r.by_source.lysted||0) + (r.by_source.viagogo||0) + (r.by_source.jerujam||0) + (r.by_source.crowdvolt||0);
-    const pct = (n) => total ? (n / total * 100) + "%" : "0%";
-    const mix = `<span class="src-mix">
-      <span class="lysted" style="width:${pct(r.by_source.lysted||0)};"></span>
-      <span class="viagogo" style="width:${pct(r.by_source.viagogo||0)};"></span>
-      <span class="jerujam" style="width:${pct(r.by_source.jerujam||0)};"></span>
-      <span class="crowdvolt" style="width:${pct(r.by_source.crowdvolt||0)};"></span>
-    </span>`;
+    // Built from whatever sources the day actually has. Hardcoding four names
+    // left manual sales out of both the segments AND the denominator, so on a
+    // day with manual sales the bar still filled but showed the mix of the
+    // other four rather than of r.count.
+    const counts = Object.entries(r.by_source || {}).filter(([, n]) => n > 0);
+    const total = counts.reduce((s, [, n]) => s + n, 0);
+    const mix = `<span class="src-mix">` + counts.map(([name, n]) =>
+      `<span class="${esc(name)}" style="width:${total ? (n / total * 100) : 0}%;background:var(--${_srcColor(name)});"></span>`
+    ).join("") + `</span>`;
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${esc(r.date)}</td>

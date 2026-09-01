@@ -1987,6 +1987,21 @@ def _matched_cost(matches_idx, jerujam_idx, sale_source, sale_id, qty):
     return round(cpt * (qty or 0), 2)
 
 
+# Every source _build_combined_sales can emit, in the order the by-source
+# rollups should present them. Keep in sync with the tail of that function —
+# `manual` was missing from /profit's rollup while still counting toward the
+# day and month rows, so the By Source table never summed to the monthly total.
+_SALE_SOURCES = ("lysted", "viagogo", "jerujam", "crowdvolt", "manual")
+
+
+def _sale_payout(s):
+    """What actually lands in the bank for one combined-sale row: the
+    platform's own payout where it reports one (Lysted), else the sale price.
+    Mirrors _payout() in sales.html / profit.html so every view agrees."""
+    p = s.get("payout")
+    return (p if p is not None else s.get("sale_price")) or 0
+
+
 def _build_combined_sales(only_canceled=False):
     """Combine sale events across sources. Sources differ in fidelity:
     JeruJam has per-sale rows; Lysted/Viagogo only expose aggregates so
@@ -2639,17 +2654,28 @@ def profit_page():
 def _profit_response():
     """Build the same payload returned by /api/profit/daily. Reused by the
     Maaser summary so both pages agree on what 'profit' means.
+
+    `profit` is PAYOUT − cost, not sale_price − cost: the platform's fee is
+    money that never arrives, so counting it as profit overstated every
+    rollup here (and the Maaser base) by the Lysted fee — roughly 8% of
+    Lysted volume. `revenue` stays gross, so profit_pct reads as a net
+    margin on gross sales. Matches _payout() in sales.html / profit.html.
+
     Adds month["expenses"] / month["net_profit"] derived from the expenses
     table (operating costs reduce the Maaser base per the user's policy)."""
     sales = _build_combined_sales()
-    # Lysted payout per sale (we have it on lysted_sales rows directly)
-    lysted_payouts_by_id = {str(r.get("id")): (r.get("payout") or 0) for r in db.all_lysted_sales()}
     by_day = {}
     by_month = {}
-    by_source = {"lysted": {"count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0},
-                 "viagogo": {"count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0},
-                 "jerujam": {"count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0},
-                 "crowdvolt":{"count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0}}
+
+    def _blank_bucket(**extra):
+        b = {"count": 0, "qty": 0, "revenue": 0, "cost": 0, "profit": 0, "payout": 0}
+        b.update(extra)
+        return b
+
+    # Known sources keep a fixed order (and a zero row) so the table doesn't
+    # reshuffle as volume moves; anything unexpected still gets a row rather
+    # than being dropped on the floor.
+    by_source = {name: _blank_bucket() for name in _SALE_SOURCES}
     for s in sales:
         date = (s.get("sale_date_iso") or "")[:10]
         if not date or not date.startswith("20"):
@@ -2657,38 +2683,37 @@ def _profit_response():
         rev = s.get("sale_price") or 0
         cost = s.get("cost") or 0
         qty = s.get("qty") or 0
-        bucket = by_day.setdefault(date, {"date": date, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0,
-                                           "by_source": {"lysted":0,"viagogo":0,"jerujam":0,"crowdvolt":0}})
+        # Payout comes off the sale row itself, NOT from a second pass over
+        # db.all_lysted_sales() — that pass skipped the hidden/canceled filter
+        # _build_combined_sales applies, so hidden and canceled Lysted sales
+        # were landing in the payout column while contributing to no other
+        # one. Reading it here also covers every source, matching the PAYOUT
+        # metric box above these tables and the one on /sales.
+        pay = _sale_payout(s)
+        src = s.get("source") or "?"
+        bucket = by_day.setdefault(date, _blank_bucket(
+            date=date, by_source={name: 0 for name in _SALE_SOURCES}))
         bucket["count"] += 1
         bucket["qty"] += qty
         bucket["revenue"] += rev
         bucket["cost"] += cost
-        bucket["profit"] += (rev - cost)
-        bucket["by_source"][s.get("source", "?")] = bucket["by_source"].get(s.get("source", "?"), 0) + 1
+        bucket["profit"] += (pay - cost)
+        bucket["payout"] += pay
+        bucket["by_source"][src] = bucket["by_source"].get(src, 0) + 1
         # Per-source totals
-        src = s.get("source") or "?"
-        if src in by_source:
-            by_source[src]["count"] += 1
-            by_source[src]["qty"] += qty
-            by_source[src]["revenue"] += rev
-            by_source[src]["cost"] += cost
-            by_source[src]["profit"] += (rev - cost)
-
-    # Pull Lysted payouts by day directly from lysted_sales (for accurate per-day payout totals)
-    for r in db.all_lysted_sales():
-        d = (r.get("sale_date_iso") or "")[:10]
-        if not d:
-            continue
-        bucket = by_day.setdefault(d, {"date": d, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0,
-                                       "by_source": {"lysted":0,"viagogo":0,"jerujam":0,"crowdvolt":0}})
-        bucket["payout"] += (r.get("payout") or 0)
-        by_source["lysted"]["payout"] += (r.get("payout") or 0)
+        sb = by_source.setdefault(src, _blank_bucket())
+        sb["count"] += 1
+        sb["qty"] += qty
+        sb["revenue"] += rev
+        sb["cost"] += cost
+        sb["profit"] += (pay - cost)
+        sb["payout"] += pay
 
     # Build month rollup from days (sale-month: bucketed by when the
     # ticket was sold). This is the cash-flow-style view.
     for d, row in by_day.items():
         m = d[:7]  # YYYY-MM
-        mb = by_month.setdefault(m, {"month": m, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0})
+        mb = by_month.setdefault(m, _blank_bucket(month=m))
         mb["count"] += row["count"]; mb["qty"] += row["qty"]
         mb["revenue"] += row["revenue"]; mb["cost"] += row["cost"]
         mb["profit"] += row["profit"]; mb["payout"] += row["payout"]
@@ -2710,22 +2735,14 @@ def _profit_response():
         rev = s.get("sale_price") or 0
         cost = s.get("cost") or 0
         qty = s.get("qty") or 0
-        mb = by_month_event.setdefault(m_key, {"month": m_key, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0})
+        # Same per-row payout as the sale-date view, bucketed by event month
+        # so the two views stay comparable.
+        pay = _sale_payout(s)
+        mb = by_month_event.setdefault(m_key, _blank_bucket(month=m_key))
         mb["count"] += 1; mb["qty"] += qty
         mb["revenue"] += rev; mb["cost"] += cost
-        mb["profit"] += (rev - cost)
-    # Lysted payout still tracked per sale-month; carry the per-sale
-    # payout into the event-month bucket as well so it stays comparable.
-    sales_by_id = {(s.get("source"), s.get("sale_id")): s for s in sales}
-    for r in db.all_lysted_sales():
-        s_match = sales_by_id.get(("lysted", str(r.get("id"))))
-        ev_date_iso = (s_match or {}).get("event_date_iso") or (r.get("sale_date_iso") or "")
-        ev_date = (ev_date_iso or "")[:10]
-        if not ev_date or not ev_date.startswith("20"):
-            continue
-        m_key = ev_date[:7]
-        mb = by_month_event.setdefault(m_key, {"month": m_key, "count":0,"qty":0,"revenue":0,"cost":0,"profit":0,"payout":0})
-        mb["payout"] += (r.get("payout") or 0)
+        mb["profit"] += (pay - cost)
+        mb["payout"] += pay
 
     days = sorted(by_day.values(), key=lambda r: r["date"], reverse=True)
     months = sorted(by_month.values(), key=lambda r: r["month"], reverse=True)
@@ -2801,7 +2818,7 @@ def api_profit_daily():
 @app.route("/api/sales-all")
 def api_sales_all():
     rows = _build_combined_sales()
-    by_source = {"lysted": 0, "viagogo": 0, "jerujam": 0, "crowdvolt": 0}
+    by_source = {name: 0 for name in _SALE_SOURCES}
     new_count = 0
     for r in rows:
         by_source[r["source"]] = by_source.get(r["source"], 0) + 1

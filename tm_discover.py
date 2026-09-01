@@ -394,6 +394,10 @@ def fetch_selectable_seats(event_code, perf_code="0"):
             "via_tm": via_tm,
             "entry_id": entry.get("id"),
             "url": entry_url(entry),
+            # This date's own start time. notify.py's "When" field reads it so
+            # a ping for one date of a series doesn't get stamped with the
+            # series' opening night (meta.firstPerfText).
+            "date_text": entry_date(entry)[0],
         })
     return seats
 
