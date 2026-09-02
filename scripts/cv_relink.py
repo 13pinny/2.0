@@ -5,14 +5,23 @@ Usage (from the repo root, on the DESKTOP with the CV Chrome signed in):
     .venv\Scripts\python scripts\cv_relink.py --dry-run     # show, send nothing
     .venv\Scripts\python scripts\cv_relink.py --local       # cache here instead
     .venv\Scripts\python scripts\cv_relink.py --with-cf-clearance
+    .venv\Scripts\python scripts\cv_relink.py --cookie      # paste, no CDP
 
 This is the manual counterpart to cv_agent.py, which does the same thing on
 demand when you press "Re-link CrowdVolt" on /inventory. Use this one when
 the agent is not running, or to debug the handoff. Both share
 cv_link_client.py, so they cannot drift.
 
-The Chrome that matters is the DEDICATED one login.py launches on :9222 with
-the user_data/ profile - not your everyday Chrome. Cookies are per profile.
+Two ways to supply the cookie:
+
+  * --cdp (default): harvest from the DEDICATED Chrome login.py launches on
+    :9222 with the user_data/ profile. Sign in there once; it persists.
+  * --cookie: paste the value out of ANY Chrome's DevTools. Use this to reuse
+    a session you already have in your everyday browser. Chrome >= 136
+    refuses --remote-debugging-port on the default profile (a deliberate
+    anti-cookie-theft change), so an everyday Chrome cannot be attached to
+    over CDP at all - but DevTools still displays the value, HttpOnly and all:
+    Application > Cookies > https://www.crowdvolt.com > cv_refresh_token.
 
 Config in .env: KARTIS_CVAUTH_SECRET (must match the server), KARTIS_BASE_URL,
 KARTIS_WEB_USER, KARTIS_WEB_PASS (the Caddy basic-auth pair).
@@ -47,13 +56,38 @@ def main():
                     help="also ship cf_clearance (IP-bound; see cv_link_client)")
     ap.add_argument("--no-verify", action="store_true",
                     help="skip the post-import live auth/refresh check")
+    ap.add_argument("--cookie", nargs="?", const="", default=None,
+                    metavar="VALUE",
+                    help="paste cv_refresh_token instead of harvesting over "
+                         "CDP - use this to reuse the session in your EVERYDAY "
+                         "Chrome. Omit the value to be prompted (keeps the "
+                         "credential out of shell history).")
     args = ap.parse_args()
 
-    print(f"harvesting from Chrome at {args.cdp} ...")
-    try:
-        cookies = client.harvest(args.cdp, args.with_cf_clearance)
-    except (client.RelinkError, cv_auth.CvAuthError) as e:
-        raise SystemExit(str(e))
+    if args.cookie is not None:
+        # Chrome >=136 refuses --remote-debugging-port on the default profile,
+        # so an everyday Chrome cannot be harvested over CDP at all. Its
+        # DevTools still SHOWS the value though (Application > Cookies >
+        # https://www.crowdvolt.com > cv_refresh_token), so let it be pasted.
+        value = args.cookie
+        if not value:
+            import getpass
+            print("Paste cv_refresh_token (DevTools > Application > Cookies > "
+                  "https://www.crowdvolt.com):")
+            value = getpass.getpass("  value (hidden): ").strip()
+        value = value.strip().strip('"').strip("'")
+        if not value:
+            raise SystemExit("no cookie value given")
+        if value.startswith("cv_refresh_token="):
+            value = value.split("=", 1)[1]
+        cookies = {"cv_refresh_token": value}
+        print(f"using pasted cookie: {client.mask(value)}")
+    else:
+        print(f"harvesting from Chrome at {args.cdp} ...")
+        try:
+            cookies = client.harvest(args.cdp, args.with_cf_clearance)
+        except (client.RelinkError, cv_auth.CvAuthError) as e:
+            raise SystemExit(str(e))
     for name, value in sorted(cookies.items()):
         print(f"  {name}: {client.mask(value)}")
 
