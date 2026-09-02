@@ -53,6 +53,10 @@ COOKIE_NAMES = ("cv_refresh_token", "cf_clearance")
 
 TOKEN_SKEW_SECONDS = 60   # re-mint this long before the JWT's own exp
 
+# cv_refresh_token's observed lifetime. Only used to tell the UI how long
+# is left before the next relink - the server is the real authority.
+REFRESH_COOKIE_DAYS = 30
+
 
 class CvAuthError(Exception):
     """Auth could not be established - the message says what a human must do."""
@@ -88,6 +92,56 @@ def _write_state(state):
     os.replace(tmp, STATE_PATH)
 
 
+
+def import_cookies(cookies):
+    """Install cookies harvested on another machine into this box's cache.
+
+    The VPS runs no logged-in Chrome and cv_refresh_token is HttpOnly, so a
+    fresh session cannot be obtained server-side at all - it has to be pushed
+    in from a desktop that does have one. scripts/cv_relink.py is the sender;
+    this is the receiver.
+
+    Only COOKIE_NAMES survive, and cv_refresh_token is mandatory: a state file
+    carrying, say, cf_clearance alone would make _load_cookies believe a
+    session exists and turn a clear "sign in" error into a puzzling 401 on
+    every call.
+    """
+    clean = {k: v for k, v in (cookies or {}).items() if k in COOKIE_NAMES and v}
+    if not clean.get("cv_refresh_token"):
+        raise CvAuthError(
+            "payload carries no cv_refresh_token - harvest it from a Chrome "
+            "signed in at crowdvolt.com")
+    state = _read_state()
+    state["cookies"] = clean
+    state["harvested_at"] = int(time.time())
+    _write_state(state)
+    return session_status()
+
+
+def session_status():
+    """Whether a CrowdVolt session is cached and how much life it has left.
+
+    Feeds a web response, so it returns cookie NAMES and ages only - never a
+    value. cv_session.json is a live credential.
+    """
+    state = _read_state()
+    cookies = state.get("cookies") or {}
+    harvested_at = state.get("harvested_at")
+    age_days = None
+    if harvested_at:
+        age_days = round((time.time() - harvested_at) / 86400.0, 1)
+    return {
+        "linked": bool(cookies.get("cv_refresh_token")),
+        "harvested_at": harvested_at,
+        "age_days": age_days,
+        # Surface the remainder rather than make the reader subtract. This is
+        # an estimate off REFRESH_COOKIE_DAYS, not something CrowdVolt told us,
+        # so <= 0 means "certainly relink", not "expired at this instant".
+        "days_remaining": (None if age_days is None
+                           else round(REFRESH_COOKIE_DAYS - age_days, 1)),
+        "cookie_names": sorted(cookies),
+    }
+
 def harvest_cookies(playwright, cdp_url):
     """Read the auth cookies out of the logged-in Chrome over CDP. Only
     needed when the cache is empty or the refresh cookie has expired -
@@ -106,7 +160,8 @@ def harvest_cookies(playwright, cdp_url):
     if "cv_refresh_token" not in found:
         raise CvAuthError(
             "no cv_refresh_token in the CrowdVolt Chrome - sign in at "
-            "crowdvolt.com in that browser (noVNC), then retry")
+            "crowdvolt.com in THAT window (the :9222 profile, not your "
+            "everyday Chrome), then retry")
     return found
 
 
@@ -138,8 +193,8 @@ class CvAuth:
         if self._pw is None:
             raise CvAuthError(
                 "no cached CrowdVolt session and no browser to harvest one "
-                f"from - sign in at crowdvolt.com in the CV Chrome ({self._cdp}) "
-                "and run a tick with the browser reachable")
+                "from - this box has no Chrome. Press Re-link CrowdVolt on "
+                "/inventory, or run scripts/cv_relink.py on the desktop")
         self._cookies = harvest_cookies(self._pw, self._cdp)
         state = _read_state()
         state["cookies"] = self._cookies
@@ -165,8 +220,10 @@ class CvAuth:
                                      cookie=self._cookie_header(), token=None)
         if status != 200:
             raise CvAuthError(
-                f"auth/refresh -> {status}: {body[:200]} - sign in at "
-                "crowdvolt.com in the CV Chrome (noVNC) and retry")
+                f"auth/refresh -> {status}: {body[:200]} - the cached session "
+                "is dead. Press Re-link CrowdVolt on /inventory, or run "
+                "scripts/cv_relink.py on the desktop with the CV Chrome "
+                "signed in")
         try:
             token = json.loads(body)["access_token"]
         except (ValueError, KeyError) as e:

@@ -136,6 +136,7 @@
   <div class="left">
     <h1>KARTIS</h1>
     <span class="meta" id="lastrun">—</span>
+    <span class="meta" id="cvauth"></span>
   </div>
   <nav class="nav">
     <a href="/" class="active">INVENTORY</a>
@@ -187,6 +188,7 @@
     <button id="refresh">Refresh</button>
     <button id="relogin" title="Open the box's Chrome (Lysted / Viagogo / CrowdVolt tabs) in a noVNC window so you can re-sign-in — no SSH">noVNC Login</button>
     <button id="chrome-restart" title="After re-signing in, bounce the scraper's Chrome so it picks up the fresh session">Restart Chrome</button>
+    <button id="cv-relink" title="Ask the desktop agent to harvest a fresh CrowdVolt session from its Chrome. Needs start_cv_agent.bat running there, signed in at crowdvolt.com.">Re-link CrowdVolt</button>
     <button id="add-pending" title="Add a ticket I have but haven't listed yet">+ Pending</button>
     <button id="open-stubhub" title="Open the exact StubHub page for every visible event, 20 tabs at a time. Allow pop-ups for this site once.">Open StubHub ×20</button>
     <input type="search" id="q-search" placeholder="search event venue section" style="flex:1; min-width:200px;">
@@ -554,6 +556,92 @@ async function load() {
 
   render();
 }
+
+
+// --- CrowdVolt session badge + relink button ---------------------------
+// cv_refresh_token is HttpOnly and ~30d, and only a signed-in desktop Chrome
+// can produce one. This page cannot do it: kartis.homes cannot reach into
+// that LAN, and a tab here cannot drive localhost:9222 (mixed content + CDP's
+// Host check). So the button PARKS a request and cv_agent.py on the desktop
+// picks it up. If no agent has checked in recently the button says so rather
+// than spinning on a request nothing will answer.
+const CVAUTH_WARN_DAYS = 5;
+let cvAuthTimer = null;
+
+function cvSetBadge(html) {
+  const el = document.getElementById("cvauth");
+  if (el) el.innerHTML = html;
+}
+
+function cvRenderStatus(st) {
+  const btn = document.getElementById("cv-relink");
+  const job = st.job || {};
+  const busy = job.state === "pending" || job.state === "running";
+
+  if (btn) {
+    btn.disabled = busy || !st.agent_online;
+    btn.textContent = busy
+      ? (job.state === "pending" ? "Waiting for desktop..." : "Relinking...")
+      : (st.agent_online ? "Re-link CrowdVolt" : "Re-link (agent offline)");
+    btn.title = st.agent_online
+      ? "Ask the desktop agent to harvest a fresh CrowdVolt session from its Chrome."
+      : "No desktop agent has checked in. Run start_cv_agent.bat on the machine "
+        + "with the CV Chrome, or run scripts/cv_relink.py there by hand.";
+  }
+
+  // Poll faster while a relink is in flight, then settle back down.
+  const wanted = busy ? 3000 : 10 * 60 * 1000;
+  if (cvAuthTimer !== wanted) {
+    if (window._cvAuthInterval) clearInterval(window._cvAuthInterval);
+    window._cvAuthInterval = setInterval(loadCvAuth, wanted);
+    cvAuthTimer = wanted;
+  }
+
+  if (job.state === "error" && job.error) {
+    const safe = String(job.error).replace(/[&<>"]/g, c =>
+      ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    cvSetBadge(` <span class="auth-warn" title="${safe}">CROWDVOLT RELINK FAILED - hover for why</span>`);
+    return;
+  }
+  if (busy) { cvSetBadge(' <span class="meta">crowdvolt relink in progress...</span>'); return; }
+  if (!st.linked) {
+    cvSetBadge(' <span class="auth-warn">CROWDVOLT NOT LINKED - press Re-link CrowdVolt</span>');
+    return;
+  }
+  const left = st.days_remaining;
+  if (left !== null && left <= CVAUTH_WARN_DAYS) {
+    cvSetBadge(left <= 0
+      ? ' <span class="auth-warn">CROWDVOLT SESSION EXPIRED - press Re-link CrowdVolt</span>'
+      : ` <span class="auth-warn">CROWDVOLT SESSION EXPIRES IN ${left}D</span>`);
+    return;
+  }
+  cvSetBadge("");
+}
+
+async function loadCvAuth() {
+  try {
+    const r = await fetch("/api/cvauth/status");
+    if (!r.ok) return;
+    cvRenderStatus(await r.json());
+  } catch (e) { /* transient - the next tick retries */ }
+}
+
+const cvBtn = document.getElementById("cv-relink");
+if (cvBtn) cvBtn.addEventListener("click", async () => {
+  cvBtn.disabled = true;
+  cvBtn.textContent = "Requesting...";
+  try {
+    await fetch("/api/cvauth/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  } catch (e) { /* status poll will show the truth */ }
+  loadCvAuth();
+});
+
+loadCvAuth();
+
 
 document.getElementById("refresh").addEventListener("click", async (e) => {
   const btn = e.currentTarget; btn.disabled = true; btn.textContent = "refreshing...";

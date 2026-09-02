@@ -7898,6 +7898,185 @@ def api_cvpricer_market_refresh(event_uqid):
                     "rows": rows})
 
 
+# --- CrowdVolt relink job queue ----------------------------------------
+# kartis.homes cannot reach into the desktop's LAN, and a tab here cannot
+# drive localhost:9222 either (mixed content + CDP's Host check). So the
+# "Re-link" button does not perform the relink - it PARKS a request that the
+# desktop agent (cv_agent.py) picks up on its next poll. Server proposes,
+# desktop disposes.
+CVAUTH_JOB_KEY = "cvauth_job"
+CVAUTH_AGENT_SEEN_KEY = "cvauth_agent_seen"
+# Two agent poll intervals plus slack. Below this the UI says the desktop is
+# offline rather than spinning on a button nothing will ever answer.
+CVAUTH_AGENT_ONLINE_SECONDS = 150
+
+
+def _cvauth_secret_error(body=None):
+    """None when the caller proved it holds KARTIS_CVAUTH_SECRET, else the
+    (response, status) to return. Header first so the secret stays out of
+    query strings and access logs; body is accepted for the import path."""
+    import hmac
+    from flask import request
+    secret = (os.environ.get("KARTIS_CVAUTH_SECRET") or "").strip()
+    if not secret:
+        return jsonify({"error": "KARTIS_CVAUTH_SECRET is not set on the "
+                                 "server - cvauth import is disabled"}), 503
+    supplied = (request.headers.get("X-Kartis-Secret")
+                or (body or {}).get("secret") or "")
+    if not hmac.compare_digest(str(supplied), secret):
+        return jsonify({"error": "bad secret"}), 403
+    return None
+
+
+def _cvauth_job_get():
+    raw = db.setting_get(CVAUTH_JOB_KEY)
+    try:
+        job = json.loads(raw) if raw else {}
+    except ValueError:
+        job = {}
+    return {"state": "idle", "requested_at": None, "started_at": None,
+            "finished_at": None, "error": None, **job}
+
+
+def _cvauth_job_set(**fields):
+    job = {**_cvauth_job_get(), **fields}
+    db.setting_set(CVAUTH_JOB_KEY, json.dumps(job),
+                   datetime.now(timezone.utc).isoformat())
+    return job
+
+
+def _cvauth_agent_state():
+    seen = db.setting_get(CVAUTH_AGENT_SEEN_KEY)
+    online, age = False, None
+    if seen:
+        try:
+            age = (datetime.now(timezone.utc)
+                   - datetime.fromisoformat(seen)).total_seconds()
+            online = age <= CVAUTH_AGENT_ONLINE_SECONDS
+        except ValueError:
+            pass
+    return {"agent_seen": seen, "agent_online": online,
+            "agent_seen_age_s": None if age is None else round(age)}
+
+
+@app.route("/api/cvauth/request", methods=["POST"])
+def api_cvauth_request():
+    """Park a relink request for the desktop agent. Body: {"cancel": true}
+    to withdraw one - a request nothing is listening for would otherwise sit
+    pending forever."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    now = datetime.now(timezone.utc).isoformat()
+    if body.get("cancel"):
+        job = _cvauth_job_set(state="idle", error=None, finished_at=now)
+    else:
+        job = _cvauth_job_set(state="pending", requested_at=now,
+                              started_at=None, finished_at=None, error=None)
+    return jsonify({"job": job, **_cvauth_agent_state()})
+
+
+@app.route("/api/cvauth/job")
+def api_cvauth_job():
+    """Agent poll. Doubles as the heartbeat that tells the UI a desktop is
+    actually listening."""
+    err = _cvauth_secret_error()
+    if err:
+        return err
+    db.setting_set(CVAUTH_AGENT_SEEN_KEY,
+                   datetime.now(timezone.utc).isoformat(),
+                   datetime.now(timezone.utc).isoformat())
+    return jsonify(_cvauth_job_get())
+
+
+@app.route("/api/cvauth/job/result", methods=["POST"])
+def api_cvauth_job_result():
+    """Agent reports progress. Body: {"state": "running"|"error"|"done",
+    "error": "..."}. Lets the button show why a relink failed on a machine
+    the user may not be sitting at."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    err = _cvauth_secret_error(body)
+    if err:
+        return err
+    state = str(body.get("state") or "").strip()
+    if state not in ("running", "error", "done"):
+        return jsonify({"error": "state must be running, error or done"}), 400
+    now = datetime.now(timezone.utc).isoformat()
+    fields = {"state": state, "error": (body.get("error") or None)}
+    if state == "running":
+        fields["started_at"] = now
+    else:
+        fields["finished_at"] = now
+    return jsonify(_cvauth_job_set(**fields))
+
+
+@app.route("/api/cvauth/status")
+def api_cvauth_status():
+    """Is a CrowdVolt session cached, and how stale? Drives the /inventory
+    badge. Returns no cookie values."""
+    import cv_auth
+    return jsonify({**cv_auth.session_status(),
+                    "import_configured": bool(
+                        (os.environ.get("KARTIS_CVAUTH_SECRET") or "").strip()),
+                    "job": _cvauth_job_get(),
+                    **_cvauth_agent_state()})
+
+
+@app.route("/api/cvauth/import", methods=["POST"])
+def api_cvauth_import():
+    """Receive a cv_refresh_token harvested on the desktop.
+
+    CrowdVolt's refresh cookie is HttpOnly and only readable out of a
+    signed-in Chrome over CDP. This box has none, and it cannot reach into
+    the LAN of a machine that does, so the desktop pushes and the server
+    receives. scripts/cv_relink.py is the sender.
+
+    Body: {"secret": "...", "cookies": {"cv_refresh_token": "..."}}
+
+    Gated on KARTIS_CVAUTH_SECRET *in addition to* Caddy's basic auth: the
+    payload is a live ~30-day credential, so it does not ride on the edge
+    gate alone. Missing secret fails closed (503) rather than accepting
+    anything - an unset env var must never mean "open".
+    """
+    from flask import request
+    import cv_auth
+
+    body = request.get_json(silent=True) or {}
+    err = _cvauth_secret_error(body)
+    if err:
+        return err
+    try:
+        status = cv_auth.import_cookies(body.get("cookies") or {})
+    except cv_auth.CvAuthError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:                      # disk full, perms, ...
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+    print(f"[kartis] cvauth: imported cookies {status['cookie_names']}")
+    # A successful import IS the job completing - the agent should not have
+    # to report separately for the happy path.
+    _cvauth_job_set(state="done", error=None,
+                    finished_at=datetime.now(timezone.utc).isoformat())
+    return jsonify({"imported": True, **status})
+
+
+@app.route("/api/cvauth/verify", methods=["POST"])
+def api_cvauth_verify():
+    """Spend the cached cookie on one real /api/auth/refresh call.
+
+    The import endpoint can only check the payload's SHAPE; this proves
+    CrowdVolt still honours it. Worth its own route so the relink script can
+    confirm end to end instead of leaving you to find out at the next tick.
+    """
+    import cv_auth
+    try:
+        cv_auth.CvAuth().token(force=True)      # cache-only: no browser here
+    except cv_auth.CvAuthError as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 502
+    return jsonify({"ok": True, **cv_auth.session_status()})
+
+
 @app.route("/api/pacha-events/status")
 def api_pacha_events_status():
     return jsonify({
