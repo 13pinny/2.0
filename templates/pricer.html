@@ -194,6 +194,7 @@
   <label title="How far below the cheapest competitor to price, in USD">undercut $<input type="number" inputmode="decimal" id="p-undercut" step="0.01" min="0.01" style="width:70px; padding:4px 6px;"></label>
   <label title="Hard brake: never drop a listing more than this inside the sliding window — it holds and pings you instead. Untick the box to suspend the cap on ALL listings (they may then follow the market straight down to their floors)."><input type="checkbox" id="p-dropcap"> max drop <input type="number" inputmode="numeric" id="p-maxdrop" step="1" min="1" max="90" style="width:58px; padding:4px 6px;">%<span id="p-dropwin" style="color:var(--muted);">/12h</span></label>
   <label title="Don't chase listings that only have 1 ticket — a lone single isn't real competition"><input type="checkbox" id="p-nosingles"> ignore 1-ticket rivals</label>
+  <label title="Events repriced on the fast cadence instead of waiting for the full pass. Comma separated: an event-name fragment (covers every date of that artist, including ones listed later) or a viagogo event id. Blank = no fast lane.">fast lane <input type="text" id="p-fast" placeholder="e.g. Hanan Ben Ari, Tasi" style="width:210px; padding:4px 6px;"></label>
   <button id="p-run">Run pricer now</button>
 </div>
 
@@ -676,6 +677,8 @@ async function loadAll() {
     maxdrop.disabled = !s.drop_cap_enabled;
     const nosingles = document.getElementById("p-nosingles");
     if (document.activeElement !== nosingles) nosingles.checked = !!s.ignore_singles;
+    const fast = document.getElementById("p-fast");
+    if (document.activeElement !== fast) fast.value = (s.fast_events || []).join(", ");
     document.getElementById("drywarn").style.display = (s.master_enabled && s.dry_run) ? "block" : "none";
 
     const cfgs = Object.values(s.configs || {});
@@ -693,6 +696,8 @@ async function loadAll() {
     else bits.push("not_run_yet");
     if (L.dry_run != null && L.at) bits.push(L.dry_run ? "dry_run" : "LIVE");
     bits.push(`every ${s.interval_minutes}m`);
+    if ((s.fast_events || []).length) bits.push(`fast ${s.fast_interval_minutes}m: ${s.fast_events.join(", ")}`);
+    if (L.scope) bits.push(`last=${L.scope}`);
     document.getElementById("p-status").textContent = bits.join(" // ");
 
     if (L.error) { err.style.display = "block"; err.textContent = "// pricer error: " + L.error; }
@@ -723,6 +728,10 @@ document.getElementById("p-undercut").addEventListener("change", async (e) => {
   const u = parseFloat(e.target.value);
   if (!u || u <= 0) return;
   await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ undercut: u }) });
+});
+document.getElementById("p-fast").addEventListener("change", async (e) => {
+  await fetch("/api/pricer/settings", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ fast_events: e.target.value }) });
+  loadAll();
 });
 document.getElementById("p-dropcap").addEventListener("change", async (e) => {
   if (!e.target.checked && !confirm("Turn OFF the drop cap for ALL listings? They may follow the market straight down to their floors.")) {

@@ -147,6 +147,13 @@ _last_pricer = {"at": None, "changed": 0, "paused": 0, "skipped": 0,
                 "running": False}
 _pricer_lock = threading.Lock()
 PRICER_INTERVAL_MINUTES = int(os.getenv("KARTIS_PRICER_INTERVAL_MINUTES") or 15)
+# The pricer job wakes on the FAST cadence and decides per tick whether it
+# owes a full pass (every PRICER_INTERVAL_MINUTES) or a fast-lane-only pass
+# over the events in the `pricer_fast_events` setting. One job rather than
+# two so a fast tick can never collide with — or starve — the full pass.
+PRICER_FAST_INTERVAL_MINUTES = max(
+    1, int(os.getenv("KARTIS_PRICER_FAST_INTERVAL_MINUTES") or 5))
+_last_pricer_full_at = None
 
 # CrowdVolt auto-pricer — same rules, CV's JSON APIs through the CDP Chrome.
 _last_cv_pricer = {"at": None, "changed": 0, "paused": 0, "skipped": 0,
@@ -1058,12 +1065,23 @@ def run_scraper():
         _run_lock.release()
 
 
-def run_pricer():
+def run_pricer(force_full=False):
+    global _last_pricer_full_at
     if not _pricer_lock.acquire(blocking=False):
         return
+    started = datetime.now(timezone.utc)
+    # Due for a full pass? Time-based rather than a tick counter so a pass
+    # skipped by the lock (or a restart) doesn't push the whole book out by
+    # another interval. The 30s grace absorbs scheduler jitter, which would
+    # otherwise slip every third tick to the one after it.
+    due_full = force_full or _last_pricer_full_at is None or \
+        (started - _last_pricer_full_at) >= (
+            timedelta(minutes=PRICER_INTERVAL_MINUTES) - timedelta(seconds=30))
     _last_pricer["running"] = True
     try:
-        counters = viagogo_pricer.run_pricer_tick()
+        counters = viagogo_pricer.run_pricer_tick(only_fast=not due_full)
+        if due_full:
+            _last_pricer_full_at = started
         _last_pricer.update(
             at=datetime.now(timezone.utc).isoformat(),
             error=None,
@@ -7599,6 +7617,8 @@ def api_pricer_status():
         "drop_cap_enabled": viagogo_pricer.drop_cap_enabled(),
         "ignore_singles": viagogo_pricer.ignore_single_competitors(),
         "interval_minutes": PRICER_INTERVAL_MINUTES,
+        "fast_interval_minutes": PRICER_FAST_INTERVAL_MINUTES,
+        "fast_events": viagogo_pricer.fast_event_tokens(),
         "configs": db.pricer_config_all(),
         "log": db.pricer_log_recent(50),
     })
@@ -7708,6 +7728,18 @@ def api_pricer_settings():
         v = "true" if body.get("drop_cap_enabled") else "false"
         db.setting_set("pricer_drop_cap_enabled", v, now_iso)
         out["drop_cap_enabled"] = v
+    if "fast_events" in body:
+        # Free text: comma/newline separated event names or ids. Stored
+        # verbatim (viagogo_pricer.fast_event_tokens does the parsing) so
+        # the box round-trips what the user typed.
+        raw = body.get("fast_events")
+        if isinstance(raw, (list, tuple)):
+            raw = ", ".join(str(t).strip() for t in raw if str(t).strip())
+        raw = (raw or "").strip()
+        if len(raw) > 500:
+            return jsonify({"error": "fast_events too long"}), 400
+        db.setting_set("pricer_fast_events", raw, now_iso)
+        out["fast_events"] = viagogo_pricer.fast_event_tokens()
     if not out:
         return jsonify({"error": "nothing to update"}), 400
     return jsonify({"ok": True, **out})
@@ -7717,7 +7749,8 @@ def api_pricer_settings():
 def api_pricer_run_now():
     if _last_pricer["running"]:
         return jsonify({"error": "pricer already running"}), 429
-    threading.Thread(target=run_pricer, daemon=True).start()
+    threading.Thread(target=run_pricer, kwargs={"force_full": True},
+                     daemon=True).start()
     return jsonify({"started": True})
 
 
@@ -8315,7 +8348,8 @@ scheduler.add_job(_fresh_thread_job(run_sales_sync), "interval", minutes=FESTIVA
 # Auto-pricer: offset from the top of the hour (start_date pushes the first
 # run out) so its browser use doesn't collide with the hourly scrape. Cheap
 # no-op while pricer_master_enabled is off.
-scheduler.add_job(_fresh_thread_job(run_pricer), "interval", minutes=PRICER_INTERVAL_MINUTES,
+scheduler.add_job(_fresh_thread_job(run_pricer), "interval",
+                  minutes=PRICER_FAST_INTERVAL_MINUTES,
                   id="pricer",
                   start_date=datetime.now() + timedelta(minutes=7))
 # CrowdVolt pricer: also drives the CDP Chrome (its own tab) — offset clear

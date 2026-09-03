@@ -1617,6 +1617,32 @@ def all_viagogo():
     return [dict(r) for r in rows]
 
 
+def viagogo_event_meta(listing_ids):
+    """(event_id, event_name) per listing id from the scrape mirror.
+
+    One query for a whole config set — the pricer's fast lane needs to know
+    which listings belong to a fast event *before* it decides whether the
+    tick is worth launching a browser for, and per-id viagogo_get calls
+    would be 50+ connections every 5 minutes.
+    """
+    ids = [str(i) for i in listing_ids]
+    if not ids:
+        return {}
+    out = {}
+    with connect() as conn:
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            rows = conn.execute(
+                "SELECT id, event_id, event_name FROM viagogo_listings "
+                "WHERE id IN (%s)" % ",".join("?" * len(chunk)),
+                chunk,
+            ).fetchall()
+            for r in rows:
+                out[str(r["id"])] = {"event_id": r["event_id"],
+                                     "event_name": r["event_name"]}
+    return out
+
+
 def viagogo_get(listing_id):
     with connect() as conn:
         row = conn.execute(

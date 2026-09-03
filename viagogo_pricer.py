@@ -166,6 +166,43 @@ def master_enabled():
     return db.setting_get_bool("pricer_master_enabled", False)
 
 
+def fast_event_tokens():
+    """Events on the fast lane — repriced every fast tick instead of only on
+    the full pass (app.py: KARTIS_PRICER_FAST_INTERVAL_MINUTES vs
+    KARTIS_PRICER_INTERVAL_MINUTES).
+
+    Comma/newline separated tokens in the `pricer_fast_events` setting, with
+    `KARTIS_PRICER_FAST_EVENTS` as the fallback when the setting was never
+    written. A numeric token matches a viagogo event id exactly; anything
+    else is a case-insensitive substring of the event name — so one token
+    ("Hanan Ben Ari") covers every date of that artist, including shows
+    listed after the token was set. Empty list = no fast lane at all, and
+    the pricer behaves exactly as it did before.
+    """
+    raw = db.setting_get("pricer_fast_events")
+    if raw is None:
+        raw = os.getenv("KARTIS_PRICER_FAST_EVENTS") or ""
+    return [t.strip() for t in re.split(r"[,\n]", raw) if t.strip()]
+
+
+def event_is_fast(row, tokens=None):
+    """Is this listing's event on the fast lane? `row` is any dict carrying
+    `event_id` / `event_name` (a live row or a scrape-mirror row)."""
+    if tokens is None:
+        tokens = fast_event_tokens()
+    if not tokens:
+        return False
+    eid = str(row.get("event_id") or "")
+    name = (row.get("event_name") or "").lower()
+    for t in tokens:
+        if t.isdigit():
+            if eid and eid == t:
+                return True
+        elif t.lower() in name:
+            return True
+    return False
+
+
 def dry_run_enabled():
     return db.setting_get_bool("pricer_dry_run", True)
 
@@ -747,10 +784,19 @@ def _log(entry):
     db.pricer_log_add(entry, _now_iso())
 
 
-def run_pricer_tick(dry_run=None):
-    """One full pricing pass. Returns counters for the status dict."""
+def run_pricer_tick(dry_run=None, only_fast=False):
+    """One pricing pass. Returns counters for the status dict.
+
+    `only_fast` narrows the pass to the fast-lane events (see
+    `fast_event_tokens`) — same rules, same safety rails, just a subset, so
+    a handful of hot events can be repriced on a shorter cadence without
+    putting the whole book (and the shared CDP Chrome) through a full pass
+    every few minutes. The drop cap is time-windowed, so a faster cadence
+    does not let a listing fall any further per hour than before.
+    """
     counters = {"changed": 0, "paused": 0, "skipped": 0, "errors": 0,
-                "dry_run": None, "eligible": 0}
+                "dry_run": None, "eligible": 0,
+                "scope": "fast" if only_fast else "full"}
     if not master_enabled():
         return counters
     if dry_run is None:
@@ -761,6 +807,20 @@ def run_pricer_tick(dry_run=None):
                if c.get("enabled") and not c.get("paused")}
     if not configs:
         return counters
+
+    # Fast pass: decide from the scrape mirror, before _exclusive_browser —
+    # a tick with nothing to do must not cost a Chrome launch every few
+    # minutes. A listing too new to be in the mirror simply waits for the
+    # next full pass rather than forcing one.
+    fast_tokens = fast_event_tokens()
+    if only_fast:
+        if not fast_tokens:
+            return counters
+        meta = db.viagogo_event_meta(configs.keys())
+        configs = {lid: c for lid, c in configs.items()
+                   if event_is_fast(meta.get(lid) or {}, fast_tokens)}
+        if not configs:
+            return counters
 
     undercut = undercut_amount()
     raise_global = allow_raise_global()
@@ -781,6 +841,11 @@ def run_pricer_tick(dry_run=None):
             eligible = {}
             for lid, cfg in configs.items():
                 row = live_by_id.get(lid)
+                if only_fast and row is not None and \
+                        not event_is_fast(row, fast_tokens):
+                    # mirror said fast, live says otherwise (renamed event) —
+                    # leave it to the full pass, don't count it as skipped
+                    continue
                 if row is None or not row.get("price"):
                     # Transient render miss vs genuinely deleted listing:
                     # the mirror's last_seen_at decides. Not seen by any of
