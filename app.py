@@ -7950,10 +7950,15 @@ def _cvauth_agent_state():
     online, age = False, None
     if seen:
         try:
-            age = (datetime.now(timezone.utc)
-                   - datetime.fromisoformat(seen)).total_seconds()
+            stamp = datetime.fromisoformat(seen)
+            # A naive stamp would parse fine and then blow up on the
+            # subtraction with a TypeError, 500-ing the status route (and so
+            # the whole badge) over a cosmetic field. Treat it as unknown.
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - stamp).total_seconds()
             online = age <= CVAUTH_AGENT_ONLINE_SECONDS
-        except ValueError:
+        except (ValueError, TypeError):
             pass
     return {"agent_seen": seen, "agent_online": online,
             "agent_seen_age_s": None if age is None else round(age)}
@@ -8008,6 +8013,67 @@ def api_cvauth_job_result():
     else:
         fields["finished_at"] = now
     return jsonify(_cvauth_job_set(**fields))
+
+
+@app.route("/api/cvsales/import", methods=["POST"])
+def api_cvsales_import():
+    """Ingest CrowdVolt sell_delivered rows captured by a signed-in browser.
+
+    This box cannot always reach CrowdVolt itself. cv_refresh_token dies (it
+    is not re-persisted when CrowdVolt rotates it), and
+    scraper._fetch_crowdvolt_sales_api runs CACHE-ONLY - no playwright - so
+    it cannot re-harvest. It raises, the UI fallback finds nothing because
+    CrowdVolt retired the Completed table, and the tick records
+    crowdvolt_sales: 0 with no error anywhere. Meanwhile a browser that IS
+    signed in can read the same endpoint perfectly.
+
+    Body: {"rows": [ <raw /api/buy_sell_history/sell_delivered rows> ]}
+
+    RAW rows on purpose: mapping stays in scraper._map_crowdvolt_api_sale so
+    there is exactly one parser for CrowdVolt's shape, and a browser-sourced
+    row lands byte-identical to a scraped one - same id (the order number),
+    so the two paths converge on one row instead of double-counting.
+
+    Gated by the edge (Caddy basic auth) like every other mutating route
+    here; it carries no credential, only sales data.
+    """
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    rows = body.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return jsonify({"error": "body needs a non-empty 'rows' list"}), 400
+    if len(rows) > 2000:
+        return jsonify({"error": "too many rows (max 2000)"}), 413
+
+    mapped, bad = [], 0
+    for r in rows:
+        if not isinstance(r, dict):
+            bad += 1
+            continue
+        try:
+            m = scraper._map_crowdvolt_api_sale(r)
+        except Exception:
+            m = None
+        if m:
+            mapped.append(m)
+        else:
+            bad += 1          # no order_number, or an unparseable shape
+    if not mapped:
+        return jsonify({"error": "no rows mapped - wrong shape?",
+                        "received": len(rows), "unmappable": bad}), 400
+
+    before = {x["id"] for x in db.all_crowdvolt_sales()}
+    db.upsert_crowdvolt_sales(mapped, datetime.now(timezone.utc).isoformat())
+    after = {x["id"] for x in db.all_crowdvolt_sales()}
+    inserted = sorted(after - before)
+    print(f"[kartis] cvsales: imported {len(mapped)} row(s), "
+          f"{len(inserted)} new, {bad} unmappable")
+    return jsonify({
+        "received": len(rows), "mapped": len(mapped), "unmappable": bad,
+        "inserted": len(inserted), "updated": len(mapped) - len(inserted),
+        "new_order_ids": inserted[:50],
+        "crowdvolt_sales_total": len(after),
+    })
 
 
 @app.route("/api/cvauth/status")
