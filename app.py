@@ -7954,6 +7954,11 @@ def api_cvpricer_market_refresh(event_uqid):
 # desktop disposes.
 CVAUTH_JOB_KEY = "cvauth_job"
 CVAUTH_AGENT_SEEN_KEY = "cvauth_agent_seen"
+# What the desktop can be asked to do. Both jobs need the same signed-in CV
+# Chrome, so one queue holds both and they serialize by construction.
+#   relink - harvest cv_refresh_token and push it here
+#   sales  - read sell_delivered in that browser and push the rows here
+CVAUTH_JOB_KINDS = ("relink", "sales")
 # Two agent poll intervals plus slack. Below this the UI says the desktop is
 # offline rather than spinning on a button nothing will ever answer.
 CVAUTH_AGENT_ONLINE_SECONDS = 150
@@ -7982,8 +7987,9 @@ def _cvauth_job_get():
         job = json.loads(raw) if raw else {}
     except ValueError:
         job = {}
-    return {"state": "idle", "requested_at": None, "started_at": None,
-            "finished_at": None, "error": None, **job}
+    return {"state": "idle", "kind": "relink", "requested_at": None,
+            "started_at": None, "finished_at": None, "error": None,
+            "result": None, **job}
 
 
 def _cvauth_job_set(**fields):
@@ -8014,17 +8020,25 @@ def _cvauth_agent_state():
 
 @app.route("/api/cvauth/request", methods=["POST"])
 def api_cvauth_request():
-    """Park a relink request for the desktop agent. Body: {"cancel": true}
-    to withdraw one - a request nothing is listening for would otherwise sit
-    pending forever."""
+    """Park a job for the desktop agent.
+
+    Body: {"kind": "relink"|"sales"} to queue one, {"cancel": true} to
+    withdraw it - a request nothing is listening for would otherwise sit
+    pending forever.
+    """
     from flask import request
     body = request.get_json(silent=True) or {}
     now = datetime.now(timezone.utc).isoformat()
     if body.get("cancel"):
         job = _cvauth_job_set(state="idle", error=None, finished_at=now)
     else:
-        job = _cvauth_job_set(state="pending", requested_at=now,
-                              started_at=None, finished_at=None, error=None)
+        kind = str(body.get("kind") or "relink").strip()
+        if kind not in CVAUTH_JOB_KINDS:
+            return jsonify({"error": "kind must be one of "
+                                     + ", ".join(CVAUTH_JOB_KINDS)}), 400
+        job = _cvauth_job_set(state="pending", kind=kind, requested_at=now,
+                              started_at=None, finished_at=None, error=None,
+                              result=None)
     return jsonify({"job": job, **_cvauth_agent_state()})
 
 
@@ -8056,6 +8070,9 @@ def api_cvauth_job_result():
         return jsonify({"error": "state must be running, error or done"}), 400
     now = datetime.now(timezone.utc).isoformat()
     fields = {"state": state, "error": (body.get("error") or None)}
+    result = body.get("result")
+    if isinstance(result, dict):
+        fields["result"] = result
     if state == "running":
         fields["started_at"] = now
     else:
@@ -8076,6 +8093,10 @@ def api_cvsales_import():
     signed in can read the same endpoint perfectly.
 
     Body: {"rows": [ <raw /api/buy_sell_history/sell_delivered rows> ]}
+
+    The sender is cv_agent.py answering a "sales" job (the Pull CV Sales
+    button on /inventory), or cv_link_client.fetch_sales run by hand. A
+    successful import IS that job completing, same as /api/cvauth/import.
 
     RAW rows on purpose: mapping stays in scraper._map_crowdvolt_api_sale so
     there is exactly one parser for CrowdVolt's shape, and a browser-sourced
@@ -8116,12 +8137,23 @@ def api_cvsales_import():
     inserted = sorted(after - before)
     print(f"[kartis] cvsales: imported {len(mapped)} row(s), "
           f"{len(inserted)} new, {bad} unmappable")
-    return jsonify({
+    summary = {
         "received": len(rows), "mapped": len(mapped), "unmappable": bad,
         "inserted": len(inserted), "updated": len(mapped) - len(inserted),
         "new_order_ids": inserted[:50],
         "crowdvolt_sales_total": len(after),
-    })
+    }
+    # Close the job the agent is answering, so the button reports the count
+    # without a second call. Only a live SALES job: a hand-run push must not
+    # mark someone else's relink done.
+    job = _cvauth_job_get()
+    if job.get("kind") == "sales" and job.get("state") in ("pending", "running"):
+        _cvauth_job_set(state="done", error=None,
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                        result={k: summary[k] for k in
+                                ("mapped", "inserted", "updated",
+                                 "crowdvolt_sales_total")})
+    return jsonify(summary)
 
 
 @app.route("/api/cvauth/status")

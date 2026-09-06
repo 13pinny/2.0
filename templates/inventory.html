@@ -189,6 +189,7 @@
     <button id="relogin" title="Open the box's Chrome (Lysted / Viagogo / CrowdVolt tabs) in a noVNC window so you can re-sign-in — no SSH">noVNC Login</button>
     <button id="chrome-restart" title="After re-signing in, bounce the scraper's Chrome so it picks up the fresh session">Restart Chrome</button>
     <button id="cv-relink" title="Ask the desktop agent to harvest a fresh CrowdVolt session from its Chrome. Needs start_cv_agent.bat running there, signed in at crowdvolt.com.">Re-link CrowdVolt</button>
+    <button id="cv-sales" title="Ask the desktop agent to read CrowdVolt's delivered sales in its signed-in Chrome and push them here.">Pull CV Sales</button>
     <button id="add-pending" title="Add a ticket I have but haven't listed yet">+ Pending</button>
     <button id="open-stubhub" title="Open the exact StubHub page for every visible event, 20 tabs at a time. Allow pop-ups for this site once.">Open StubHub ×20</button>
     <input type="search" id="q-search" placeholder="search event venue section" style="flex:1; min-width:200px;">
@@ -558,14 +559,21 @@ async function load() {
 }
 
 
-// --- CrowdVolt session badge + relink button ---------------------------
+// --- CrowdVolt badge + relink / sales buttons --------------------------
 // cv_refresh_token is HttpOnly and ~30d, and only a signed-in desktop Chrome
 // can produce one. This page cannot do it: kartis.homes cannot reach into
 // that LAN, and a tab here cannot drive localhost:9222 (mixed content + CDP's
-// Host check). So the button PARKS a request and cv_agent.py on the desktop
-// picks it up. If no agent has checked in recently the button says so rather
+// Host check). So a button PARKS a request and cv_agent.py on the desktop
+// picks it up. If no agent has checked in recently the buttons say so rather
 // than spinning on a request nothing will answer.
+//
+// Pull CV Sales rides the same queue for the same reason: the box's own
+// CrowdVolt session keeps dying and it has no browser to renew it with, so
+// the desktop reads the delivered-sales feed and pushes the rows in. One
+// queue, so the two jobs cannot fight over the same Chrome.
 const CVAUTH_WARN_DAYS = 5;
+// How long a finished sales pull keeps reporting its count on the badge.
+const CVSALES_NOTE_MS = 2 * 60 * 1000;
 let cvAuthTimer = null;
 
 function cvSetBadge(html) {
@@ -573,24 +581,54 @@ function cvSetBadge(html) {
   if (el) el.innerHTML = html;
 }
 
+// The count from a sales pull that just finished, or null. Read off the
+// job's own finished_at so it expires on its own - no client-side timer to
+// leak across reloads.
+function cvSalesNote(job) {
+  if (job.state !== "done" || (job.kind || "relink") !== "sales") return null;
+  if (!job.result || !job.finished_at) return null;
+  const age = Date.now() - Date.parse(job.finished_at);
+  if (!(age >= 0 && age < CVSALES_NOTE_MS)) return null;
+  const r = job.result;
+  return `CV SALES: ${r.inserted} new, ${r.updated} updated `
+       + `(${r.crowdvolt_sales_total} on the box)`;
+}
+
 function cvRenderStatus(st) {
-  const btn = document.getElementById("cv-relink");
   const job = st.job || {};
   const busy = job.state === "pending" || job.state === "running";
+  const kind = job.kind || "relink";
+  const waiting = job.state === "pending" ? "Waiting for desktop..." : null;
 
-  if (btn) {
-    btn.disabled = busy || !st.agent_online;
-    btn.textContent = busy
-      ? (job.state === "pending" ? "Waiting for desktop..." : "Relinking...")
+  const relink = document.getElementById("cv-relink");
+  if (relink) {
+    relink.disabled = busy || !st.agent_online;
+    relink.textContent = (busy && kind === "relink")
+      ? (waiting || "Relinking...")
       : (st.agent_online ? "Re-link CrowdVolt" : "Re-link (agent offline)");
-    btn.title = st.agent_online
+    relink.title = st.agent_online
       ? "Ask the desktop agent to harvest a fresh CrowdVolt session from its Chrome."
       : "No desktop agent has checked in. Run start_cv_agent.bat on the machine "
         + "with the CV Chrome, or run scripts/cv_relink.py there by hand.";
   }
 
-  // Poll faster while a relink is in flight, then settle back down.
-  const wanted = busy ? 3000 : 10 * 60 * 1000;
+  const sales = document.getElementById("cv-sales");
+  if (sales) {
+    // Both jobs need the same Chrome, so either one in flight disables both.
+    sales.disabled = busy || !st.agent_online;
+    sales.textContent = (busy && kind === "sales")
+      ? (waiting || "Pulling sales...")
+      : (st.agent_online ? "Pull CV Sales" : "Pull CV Sales (agent offline)");
+    sales.title = st.agent_online
+      ? "Ask the desktop agent to read CrowdVolt's delivered sales in its "
+        + "signed-in Chrome and push them here."
+      : "No desktop agent has checked in. Run start_cv_agent.bat on the machine "
+        + "with the CV Chrome, or run cv_agent.py --sales there by hand.";
+  }
+
+  // Poll faster while a job is in flight, and while a fresh count is on
+  // screen so it clears near its own deadline, then settle back down.
+  const wanted = busy ? 3000 : (cvSalesNote(job) ? 15000 : 10 * 60 * 1000);
   if (cvAuthTimer !== wanted) {
     if (window._cvAuthInterval) clearInterval(window._cvAuthInterval);
     window._cvAuthInterval = setInterval(loadCvAuth, wanted);
@@ -600,10 +638,17 @@ function cvRenderStatus(st) {
   if (job.state === "error" && job.error) {
     const safe = String(job.error).replace(/[&<>"]/g, c =>
       ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-    cvSetBadge(` <span class="auth-warn" title="${safe}">CROWDVOLT RELINK FAILED - hover for why</span>`);
+    const failed = kind === "sales" ? "SALES PULL" : "RELINK";
+    cvSetBadge(` <span class="auth-warn" title="${safe}">CROWDVOLT ${failed} FAILED - hover for why</span>`);
     return;
   }
-  if (busy) { cvSetBadge(' <span class="meta">crowdvolt relink in progress...</span>'); return; }
+  if (busy) {
+    const doing = kind === "sales" ? "sales pull" : "relink";
+    cvSetBadge(` <span class="meta">crowdvolt ${doing} in progress...</span>`);
+    return;
+  }
+  const note = cvSalesNote(job);
+  if (note) { cvSetBadge(` <span class="meta">${note}</span>`); return; }
   if (!st.linked) {
     cvSetBadge(' <span class="auth-warn">CROWDVOLT NOT LINKED - press Re-link CrowdVolt</span>');
     return;
@@ -626,19 +671,27 @@ async function loadCvAuth() {
   } catch (e) { /* transient - the next tick retries */ }
 }
 
+// Park a job for the desktop. The optimistic disable is cosmetic - the very
+// next status poll renders whatever actually happened.
+function cvRequest(kind, btn) {
+  return async () => {
+    btn.disabled = true;
+    btn.textContent = "Requesting...";
+    try {
+      await fetch("/api/cvauth/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind }),
+      });
+    } catch (e) { /* status poll will show the truth */ }
+    loadCvAuth();
+  };
+}
+
 const cvBtn = document.getElementById("cv-relink");
-if (cvBtn) cvBtn.addEventListener("click", async () => {
-  cvBtn.disabled = true;
-  cvBtn.textContent = "Requesting...";
-  try {
-    await fetch("/api/cvauth/request", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-  } catch (e) { /* status poll will show the truth */ }
-  loadCvAuth();
-});
+if (cvBtn) cvBtn.addEventListener("click", cvRequest("relink", cvBtn));
+const cvSalesBtn = document.getElementById("cv-sales");
+if (cvSalesBtn) cvSalesBtn.addEventListener("click", cvRequest("sales", cvSalesBtn));
 
 loadCvAuth();
 
