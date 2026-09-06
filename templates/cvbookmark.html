@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — CV Sales Bookmarklet</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #d1242f;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover { color: var(--accent); }
+  main { padding: 22px 24px 60px; max-width: 780px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 28px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 8px 0; }
+  p b, li b { color: var(--text); }
+  ol { font-size: 13px; line-height: 1.7; color: var(--muted); padding-left: 22px; }
+  .grab { display: inline-block; background: var(--accent); color: #fff; text-decoration: none; padding: 11px 22px; font-size: 13px; font-weight: 600; letter-spacing: 1px; border-radius: 6px; cursor: grab; }
+  .grab:active { cursor: grabbing; }
+  .bar { background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 20px; margin: 14px 0 6px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 10px 12px; font-size: 12px; border-radius: 6px; }
+  .note { background: var(--bg-3); border: 1px solid var(--line); padding: 10px 12px; font-size: 12px; line-height: 1.55; color: var(--muted); border-radius: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CV Sales Bookmarklet</h1>
+  <div class="nav">
+    <a href="/">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/cvpricer">CV PRICER</a>
+  </div>
+</header>
+<main>
+
+{% if not cv_token %}
+  <div class="err">
+    KARTIS_CVSALES_TOKEN is not set on the server, so the bookmarklet cannot be
+    issued. Set it in <b>/opt/kartis/.env</b> and restart kartis-flask.
+  </div>
+{% else %}
+
+  <h2>Drag this to your bookmarks bar</h2>
+  <div class="bar">
+    <a class="grab" id="bm" href="#" onclick="return false;">Pull CV Sales &rarr; Kartis</a>
+  </div>
+  <p>Then, whenever you want your sales up to date:</p>
+  <ol>
+    <li>Be signed into <b>crowdvolt.com</b> in this browser — your normal one, no special window.</li>
+    <li>Be <b>on a crowdvolt.com page</b>.</li>
+    <li>Click the bookmark. A box appears in the corner and tells you what landed.</li>
+  </ol>
+
+  <h2>Why it lives here and not on the dashboard</h2>
+  <p>
+    Your CrowdVolt session cookie is <b>HttpOnly and scoped to crowdvolt.com</b>.
+    A button on this site cannot read it, and this server cannot reach into your
+    browser. Running from a crowdvolt.com page is what lets your own logged-in
+    session do the reading — no token to harvest, no second Chrome, no agent.
+  </p>
+  <div class="note">
+    The bookmark carries a token that authorises the import. Treat it like a
+    password: anyone holding it could file fake sales rows into your ledger. If
+    it leaks, change <b>KARTIS_CVSALES_TOKEN</b> on the box, reload this page and
+    drag the link again. It cannot touch your CrowdVolt session or anything else
+    on kartis.
+  </div>
+
+{% endif %}
+</main>
+
+<script>
+// The bookmarklet's real source, written as a normal function and shipped via
+// toString() — one copy to read and maintain, no minified blob to hand-edit.
+function kartisPullCvSales(TOKEN, ENDPOINT) {
+  var box = document.createElement("div");
+  box.style.cssText = "position:fixed;z-index:2147483647;right:16px;bottom:16px;"
+    + "background:#161b22;color:#e6edf3;font:13px/1.5 -apple-system,Segoe UI,sans-serif;"
+    + "padding:12px 16px;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.35);"
+    + "max-width:340px;white-space:pre-wrap";
+  document.body.appendChild(box);
+  var say = function (msg, colour) {
+    box.textContent = msg;
+    box.style.color = colour || "#e6edf3";
+  };
+  var done = function (msg, colour) {
+    say(msg, colour);
+    setTimeout(function () { box.remove(); }, 8000);
+  };
+  (async function () {
+    try {
+      if (location.hostname.indexOf("crowdvolt.com") === -1) {
+        return done("Run this from a crowdvolt.com page.", "#ff7b72");
+      }
+      say("Checking your CrowdVolt session…");
+      // Same-origin on www.crowdvolt.com, so the HttpOnly cookie rides along
+      // and mints the access token the API wants. Nothing is read or stored.
+      var r = await fetch("https://www.crowdvolt.com/api/auth/refresh", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json",
+                   "X-Requested-With": "XMLHttpRequest" },
+        body: "{}"
+      });
+      if (!r.ok) {
+        return done("CrowdVolt says you are signed out (" + r.status
+          + "). Sign in, then click again.", "#ff7b72");
+      }
+      var access = (await r.json()).access_token;
+      if (!access) return done("No access_token came back.", "#ff7b72");
+
+      var rows = [], seen = {}, offset = 0;
+      for (;;) {
+        var q = await fetch("https://api.crowdvolt.com/api/buy_sell_history/"
+          + "sell_delivered?limit=25&offset=" + offset,
+          { headers: { "Authorization": "Bearer " + access, "x-pokedex": "0376" } });
+        if (!q.ok) return done("sell_delivered → " + q.status, "#ff7b72");
+        var page = await q.json();
+        if (!Array.isArray(page) || !page.length) break;
+        for (var i = 0; i < page.length; i++) {
+          var id = String((page[i] || {}).order_number || "").trim();
+          // Dedupe on the order number: a sale landing mid-read shifts the
+          // window and would otherwise repeat a row across two pages.
+          if (id && !seen[id]) { seen[id] = 1; rows.push(page[i]); }
+        }
+        say("Read " + rows.length + " sales…");
+        if (page.length < 25) break;
+        offset += 25;
+        if (offset > 2000) break;
+      }
+      if (!rows.length) return done("No delivered sales found.", "#ff7b72");
+
+      say("Sending " + rows.length + " to kartis…");
+      // text/plain keeps this a "simple" CORS request, so the browser sends it
+      // straight through with no preflight for Caddy to reject.
+      var p = await fetch(ENDPOINT, {
+        method: "POST", headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ token: TOKEN, rows: rows })
+      });
+      var out = await p.json();
+      if (!p.ok) return done("kartis: " + (out.error || p.status), "#ff7b72");
+      done("✓ " + out.inserted + " new, " + out.updated + " updated\n"
+        + out.crowdvolt_sales_total + " CrowdVolt sales on kartis now.", "#7ee787");
+    } catch (e) {
+      done("Failed: " + e, "#ff7b72");
+    }
+  })();
+}
+
+(function () {
+  var el = document.getElementById("bm");
+  if (!el) return;
+  // tojson gives the VALUE; JSON.stringify turns it back into a literal to
+  // embed in the bookmarklet's source.
+  var code = "(" + kartisPullCvSales.toString() + ")("
+    + JSON.stringify({{ cv_token|tojson }}) + ","
+    + JSON.stringify({{ import_url|tojson }}) + ");void 0";
+  // Must encode: the source carries #rrggbb colours, and a bare # would cut
+  // the URL off at the fragment. The browser decodes before executing.
+  el.href = "javascript:" + encodeURIComponent(code);
+})();
+</script>
+</body>
+</html>

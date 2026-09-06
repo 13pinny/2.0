@@ -2329,6 +2329,20 @@ def cvpricer_page():
     return render_template("cvpricer.html")
 
 
+@app.route("/cvbookmark")
+def cvbookmark():
+    """The drag-me-to-your-bookmarks page for the CrowdVolt sales pull.
+
+    The token is injected here rather than typed by hand, so rotating it is
+    "reload this page and drag the link again" - no copy-paste of a secret.
+    """
+    return render_template("cvbookmark.html",
+                           cv_token=_cvsales_token(),
+                           import_url=(os.environ.get("KARTIS_BASE_URL")
+                                       or "https://kartis.homes").rstrip("/")
+                                      + "/api/cvsales/import")
+
+
 @app.route("/cvfees")
 def cvfees_page():
     return render_template("cvfees.html")
@@ -7981,6 +7995,55 @@ def _cvauth_secret_error(body=None):
     return None
 
 
+# The bookmarklet posts straight from crowdvolt.com, so /api/cvsales/import
+# is exempted from Caddy's basic auth (a cross-origin POST cannot satisfy a
+# basic-auth challenge, and a preflight carries no credentials at all). It
+# therefore carries its own gate. Deliberately NOT KARTIS_CVAUTH_SECRET: this
+# token lives in a bookmark, which is far more exposed than a .env, and the
+# cvauth routes it would otherwise unlock import a live session cookie.
+# Worst case here is forged sales rows, not a stolen CrowdVolt session.
+CVSALES_ALLOWED_ORIGINS = ("https://www.crowdvolt.com", "https://crowdvolt.com")
+
+
+def _cvsales_token():
+    return (os.environ.get("KARTIS_CVSALES_TOKEN") or "").strip()
+
+
+def _cvsales_cors(resp, origin):
+    """Let the posting page read the result. Only the CrowdVolt origins the
+    bookmarklet can run on, so this is not a general opening of the API."""
+    if origin in CVSALES_ALLOWED_ORIGINS:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+    return resp
+
+
+def _cvsales_auth_error(body):
+    """None when the caller proved it may import sales, else (response, code).
+
+    Two ways in, because two very different callers use this route: the
+    desktop agent already holds KARTIS_CVAUTH_SECRET and sends it as a
+    header, while the bookmarklet can only put a token in the body (a custom
+    header would trigger a preflight that Caddy answers with a 401).
+    """
+    import hmac
+    from flask import request
+    supplied_secret = request.headers.get("X-Kartis-Secret") or ""
+    secret = (os.environ.get("KARTIS_CVAUTH_SECRET") or "").strip()
+    if secret and hmac.compare_digest(str(supplied_secret), secret):
+        return None
+    token = _cvsales_token()
+    if token and hmac.compare_digest(str((body or {}).get("token") or ""), token):
+        return None
+    if not secret and not token:
+        # An unset env var must never mean "open" on a route the edge no
+        # longer guards.
+        return jsonify({"error": "neither KARTIS_CVSALES_TOKEN nor "
+                                 "KARTIS_CVAUTH_SECRET is set on the server - "
+                                 "sales import is disabled"}), 503
+    return jsonify({"error": "bad token"}), 403
+
+
 def _cvauth_job_get():
     raw = db.setting_get(CVAUTH_JOB_KEY)
     try:
@@ -8080,7 +8143,7 @@ def api_cvauth_job_result():
     return jsonify(_cvauth_job_set(**fields))
 
 
-@app.route("/api/cvsales/import", methods=["POST"])
+@app.route("/api/cvsales/import", methods=["POST", "OPTIONS"])
 def api_cvsales_import():
     """Ingest CrowdVolt sell_delivered rows captured by a signed-in browser.
 
@@ -8103,16 +8166,34 @@ def api_cvsales_import():
     row lands byte-identical to a scraped one - same id (the order number),
     so the two paths converge on one row instead of double-counting.
 
-    Gated by the edge (Caddy basic auth) like every other mutating route
-    here; it carries no credential, only sales data.
+    Gated by its own token rather than by the edge: Caddy exempts this one
+    path so the bookmarklet on crowdvolt.com can post to it directly. See
+    _cvsales_auth_error. It carries sales data, never a credential.
     """
     from flask import request
-    body = request.get_json(silent=True) or {}
+    origin = request.headers.get("Origin") or ""
+    if request.method == "OPTIONS":
+        # Only reached if a browser decides to preflight; the bookmarklet
+        # sends text/plain precisely so it does not have to.
+        resp = _cvsales_cors(jsonify({}), origin)
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Max-Age"] = "600"
+        return resp
+    # force=True: the bookmarklet posts JSON as text/plain to stay a "simple"
+    # CORS request, so the Content-Type will not be application/json.
+    body = request.get_json(force=True, silent=True) or {}
+    err = _cvsales_auth_error(body)
+    if err:
+        resp, code = err
+        return _cvsales_cors(resp, origin), code
     rows = body.get("rows")
     if not isinstance(rows, list) or not rows:
-        return jsonify({"error": "body needs a non-empty 'rows' list"}), 400
+        return _cvsales_cors(
+            jsonify({"error": "body needs a non-empty 'rows' list"}), origin), 400
     if len(rows) > 2000:
-        return jsonify({"error": "too many rows (max 2000)"}), 413
+        return _cvsales_cors(
+            jsonify({"error": "too many rows (max 2000)"}), origin), 413
 
     mapped, bad = [], 0
     for r in rows:
@@ -8128,8 +8209,9 @@ def api_cvsales_import():
         else:
             bad += 1          # no order_number, or an unparseable shape
     if not mapped:
-        return jsonify({"error": "no rows mapped - wrong shape?",
-                        "received": len(rows), "unmappable": bad}), 400
+        return _cvsales_cors(
+            jsonify({"error": "no rows mapped - wrong shape?",
+                     "received": len(rows), "unmappable": bad}), origin), 400
 
     before = {x["id"] for x in db.all_crowdvolt_sales()}
     db.upsert_crowdvolt_sales(mapped, datetime.now(timezone.utc).isoformat())
@@ -8153,7 +8235,7 @@ def api_cvsales_import():
                         result={k: summary[k] for k in
                                 ("mapped", "inserted", "updated",
                                  "crowdvolt_sales_total")})
-    return jsonify(summary)
+    return _cvsales_cors(jsonify(summary), origin)
 
 
 @app.route("/api/cvauth/status")

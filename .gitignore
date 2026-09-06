@@ -41,3 +41,7 @@ supervisor.log
 
 # CrowdVolt refresh cookie cache (live credential)
 cv_session.json
+
+# .env backups carry live credentials
+.env.bak*
+.env.save
