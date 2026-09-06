@@ -541,6 +541,13 @@ function blockBreakdown(w, avail) {
     .filter(k => k !== '');
   if (keys.length < 2) return '';   // a single bucket is what the top line already says
   const win = w.standing_window || 0;
+  // Label payloads are cached on disk for an hour, so right after a deploy a
+  // source that HAS standing sections can still be serving a pre-capacity
+  // block map. Without `reserved` we can't tell a standing section from a
+  // seated one, and its buy-window count would render as though it were real
+  // inventory ("10" for a section with 5000 left) — the precise misreading
+  // this breakdown exists to prevent. Show nothing until the cache rolls.
+  if (win && !keys.some(k => (blocks[k] || {}).reserved !== undefined)) return '';
   const rows = keys.map(k => {
     const b = blocks[k] || {};
     const standing = win > 0 && b.reserved === false;
