@@ -93,6 +93,17 @@ SOURCE_NAME = "kupat"
 # a threshold since kupat has no "last tickets" signal of its own.
 GA_LOW_THRESHOLD = int(os.getenv("KARTIS_KUPAT_GA_LOW") or 25)
 
+# A MIXED venue (seated tribunes + standing lawn) reports its standing
+# sections through the same seats-status endpoint, but only ever as a buy
+# window the size of the ticket group's `maxQty` — 10 rows per standing
+# section on every call, no matter whether 5 or 5000 remain. So a standing
+# section sitting at exactly this number means "at least this many", and a
+# count BELOW it is the real remainder (the window can't be filled). Verified
+# against Peer Tasi | Hanan Ben Ari @ Amphi MAX, 2026-09: GOLDEN RING and
+# דשא both pinned at 10 while availSeats said 5548 house-wide, across every
+# isReserved/isHold parameter combination the endpoint accepts.
+STANDING_WINDOW = int(os.getenv("KARTIS_KUPAT_STANDING_WINDOW") or 10)
+
 # A presentation that has ever served per-seat rows is SEATED, permanently.
 # The in-page capture occasionally misses XHRs (12s poll race); without this
 # sticky memory a miss degrades the watcher to the GA pseudo-seat (when the
@@ -566,11 +577,53 @@ def _cache_path(feature_id, presentation_id, lang):
 # fetch_fresh below. No separate HTTP helpers; the API rejects them anyway.
 
 
-def _build_block_map(presentation, seatplan):
-    """Returns ({block_code: {name, price, priceLevel, ticketGroupId}}, totalSeated).
+def _count_section_dots(section):
+    """Number of real seat dots in one seatplan section.
 
-    totalSeated is the sum of every section's Capacity from the seatplan —
-    i.e. the venue's seated dot-count for this layout."""
+    A section's layout is groups -> rows -> seats. Reserved (seated) sections
+    key their seats under "S"; standing sections carry an empty "seats" map
+    instead, so they count 0 — which is exactly the distinction we want.
+    """
+    total = 0
+    groups = section.get("groups")
+    groups = list(groups.values()) if isinstance(groups, dict) else (groups or [])
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        rows = group.get("rows")
+        rows = list(rows.values()) if isinstance(rows, dict) else (rows or [])
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            seats = row.get("S")
+            if seats is None:
+                seats = row.get("seats")
+            if isinstance(seats, (dict, list)):
+                total += len(seats)
+    return total
+
+
+def _build_block_map(presentation, seatplan):
+    """Returns ({block_code: {...}}, totalSeated).
+
+    Each block carries name/price/priceLevel/ticketGroupId plus:
+      capacity — how many seats the section really holds
+      reserved — True for a real per-seat section, False for standing/GA
+
+    Capacity comes from COUNTING the section's seat dots, not from the
+    seatplan's own ``Capacity`` field. That field is a venue-config leftover
+    and is wildly wrong on real layouts: Amphi MAX's three tribunes each
+    report Capacity 100 while their seat maps hold 839 / 816 / 839 dots, so
+    summing it told the dashboard a ~14.8k-seat show had 300 seats. The
+    ``Capacity`` field survives only as a fallback for sections that ship no
+    seat map at all, so this can never *lower* a venue's seated total — a
+    lower total in _has_seated_capacity could flip a seated event to GA and
+    phantom-remove its whole seat set.
+
+    totalSeated is the sum of those capacities — the venue's SEATED count
+    only. On mixed venues (seated tribunes + standing lawn) it is much
+    smaller than the presentation's availSeats, which counts standing too.
+    """
     price_by_group = {}
     for lvl in presentation.get("priceLevels") or []:
         gid = lvl.get("ticketGroupId")
@@ -590,14 +643,24 @@ def _build_block_map(presentation, seatplan):
             gid_int = int(gid) if gid is not None else None
         except (TypeError, ValueError):
             gid_int = None
-        cap = sec.get("Capacity")
-        if isinstance(cap, (int, float)):
-            total_seated += int(cap)
+        dots = _count_section_dots(sec)
+        if dots:
+            capacity = dots
+        else:
+            cap = sec.get("Capacity")
+            capacity = int(cap) if isinstance(cap, (int, float)) else None
+        total_seated += capacity or 0
         out[section_id] = {
             "name": name or section_id,
             "price": price_by_group.get(gid_int),
             "priceLevel": gid_int,
             "ticketGroupId": gid_int,
+            "capacity": capacity,
+            # Standing sections ship no seat map, and seats-status only ever
+            # hands back a STANDING_WINDOW-sized buy window for them — never
+            # their true remaining stock. The UI must not read those counts
+            # as inventory.
+            "reserved": bool(sec.get("IsReserved")) and dots > 0,
         }
     return out, total_seated
 
@@ -610,6 +673,18 @@ def fetch_fresh(feature_id, presentation_id, lang="iw"):
     # GA (standing) events have no seated sections — see _has_seated_capacity.
     # `isGA` is an int, not a boolean, so it can't be used here.
     is_ga = total_seated == 0
+    # Mixed venues (e.g. Amphi MAX: three seated tribunes ringed by standing
+    # lawn + pit) have a real seat map that covers only part of the house, so
+    # total_seated is NOT the venue capacity — availSeats routinely exceeds
+    # it. Publishing it as totalSeats renders an "X / Y" where X > Y and a
+    # nonsense 0% sold, so treat the house total as unknown there and let the
+    # per-section breakdown carry the detail instead.
+    avail = presentation.get("availSeats")
+    mixed = (
+        not is_ga
+        and isinstance(avail, (int, float))
+        and avail > total_seated
+    )
     # kupat returns dateTime as "YYYY-MM-DD HH:MM:SS" in venue-local time.
     # We keep both the raw string (for accurate display, no TZ conversion)
     # and an ms-since-epoch interpretation (for sorting). The display path
@@ -637,11 +712,17 @@ def fetch_fresh(feature_id, presentation_id, lang="iw"):
             "firstPerfMs": perf_ms,
             "firstPerfText": perf_text,
             "status": "soldout" if presentation.get("soldout") else "selling",
-            "availSeats": presentation.get("availSeats"),
+            "availSeats": avail,
             # For GA, the seatplan capacity is the venue's *seated* dot-count,
             # not the standing/GA allocation, so it's a misleading "total" —
-            # null it and show tickets-left only. Non-GA keeps the real total.
-            "totalSeats": None if is_ga else (total_seated or None),
+            # null it and show tickets-left only. Same for mixed venues, where
+            # it only covers the seated part. Fully-seated shows keep the real
+            # total and their existing "X / Y (% sold)" display.
+            "totalSeats": None if (is_ga or mixed) else (total_seated or None),
+            # Seated capacity on its own — always the sum of the seat map, so
+            # the breakdown can still show "95 / 2494 seated" on mixed venues.
+            "seatedTotal": total_seated or None,
+            "mixed": mixed,
             # GA (standing) marker + low-stock-aware status for the GA Tracker
             # page. Non-GA kupat events leave ga False and behave as before.
             "ga": is_ga,

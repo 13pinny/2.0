@@ -73,6 +73,21 @@
   .empty { color: var(--muted); padding: 28px; text-align: center; font-size: 12px; }
   .seats-detail { font-size: 11px; color: var(--muted); white-space: pre-wrap; max-height: 200px; overflow: auto; padding: 6px 8px; background: var(--bg-3); border: 1px solid var(--line); }
   details summary { cursor: pointer; color: var(--accent); font-size: 11px; }
+  /* Per-section breakdown inside the Seats cell. Sections list
+     most-sold-first, so whatever is about to go sits at the top. */
+  .block-break { margin-top: 3px; }
+  .block-break > table { width: auto; min-width: 210px; margin: 4px 0 0; background: var(--bg-3); border: 1px solid var(--line); }
+  .block-break td { padding: 2px 7px; border: 0; font-size: 11px; white-space: nowrap; }
+  .block-break td.bk-name { color: var(--text); max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+  .block-break td.bk-n { text-align: right; font-variant-numeric: tabular-nums; }
+  .block-break td.bk-pct { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .block-break tr.bk-standing td.bk-name { color: var(--muted); }
+  .block-break tr.bk-note td { color: var(--muted); font-style: italic; white-space: normal; max-width: 250px; }
+  .block-break tr.bk-sep td { border-top: 1px solid var(--line-2); padding-top: 4px; }
+  .bk-tag { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; padding: 0 4px; border: 1px solid currentColor; border-radius: 1px; margin-left: 5px; }
+  .bk-tag.gone { color: var(--red); }
+  .bk-tag.low { color: var(--amber); }
+  .bk-tag.cap { color: var(--muted); }
   .add-form { display: grid; grid-template-columns: 2fr 1fr auto; gap: 8px; max-width: 900px; }
   .add-form input { width: 100%; }
   .bulk-form { max-width: 900px; }
@@ -385,11 +400,15 @@ async function load() {
     if (d.seats_json) {
       try {
         const seats = JSON.parse(d.seats_json);
+        // kupat blocks are numeric section ids ("5"); show the section's
+        // real name so a drop reads "טריבונה 3", not "5".
+        const names = (w && w.blocks) || {};
         const lines = seats.map(s => {
           const block = s.block || s.b || '?';
+          const name = (names[block] || {}).name || block;
           const row = s.row || s.r || '?';
           const seat = s.seat ?? s.l ?? '?';
-          return `${block} R${row} S${seat}`;
+          return `${name} R${row} S${seat}`;
         }).join('\n');
         seatsHtml = `<details><summary>${seats.length} seat(s)</summary><div class="seats-detail">${escape(lines)}</div></details>`;
       } catch (_) {
@@ -489,11 +508,112 @@ function seatCell(w) {
   const avail = (w.available_seats != null) ? w.available_seats : w.last_seat_count;
   const total = w.total_seats;
   if (avail == null) return '—';
-  if (!total) return String(avail);
+  const breakdown = blockBreakdown(w, avail);
+  if (!total) return `<div>${fmtNum(avail)}</div>${breakdown}`;
   const sold = Math.max(0, total - avail);
   const pctSold = total > 0 ? (sold / total * 100) : 0;
-  return `<div>${avail} / ${total}</div>` +
-         `<div style="font-size:10px;color:var(--muted)">${pctSold.toFixed(1)}% sold</div>`;
+  return `<div>${fmtNum(avail)} / ${fmtNum(total)}</div>` +
+         `<div style="font-size:10px;color:var(--muted)">${pctSold.toFixed(1)}% sold</div>` +
+         breakdown;
+}
+
+function fmtNum(n) {
+  return (typeof n === 'number') ? n.toLocaleString('en-US') : String(n);
+}
+
+// Per-section "how much is left in each category", built from the section
+// map (names / capacities) joined against the live per-block seat counts.
+//
+// Two kinds of section, and conflating them is the whole trap:
+//   reserved — a real seat map. The count IS the remaining inventory, so
+//              "37 / 839 · 95.6% sold" is exact.
+//   standing — no seat map. The source's availability feed hands back a
+//              fixed-size buy window (kupat: 10 rows) no matter whether 5
+//              or 5000 remain, so the count is a FLOOR, not inventory. We
+//              render "10+", and only trust the number once it drops below
+//              the window — which is the genuine last-tickets signal.
+// Sources that don't mark sections (ticketmaster) have reserved undefined
+// and are treated as seated, exactly as before.
+function blockBreakdown(w, avail) {
+  const blocks = w.blocks || {};
+  const counts = w.block_counts || {};
+  const keys = Array.from(new Set([...Object.keys(blocks), ...Object.keys(counts)]))
+    .filter(k => k !== '');
+  if (keys.length < 2) return '';   // a single bucket is what the top line already says
+  const win = w.standing_window || 0;
+  const rows = keys.map(k => {
+    const b = blocks[k] || {};
+    const standing = win > 0 && b.reserved === false;
+    // Sources that publish a real per-block QUANTITY (tickchak's per-type
+    // released/sold/left) win over the seat count: tickchak stores one
+    // *virtual* seat per in-stock ticket type, so its block_counts are all
+    // 1 and would read as "1 ticket left" on a type with 800.
+    const hasQty = typeof b.available === 'number';
+    const n = hasQty ? b.available : (counts[k] || 0);
+    const cap = hasQty
+      ? ((typeof b.amount === 'number' && b.amount > 0) ? b.amount : null)
+      : ((!standing && typeof b.capacity === 'number' && b.capacity > 0) ? b.capacity : null);
+    return {
+      name: b.name || k,
+      n, cap, standing,
+      pct: cap ? Math.max(0, cap - n) / cap * 100 : null,
+      capped: standing && n >= win,
+    };
+  });
+  // Seated first (closest to sold out at the top), then standing.
+  const seated = rows.filter(r => !r.standing)
+    .sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1) || a.n - b.n);
+  // Standing sections whose count is BELOW the window are showing their true
+  // remainder (sold out, or genuinely last-N) — those are the actionable ones,
+  // so they sort above the capped "10+" rows that tell you nothing.
+  const standing = rows.filter(r => r.standing)
+    .sort((a, b) => (a.capped ? 1 : 0) - (b.capped ? 1 : 0) || a.n - b.n);
+  const cells = [];
+  for (const r of seated) {
+    const tag = r.n === 0 ? '<span class="bk-tag gone">sold out</span>' : '';
+    cells.push(
+      `<tr><td class="bk-name" title="${escape(r.name)}">${escape(r.name)}</td>` +
+      `<td class="bk-n">${fmtNum(r.n)}${r.cap ? ' / ' + fmtNum(r.cap) : ''}${tag}</td>` +
+      `<td class="bk-pct">${r.pct != null ? r.pct.toFixed(1) + '%' : ''}</td></tr>`);
+  }
+  for (const [i, r] of standing.entries()) {
+    let n, tag;
+    if (r.n === 0) {
+      n = '0'; tag = '<span class="bk-tag gone">sold out</span>';
+    } else if (r.capped) {
+      n = fmtNum(r.n) + '+'; tag = '<span class="bk-tag cap">standing</span>';
+    } else {
+      n = fmtNum(r.n); tag = '<span class="bk-tag low">last ' + fmtNum(r.n) + '</span>';
+    }
+    cells.push(
+      `<tr class="bk-standing${i === 0 && seated.length ? ' bk-sep' : ''}">` +
+      `<td class="bk-name" title="${escape(r.name)}">${escape(r.name)}</td>` +
+      `<td class="bk-n">${n}${tag}</td><td class="bk-pct"></td></tr>`);
+  }
+  // On a mixed venue the seat map covers only part of the house, so the
+  // standing remainder is what's left after the seated sections — a real
+  // number, just not splittable between the standing categories.
+  if (standing.length && w.mixed_venue && typeof avail === 'number') {
+    const seatedLeft = seated.reduce((s, r) => s + r.n, 0);
+    const standingLeft = avail - seatedLeft;
+    if (standingLeft > 0) {
+      const names = standing.map(r => r.name).join(' + ');
+      cells.push(
+        `<tr class="bk-note bk-sep"><td colspan="3">~${fmtNum(standingLeft)} left across ` +
+        `${escape(names)} — the feed caps each standing section at ${win}, ` +
+        `so this total can't be split between them.</td></tr>`);
+    }
+  }
+  if (w.mixed_venue && w.seated_total) {
+    const seatedLeft = seated.reduce((s, r) => s + r.n, 0);
+    const pct = (w.seated_total - seatedLeft) / w.seated_total * 100;
+    cells.push(
+      `<tr class="bk-note"><td colspan="3">seated total ${fmtNum(seatedLeft)} / ` +
+      `${fmtNum(w.seated_total)} — ${pct.toFixed(1)}% sold</td></tr>`);
+  }
+  if (!cells.length) return '';
+  return `<details class="block-break"><summary>by section</summary>` +
+         `<table>${cells.join('')}</table></details>`;
 }
 
 function filterSummaryFor(w) {

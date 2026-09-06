@@ -3025,6 +3025,35 @@ def tm_get_seat_keys(watcher_id):
     return {r["seat_key"] for r in rows}
 
 
+def tm_seat_counts_by_block(watcher_ids):
+    """{watcher_id: {block: available_count}} over the CURRENT seat state.
+
+    The watcher already stores one row per currently-buyable seat with the
+    section it sits in, so the per-category breakdown the dashboard shows is
+    just a GROUP BY — no extra scraping. Done for every watcher in one query
+    so /api/watchers stays a single round trip.
+    """
+    ids = [w for w in (watcher_ids or []) if w]
+    if not ids:
+        return {}
+    out = {}
+    with connect() as conn:
+        # SQLite caps a statement at 999 host params by default; watcher
+        # counts are far below that, but chunk anyway so a big board can't
+        # start failing silently.
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT watcher_id, block, COUNT(*) AS n FROM tm_seat_state "
+                f"WHERE watcher_id IN ({marks}) GROUP BY watcher_id, block",
+                chunk,
+            ).fetchall()
+            for r in rows:
+                out.setdefault(r["watcher_id"], {})[r["block"] or ""] = r["n"]
+    return out
+
+
 def tm_replace_seat_state(watcher_id, seats):
     """Atomically replace the watcher's known seat set. Seats must be in the
     normalized shape with `block`, `row`, `seat` keys (each source module

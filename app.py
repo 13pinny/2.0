@@ -7284,6 +7284,9 @@ def api_watchers():
     watchers = db.tm_all_watchers()
     drops = db.tm_recent_drops(limit=200)
     settings = db.all_settings()
+    # Per-section availability for the breakdown in the Seats column. One
+    # GROUP BY over the seat state the watcher already keeps — no scraping.
+    seat_counts = db.tm_seat_counts_by_block([w["id"] for w in watchers])
     # Enrich each watcher with venue capacity from its cached labels — pure
     # disk read, no network. Lets the UI show "53 / 4125 (98.7% sold)"
     # without holding a venue total in tm_watchers.
@@ -7312,6 +7315,18 @@ def api_watchers():
             if meta.get("festival"):
                 w["festival_status"] = meta.get("festivalStatus")
                 w["festival_types"] = lbls.get("blocks") or {}
+            # Per-section breakdown: the section map (name / price / capacity /
+            # reserved) joined in the UI against the live per-block counts
+            # below. Mixed venues also carry the seated subtotal, since their
+            # seat map covers only part of the house.
+            w["blocks"] = lbls.get("blocks") or {}
+            w["block_counts"] = seat_counts.get(w["id"], {})
+            w["seated_total"] = meta.get("seatedTotal")
+            w["mixed_venue"] = bool(meta.get("mixed"))
+            # How many rows a standing section is capped at in this source's
+            # availability feed — the UI needs it to render "10+" instead of
+            # a fake "10 left". None for sources with no such cap.
+            w["standing_window"] = getattr(src, "STANDING_WINDOW", None)
         except Exception:
             w["total_seats"] = None
             w["available_seats"] = None
