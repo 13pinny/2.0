@@ -1155,9 +1155,45 @@ def notify_site_event(kind, ev, old=None):
                 line += " — SOLD OUT"
             lines.append(line)
         color = 0xF39C12
+    elif kind in ("salesoon", "salelive"):
+        # Kupat publishes each performance's exact Ticket_Sale_Start, so a
+        # drop is knowable to the minute BEFORE it happens — that is the
+        # whole point of these two pings.
+        rows = ev.get("scheduled_sales" if kind == "salesoon" else "live_sales") or []
+        n = len(rows)
+        if kind == "salesoon":
+            when = min((r.get("sale_start") or "" for r in rows), default="")
+            title = (f"⏰ {label}: {name} — sale opens {when}" if when and n == 1
+                     else f"⏰ {label}: {name} — {n} sales scheduled")
+            color = 0x5865F2
+        else:
+            title = (f"🚨 {label}: {name} — SALE IS OPEN" if n == 1
+                     else f"🚨 {label}: {name} — {n} dates just went on sale")
+            color = 0xFF2D55
+        lines = []
+        for r in rows:
+            line = f"**{r.get('date_text') or '?'}**"
+            if r.get("venue"):
+                line += f" — {r['venue']}"
+            if r.get("min_price"):
+                line += f" — from ₪{r['min_price']:g}"
+            if kind == "salesoon" and r.get("sale_start"):
+                line += f" — opens {r['sale_start']}"
+            if r.get("queue"):
+                line += " — QUEUE-IT"
+            lines.append(line)
+    elif kind == "graphic":
+        title = f"🖼️ {label}: new artwork on the homepage — {name}"
+        color = 0xB57EDC
+        where = ", ".join(ev.get("homepage_sections") or [])
+        lines.append(f"The banner changed{f' ({where})' if where else ''} — "
+                     "usually a re-announcement, a new date or a lineup change.")
     elif kind == "onsale":
         if ev.get("source") == "kupat":
+            where = ", ".join(ev.get("homepage_sections") or [])
             title = f"🏠 Kupat: {name} is now on the homepage — sale is official"
+            if where:
+                lines.append(f"Promoted in: {where}")
         else:
             title = f"🎟️ {label}: {name} is now ON SALE"
         color = 0x56D364
@@ -1173,6 +1209,18 @@ def notify_site_event(kind, ev, old=None):
             lines.append("⏳ Not on sale yet — listed only." +
                          (" Watch for the homepage ping." if ev.get("source") == "kupat" else ""))
 
+    # A scheduled sale is the single most useful fact about an event that
+    # isn't selling yet, so every kind that isn't already about the sale
+    # itself carries the opening time.
+    pending = ev.get("pending_sales") or []
+    if pending and kind not in ("salesoon", "salelive"):
+        when = pending[0].get("sale_start")
+        if when:
+            n = len({p.get("sale_start") for p in pending})
+            lines.append(f"⏰ Sale opens **{when}**" +
+                         (f" (+{n - 1} other opening time{'s' if n > 2 else ''})"
+                          if n > 1 else ""))
+
     embed = {
         "title": title[:250],
         "description": "\n".join(lines)[:4000],
@@ -1181,7 +1229,14 @@ def notify_site_event(kind, ev, old=None):
     }
     if ev.get("image"):
         embed["image"] = {"url": ev["image"]}
-    return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
+    payload = {"embeds": [embed]}
+    if kind == "salelive":
+        # The one perishable ping in this family — a sale that opened this
+        # minute. Plain-text content rides along so the phone push shows
+        # the headline instead of "sent an embed" (same trick as the pacha
+        # price-drop shocks).
+        payload["content"] = title[:1900]
+    return {"discord": _post_discord(discord_url, payload)}
 
 
 def notify_pricer_paused(info):

@@ -704,6 +704,15 @@ CREATE TABLE IF NOT EXISTS site_seen_events (
     -- a known event is the 'newdate' ping. NULL = no baseline yet, so the
     -- first tick after deploy stores silently instead of ping-flooding.
     perfs_json    TEXT,
+    -- Signature of the promotional graphic the site currently shows for
+    -- this event (kupat only). A change is the 'graphic' ping; NULL = no
+    -- baseline yet, which stores silently.
+    image_sig     TEXT,
+    -- JSON {"pending": {perf_key: sale_start}} — performances whose sale
+    -- has been SCHEDULED but hasn't opened (kupat only). A new/moved entry
+    -- is the 'salesoon' ping; an entry whose time has passed is
+    -- 'salelive'. NULL = no baseline yet, so the first tick is silent.
+    sale_json     TEXT,
     PRIMARY KEY (source, event_key)
 );
 -- Market-wide tracker (market.py + app.py run_market_sweep). One row per
@@ -1220,6 +1229,10 @@ def init():
         sse_cols = {row["name"] for row in conn.execute("PRAGMA table_info(site_seen_events)").fetchall()}
         if "perfs_json" not in sse_cols:
             conn.execute("ALTER TABLE site_seen_events ADD COLUMN perfs_json TEXT")
+        if "image_sig" not in sse_cols:
+            conn.execute("ALTER TABLE site_seen_events ADD COLUMN image_sig TEXT")
+        if "sale_json" not in sse_cols:
+            conn.execute("ALTER TABLE site_seen_events ADD COLUMN sale_json TEXT")
         pc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(viagogo_pricer_config)").fetchall()}
         if "compete_sections" not in pc_cols:
             conn.execute("ALTER TABLE viagogo_pricer_config ADD COLUMN compete_sections TEXT")
@@ -3554,6 +3567,30 @@ def site_events_set_perfs(source, event_key, perf_keys):
         conn.execute(
             "UPDATE site_seen_events SET perfs_json = ? WHERE source = ? AND event_key = ?",
             (json.dumps(sorted(perf_keys)), source, event_key),
+        )
+
+
+def site_events_set_image_sig(source, event_key, image_sig):
+    """Persist the promotional graphic's signature for one event (kupat's
+    'graphic changed' diff). The upsert path never touches image_sig, so a
+    tick that couldn't HEAD the banner leaves the stored baseline alone
+    instead of reading as 'the graphic was removed'."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE site_seen_events SET image_sig = ? WHERE source = ? AND event_key = ?",
+            (image_sig, source, event_key),
+        )
+
+
+def site_events_set_sales(source, event_key, pending):
+    """Persist the scheduled-but-not-open sales for one event (kupat's
+    'salesoon' / 'salelive' diff) as {perf_key: sale_start}. Written only
+    when the sale feed was readable this tick — like perfs_json, a NULL
+    means "no baseline yet" and baselines silently."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE site_seen_events SET sale_json = ? WHERE source = ? AND event_key = ?",
+            (json.dumps({"pending": pending}, ensure_ascii=False), source, event_key),
         )
 
 

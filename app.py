@@ -277,12 +277,18 @@ _last_edm_catalogs = {}
 # run dashboard sets KARTIS_IL_EVENTS_ENABLED=0 or Discord double-pings.
 IL_EVENT_SOURCES = {"kupat": kupat_events, "tm": tm_events, "barby": barby_events}
 _last_il_events = {"at": None, "events": {}, "new": 0, "onsale": 0,
-                   "newdate": 0, "notified": 0, "baseline": [], "errors": {},
+                   "newdate": 0, "graphic": 0, "salesoon": 0, "salelive": 0,
+                   "notified": 0, "baseline": [], "errors": {},
                    "error": None, "running": False}
 _il_events_lock = threading.Lock()
 IL_EVENTS_INTERVAL_MINUTES = int(os.getenv("KARTIS_IL_EVENTS_INTERVAL_MINUTES") or 10)
 IL_EVENTS_ENABLED = (os.getenv("KARTIS_IL_EVENTS_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 IL_EVENTS_MAX_PINGS_PER_TICK = 12
+# Ping priority under that cap, most perishable first: a sale that just
+# opened beats one scheduled for later, which beats a homepage debut, a
+# re-drawn banner, an added date and a routine catalog listing.
+IL_EVENTS_PING_ORDER = {"salelive": 0, "salesoon": 1, "onsale": 2,
+                        "graphic": 3, "newdate": 4, "new": 5}
 
 # Market-wide tracker (/market) — hourly availability sweep of every event
 # on kupat + TM-IL (+ manually-added tickchak) via market.py. Needs
@@ -785,6 +791,16 @@ def run_il_events():
                     perf_map = mod.fetch_presentations(events)
                 except Exception as e:
                     print(f"[il-events] {source} presentations fetch failed (perf diff skipped): {e}")
+            # Scheduled-but-not-yet-open sales (kupat only). Same
+            # fail-soft contract as the perf map: on error the diff is
+            # skipped and stored sale state is left untouched, never
+            # rewritten to "nothing scheduled".
+            sale_map = None
+            if hasattr(mod, "fetch_pending_sales"):
+                try:
+                    sale_map = mod.fetch_pending_sales()
+                except Exception as e:
+                    print(f"[il-events] {source} pending-sale fetch failed (sale diff skipped): {e}")
             seen = db.site_events_all_seen(source)
             baseline = not seen
             if baseline:
@@ -807,6 +823,74 @@ def run_il_events():
                 # not re-arm the 'onsale' ping and fire again on its return.
                 if old is not None and old["on_sale"] and not ev["on_sale"]:
                     ev["on_sale"] = True
+                # The promotional graphic. Only meaningful while the show
+                # is promoted (an unpromoted event has no banner to
+                # compare), and only once a baseline exists — a first
+                # sighting stores silently. A tick that couldn't HEAD the
+                # banner leaves the stored signature alone.
+                if ev.get("image_sig"):
+                    old_sig = (old or {}).get("image_sig")
+                    if old and old_sig and old_sig != ev["image_sig"] and not baseline:
+                        pings.append(("graphic", ev, old))
+                    ev["_image_sig"] = ev["image_sig"]
+
+                if sale_map is not None:
+                    cur_sales = sale_map.get(ev["event_key"], {})
+                    # Every scheduled-but-unopened sale, ping or not — the
+                    # 'new' and 'onsale' embeds show the opening time
+                    # inline, so an announcement carries the drop time
+                    # without also firing a separate 'salesoon'.
+                    if cur_sales:
+                        ev["pending_sales"] = sorted(
+                            ({**info, "perf_key": k} for k, info in cur_sales.items()),
+                            key=lambda r: (r.get("sale_start") or "", r.get("date_text") or ""))
+                    stored_raw = (old or {}).get("sale_json")
+                    stored = None
+                    if stored_raw:
+                        try:
+                            stored = json.loads(stored_raw).get("pending") or {}
+                        except (ValueError, AttributeError):
+                            stored = None
+                    if old is None or baseline or stored is None:
+                        # First tick with sale data for this event: store a
+                        # silent baseline. A show whose sale is already
+                        # scheduled shouldn't ping just because we started
+                        # looking — 'new' already covers a brand-new event.
+                        pass
+                    else:
+                        perfs_by_key = {p["perf_key"]: p
+                                        for p in (perf_map or {}).get(ev["event_key"], [])}
+
+                        def _sale_row(perf_key, info, start):
+                            row = dict(perfs_by_key.get(perf_key) or {})
+                            row.update({k: v for k, v in (info or {}).items() if v not in (None, "")})
+                            row["perf_key"] = perf_key
+                            row["sale_start"] = start
+                            return row
+
+                        scheduled, live = [], []
+                        for perf_key, info in cur_sales.items():
+                            was = stored.get(perf_key)
+                            if was != info["sale_start"]:
+                                # New drop, or one kupat moved to a
+                                # different minute — both are news.
+                                scheduled.append(_sale_row(perf_key, info, info["sale_start"]))
+                        for perf_key, start in stored.items():
+                            if perf_key in cur_sales:
+                                continue
+                            # Gone from the pending feed: the sale opened
+                            # (its minute passed) or kupat pulled it. Only
+                            # the former is a ping.
+                            if mod.sale_start_passed(start):
+                                live.append(_sale_row(perf_key, None, start))
+                        if scheduled:
+                            ev["scheduled_sales"] = scheduled
+                            pings.append(("salesoon", ev, old))
+                        if live:
+                            ev["live_sales"] = live
+                            pings.append(("salelive", ev, old))
+                    ev["_sale_pending"] = {k: v["sale_start"] for k, v in cur_sales.items()}
+
                 if perf_map is not None and ev["event_key"] in perf_map:
                     cur = perf_map[ev["event_key"]]
                     cur_keys = {p["perf_key"] for p in cur}
@@ -834,8 +918,16 @@ def run_il_events():
                 db.site_events_upsert_seen(source, ev, now_iso)
                 if ev.get("_perf_union") is not None:
                     db.site_events_set_perfs(source, ev["event_key"], ev["_perf_union"])
+                if ev.get("_image_sig"):
+                    db.site_events_set_image_sig(source, ev["event_key"], ev["_image_sig"])
+                if ev.get("_sale_pending") is not None:
+                    db.site_events_set_sales(source, ev["event_key"], ev["_sale_pending"])
             if baseline:
                 print(f"[il-events] {source} baseline stored: {len(events)} events, no pings")
+
+        # Perishable first, so a burst of routine announcements can't push
+        # a sale that is opening RIGHT NOW past the per-tick cap.
+        pings.sort(key=lambda p: IL_EVENTS_PING_ORDER.get(p[0], 99))
 
         notified = 0
         if not muted:
@@ -854,6 +946,9 @@ def run_il_events():
             new=sum(1 for k, _, _ in pings if k == "new"),
             onsale=sum(1 for k, _, _ in pings if k == "onsale"),
             newdate=sum(1 for k, _, _ in pings if k == "newdate"),
+            graphic=sum(1 for k, _, _ in pings if k == "graphic"),
+            salesoon=sum(1 for k, _, _ in pings if k == "salesoon"),
+            salelive=sum(1 for k, _, _ in pings if k == "salelive"),
             notified=notified,
         )
     except Exception as e:
@@ -3504,6 +3599,14 @@ def api_viagogo_push():
 
 # Simple in-process cache: (event_id, ticket_type) -> list[str]
 _sections_cache: dict = {}
+# ...and a short-lived cache of FAILURES: (event_id, ticket_type) -> (when, msg).
+# Each miss costs a ~20s browser flow under the shared viagogo "listing" lock,
+# and /listings auto-fetches sections for every awaiting card on every render.
+# Without this, a handful of un-fetchable events re-queue that flow on every
+# page load and starve the interactive flows (2026-09-07: "Use link" lost the
+# lock three times over and reported the event as unlistable).
+_sections_fail_cache: dict = {}
+SECTIONS_FAIL_TTL_SECONDS = int(os.getenv("KARTIS_SECTIONS_FAIL_TTL") or 300)
 
 
 @app.route("/api/viagogo-sections")
@@ -3517,11 +3620,21 @@ def api_viagogo_sections():
     cache_key = (event_id, ticket_type)
     if cache_key in _sections_cache:
         return jsonify({"sections": _sections_cache[cache_key], "cached": True})
+    # The ↻ reload button sends force=1 to skip the failure cache on demand.
+    force = (request.args.get("force") or "") not in ("", "0", "false")
+    failed = _sections_fail_cache.get(cache_key)
+    if failed and not force:
+        when, msg = failed
+        if time.time() - when < SECTIONS_FAIL_TTL_SECONDS:
+            return jsonify({"error": msg, "cached": True}), 500
+        _sections_fail_cache.pop(cache_key, None)
     try:
         sections = viagogo_listing.fetch_sections(event_id, search_query, ticket_type)
         _sections_cache[cache_key] = sections
+        _sections_fail_cache.pop(cache_key, None)
         return jsonify({"sections": sections})
     except Exception as e:
+        _sections_fail_cache[cache_key] = (time.time(), str(e))
         return jsonify({"error": str(e)}), 500
 
 
