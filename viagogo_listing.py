@@ -141,8 +141,18 @@ def _open_listings_page(p):
 
 
 def _open_new_listing_modal(page):
+    """Open the New Listing picker, re-clicking once if it didn't take.
+
+    Under load the button click sometimes doesn't register (same failure
+    mode as the ticket-type tile below), and the flow then dies on a
+    "#modal #txtSearch" timeout that reads like a broken session.
+    """
     page.click('text="New Listing"')
-    page.wait_for_selector("#modal #txtSearch", timeout=MODAL_TIMEOUT_MS)
+    try:
+        page.wait_for_selector("#modal #txtSearch", timeout=MODAL_TIMEOUT_MS)
+    except Exception:
+        page.click('text="New Listing"')
+        page.wait_for_selector("#modal #txtSearch", timeout=2 * MODAL_TIMEOUT_MS)
 
 
 def _search_rows(page, query):
@@ -167,7 +177,15 @@ def _search_rows(page, query):
     out = []
     for r in rows:
         link = r.get_attribute("data-eventlink") or ""
-        m = re.search(r"(\d+)$", link)
+        # Real events link to .../sellerevents/<numeric id>. The picker also
+        # renders a "(requested event)" placeholder row whose link ends in a
+        # UUID (.../sellerevents/72257be5-...-e1324c3ca2a1) — anchoring the
+        # id to a whole path segment skips it. A bare `(\d+)$` used to chew
+        # the UUID's trailing digits into event_id "1" (or "984"), which then
+        # ranked first, got auto-chosen, 500'd every section fetch, and — via
+        # a $= suffix match in _click_event_row — could open ANY row whose id
+        # ends in 1 (2026-09-07: a Shlomo Artzi push matched "1").
+        m = re.search(r"/(\d+)$", link)
         if not m:
             continue
         tds = r.query_selector_all("td")
@@ -308,7 +326,7 @@ def _click_event_row(page, event_id, match_row=None):
     at click time and auto-waits for it to be actionable. Falls back to the
     captured handle only if the locator can't find the row.
     """
-    row = page.locator(f'#modal tr.pointer[data-eventlink$="{event_id}"]').first
+    row = page.locator(f'#modal tr.pointer[data-eventlink$="/{event_id}"]').first
     try:
         row.wait_for(state="visible", timeout=MODAL_TIMEOUT_MS)
         row.scroll_into_view_if_needed()

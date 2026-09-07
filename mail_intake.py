@@ -756,23 +756,41 @@ def set_push_event_from_url(push_id, url_or_id, now_iso=None):
     # unfiltered event list without our row. Retry each query a few times
     # before concluding the event genuinely isn't listable.
     match = None
+    searched = False          # did any attempt actually reach the picker?
+    last_error = None
+    seen = []
     for attempt in range(3):
         for q in queries:
             try:
                 rows = viagogo_listing.search_event(q, limit=25)
             except Exception as e:
+                last_error = e
                 print(f"[intake] set-event picker search failed ({q!r}): {e}")
                 continue
+            searched = True
+            seen = rows
             match = next((r for r in rows if str(r.get("event_id")) == event_id), None)
             if match:
                 break
         if match:
             break
     if not match:
+        # Don't blame the event for a browser/lock failure. Only claim the
+        # picker can't see it when the picker actually answered — otherwise
+        # surface the real reason (2026-09-07: every attempt was losing the
+        # shared browser lock to the listings page's section fetches, and the
+        # user was told the show "may not be open for seller listings yet").
+        if not searched:
+            raise ValueError(
+                f"couldn't reach viagogo's seller picker to verify event "
+                f"{event_id}: {last_error} — try again in a moment")
+        listed = ", ".join(
+            f"{r.get('date') or '?'} {r.get('venue') or ''}".strip()
+            for r in seen[:6]) or "nothing"
         raise ValueError(
             f"viagogo's seller picker doesn't list event {event_id} under "
             f"'{term}' — the show may not be open for seller listings yet; "
-            "try again later")
+            f"try again later (it offered: {listed})")
 
     candidate = {k: match.get(k) for k in
                  ("event_id", "event_name", "venue", "city", "weekday", "date", "time")}

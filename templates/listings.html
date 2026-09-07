@@ -178,6 +178,7 @@ async function load() {
 }
 
 function renderCards(rows) {
+  _secQueue.length = 0;   // the cards these were queued for are about to go
   const container = $("vg-container");
   const doneContainer = $("vg-done");
 
@@ -337,8 +338,10 @@ function renderCards(rows) {
     // Wire event + ticket-type dropdowns to reload the section list
     const eventSel = card.querySelector("select[data-f='event_id']");
     const ticketSel = card.querySelector("select[data-f='ticket_type']");
-    eventSel.addEventListener("change", () => loadSections(card, eventSel.value, ticketSel.value));
-    ticketSel.addEventListener("change", () => loadSections(card, eventSel.value, ticketSel.value));
+    const reloadSectionsNow = () =>
+      withSectionQueuePaused(() => loadSections(card, eventSel.value, ticketSel.value));
+    eventSel.addEventListener("change", reloadSectionsNow);
+    ticketSel.addEventListener("change", reloadSectionsNow);
 
     // Keep proceeds (per-ticket take-home = viagogo price − 10%) in sync live
     const priceInput = card.querySelector("input[data-f='website_price']");
@@ -353,10 +356,11 @@ function renderCards(rows) {
     // Manual re-fetch for when viagogo's picker is laggy — beats refreshing
     // the whole page just to retry the section load.
     const reloadSecBtn = card.querySelector("[data-act='reload-sections']");
-    if (reloadSecBtn) reloadSecBtn.addEventListener("click", () => loadSections(card, eventSel.value, ticketSel.value));
+    if (reloadSecBtn) reloadSecBtn.addEventListener("click", () =>
+      withSectionQueuePaused(() => loadSections(card, eventSel.value, ticketSel.value, {force: true})));
 
-    // Auto-load sections for the pre-chosen event
-    if (r.chosen_event_id) loadSections(card, r.chosen_event_id, "E-Tickets");
+    // Auto-load sections for the pre-chosen event (queued, one at a time)
+    if (r.chosen_event_id) queueSections(card, r.chosen_event_id, "E-Tickets");
 
     // Live date check: ticket email date vs the selected viagogo event's
     // date — a same-artist wrong-night match is an expensive mistake.
@@ -446,7 +450,50 @@ function guessSection(sections, suggested, kupatSection) {
   return {value: "", source: "none"};
 }
 
-async function loadSections(card, eventId, ticketType) {
+// Every section fetch is a ~20s browser flow on the box, and they all
+// serialize behind ONE viagogo lock. Firing one per card on render (a dozen
+// on a busy inbox) queued minutes of browser work and starved the flows the
+// user is actually waiting on — "Use link" lost the lock three times over on
+// 2026-09-07 and reported the event as unlistable. So: auto-loads go through
+// a single-file queue, and interactive work (Use link) pauses it and jumps
+// the line.
+const _secQueue = [];
+let _secRunning = false;
+let _secPaused = 0;
+
+function queueSections(card, eventId, ticketType) {
+  _secQueue.push([card, eventId, ticketType]);
+  drainSections();
+}
+
+async function drainSections() {
+  if (_secRunning || _secPaused) return;
+  _secRunning = true;
+  try {
+    while (_secQueue.length && !_secPaused) {
+      const [card, eventId, ticketType] = _secQueue.shift();
+      if (!card.isConnected) continue;   // card re-rendered under us
+      await loadSections(card, eventId, ticketType);
+    }
+  } finally {
+    _secRunning = false;
+  }
+}
+
+// Run `fn` ahead of the auto-load queue: pause it, let any in-flight fetch
+// finish, then go. Nested calls are counted, so two overlapping interactive
+// actions can't un-pause each other.
+async function withSectionQueuePaused(fn) {
+  _secPaused++;
+  try {
+    return await fn();
+  } finally {
+    _secPaused--;
+    drainSections();
+  }
+}
+
+async function loadSections(card, eventId, ticketType, opts) {
   const searchQuery = card.dataset.searchQuery || "";
   const sel = card.querySelector("select[data-f='section']");
   if (!sel || !eventId || !searchQuery) return;
@@ -462,6 +509,8 @@ async function loadSections(card, eventId, ticketType) {
   const killer = setTimeout(() => ctrl.abort(), 60000);
   try {
     const params = new URLSearchParams({event_id: eventId, search_query: searchQuery, ticket_type: ticketType || "E-Tickets"});
+    // A manual ↻ means "really try again" — skip the server's failure cache.
+    if (opts && opts.force) params.set("force", "1");
     const res = await fetch("/api/viagogo-sections?" + params, {signal: ctrl.signal});
     const d = await res.json();
     if (!res.ok || !d.sections || !d.sections.length) {
@@ -668,15 +717,19 @@ async function setEventFromLink(card) {
   const url = (card.querySelector("input[data-f='event_url']")?.value || "").trim();
   if (!url) { alert("Paste the viagogo event page URL first (…/E-123456)"); return; }
   const btn = card.querySelector("[data-act='vg-set-event']");
-  if (btn) { btn.disabled = true; btn.textContent = "verifying… (~15s)"; }
+  if (btn) { btn.disabled = true; btn.textContent = "verifying… (up to 1 min)"; }
   try {
-    const res = await fetch("/api/viagogo-push/set-event", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({id, url}),
+    // Goes ahead of the background section loads — this is what the user is
+    // sitting and waiting for, and both contend for the same viagogo browser.
+    const d = await withSectionQueuePaused(async () => {
+      const res = await fetch("/api/viagogo-push/set-event", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({id, url}),
+      });
+      return {ok: res.ok, body: await res.json()};
     });
-    const d = await res.json();
-    if (!res.ok) { alert(d.error || "failed"); return; }
+    if (!d.ok) { alert(d.body.error || "failed"); return; }
     await load();
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Use link"; }
