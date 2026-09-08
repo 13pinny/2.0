@@ -335,6 +335,19 @@ function renderCards(rows) {
     eventSel.addEventListener("change", reloadSectionsNow);
     ticketSel.addEventListener("change", reloadSectionsNow);
 
+    // no_match means "we wouldn't pick for you", not "you can't proceed":
+    // the search may have found the right artist on a date it couldn't
+    // confirm. Approving stays blocked until an event is actually chosen —
+    // and then it opens up, so a card with candidates is never a dead end.
+    const approveBtns = card.querySelectorAll(
+      "[data-act='vg-approve-draft'], [data-act='vg-approve-live']");
+    const syncApprove = () => {
+      if (!noMatch) return;
+      approveBtns.forEach(b => { b.disabled = !eventSel.value; });
+    };
+    eventSel.addEventListener("change", syncApprove);
+    syncApprove();
+
     // Keep proceeds (per-ticket take-home = viagogo price − 10%) in sync live
     const priceInput = card.querySelector("input[data-f='website_price']");
     const proceedsInput = card.querySelector("input[data-f='proceeds']");
