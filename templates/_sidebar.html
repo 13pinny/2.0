@@ -52,13 +52,16 @@
   ]},
 ] %}
 <style>
-  body { margin-left: 68px; }
-  .ks-rail { position: fixed; top: 0; left: 0; bottom: 0; width: 68px; background: #14181f; border-right: 1px solid #23262d; z-index: 50; display: flex; flex-direction: column; align-items: stretch; }
+  body { margin-left: 76px; }
+  .ks-rail { position: fixed; top: 0; left: 0; bottom: 0; width: 76px; background: #14181f; border-right: 1px solid #23262d; z-index: 50; display: flex; flex-direction: column; align-items: stretch; }
   .ks-logo { display: flex; align-items: center; justify-content: center; height: 52px; flex: 0 0 auto; color: #58a6ff; font-size: 15px; font-weight: 800; letter-spacing: 1px; text-decoration: none; border-bottom: 1px solid #23262d; }
-  .ks-item, .ks-group > .ks-trigger { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 9px 4px; color: #8b949e; text-decoration: none; font-size: 8.5px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; text-align: center; cursor: pointer; user-select: none; border-left: 2px solid transparent; }
+  /* Deliberately NOT uppercase: at rail sizes mixed case is both easier to
+     read (word shapes survive) and narrower, which is what buys the larger
+     type without widening the rail. */
+  .ks-item, .ks-group > .ks-trigger { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 10px 4px; color: #b9c4d0; text-decoration: none; font-size: 10.5px; font-weight: 600; letter-spacing: 0.1px; text-align: center; cursor: pointer; user-select: none; border-left: 2px solid transparent; }
   .ks-item svg, .ks-group > .ks-trigger svg { width: 19px; height: 19px; flex: 0 0 auto; }
   /* The rail is narrow and the labels are single words, so they cannot wrap:
-     without this guard a long one (INVENTORY) paints out over the page. */
+     without this guard a long one (Inventory) paints out over the page. */
   .ks-item span, .ks-group > .ks-trigger span { max-width: 100%; overflow: hidden; line-height: 1.15; }
   .ks-item:hover, .ks-group > .ks-trigger:hover { color: #e6edf3; background: #1c2028; }
   .ks-item.active, .ks-group.active > .ks-trigger { color: #58a6ff; border-left-color: #58a6ff; background: #1c2028; }
@@ -66,15 +69,15 @@
   .ks-flyout { position: absolute; left: 100%; top: 0; min-width: 176px; background: #ffffff; border: 1px solid #d3dae1; box-shadow: 0 10px 28px rgba(0,0,0,0.22); padding: 6px 0; display: none; z-index: 55; }
   .ks-group:hover > .ks-flyout, .ks-group.ks-open > .ks-flyout { display: block; }
   .ks-flyout::before { content: ""; position: absolute; left: -6px; top: 0; bottom: 0; width: 6px; }
-  .ks-flyout a { display: block; padding: 8px 14px; font-size: 11.5px; letter-spacing: 0.5px; color: #24292f; text-decoration: none; white-space: nowrap; }
+  .ks-flyout a { display: block; padding: 9px 15px; font-size: 12.5px; letter-spacing: 0.1px; color: #24292f; text-decoration: none; white-space: nowrap; }
   .ks-flyout a:hover { background: #f1f4f8; }
   .ks-flyout a.active { color: #0969da; font-weight: 700; }
-  .ks-flyout .ks-flyout-title { padding: 4px 14px 6px; font-size: 9.5px; letter-spacing: 1.5px; text-transform: uppercase; color: #8b949e; }
+  .ks-flyout .ks-flyout-title { padding: 5px 15px 7px; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: #7b8794; }
   @media (max-width: 720px) {
-    body { margin-left: 52px; }
-    .ks-rail { width: 52px; }
+    body { margin-left: 60px; }
+    .ks-rail { width: 60px; }
     .ks-logo { height: 44px; font-size: 13px; }
-    .ks-item, .ks-group > .ks-trigger { font-size: 7px; letter-spacing: 0.2px; padding: 7px 2px; }
+    .ks-item, .ks-group > .ks-trigger { font-size: 9px; letter-spacing: 0; padding: 8px 2px; }
     .ks-item svg, .ks-group > .ks-trigger svg { width: 17px; height: 17px; }
   }
 </style>
