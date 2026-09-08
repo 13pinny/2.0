@@ -61,6 +61,9 @@
   h2 .count { color: var(--muted); font-weight: 400; font-size: 11px; }
   .pill-bar { display: flex; gap: 4px; margin-bottom: 12px; }
   .pill-bar .pill { font-family: inherit; font-size: 10px; letter-spacing: 1.5px; padding: 5px 12px; border: 1px solid var(--line); background: var(--bg-2); color: var(--muted); cursor: pointer; text-transform: uppercase; }
+  .profit-foot { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--line); text-align: right; }
+  .profit-foot a { display: inline-block; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; padding: 7px 14px; border: 1px solid var(--line); background: var(--bg-2); color: var(--accent); text-decoration: none; }
+  .profit-foot a:hover { border-color: var(--accent); background: var(--bg-3); }
   .pill-bar .pill:hover { background: #e9edf2; color: var(--text); }
   .pill-bar .pill.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.06); }
   tbody tr { cursor: pointer; }
@@ -162,36 +165,12 @@
 </style>
 </head>
 <body>
+{% include "_sidebar.html" %}
 <header>
   <div class="left">
     <h1>SALES</h1>
     <span class="meta" id="sub">—</span>
   </div>
-  <nav class="nav">
-    <a href="/">INVENTORY</a>
-    <a href="/sales" class="active">SALES</a>
-    <a href="/profit">PROFIT</a>
-    <a href="/expenses">EXPENSES</a>
-    <a href="/cashback">CASHBACK</a>
-    <a href="/maaser">MAASER</a>
-    <a href="/pricer">PRICER</a>
-    <a href="/cvpricer">CV PRICER</a>
-    <a href="/listings">LISTINGS</a>
-    <a href="/unmapped">UNMAPPED</a>
-    <a href="/vgsales">VG SALES</a>
-    <a href="/festival">CHUTZOT HAYOTZER</a>
-    <a href="/ga">GA</a>
-    <a href="/market">ISRAEL MARKET</a>
-    <a href="/pacha">PACHA</a>
-    <a href="/marquee">MARQUEE</a>
-    <a href="/edm">EDM</a>
-    <a href="/dice">DICE</a>
-    <a href="/watchers">WATCHERS</a>
-    <a href="/todos">TO-DO</a>
-    <a href="/tools">TOOLS</a>
-    <a href="/vault">VAULT</a>
-    <a href="/tm">TM ACCTS</a>
-  </nav>
 </header>
 <main>
   <div class="stats">
@@ -298,6 +277,10 @@
     </tr></thead>
     <tbody id="canceledbody"></tbody>
   </table>
+
+  <div class="profit-foot">
+    <a href="/profit">View Profit →</a>
+  </div>
 </main>
 
 <div id="bulk-bar">

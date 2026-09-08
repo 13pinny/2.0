@@ -1,0 +1,117 @@
+{# Shared left icon-rail navigation. Included once, right after <body>, on every
+   page except the mockup gallery. Groups with more than one page open a
+   hover/click flyout instead of navigating to a landing page. #}
+{% set ks_icons = {
+  "inventory": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2 10 2.5l7.5 3.7-7.5 3.6-7.5-3.6Z"/><path d="M2.5 6.2v7.6L10 17.5l7.5-3.7V6.2"/><path d="M10 9.8v7.7"/></svg>',
+  "sales": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.2 2.5H17.5v6.3L9 17.3a1.4 1.4 0 0 1-2 0L2.7 13a1.4 1.4 0 0 1 0-2l8.5-8.5Z"/><circle cx="14" cy="6" r="1.15" fill="currentColor" stroke="none"/></svg>',
+  "books": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5.3C8.7 4.2 6.5 3.6 3.5 3.6v11.6c3 0 5.2.6 6.5 1.7"/><path d="M10 5.3c1.3-1.1 3.5-1.7 6.5-1.7v11.6c-3 0-5.2.6-6.5 1.7V5.3Z"/></svg>',
+  "viagogo": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.3a1.9 1.9 0 0 0 0 3.4v3h15v-3a1.9 1.9 0 0 1 0-3.4v-3h-15v3Z"/><path d="M8 5.3v9.4" stroke-dasharray="1.6 1.8"/></svg>',
+  "data": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.3 11.3h3l1.8-5.6 3 8.6 1.8-5.4 1.4 2.4h4.4"/></svg>',
+  "tools": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13.2 3.4a3.6 3.6 0 0 0-4.6 4.4L3 13.4l2.6 2.6 5.6-5.6a3.6 3.6 0 0 0 4.4-4.6l-2.4 2.4-2-.6-.6-2 2.4-2.4Z"/></svg>',
+} %}
+{% set ks_path = request.path %}
+{% set ks_solo = [
+  {"label": "Inventory", "href": "/", "icon": "inventory"},
+  {"label": "Sales", "href": "/sales", "icon": "sales"},
+] %}
+{% set ks_groups = [
+  {"label": "Books", "icon": "books", "links": [
+    {"label": "Expenses", "href": "/expenses"},
+    {"label": "Cashback", "href": "/cashback"},
+    {"label": "Maaser", "href": "/maaser"},
+    {"label": "Pending", "href": "/pending"},
+    {"label": "Owed", "href": "/owed"},
+    {"label": "Credits", "href": "/credits"},
+  ]},
+  {"label": "Viagogo", "icon": "viagogo", "links": [
+    {"label": "Sources", "href": "/sources"},
+    {"label": "Pricer", "href": "/pricer"},
+    {"label": "CV Pricer", "href": "/cvpricer"},
+    {"label": "CV Fees", "href": "/cvfees"},
+    {"label": "CV Bookmark", "href": "/cvbookmark"},
+    {"label": "Listings", "href": "/listings"},
+    {"label": "Unmapped", "href": "/unmapped"},
+    {"label": "VG Sales", "href": "/vgsales"},
+  ]},
+  {"label": "Data", "icon": "data", "links": [
+    {"label": "NEXT 26", "href": "/series"},
+    {"label": "EDM", "href": "/edm"},
+    {"label": "DICE", "href": "/dice"},
+    {"label": "Pacha", "href": "/pacha"},
+    {"label": "Marquee", "href": "/marquee"},
+    {"label": "GA", "href": "/ga"},
+    {"label": "Israel Market", "href": "/market"},
+    {"label": "Watchers", "href": "/watchers"},
+  ]},
+  {"label": "Tools", "icon": "tools", "links": [
+    {"label": "Tools", "href": "/tools"},
+    {"label": "Vault", "href": "/vault"},
+    {"label": "TM Accounts", "href": "/tm"},
+    {"label": "To-Do", "href": "/todos"},
+    {"label": "JeruJam", "href": "/jerujam"},
+  ]},
+] %}
+<style>
+  body { margin-left: 68px; }
+  .ks-rail { position: fixed; top: 0; left: 0; bottom: 0; width: 68px; background: #14181f; border-right: 1px solid #23262d; z-index: 50; display: flex; flex-direction: column; align-items: stretch; }
+  .ks-logo { display: flex; align-items: center; justify-content: center; height: 52px; flex: 0 0 auto; color: #58a6ff; font-size: 15px; font-weight: 800; letter-spacing: 1px; text-decoration: none; border-bottom: 1px solid #23262d; }
+  .ks-item, .ks-group > .ks-trigger { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 9px 4px; color: #8b949e; text-decoration: none; font-size: 8.5px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; text-align: center; cursor: pointer; user-select: none; border-left: 2px solid transparent; }
+  .ks-item svg, .ks-group > .ks-trigger svg { width: 19px; height: 19px; flex: 0 0 auto; }
+  .ks-item:hover, .ks-group > .ks-trigger:hover { color: #e6edf3; background: #1c2028; }
+  .ks-item.active, .ks-group.active > .ks-trigger { color: #58a6ff; border-left-color: #58a6ff; background: #1c2028; }
+  .ks-group { position: relative; }
+  .ks-flyout { position: absolute; left: 100%; top: 0; min-width: 176px; background: #ffffff; border: 1px solid #d3dae1; box-shadow: 0 10px 28px rgba(0,0,0,0.22); padding: 6px 0; display: none; z-index: 55; }
+  .ks-group:hover > .ks-flyout, .ks-group.ks-open > .ks-flyout { display: block; }
+  .ks-flyout::before { content: ""; position: absolute; left: -6px; top: 0; bottom: 0; width: 6px; }
+  .ks-flyout a { display: block; padding: 8px 14px; font-size: 11.5px; letter-spacing: 0.5px; color: #24292f; text-decoration: none; white-space: nowrap; }
+  .ks-flyout a:hover { background: #f1f4f8; }
+  .ks-flyout a.active { color: #0969da; font-weight: 700; }
+  .ks-flyout .ks-flyout-title { padding: 4px 14px 6px; font-size: 9.5px; letter-spacing: 1.5px; text-transform: uppercase; color: #8b949e; }
+  @media (max-width: 720px) {
+    body { margin-left: 52px; }
+    .ks-rail { width: 52px; }
+    .ks-logo { height: 44px; font-size: 13px; }
+    .ks-item, .ks-group > .ks-trigger { font-size: 7.5px; padding: 7px 2px; }
+    .ks-item svg, .ks-group > .ks-trigger svg { width: 17px; height: 17px; }
+  }
+</style>
+<aside class="ks-rail" id="ksRail">
+  <a class="ks-logo" href="/" title="Kartis">K</a>
+  {% for it in ks_solo %}
+  <a class="ks-item{% if ks_path == it.href %} active{% endif %}" href="{{ it.href }}">{{ ks_icons[it.icon]|safe }}<span>{{ it.label }}</span></a>
+  {% endfor %}
+  {% for g in ks_groups %}
+  {% set g_active = g.links|selectattr("href", "equalto", ks_path)|list|length > 0 %}
+  <div class="ks-group{% if g_active %} active{% endif %}">
+    <div class="ks-trigger" tabindex="0" role="button" aria-haspopup="true">{{ ks_icons[g.icon]|safe }}<span>{{ g.label }}</span></div>
+    <div class="ks-flyout">
+      <div class="ks-flyout-title">{{ g.label }}</div>
+      {% for it in g.links %}
+      <a href="{{ it.href }}"{% if ks_path == it.href %} class="active"{% endif %}>{{ it.label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</aside>
+<script>
+(function () {
+  var rail = document.getElementById("ksRail");
+  if (!rail) return;
+  rail.querySelectorAll(".ks-group > .ks-trigger").forEach(function (trigger) {
+    trigger.addEventListener("click", function (e) {
+      var group = trigger.parentElement;
+      var wasOpen = group.classList.contains("ks-open");
+      rail.querySelectorAll(".ks-group.ks-open").forEach(function (g) { g.classList.remove("ks-open"); });
+      if (!wasOpen) group.classList.add("ks-open");
+      e.stopPropagation();
+    });
+    trigger.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); trigger.click(); }
+      if (e.key === "Escape") trigger.parentElement.classList.remove("ks-open");
+    });
+  });
+  document.addEventListener("click", function () {
+    rail.querySelectorAll(".ks-group.ks-open").forEach(function (g) { g.classList.remove("ks-open"); });
+  });
+})();
+</script>
