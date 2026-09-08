@@ -57,6 +57,9 @@
   .ks-logo { display: flex; align-items: center; justify-content: center; height: 52px; flex: 0 0 auto; color: #58a6ff; font-size: 15px; font-weight: 800; letter-spacing: 1px; text-decoration: none; border-bottom: 1px solid #23262d; }
   .ks-item, .ks-group > .ks-trigger { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 9px 4px; color: #8b949e; text-decoration: none; font-size: 8.5px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; text-align: center; cursor: pointer; user-select: none; border-left: 2px solid transparent; }
   .ks-item svg, .ks-group > .ks-trigger svg { width: 19px; height: 19px; flex: 0 0 auto; }
+  /* The rail is narrow and the labels are single words, so they cannot wrap:
+     without this guard a long one (INVENTORY) paints out over the page. */
+  .ks-item span, .ks-group > .ks-trigger span { max-width: 100%; overflow: hidden; line-height: 1.15; }
   .ks-item:hover, .ks-group > .ks-trigger:hover { color: #e6edf3; background: #1c2028; }
   .ks-item.active, .ks-group.active > .ks-trigger { color: #58a6ff; border-left-color: #58a6ff; background: #1c2028; }
   .ks-group { position: relative; }
@@ -71,7 +74,7 @@
     body { margin-left: 52px; }
     .ks-rail { width: 52px; }
     .ks-logo { height: 44px; font-size: 13px; }
-    .ks-item, .ks-group > .ks-trigger { font-size: 7.5px; padding: 7px 2px; }
+    .ks-item, .ks-group > .ks-trigger { font-size: 7px; letter-spacing: 0.2px; padding: 7px 2px; }
     .ks-item svg, .ks-group > .ks-trigger svg { width: 17px; height: 17px; }
   }
 </style>
