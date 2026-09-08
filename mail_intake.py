@@ -601,8 +601,34 @@ def _relevant_candidates(search_term, rows):
     return out
 
 
-def _search_viagogo(search_term):
-    """search_event, but with two guards against a confidently wrong match.
+# How many candidates a card offers in its dropdown. The picker can return
+# fifty rows for a common word; the ones worth showing are the ones near the
+# ticket's night, not the first N in viagogo's date order.
+CANDIDATE_LIMIT = 12
+
+
+def _nearest_candidates(rows, want_dates, limit=CANDIDATE_LIMIT):
+    """The `limit` rows closest to any of `want_dates` (undated rows last).
+
+    Slicing viagogo's own date order instead is how the right show got lost:
+    a "Hysteria" search renders 49 rows and the three Israeli nights are the
+    LAST of them, behind forty US tribute shows, so every earlier cap — 8,
+    25, even 40 — cut off exactly the events the tickets were for.
+    """
+    if not want_dates:
+        return rows[:limit]
+
+    def distance(r):
+        got = _parse_candidate_date(r.get("date"))
+        if got is None:
+            return 10 ** 6
+        return min(abs((got - w).days) for w in want_dates)
+
+    return sorted(rows, key=distance)[:limit]
+
+
+def _search_viagogo(search_term, want_dates=None):
+    """search_event, with three guards against a confidently wrong match.
 
     (1) viagogo's picker can't match Hebrew — fed a Hebrew query it returns
     its default/popular event list, which once "matched" פאר טסי to a World
@@ -613,16 +639,31 @@ def _search_viagogo(search_term):
     (2) The same default list comes back for an ENGLISH term viagogo simply
     doesn't carry, so the results are filtered for actual relevance too.
 
-    Either way an empty return means "no match", which is the honest answer.
+    (3) What survives is then narrowed to the shows nearest `want_dates` —
+    the ticket dates this search is for — rather than the first few in
+    viagogo's date order.
+
+    An empty return means "no match", which is the honest answer.
     """
     if _HEBREW_RX.search(search_term or ""):
         return []
-    rows = viagogo_listing.search_event(search_term, limit=25)
+    rows = viagogo_listing.search_event(search_term)
     keep = _relevant_candidates(search_term, rows)
     if rows and not keep:
         print(f"[intake] viagogo picker had nothing for {search_term!r} "
               f"(it offered {[r.get('event_name') for r in rows[:5]]})")
-    return keep[:8]
+    return _nearest_candidates(keep, want_dates)
+
+
+def _ticket_dates(*iso_strings):
+    """Parse ticket dates for _search_viagogo, skipping the unparseable."""
+    out = []
+    for iso in iso_strings:
+        try:
+            out.append(datetime.strptime((iso or "")[:10], "%Y-%m-%d").date())
+        except ValueError:
+            pass
+    return out
 
 
 def _push_kupat_to_viagogo(intake_id, fields):
@@ -678,7 +719,8 @@ def _push_kupat_to_viagogo(intake_id, fields):
     search_error = None
     candidates = []
     try:
-        candidates = _search_viagogo(search_term)
+        candidates = _search_viagogo(
+            search_term, _ticket_dates(fields.get("event_date_iso")))
     except Exception as e:
         search_error = f"{type(e).__name__}: {e}"
 
@@ -770,7 +812,8 @@ def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None,
     cost_per_unit = fields.get("cost_per_unit")
     search_term = force_term or _resolve_search_term(event_name, venue)
     try:
-        candidates = _search_viagogo(search_term)
+        candidates = _search_viagogo(
+            search_term, _ticket_dates(fields.get("event_date_iso")))
     except Exception as e:
         db.viagogo_push_update(push_id, {
             "status": "error",
@@ -880,8 +923,12 @@ def retry_pushes_for_name(term, push_ids, now_iso=None):
         now_iso = datetime.now(timezone.utc).isoformat()
     if not push_ids:
         return
+    # The cards in a batch are usually different nights of the same run, so
+    # the shared search has to keep candidates near EVERY one of them.
+    pushes = [db.viagogo_push_get(pid) for pid in push_ids]
+    want = _ticket_dates(*[(p or {}).get("event_date_iso") for p in pushes])
     try:
-        candidates = _search_viagogo(term)
+        candidates = _search_viagogo(term, want)
     except Exception as e:
         for pid in push_ids:
             db.viagogo_push_update(pid, {
@@ -972,7 +1019,9 @@ def set_push_event_from_url(push_id, url_or_id, now_iso=None):
     for attempt in range(3):
         for q in queries:
             try:
-                rows = viagogo_listing.search_event(q, limit=25)
+                # No limit: a pasted link is often for a date deep in the list,
+                # exactly where a cap used to hide it.
+                rows = viagogo_listing.search_event(q)
             except Exception as e:
                 last_error = e
                 print(f"[intake] set-event picker search failed ({q!r}): {e}")

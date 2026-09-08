@@ -140,19 +140,48 @@ def _open_listings_page(p):
     return page
 
 
-def _open_new_listing_modal(page):
-    """Open the New Listing picker, re-clicking once if it didn't take.
-
-    Under load the button click sometimes doesn't register (same failure
-    mode as the ticket-type tile below), and the flow then dies on a
-    "#modal #txtSearch" timeout that reads like a broken session.
-    """
-    page.click('text="New Listing"')
+def _picker_open(page):
+    box = page.locator("#modal #txtSearch")
     try:
-        page.wait_for_selector("#modal #txtSearch", timeout=MODAL_TIMEOUT_MS)
+        return bool(box.count()) and box.first.is_visible()
     except Exception:
-        page.click('text="New Listing"')
-        page.wait_for_selector("#modal #txtSearch", timeout=2 * MODAL_TIMEOUT_MS)
+        return False
+
+
+def _dismiss_modal(page):
+    try:
+        page.locator("#modal .modal-close, #modal .i-remove").first.click(timeout=3000)
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+
+
+def _open_new_listing_modal(page):
+    """Open the New Listing picker, tolerating the two ways it doesn't take.
+
+    Some other modal already being open makes the click land on the overlay
+    instead — Playwright retries for the full timeout and gives up with
+    "<div id="modal"> ... intercepts pointer events", which surfaced as a
+    bare "#modal #txtSearch" TimeoutError that reads like a dead session and
+    killed two real pushes on 2026-09-06. And under load the click sometimes
+    just doesn't register (same failure mode as the ticket-type tile below).
+    So: don't click at all if the picker is already up, dismiss whatever is
+    covering the button if the click is blocked, and retry once either way.
+    """
+    for _ in range(2):
+        if _picker_open(page):
+            return
+        try:
+            page.click('text="New Listing"', timeout=MODAL_TIMEOUT_MS)
+        except Exception:
+            _dismiss_modal(page)
+            continue
+        try:
+            page.wait_for_selector("#modal #txtSearch", timeout=MODAL_TIMEOUT_MS)
+            return
+        except Exception:
+            pass
+    page.wait_for_selector("#modal #txtSearch", timeout=2 * MODAL_TIMEOUT_MS)
 
 
 # The picker's filter is async; poll this many times, this far apart, for
@@ -162,6 +191,22 @@ SEARCH_SETTLE_POLLS = 16
 # ...and retype once if it never fired at all — the FIRST search after the
 # modal opens loses its keystrokes often enough to matter (measured 1 in 3).
 SEARCH_ATTEMPTS = 2
+
+
+# Pulls every picker row's fields in a single round-trip (see _search_rows).
+_ROW_EXTRACT_JS = """
+() => Array.from(document.querySelectorAll('#modal tr.pointer')).map(r => {
+  const tds = r.querySelectorAll('td');
+  const kids = el => el ? Array.from(el.children).map(c => (c.innerText || '').trim()) : [];
+  const d = kids(tds[0]), n = kids(tds[1]);
+  return {
+    link: r.getAttribute('data-eventlink') || '',
+    weekday: d[0] || '', date: d[1] || '', time: d[2] || '',
+    event_name: n[0] || '', venue: n[1] || '', city: n[2] || '',
+    ok: tds.length >= 2,
+  };
+})
+"""
 
 
 def _row_signature(page):
@@ -214,10 +259,20 @@ def _search_rows(page, query):
         search_box.click()
         search_box.fill("")
         page.wait_for_timeout(4 * SEARCH_SETTLE_MS)
-    rows = page.query_selector_all("#modal tr.pointer")
+    # One evaluate for every row's text instead of ~8 CDP round-trips each.
+    # A popular query renders 50+ rows and callers need to see all of them:
+    # the picker orders by date, so slicing the first N by hand threw away
+    # the later ones — the Israeli "Hysteria" nights sat at rows 45-49
+    # behind forty US tribute shows and were invisible to a limit of 8 or 25
+    # (2026-09-08). Element handles come back alongside, same order, for
+    # _click_event_row's fallback.
+    handles = page.query_selector_all("#modal tr.pointer")
+    try:
+        parsed = page.evaluate(_ROW_EXTRACT_JS)
+    except Exception:
+        parsed = []
     out = []
-    for r in rows:
-        link = r.get_attribute("data-eventlink") or ""
+    for r, d in zip(handles, parsed):
         # Real events link to .../sellerevents/<numeric id>. The picker also
         # renders a "(requested event)" placeholder row whose link ends in a
         # UUID (.../sellerevents/72257be5-...-e1324c3ca2a1) — anchoring the
@@ -226,32 +281,23 @@ def _search_rows(page, query):
         # ranked first, got auto-chosen, 500'd every section fetch, and — via
         # a $= suffix match in _click_event_row — could open ANY row whose id
         # ends in 1 (2026-09-07: a Shlomo Artzi push matched "1").
-        m = re.search(r"/(\d+)$", link)
-        if not m:
+        m = re.search(r"/(\d+)$", d.get("link") or "")
+        if not m or not d.get("ok"):
             continue
-        tds = r.query_selector_all("td")
-        if len(tds) < 2:
-            continue
-        date_kids = tds[0].query_selector_all(":scope > *")
-        name_kids = tds[1].query_selector_all(":scope > *")
-
-        def _t(kids, i):
-            return kids[i].inner_text().strip() if len(kids) > i else ""
-
         out.append({
             "event_id": m.group(1),
-            "event_name": _t(name_kids, 0),
-            "venue": _t(name_kids, 1),
-            "city": _t(name_kids, 2),
-            "weekday": _t(date_kids, 0),
-            "date": _t(date_kids, 1),
-            "time": _t(date_kids, 2),
+            "event_name": d.get("event_name") or "",
+            "venue": d.get("venue") or "",
+            "city": d.get("city") or "",
+            "weekday": d.get("weekday") or "",
+            "date": d.get("date") or "",
+            "time": d.get("time") or "",
             "_row": r,
         })
     return out
 
 
-def search_event(query, limit=10):
+def search_event(query, limit=250):
     """Search viagogo's New Listing event picker for `query`.
 
     Returns up to `limit` candidate dicts: {event_id, event_name, venue,
