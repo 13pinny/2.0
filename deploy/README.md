@@ -192,6 +192,25 @@ journalctl -u kartis-flask -f   # watch for the APScheduler boot log
 Visit `https://kartis.<yourdomain>.com/`, enter your basic-auth creds,
 trigger a resync from the UI (or `curl -u you:pw -X POST https://kartis.<yourdomain>.com/api/resync`).
 
+## Deploying a change
+
+Nothing pulls code onto the VPS by itself. `supervisor.py` auto-updates
+only `watcher_only.py`, and it doesn't run here; `kartis-flask.service`
+restarts gunicorn on crash but never touches git. So after merging:
+
+```sh
+/opt/kartis/deploy/update.sh
+```
+
+It pulls, reinstalls **only** if `requirements.txt` moved, restarts
+`kartis-flask`, and waits for the app to answer before reporting success
+(exit 1 and a pointer to `journalctl` if it doesn't). With nothing to
+pull it exits without touching the service.
+
+The restart is the part that matters: gunicorn compiles the Jinja
+templates once and caches them, so a bare `git pull` leaves the old UI
+serving indefinitely.
+
 ## 9. Backups to B2
 
 ```sh
