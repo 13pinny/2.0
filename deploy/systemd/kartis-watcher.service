@@ -1,0 +1,21 @@
+[Unit]
+Description=Kartis headless drop-checker (self-updating supervisor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+WorkingDirectory=/opt/kartis
+EnvironmentFile=/opt/kartis/.env
+# supervisor.py spawns watcher_only.py, git-pulls every KARTIS_PULL_INTERVAL_SECONDS,
+# and restarts the child on new commits. Install the lean watcher dep set on
+# auto-update (no Flask/patchright) — see requirements-watcher.txt.
+Environment=KARTIS_REQUIREMENTS=requirements-watcher.txt
+ExecStart=/opt/kartis/.venv/bin/python supervisor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

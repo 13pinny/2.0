@@ -1,0 +1,6 @@
+# Watcher-only dependency set — for the headless drop-checker box (e.g. the
+# Hetzner VPS). No Flask, no patchright/Chrome, no Excel/PDF parsing; those
+# are only needed by the full dashboard (app.py). The supervisor installs
+# this file instead of requirements.txt when KARTIS_REQUIREMENTS points here.
+APScheduler>=3.10
+python-dotenv>=1.0

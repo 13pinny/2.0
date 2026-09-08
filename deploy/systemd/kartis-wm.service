@@ -1,0 +1,16 @@
+[Unit]
+Description=Kartis window manager on the Xvfb display (raise/move the Chrome windows in noVNC)
+Requires=kartis-xvfb.service
+After=kartis-xvfb.service
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+Environment=DISPLAY=:99
+ExecStart=/usr/bin/openbox
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

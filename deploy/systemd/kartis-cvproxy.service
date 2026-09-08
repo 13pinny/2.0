@@ -1,0 +1,19 @@
+[Unit]
+Description=Kartis CrowdVolt proxy forwarder (injects residential upstream auth for the CV Chrome)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+WorkingDirectory=/opt/kartis
+# Must contain KARTIS_CVPROXY_UPSTREAM=http://user:pass@host:port
+# (owner kartis, chmod 600 — credentials never go in the repo).
+EnvironmentFile=/opt/kartis/.env.cvproxy
+ExecStart=/opt/kartis/.venv/bin/python /opt/kartis/cvproxy.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
