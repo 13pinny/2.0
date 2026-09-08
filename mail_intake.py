@@ -450,12 +450,27 @@ def _candidate_date_mismatch(chosen, event_date_iso):
             "right show before approving")
 
 
+# How far a candidate's date may sit from the ticket's and still be
+# auto-chosen. An artist's own run of nights is the case this must get
+# right, so it is deliberately tight.
+CANDIDATE_DATE_WINDOW_DAYS = 3
+
+
 def _rank_viagogo_candidates(candidates, event_date_iso):
-    """Prefer the candidate whose date PARSES to exactly the Kupat email's
-    date; fall back to the old day-of-month-substring heuristic, then to the
-    first live candidate. The user still confirms on the card, and a chosen
-    candidate whose date disagrees with the email gets a DATE MISMATCH
-    warning stamped into the row (see _candidate_date_mismatch).
+    """The candidate closest to the ticket's date, or None if none is close.
+
+    Returning None is the important half. Name matching alone finds shows
+    that merely share a word — "Hysteria" surfaces forty Def Leppard tribute
+    nights, and the old fallbacks (a day-of-month SUBSTRING, then simply the
+    first candidate) auto-chose one of them for a Tel Aviv ticket, so seven
+    cards sat at awaiting_approval offering a London pub gig (2026-09-08).
+    A same-artist wrong-night match is expensive; a wrong-artist one is
+    worse. So when the ticket's date is known and nothing lands within
+    CANDIDATE_DATE_WINDOW_DAYS of it, pick nothing and let the caller say so.
+
+    With no usable ticket date there is nothing to judge on, and the first
+    live candidate is as good a starting point as any — the user confirms on
+    the card either way.
 
     viagogo's picker also lists "requested event" placeholder rows alongside
     the real live event (same artist, same date). Never auto-pick a
@@ -468,21 +483,37 @@ def _rank_viagogo_candidates(candidates, event_date_iso):
     live = [c for c in candidates
             if "requested" not in (c.get("event_name") or "").lower()]
     pool = live or candidates
-    want = None
     try:
         want = datetime.strptime((event_date_iso or "")[:10], "%Y-%m-%d").date()
     except ValueError:
-        pass
-    if want:
-        for c in pool:
-            if _parse_candidate_date(c.get("date")) == want:
-                return c
-    day = (event_date_iso or "")[8:10]
-    if day:
-        for c in pool:
-            if day in (c.get("date") or ""):
-                return c
-    return pool[0]
+        return pool[0]
+    near = []
+    for c in pool:
+        got = _parse_candidate_date(c.get("date"))
+        if got is not None and abs((got - want).days) <= CANDIDATE_DATE_WINDOW_DAYS:
+            near.append((abs((got - want).days), c))
+    if not near:
+        return None
+    return min(near, key=lambda t: t[0])[1]
+
+
+def _no_near_candidate_error(candidates, event_date_iso, term):
+    """Message for the case _rank_viagogo_candidates refused to pick: name
+    matches exist but none is on (or near) the ticket's night."""
+    dates = [d for d in (_parse_candidate_date(c.get("date")) for c in candidates)
+             if d is not None]
+    nearest = ""
+    if dates:
+        try:
+            want = datetime.strptime((event_date_iso or "")[:10], "%Y-%m-%d").date()
+            best = min(dates, key=lambda d: abs((d - want).days))
+            nearest = f" (nearest is {best.strftime('%a %b %d %Y')})"
+        except ValueError:
+            pass
+    return (f"viagogo lists {len(candidates)} event(s) matching '{term}' but none "
+            f"on your ticket's date{nearest} — it may be a different show with a "
+            "similar name. Pick from the list if one is right, or paste the "
+            "viagogo event link.")
 
 
 def _resolve_search_term(event_name, venue):
@@ -693,6 +724,14 @@ def _push_kupat_to_viagogo(intake_id, fields):
         elif not candidates:
             row["status"] = "no_match"
             row["candidates_json"] = "[]"
+        elif chosen is None:
+            # Name matches, but nothing on the ticket's night. Keep them
+            # listed for reference and leave the card in the no_match state
+            # that offers the teach box and the paste-a-link box.
+            row["status"] = "no_match"
+            row["candidates_json"] = json.dumps(candidates, ensure_ascii=False)
+            row["error"] = _no_near_candidate_error(
+                candidates, fields.get("event_date_iso"), search_term)
         else:
             row.update({
                 "status": "awaiting_approval",
@@ -761,6 +800,14 @@ def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None,
             return
     else:
         chosen = _rank_viagogo_candidates(candidates, fields.get("event_date_iso"))
+        if chosen is None:
+            db.viagogo_push_update(push_id, {
+                "status": "no_match",
+                "candidates_json": json.dumps(candidates, ensure_ascii=False),
+                "error": _no_near_candidate_error(
+                    candidates, fields.get("event_date_iso"), search_term),
+            }, now_iso)
+            return
     try:
         fx_rate = fx.ils_to_usd_rate()
         cost_usd = fx.ils_to_usd(cost_per_unit) if cost_per_unit is not None else None
@@ -860,6 +907,14 @@ def retry_pushes_for_name(term, push_ids, now_iso=None):
         if not push:
             continue
         chosen = _rank_viagogo_candidates(candidates, push.get("event_date_iso"))
+        if chosen is None:
+            db.viagogo_push_update(pid, {
+                "status": "no_match",
+                "candidates_json": cands_json,
+                "error": _no_near_candidate_error(
+                    candidates, push.get("event_date_iso"), term),
+            }, now_iso)
+            continue
         try:
             cpu = push.get("cost_per_unit")
             fx_rate = fx.ils_to_usd_rate()
