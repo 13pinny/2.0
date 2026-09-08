@@ -44,6 +44,7 @@
   .inbox-card .ic-head .provider.status-listed { border-color: var(--green); color: var(--green); }
   .inbox-card .ic-head .when { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
   .inbox-card .ic-head .warn { font-size: 10px; color: var(--amber); letter-spacing: 1px; border: 1px solid var(--amber); padding: 1px 6px; }
+  .inbox-card .ic-head .busy { font-size: 10px; color: var(--accent); letter-spacing: 1px; border: 1px solid var(--accent); padding: 1px 6px; }
   .inbox-card .ic-subject { padding: 8px 14px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
   .inbox-card .ic-body { padding: 10px 14px; display: grid; grid-template-columns: 110px 1fr 110px 1fr; gap: 6px 12px; font-size: 12px; }
   .inbox-card .ic-body label { color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; align-self: center; }
@@ -147,6 +148,24 @@ async function load() {
   if (vgR.ok) {
     const d = await vgR.json();
     renderCards(d.rows || []);
+    return d.rows || [];
+  }
+  return [];
+}
+
+// mail_intake.SEARCHING_PREFIX — a taught-name re-search that is still running.
+const SEARCHING_RX = /^re-searching viagogo/;
+
+// The picker search behind "Teach & Re-search" takes ~30s and used to finish
+// long after the page's two quick reloads, so the card looked untouched and
+// the feature looked dead (2026-09-08). Keep reloading until the rows we
+// kicked off stop reporting themselves as busy.
+async function pollWhileSearching(ids) {
+  for (const wait of [4000, 6000, 10000, 15000, 20000, 25000, 30000]) {
+    await new Promise(r => setTimeout(r, wait));
+    const rows = await load();
+    const busy = rows.some(r => ids.includes(r.id) && SEARCHING_RX.test(r.error || ""));
+    if (!busy) return;
   }
 }
 
@@ -197,7 +216,7 @@ function renderCards(rows) {
         <span class="from" title="${esc(r.chosen_venue || r.venue || "")}">${esc(r.chosen_event_name || r.event_name || "")} — ${esc(r.chosen_venue || r.venue || "")}</span>
         ${r.buyer_email ? `<span style="font-size:10px;color:var(--accent);letter-spacing:0.5px;" title="Account the tickets were bought under — deliver from this inbox">📧 ${esc(r.buyer_email)}</span>` : ""}
         <span class="when">${esc(when)}</span>
-        ${r.error ? `<span class="warn" title="${esc(r.error)}">${esc(r.error.slice(0, 80))}</span>` : ""}
+        ${r.error ? `<span class="${SEARCHING_RX.test(r.error) ? "busy" : "warn"}" title="${esc(r.error)}">${esc(r.error.slice(0, 80))}</span>` : ""}
       </div>
       <div class="ic-subject" style="direction: rtl; text-align: right; color: var(--text);" title="What the Kupat email/ticket says — confirm the viagogo section AND DATE against this">
         🎫 ${esc(r.event_name || "?")}${r.venue ? ` — ${esc(r.venue)}` : ""} &nbsp;·&nbsp; 📅 <b style="color: var(--accent);">${esc(fmtTicketDate(r.event_date_iso) || "— תאריך לא זוהה —")}</b> &nbsp;·&nbsp; אזור: <b style="color: var(--amber);">${esc(r.section || "— לא צוין —")}</b>${r.row_label ? ` &nbsp;·&nbsp; שורה: ${esc(r.row_label)}` : ""}${r.seats ? ` &nbsp;·&nbsp; כיסאות: ${esc(r.seats)}` : ""}
@@ -681,8 +700,17 @@ async function teachName(card) {
     body: JSON.stringify({hebrew, english, push_id: id}),
   });
   if (!res.ok) { alert("Failed to save name mapping"); if (btn) btn.disabled = false; return; }
+  const d = await res.json().catch(() => ({}));
+  const ids = d.retrying || [];
   await load();
-  setTimeout(() => load(), 5000);
+  if (!ids.length) {
+    alert(`Saved "${hebrew}" → "${english}". No card was waiting on that name, `
+          + "so nothing was re-searched — future emails will use it.");
+    return;
+  }
+  // One picker search covers every card waiting on this name, so a batch
+  // settles together rather than one card at a time.
+  await pollWhileSearching(ids);
 }
 
 async function setEventFromLink(card) {

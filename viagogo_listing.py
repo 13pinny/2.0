@@ -155,24 +155,65 @@ def _open_new_listing_modal(page):
         page.wait_for_selector("#modal #txtSearch", timeout=2 * MODAL_TIMEOUT_MS)
 
 
+# The picker's filter is async; poll this many times, this far apart, for
+# the row list to change and then hold still (~4s per attempt).
+SEARCH_SETTLE_MS = 250
+SEARCH_SETTLE_POLLS = 16
+# ...and retype once if it never fired at all — the FIRST search after the
+# modal opens loses its keystrokes often enough to matter (measured 1 in 3).
+SEARCH_ATTEMPTS = 2
+
+
+def _row_signature(page):
+    """Cheap identity of what the picker is currently showing, for spotting
+    the moment its async filter has actually replaced the rows."""
+    try:
+        return tuple(r.get_attribute("data-eventlink") or ""
+                     for r in page.query_selector_all("#modal tr.pointer"))
+    except Exception:
+        return ()
+
+
 def _search_rows(page, query):
     """Types `query` into the New Listing event picker (real keystrokes —
     raw value-setting doesn't trigger the picker's filter binding) and
     returns the matching rows as both data dicts and live element handles.
     """
+    # The modal already shows an UNFILTERED default list before we type, so
+    # "wait for a row to exist" is satisfied instantly by stale rows and the
+    # old flat 300ms settle often read them (2026-09-08: a "Shlomo Artzi"
+    # search came back as viagogo's global upcoming list, truncated at the
+    # caller's limit — missing the very Nov 27 date being looked for, and
+    # handing the matcher a screenful of unrelated artists to rank).
+    #
+    # So watch the rows instead of the clock: snapshot them, type, and wait
+    # for the list to actually CHANGE and then hold still. If it never
+    # changes the filter didn't fire — retype once, since the first search
+    # after the modal opens drops its keystrokes about a third of the time.
+    # A query viagogo genuinely can't match also never changes the list, so
+    # both attempts are spent before returning the default list; callers
+    # must filter it out by relevance rather than trust it.
     search_box = page.locator("#modal #txtSearch")
     search_box.click()
     search_box.fill("")
-    page.keyboard.type(query, delay=40)
-    # The picker filters async. Wait for at least one row to render (up to
-    # 5s — a laggy page can take well over the old flat 700ms) rather than
-    # sleeping a fixed amount and reading an empty, still-filtering list.
-    # Don't fail hard if the query legitimately has no matches.
-    try:
-        page.wait_for_selector("#modal tr.pointer", timeout=5000)
-    except Exception:
-        pass
-    page.wait_for_timeout(300)  # brief settle after the first row appears
+    page.wait_for_timeout(2 * SEARCH_SETTLE_MS)   # let the clear repaint
+    for attempt in range(SEARCH_ATTEMPTS):
+        before = _row_signature(page)
+        page.keyboard.type(query, delay=40)
+        last = None
+        filtered = False
+        for _ in range(SEARCH_SETTLE_POLLS):
+            page.wait_for_timeout(SEARCH_SETTLE_MS)
+            sig = _row_signature(page)
+            if sig != before and sig == last:
+                filtered = True
+                break
+            last = sig
+        if filtered or attempt == SEARCH_ATTEMPTS - 1:
+            break
+        search_box.click()
+        search_box.fill("")
+        page.wait_for_timeout(4 * SEARCH_SETTLE_MS)
     rows = page.query_selector_all("#modal tr.pointer")
     out = []
     for r in rows:

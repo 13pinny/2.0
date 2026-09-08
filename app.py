@@ -3796,10 +3796,12 @@ def api_kupat_name_map():
         db.kupat_name_map_set(hebrew, english, now_iso)
 
     push_id = (body.get("push_id") or "").strip()
-    if push_id:
-        push = db.viagogo_push_get(push_id)
-        if push and push.get("status") in ("no_match", "error"):
-            # Re-run the search in background with the new mapping / link.
+    if force_event_id:
+        # Pasted-link path: event-specific, so it only ever touches this row.
+        push = db.viagogo_push_get(push_id) if push_id else None
+        if push and push.get("status") in mail_intake._RETRYABLE_STATUSES:
+            mail_intake.mark_pushes_searching([push_id], force_term, now_iso)
+
             def _retry(pid, fields, now, term, evid):
                 import mail_intake as _mi
                 _mi._push_kupat_to_viagogo_update(pid, fields, now,
@@ -3814,7 +3816,26 @@ def api_kupat_name_map():
                 args=(push_id, fields, now_iso, force_term, force_event_id),
                 daemon=True,
             ).start()
-    return jsonify({"ok": True})
+            return jsonify({"ok": True, "retrying": [push_id]})
+        return jsonify({"ok": True, "retrying": []})
+
+    # Taught a name: every stuck card that name now covers wants the same
+    # picker search, so mark them all busy here (the page's next reload shows
+    # it) and run ONE search for the lot in the background.
+    retry_ids = mail_intake.pushes_for_search_term(english, extra_push_id=push_id)
+    if retry_ids:
+        mail_intake.mark_pushes_searching(retry_ids, english, now_iso)
+
+        def _retry_all(term, ids, now):
+            import mail_intake as _mi
+            try:
+                _mi.retry_pushes_for_name(term, ids, now)
+            except Exception:
+                traceback.print_exc()
+        threading.Thread(target=_retry_all,
+                         args=(english, retry_ids, now_iso),
+                         daemon=True).start()
+    return jsonify({"ok": True, "retrying": retry_ids})
 
 
 @app.route("/api/inventory/manual-add", methods=["POST"])

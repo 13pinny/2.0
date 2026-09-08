@@ -526,16 +526,72 @@ def _resolve_search_term(event_name, venue):
 _HEBREW_RX = re.compile("[\u0590-\u05FF]")
 
 
+# Tokens too common to prove a picker row is the artist we asked for —
+# Hebrew name particles transliterate into a handful of shared words, so
+# "Eden Ben Zaken" must not answer a search for "Pe'er Tasi and Hanan Ben Ari".
+_WEAK_TOKENS = {
+    "and", "the", "with", "feat", "featuring", "live", "tour", "show", "band",
+    "ben", "bar", "bat", "abu", "les", "des", "van", "der", "night", "nights",
+    "festival", "concert", "tickets", "only", "presents", "orchestra",
+}
+_TOKEN_RX = re.compile(r"[^a-z0-9]+")
+
+
+def _name_tokens(text):
+    return [t for t in _TOKEN_RX.split((text or "").lower())
+            if len(t) >= 3 and t not in _WEAK_TOKENS]
+
+
+def _relevant_candidates(search_term, rows):
+    """Keep only picker rows that actually answer `search_term`.
+
+    viagogo's New Listing picker does NOT return an empty list for a query
+    it can't match — it falls back to its default upcoming-events list. So a
+    search for a show viagogo doesn't carry comes back looking like 8 or 25
+    perfectly good candidates, `_rank_viagogo_candidates` picks whichever one
+    lands near the ticket's date, and the card confidently offers the wrong
+    artist (2026-09-07: searching "Hysteria" returned Eyal Golan, Shlomo Artzi
+    and Idan Amedi; the existing Hebrew guard only covered untranslated terms).
+
+    A row qualifies when it shares enough distinctive tokens with the term:
+    both of them when the term has two or more, otherwise its only one. That
+    keeps genuinely related shows ("Hanan Ben Ari" for a "Pe'er Tasi and Hanan
+    Ben Ari" ticket) while dropping the default list wholesale.
+    """
+    want = _name_tokens(search_term)
+    if not want:
+        return rows
+    need = min(2, len(want))
+    out = []
+    for r in rows:
+        have = set(_name_tokens(r.get("event_name")))
+        if sum(1 for t in want if t in have) >= need:
+            out.append(r)
+    return out
+
+
 def _search_viagogo(search_term):
-    """search_event, but with a guard: viagogo's picker can't actually match
-    Hebrew — when fed a Hebrew query it returns its default/popular event
-    list, which once "matched" פאר טסי to a World Cup game. If the resolved
-    term is still Hebrew (no name mapping taught yet), report no candidates
-    so the push lands as no_match and the user gets the teach flow instead
-    of a bogus awaiting_approval."""
+    """search_event, but with two guards against a confidently wrong match.
+
+    (1) viagogo's picker can't match Hebrew — fed a Hebrew query it returns
+    its default/popular event list, which once "matched" פאר טסי to a World
+    Cup game. If the resolved term is still Hebrew (no name mapping taught
+    yet), report no candidates so the push lands as no_match and the user
+    gets the teach flow instead of a bogus awaiting_approval.
+
+    (2) The same default list comes back for an ENGLISH term viagogo simply
+    doesn't carry, so the results are filtered for actual relevance too.
+
+    Either way an empty return means "no match", which is the honest answer.
+    """
     if _HEBREW_RX.search(search_term or ""):
         return []
-    return viagogo_listing.search_event(search_term, limit=8)
+    rows = viagogo_listing.search_event(search_term, limit=25)
+    keep = _relevant_candidates(search_term, rows)
+    if rows and not keep:
+        print(f"[intake] viagogo picker had nothing for {search_term!r} "
+              f"(it offered {[r.get('event_name') for r in rows[:5]]})")
+    return keep[:8]
 
 
 def _push_kupat_to_viagogo(intake_id, fields):
@@ -724,6 +780,105 @@ def _push_kupat_to_viagogo_update(push_id, fields, now_iso=None,
         "website_price_usd": website_price,
         "error": _candidate_date_mismatch(chosen, fields.get("event_date_iso")),
     }, now_iso)
+
+
+# Stamped into viagogo_push.error while a taught-name re-search is in
+# flight, so the card says something is happening instead of looking
+# untouched for the ~30s the picker takes. Any outcome overwrites it.
+SEARCHING_PREFIX = "re-searching viagogo"
+
+# A viagogo_push row is retryable from the teach box in exactly these states.
+_RETRYABLE_STATUSES = ("no_match", "error")
+
+
+def pushes_for_search_term(term, extra_push_id=None):
+    """Every stuck push whose event name now resolves to `term`.
+
+    Teaching a name used to retry ONLY the card that was clicked, so the five
+    other היסטריה tickets from the same week sat there as no_match with the
+    mapping already learned (2026-09-08). They all want the same picker
+    search, so collect them and run it once.
+    """
+    ids = []
+    for p in db.viagogo_push_all():
+        if p.get("status") not in _RETRYABLE_STATUSES:
+            continue
+        if (p.get("id") == extra_push_id
+                or _resolve_search_term(p.get("event_name") or "",
+                                        p.get("venue") or "") == term):
+            ids.append(p["id"])
+    return ids
+
+
+def mark_pushes_searching(push_ids, term, now_iso=None):
+    """Flag the rows as busy BEFORE the browser work starts, so the page's
+    first reload already shows it (the search outlives several reloads)."""
+    if now_iso is None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+    for pid in push_ids:
+        db.viagogo_push_update(
+            pid, {"error": f"{SEARCHING_PREFIX} for '{term}' — up to a minute…"},
+            now_iso)
+
+
+def retry_pushes_for_name(term, push_ids, now_iso=None):
+    """Re-search viagogo ONCE for `term` and apply the result to every push
+    in `push_ids`, each ranked against its own ticket date.
+
+    Every row is written whatever happens — a silent no-op is what made the
+    teach box look broken. An empty picker result lands as no_match with a
+    message saying so, rather than leaving the card exactly as it was.
+    """
+    if now_iso is None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+    if not push_ids:
+        return
+    try:
+        candidates = _search_viagogo(term)
+    except Exception as e:
+        for pid in push_ids:
+            db.viagogo_push_update(pid, {
+                "status": "error",
+                "error": f"viagogo search for '{term}' failed: {type(e).__name__}: {e}",
+            }, now_iso)
+        return
+
+    if not candidates:
+        for pid in push_ids:
+            db.viagogo_push_update(pid, {
+                "status": "no_match",
+                "candidates_json": "[]",
+                "error": (f"viagogo's seller picker has no event matching "
+                          f"'{term}' — check the English spelling viagogo uses, "
+                          f"or paste the event link below"),
+            }, now_iso)
+        return
+
+    cands_json = json.dumps(candidates, ensure_ascii=False)
+    for pid in push_ids:
+        push = db.viagogo_push_get(pid)
+        if not push:
+            continue
+        chosen = _rank_viagogo_candidates(candidates, push.get("event_date_iso"))
+        try:
+            cpu = push.get("cost_per_unit")
+            fx_rate = fx.ils_to_usd_rate()
+            cost_usd = fx.ils_to_usd(cpu) if cpu is not None else None
+            website_price = round(cost_usd * 5, 2) if cost_usd is not None else None
+        except Exception:
+            fx_rate = cost_usd = website_price = None
+        db.viagogo_push_update(pid, {
+            "status": "awaiting_approval",
+            "candidates_json": cands_json,
+            "chosen_event_id": chosen.get("event_id"),
+            "chosen_event_name": chosen.get("event_name"),
+            "chosen_venue": chosen.get("venue"),
+            "chosen_event_date": chosen.get("date"),
+            "fx_rate": fx_rate,
+            "cost_usd_per_ticket": cost_usd,
+            "website_price_usd": website_price,
+            "error": _candidate_date_mismatch(chosen, push.get("event_date_iso")),
+        }, now_iso)
 
 
 def set_push_event_from_url(push_id, url_or_id, now_iso=None):
