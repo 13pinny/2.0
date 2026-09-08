@@ -25,8 +25,6 @@
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
   header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
-  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
-  header .nav a:hover, header .nav a.active { color: var(--accent); }
   main { padding: 18px 24px 60px; }
   h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; }
   h2:first-child { margin-top: 0; }
@@ -71,30 +69,12 @@
 </style>
 </head>
 <body>
+{% include "_sidebar.html" %}
 <header>
   <div class="left">
     <h1>Kartis</h1>
     <span class="meta" id="meta">loading…</span>
   </div>
-  <nav class="nav">
-    <a href="/">INVENTORY</a>
-    <a href="/sales">SALES</a>
-    <a href="/profit">PROFIT</a>
-    <a href="/series">SERIES</a>
-    <a href="/pricer">PRICER</a>
-    <a href="/cvpricer">CV PRICER</a>
-    <a href="/cvfees" class="active">CV FEES</a>
-    <a href="/listings">LISTINGS</a>
-    <a href="/unmapped">UNMAPPED</a>
-    <a href="/vgsales">VG SALES</a>
-    <a href="/market">ISRAEL MARKET</a>
-    <a href="/pacha">PACHA</a>
-    <a href="/edm">EDM</a>
-    <a href="/dice">DICE</a>
-    <a href="/watchers">WATCHERS</a>
-    <a href="/todos">TO-DO</a>
-    <a href="/tools">TOOLS</a>
-  </nav>
 </header>
 
 <main>

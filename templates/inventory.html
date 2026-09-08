@@ -30,8 +30,6 @@
   header .meta .auth-warn { display: inline-block; margin-left: 10px; padding: 1px 8px; font-size: 10px; letter-spacing: 1.5px; color: var(--bg); background: var(--red); border: 1px solid var(--red); cursor: pointer; user-select: none; }
   header .meta .auth-warn:hover { background: #ff6e64; }
   header .meta .auth-warn.scraping { background: var(--amber); border-color: var(--amber); cursor: progress; }
-  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
-  header .nav a:hover, header .nav a.active { color: var(--accent); }
   main { padding: 18px 24px 60px; }
   .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
@@ -132,39 +130,13 @@
 </style>
 </head>
 <body>
+{% include "_sidebar.html" %}
 <header>
   <div class="left">
     <h1>KARTIS</h1>
     <span class="meta" id="lastrun">—</span>
     <span class="meta" id="cvauth"></span>
   </div>
-  <nav class="nav">
-    <a href="/" class="active">INVENTORY</a>
-    <a href="/sales">SALES</a>
-    <a href="/profit">PROFIT</a>
-    <a href="/series">SERIES</a>
-    <a href="/expenses">EXPENSES</a>
-    <a href="/cashback">CASHBACK</a>
-    <a href="/maaser">MAASER</a>
-    <a href="/pricer">PRICER</a>
-    <a href="/cvpricer">CV PRICER</a>
-    <a href="/cvbookmark" title="One-click CrowdVolt sales pull you run from your own browser">CV BOOKMARK</a>
-    <a href="/listings">LISTINGS</a>
-    <a href="/unmapped">UNMAPPED</a>
-    <a href="/vgsales">VG SALES</a>
-    <a href="/festival">CHUTZOT HAYOTZER</a>
-    <a href="/ga">GA</a>
-    <a href="/market">ISRAEL MARKET</a>
-    <a href="/pacha">PACHA</a>
-    <a href="/marquee">MARQUEE</a>
-    <a href="/edm">EDM</a>
-    <a href="/dice">DICE</a>
-    <a href="/watchers">WATCHERS</a>
-    <a href="/todos">TO-DO</a>
-    <a href="/tools">TOOLS</a>
-    <a href="/vault">VAULT</a>
-    <a href="/tm">TM ACCTS</a>
-  </nav>
 </header>
 <main>
   <div id="errbox" class="err" style="display:none"></div>
