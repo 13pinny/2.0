@@ -89,11 +89,19 @@ class Browser:
                 "`.venv\\Scripts\\python -m patchright install chromium`."
             ) from e
         self._pw = sync_playwright().start()
-        # Headless gets ERR_HTTP2_PROTOCOL_ERROR from the Akamai edge;
-        # headful passes. Park the window far off-screen.
-        self._browser = self._pw.chromium.launch(
-            headless=False, args=["--window-position=-2400,-2400"])
-        self._page = self._browser.new_context(locale="he-IL").new_page()
+        # A raise out of __enter__ never reaches __exit__, so without this
+        # guard a failed launch orphans the node driver. On the VPS the
+        # headful launch fails every hourly sweep (no X server) - 61 leaked
+        # drivers ate ~1.9 GB by 2026-09-17.
+        try:
+            # Headless gets ERR_HTTP2_PROTOCOL_ERROR from the Akamai edge;
+            # headful passes. Park the window far off-screen.
+            self._browser = self._pw.chromium.launch(
+                headless=False, args=["--window-position=-2400,-2400"])
+            self._page = self._browser.new_context(locale="he-IL").new_page()
+        except Exception:
+            self.__exit__(None, None, None)
+            raise
         try:
             self._page.goto(SITE_BASE + "/", wait_until="domcontentloaded",
                             timeout=45000)

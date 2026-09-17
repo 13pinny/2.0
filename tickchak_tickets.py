@@ -184,7 +184,11 @@ def _launch_browser(headless=True):
     from patchright.sync_api import sync_playwright
     pw = sync_playwright().start()
     # Mobile viewport — tickchak /n/ is a mobile-first PWA
-    browser = pw.chromium.launch(headless=headless)
+    try:
+        browser = pw.chromium.launch(headless=headless)
+    except Exception:
+        pw.stop()  # otherwise the node driver is orphaned
+        raise
     return pw, browser
 
 

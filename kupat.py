@@ -205,8 +205,14 @@ class BrowserSession:
                 "`.venv\\Scripts\\python -m patchright install chromium`."
             ) from e
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=True)
-        self._ctx = self._browser.new_context(locale="he-IL")
+        # A raise out of __enter__ never reaches __exit__ - clean up here or
+        # the node driver is orphaned.
+        try:
+            self._browser = self._pw.chromium.launch(headless=True)
+            self._ctx = self._browser.new_context(locale="he-IL")
+        except Exception:
+            self.__exit__(None, None, None)
+            raise
         return self
 
     def __exit__(self, exc_type, exc, tb):
