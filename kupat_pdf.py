@@ -27,7 +27,6 @@ chars get scrubbed so the path is always a legal Windows path.
 
 The browser stays headless (default). Set KUPAT_PDF_HEADLESS=0 to watch.
 """
-import io
 import json
 import os
 import re
@@ -38,7 +37,11 @@ import gzip
 from pathlib import Path
 from datetime import datetime
 
+import fitz
+
 SOURCE = "kupat"
+# Pixels-per-inch declared for the screenshot we wrap into the PDF.
+PDF_DPI = 144.0
 SITE_BASE = "https://tickets.kupat.co.il"
 REQUEST_TIMEOUT = 20
 HEADERS = {
@@ -381,7 +384,7 @@ def render_pdfs(url, base_dir=None, on_progress=None, headless=None):
             page.wait_for_timeout(350)  # let lazy canvases repaint
 
             # Capture the active slide as a PNG screenshot, then wrap it
-            # in a PDF via Pillow. Why not page.pdf()? Chromium's print-to-
+            # in a PDF via PyMuPDF. Why not page.pdf()? Chromium's print-to-
             # PDF path emits content Adobe Acrobat Reader sometimes
             # renders as a blank page (canvas-as-vector + tagged-pdf
             # quirks). A raster PNG embedded as an Image XObject in a
@@ -389,7 +392,10 @@ def render_pdfs(url, base_dir=None, on_progress=None, headless=None):
             # Edge, Chrome, Preview, mobile) and prints reliably to any
             # printer. Tradeoff: text isn't selectable in the PDF — for a
             # ticket that gets scanned at the venue, that's a fine trade.
-            from PIL import Image
+            # (fitz and not Pillow: PyMuPDF is already a hard dependency of
+            # this repo — tickchak_pdf.py runs on it — and Pillow never was,
+            # so importing it here meant the whole /tools print blew up with
+            # "No module named 'PIL'" after driving the browser.)
             if box and box.get("w") and box.get("h"):
                 # Locate the active slide via the same selector trick we
                 # used during DOM manipulation, get its element handle,
@@ -406,13 +412,24 @@ def render_pdfs(url, base_dir=None, on_progress=None, headless=None):
             else:
                 png_bytes = page.screenshot(type="png", full_page=True)
 
-            img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
-            pdf_buf = io.BytesIO()
-            # resolution=144 — the screenshot is 2x DPI; declaring 144 in
-            # the PDF means each px maps to 1/144 inch on a printed page,
-            # so the printed ticket comes out at its natural size (~5.5×8").
-            img.save(pdf_buf, format="PDF", resolution=144.0)
-            pdf_bytes = pdf_buf.getvalue()
+            pix = fitz.Pixmap(png_bytes)
+            if pix.alpha:
+                # Flatten to opaque RGB (what Pillow's .convert("RGB") did):
+                # a transparent ticket background would otherwise ride into the
+                # PDF as an SMask that some printer drivers rasterize badly.
+                pix = fitz.Pixmap(pix, 0)
+            # PDF_DPI=144 — the screenshot is 2x device scale, and mapping
+            # each pixel to 1/144 inch on the page is what makes the printed
+            # ticket come out at its natural size. Size the page off the
+            # PIXEL dimensions, never off fitz.open(stream=...)[0].rect:
+            # that rect is already scaled by whatever DPI the PNG happens to
+            # declare (96 by default), which would halve the ticket again.
+            pdf_doc = fitz.open()
+            pdf_page = pdf_doc.new_page(width=pix.width * 72.0 / PDF_DPI,
+                                        height=pix.height * 72.0 / PDF_DPI)
+            pdf_page.insert_image(pdf_page.rect, pixmap=pix)
+            pdf_bytes = pdf_doc.tobytes(deflate=True)
+            pdf_doc.close()
             fname = ticket_filename(t)
             target = folder / fname
             target.write_bytes(pdf_bytes)
