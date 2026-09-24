@@ -2177,9 +2177,13 @@ def _build_combined_sales(only_canceled=False):
             "is_new": False,
         })
 
-    purchases_by_id = {r.get("id"): r for r in db.all_lysted_purchases()}
+    # Read once and reuse: all_lysted_purchases() is a full table scan that
+    # materialises every row, and it used to be re-run inside the CrowdVolt
+    # cost-backfill loop below (one scan per sale).
+    lysted_purchases = db.all_lysted_purchases()
+    purchases_by_id = {r.get("id"): r for r in lysted_purchases}
     purchases_cost_by_event = {}
-    for r in db.all_lysted_purchases():
+    for r in lysted_purchases:
         key = (r.get("event_name") or "", r.get("section") or "", r.get("row_label") or "")
         purchases_cost_by_event[key] = r.get("cost_per_unit")
     for r in db.all_lysted_sales():
@@ -2305,7 +2309,7 @@ def _build_combined_sales(only_canceled=False):
         cv_section = r.get("ticket_type") or ""
         cv_qty = qty
         if not cost:
-            for lp in db.all_lysted_purchases():
+            for lp in lysted_purchases:
                 if not matcher._events_match(lp.get("event_name"), cv_event):
                     continue
                 if (lp.get("qty") or 0) != cv_qty:

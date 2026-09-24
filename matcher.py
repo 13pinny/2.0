@@ -23,6 +23,7 @@ Notes:
 import re
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 import db
 
@@ -39,7 +40,15 @@ def _norm_event(s):
     return re.sub(r"\s+", " ", s).strip()
 
 
+@lru_cache(maxsize=200_000)
 def _events_match(a, b, threshold=0.85):
+    """Fuzzy event-name equality.
+
+    Memoized: the profit/maaser build compares the same handful of event
+    names over and over across nested loops, and SequenceMatcher.ratio() is
+    O(len(a)*len(b)). Caching turns the repeat comparisons into dict hits.
+    Pure function of its args, so the cache can never go stale within a run;
+    names are short and bounded, so the cache stays small."""
     a, b = _norm_event(a), _norm_event(b)
     if not a or not b:
         return False
