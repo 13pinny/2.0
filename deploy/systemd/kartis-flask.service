@@ -20,6 +20,9 @@ ExecStart=/opt/kartis/.venv/bin/gunicorn \
     --access-logfile - \
     --error-logfile - \
     app:app
+# The kupat/zappa Chromiums this spawns inherit this; let them die before
+# the display stack does.
+OOMScoreAdjust=200
 Restart=always
 RestartSec=5
 

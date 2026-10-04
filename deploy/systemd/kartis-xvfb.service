@@ -8,7 +8,16 @@ User=kartis
 Group=kartis
 # :99 matches DISPLAY=:99 in kartis-chrome.service. 1280x800 is enough for
 # the dashboards; bigger just wastes RAM.
-ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x800x24
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x800x24 -nolisten tcp
+# Type=simple returns before the socket exists; Chrome/x11vnc starting in
+# that gap die with "cannot open display" and burn a restart cycle.
+ExecStartPost=/bin/sh -c 'for i in $$(seq 50); do [ -e /tmp/.X11-unix/X99 ] && exit 0; sleep 0.1; done'
+# Dark gray, not black: an empty display then reads as "Chrome isn't
+# showing" instead of looking like a broken VNC feed.
+ExecStartPost=-/usr/bin/xsetroot -display :99 -solid "#30343c"
+# Never let the OOM killer pick the display: losing Xvfb takes every window
+# with it and noVNC shows a black screen. Chrome (+500) goes first instead.
+OOMScoreAdjust=-900
 Restart=always
 RestartSec=3
 

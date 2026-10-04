@@ -9,6 +9,9 @@ User=kartis
 Group=kartis
 # Listen on loopback only — Caddy reverse_proxies to it from vnc.kartis.homes
 ExecStart=/usr/bin/websockify --web=/usr/share/novnc/ --heartbeat=30 127.0.0.1:6080 localhost:5900
+# Never let the OOM killer pick the display: losing Xvfb takes every window
+# with it and noVNC shows a black screen. Chrome (+500) goes first instead.
+OOMScoreAdjust=-900
 Restart=always
 RestartSec=3
 

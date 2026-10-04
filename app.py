@@ -7428,6 +7428,31 @@ def api_chrome_open_logins():
     return jsonify({"ok": True, "opened": opened, "skipped": skipped, "errors": errors})
 
 
+_display_repair_lock = threading.Lock()
+
+
+@app.route("/api/display/status")
+def api_display_status():
+    """Health of the noVNC display stack (units, Chrome CDP, visible Chrome
+    windows, free RAM) — see display_repair.py."""
+    import display_repair
+    return jsonify(display_repair.status())
+
+
+@app.route("/api/display/repair", methods=["POST"])
+def api_display_repair():
+    """Fix a black noVNC screen: restart any dead display unit or Chrome,
+    un-minimize hidden Chrome windows, open a window if Chrome has none.
+    The noVNC Login button calls this before opening the login tabs."""
+    import display_repair
+    if not _display_repair_lock.acquire(blocking=False):
+        return jsonify({"error": "a repair is already running"}), 429
+    try:
+        return jsonify(display_repair.repair())
+    finally:
+        _display_repair_lock.release()
+
+
 @app.route("/api/watchers")
 def api_watchers():
     # Sweep past-event watchers on every page load so the UI doesn't have to

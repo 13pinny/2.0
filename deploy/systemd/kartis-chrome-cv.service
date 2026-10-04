@@ -21,12 +21,21 @@ ExecStart=/usr/bin/google-chrome-stable \
     --remote-allow-origins=* \
     --user-data-dir=/opt/kartis/user_data_cv \
     --proxy-server=http://127.0.0.1:3128 \
+    --renderer-process-limit=4 \
+    --disk-cache-size=104857600 \
     --no-first-run \
     --no-default-browser-check \
     --disable-features=Translate \
     --disable-background-networking \
     --window-position=60,60 \
     --window-size=1150,680
+# Memory: on the 4 GB box a runaway Chrome used to drag the whole system
+# into the OOM killer, which then took Xvfb/x11vnc too (black noVNC). Now
+# Chrome is reclaimed hard past MemoryHigh, killed+restarted past
+# MemoryMax, and is the OOM killer's first choice — never the display.
+MemoryHigh=700M
+MemoryMax=1000M
+OOMScoreAdjust=500
 Restart=always
 RestartSec=5
 
