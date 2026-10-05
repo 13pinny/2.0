@@ -35,6 +35,8 @@ import market
 import matcher
 import notify
 import edm_events
+import eventim_events
+from edm_common import EdmEventsError
 import pacha_events
 import pacha_tickets
 import scraper
@@ -6326,13 +6328,53 @@ def api_edm_add():
     try:
         ev = edm_events.fetch_one(source, key)
     except Exception as e:
-        return jsonify({"error": f"could not fetch that event: {e}"}), 502
+        # The VPS can't reach Eventim at all (Cloudflare) — those pages arrive
+        # through the desktop relay, which only sends events that are already
+        # tracked. So an eventim add can't be validated here; take it and let
+        # the relay's first send (or the row's last_error) settle it.
+        if source != eventim_events.SOURCE_NAME:
+            return jsonify({"error": f"could not fetch that event: {e}"}), 502
+        ev = {"name": None}
     event_id = db.edm_tracked_add(source, key, url,
                                   datetime.now(timezone.utc).isoformat(),
                                   label=(body.get("label") or "").strip() or None)
     return jsonify({"event_id": event_id, "source": source,
                     "name": ev.get("name"), "min_price": ev.get("min_price"),
-                    "on_sale": ev.get("on_sale")})
+                    "on_sale": ev.get("on_sale"),
+                    "pending_relay": ev.get("name") is None})
+
+
+@app.route("/api/edm/eventim-relay/targets")
+def api_eventim_relay_targets():
+    """What the desktop relay (eventim_relay.py) should load: every tracked,
+    un-paused eventim event, with the URL as pasted — the www.eventim.us form
+    lists tiers without an afflky where the wl.eventim.us/_/<id> form doesn't.
+    The poll doubles as the relay's heartbeat on /api/edm-events/status."""
+    err = _cvauth_secret_error()
+    if err:
+        return err
+    _last_edm_events["relay_seen_at"] = datetime.now(timezone.utc).isoformat()
+    rows = [r for r in db.edm_tracked_all(include_paused=False)
+            if r["source"] == eventim_events.SOURCE_NAME]
+    return jsonify({"targets": [{"event_key": r["event_key"],
+                                 "url": r.get("url") or eventim_events.fetch_url(r["event_key"])}
+                                for r in rows]})
+
+
+@app.route("/api/edm/eventim-relay", methods=["POST"])
+def api_eventim_relay():
+    """Desktop relay drop-off: {event_key, html}. Stored for the next EDM
+    tick to read (see eventim_events' DESKTOP RELAY note)."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    err = _cvauth_secret_error()
+    if err:
+        return err
+    try:
+        n = eventim_events.relay_store(body.get("event_key") or "", body.get("html") or "")
+    except (EdmEventsError, ValueError) as e:
+        return jsonify({"error": str(e)}), 422
+    return jsonify({"ok": True, "tiers": n})
 
 
 @app.route("/api/edm/remove", methods=["POST"])

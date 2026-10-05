@@ -102,7 +102,10 @@
   <p class="sub">Paste a posh.vip, events.leapevents.com, wl.eventim.us or shotgun.live
     event URL. Tao Group (Marquee New York / Skydeck) is swept from the venue calendars
     automatically and lives on its own page — see <a href="/marquee">MARQUEE</a>.
-     Keep the <code>?afflky=</code> parameter on Eventim links — without it the page lists no tickets.</p>
+     Eventim links (eventim.us / wl.eventim.us) are fetched by the desktop relay
+     (<code>eventim_relay.py</code> on the PC) because Cloudflare blocks this server — paste the
+     link exactly as it opens in your browser (keep any <code>?afflky=</code>); tiers show up
+     within a few minutes of adding.</p>
   <div class="controls">
     <input type="text" id="addurl" placeholder="https://posh.vip/e/… " />
     <button class="primary" id="addbtn">Track</button>

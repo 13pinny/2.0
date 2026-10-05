@@ -52,11 +52,32 @@ so once a type drops under the order cap (6 here) `max_qty` becomes a real
 below the event's order limit, as `available` — a genuine tail-end
 low-stock signal. Above that it stays None (unknown), never a fake count.
 
+CROSS-SELLS. A page can list OTHER events under "add to my order" (the
+Black Coffee Houston page carries Crankdat and Gryffin), each in a hidden
+<div id="addtomyorderbox<N>"> holding the same ticket-list markup. Parsing
+past the first of those mixed their tiers into this event — a $70.48
+Gryffin ticket became Black Coffee's "cheapest price". parse_tiers stops at
+the first add-to-order box.
+
+DESKTOP RELAY. As of 2026-10-05 Cloudflare challenges the VPS on every
+route, full BROWSER_HEADERS included — and a real Chrome on the VPS gets
+"Verify you are human" too (Hetzner IP reputation), while the same page
+loads fine from a home connection. So `eventim_relay.py` on the desktop
+loads each tracked event's URL in its own Chrome and POSTs the rendered
+HTML to /api/edm/eventim-relay, which stores it under tm_cache/ via
+relay_store(). fetch_event prefers a relayed page younger than
+RELAY_MAX_AGE_SECONDS and only falls back to its own HTTP fetch otherwise,
+so the diff/ping pipeline is unchanged — it just reads a page the desktop
+fetched. A stale relay surfaces as the event's last_error on /edm, never
+as "sold out".
+
 CLI probe:  python eventim_events.py [<url>] [--json]
 """
 import json
+import os
 import re
 import sys
+import time
 
 import edm_common
 from edm_common import EdmEventsError, make_tier, rollup
@@ -88,6 +109,11 @@ _NOTAVAIL_RE = re.compile(r'<div class="purchprice tix-not-avail">(.*?)</div>', 
 _SELECT_RE = re.compile(r'<select[^>]*tickettypeid="(\d+)"(.*?)</select>', re.I | re.S)
 _OPTION_VAL_RE = re.compile(r'<option value="(\d+)"', re.I)
 _LIMIT_RE = re.compile(r"There is a (\d+) ticket limit", re.I)
+_CROSS_SELL_RE = re.compile(r'<div id="addtomyorderbox', re.I)
+
+RELAY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "tm_cache", "eventim_relay")
+RELAY_MAX_AGE_SECONDS = int(os.getenv("KARTIS_EVENTIM_RELAY_MAX_AGE_SECONDS") or 900)
 
 
 def parse_url(url):
@@ -189,6 +215,9 @@ def _li_tier(li, group, order_limit):
 
 
 def parse_tiers(html):
+    cut = _CROSS_SELL_RE.search(html)
+    if cut:
+        html = html[:cut.start()]
     limit_m = _LIMIT_RE.search(html)
     order_limit = int(limit_m.group(1)) if limit_m else None
     tiers = []
@@ -217,11 +246,53 @@ def _date_text(ld):
     return dt.strftime("%a, %b %d, %Y · %I:%M %p").replace(" 0", " ")
 
 
+def _relay_path(event_key):
+    event_id, _ = split_key(event_key)
+    return os.path.join(RELAY_DIR, f"{event_id}.html")
+
+
+def relay_age(event_key):
+    """Seconds since the desktop relay last stored this event, or None."""
+    try:
+        return time.time() - os.path.getmtime(_relay_path(parse_url(event_key)))
+    except OSError:
+        return None
+
+
+def relay_store(event_key, html):
+    """Keep a desktop-rendered page for fetch_event. Refuses a page that
+    doesn't parse to tiers, so a challenge page the desktop happened to get
+    can never overwrite a good one."""
+    event_key = parse_url(event_key)
+    tiers, _ = parse_tiers(html or "")
+    if not tiers:
+        raise EdmEventsError(f"eventim relay: page for {event_key} has no ticket tiers")
+    os.makedirs(RELAY_DIR, exist_ok=True)
+    path = _relay_path(event_key)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        f.write(html)
+    os.replace(path + ".tmp", path)
+    return len(tiers)
+
+
+def _load_html(event_key, url):
+    age = relay_age(event_key)
+    if age is not None and age <= RELAY_MAX_AGE_SECONDS:
+        with open(_relay_path(event_key), encoding="utf-8") as f:
+            return f.read()
+    try:
+        return edm_common.fetch_text(url)
+    except EdmEventsError as e:
+        when = f"{age / 60:.0f} min ago" if age is not None else "never"
+        raise EdmEventsError(f"{e} — desktop relay last sent this page {when}; "
+                             "is eventim_relay.py running?") from e
+
+
 def fetch_event(event_key):
     """One wl.eventim.us event, normalized (see edm_common's docstring)."""
     event_key = parse_url(event_key)
     url = fetch_url(event_key)
-    html = edm_common.fetch_text(url)
+    html = _load_html(event_key, url)
 
     # A Cloudflare interstitial is a big HTML page with none of our markup;
     # make that read as a fetch failure, never as an empty tier list.
