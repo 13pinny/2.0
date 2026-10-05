@@ -307,6 +307,25 @@ the dashboard), re-login in the Chrome window there, then back on the box
 `sudo systemctl restart kartis-chrome`. The Chrome restart can also be
 triggered from anywhere with `curl`-able access if you wire up an endpoint.
 
+**noVNC connects but the screen is black.**
+Black = no Chrome window on the display. Usually the box ran out of RAM and
+the OOM killer took Chrome (or Xvfb), or a Chrome window got minimized —
+openbox has no taskbar, so it can't be brought back from inside noVNC.
+Click **Fix Screen** on /inventory (or just **noVNC Login**, which runs the
+same repair first): it restarts any dead display unit or Chrome, un-minimizes
+hidden windows, and opens one if Chrome has none. If the button reports an
+error, run the full repair once over SSH:
+
+```sh
+cd /opt/kartis && sudo -u kartis git pull --ff-only && sudo bash deploy/fix-vnc.sh
+```
+
+It adds a 2 GB swapfile if there's none, kills orphaned patchright drivers,
+installs the display units with the OOM killer told to spare them, caps each
+Chrome's memory (drop-ins; your Chrome units are left as they are), lets the
+dashboard restart the display units without a password, and prints a health
+report. An empty display is now dark gray instead of black.
+
 **noVNC bookmark shows "Failed to connect" but services look "active".**
 x11vnc drifted off port 5900 (auto-probed to 5901 after a quick restart)
 while websockify still bridges 5900. The `kartis-vnc.service` unit pins

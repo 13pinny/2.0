@@ -9,6 +9,9 @@ User=kartis
 Group=kartis
 Environment=DISPLAY=:99
 ExecStart=/usr/bin/openbox
+# Never let the OOM killer pick the display: losing Xvfb takes every window
+# with it and noVNC shows a black screen. Chrome (+500) goes first instead.
+OOMScoreAdjust=-900
 Restart=always
 RestartSec=5
 
