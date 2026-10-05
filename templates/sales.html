@@ -111,6 +111,10 @@
   .grp-unmerge:hover { background: rgba(167,139,250,0.12); }
   .grp-cost { background: transparent; border: 1px dashed var(--line-2); color: var(--muted); padding: 1px 6px; font-size: 9px; letter-spacing: 1.5px; margin-left: 8px; cursor: pointer; font-family: inherit; border-radius: 1px; }
   .grp-cost:hover { background: rgba(210,153,34,0.12); border-color: var(--amber); color: var(--amber); }
+  .grp-add-sale { background: transparent; border: 1px dashed var(--line-2); color: var(--muted); padding: 1px 6px; font-size: 9px; letter-spacing: 1.5px; margin-left: 8px; cursor: pointer; font-family: inherit; border-radius: 1px; }
+  .grp-add-sale:hover, tr.group-hdr td:hover .grp-add-sale { border-color: var(--green); color: var(--green); }
+  #add-sale-btn { font-family: inherit; font-size: 11px; padding: 6px 12px; cursor: pointer; letter-spacing: 1.5px; background: var(--bg-3); color: var(--text); border: 1px solid var(--line); }
+  #add-sale-btn:hover { border-color: var(--green); color: var(--green); }
   .grp-cost.set { border-style: solid; border-color: var(--amber); color: var(--amber); }
   tr.group-hdr td:hover .grp-cost { border-color: var(--amber); color: var(--amber); }
   #merge-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--purple); padding: 9px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); display: none; z-index: 999; letter-spacing: 0.5px; gap: 12px; align-items: center; }
@@ -169,6 +173,7 @@
     <h1>SALES</h1>
     <span class="meta" id="sub">—</span>
   </div>
+  <button id="add-sale-btn" title="Record a sale you made yourself (cash, Zelle, a friend…)">+ ADD SALE</button>
 </header>
 <main>
   <div class="stats">
@@ -344,6 +349,47 @@
   <option value="Viagogo">
   <option value="CrowdVolt">
 </datalist>
+
+<datalist id="sale-method-options">
+  <option value="Cash">
+  <option value="Zelle">
+  <option value="Venmo">
+  <option value="PayPal">
+  <option value="Bank transfer">
+  <option value="WhatsApp">
+  <option value="Facebook">
+  <option value="Viagogo">
+  <option value="Lysted">
+  <option value="CrowdVolt">
+  <option value="JJT">
+</datalist>
+<datalist id="add-sale-events"></datalist>
+
+<div id="add-sale-bg" class="modal-bg">
+  <div class="modal">
+    <h3><span>// ADD MY OWN SALE <span class="src-tag" style="color:var(--green);border-color:var(--green);">MANUAL</span></span><button class="close" id="as-close">&times;</button></h3>
+    <div class="modal-body">
+      <label>Event</label><input id="as-event_name" type="text" list="add-sale-events" placeholder="event name">
+      <label>Event Date</label><input id="as-event_date_iso" type="date">
+      <label>Venue</label><input id="as-venue" type="text" placeholder="optional">
+      <label>Section</label><input id="as-section" type="text">
+      <label>Row</label><input id="as-row" type="text">
+      <label>Seats</label><input id="as-seats" type="text" placeholder="e.g. 5-6 or 5,6,7">
+      <label>Qty</label><input id="as-qty" type="number" step="1" min="1" placeholder="auto from seats">
+      <label>Cost</label><input id="as-cost" type="number" step="0.01" placeholder="what these tickets cost you (total)">
+      <label>Sale Total</label><input id="as-sale_price" type="number" step="0.01" placeholder="what you got for them (total)">
+      <label>Sale Method</label><input id="as-platform" type="text" list="sale-method-options" placeholder="cash, Zelle, Venmo…">
+      <label>Sold To</label><input id="as-buyer" type="text" placeholder="who bought them">
+      <label>Sale Date</label><input id="as-sale_date" type="date">
+      <label>Note</label><input id="as-note" type="text" placeholder="optional">
+    </div>
+    <div class="modal-foot">
+      <span class="muted">Not linked to inventory · ctrl+enter saves</span>
+      <button id="as-cancel">Cancel</button>
+      <button class="primary" id="as-save">Save</button>
+    </div>
+  </div>
+</div>
 
 <div id="toast"><span id="toast-msg"></span><button id="toast-undo">Undo</button><span class="kbd">Ctrl+Z</span></div>
 
@@ -556,7 +602,7 @@ function _renderRow(r) {
     <td class="${ed('venue')}">${esc(r.venue)}</td>
     <td class="${ed('section')}">${esc(r.section)}${r.row ? " / " + esc(r.row) : ""}</td>
     <td><span class="src src-${esc(r.source)}">${esc(_srcLabel(r.source))}</span>${newBadge}</td>
-    <td class="cell-edit ${ed('platform')}" data-edit-field="platform" title="Click to edit platform">${esc(r.platform)}</td>
+    <td class="cell-edit ${ed('platform')}" data-edit-field="platform" title="Click to edit platform">${esc(r.platform)}${r.buyer ? `<div class="muted" style="font-size:10px;">→ ${esc(r.buyer)}</div>` : ""}</td>
     <td class="muted" style="font-size:11px;">${esc(r.order_id || "")}</td>
     <td class="num ${ed('qty')}">${r.qty ?? ""}</td>
     <td class="num ${ed('sale_price')}">${revCell}</td>
@@ -694,6 +740,7 @@ function _renderGrouped(tbody, rows, groupOrder) {
         <span class="evt-meta">${esc(fmtDateTime(g.event_date_iso || g.event_date || ""))} · ${esc(g.venue || "")}</span>
         ${mergedBadge}
         ${costBtn}
+        <button class="grp-add-sale" title="Record a sale you made yourself for this event" data-name="${esc(g.event_name || "")}" data-date="${esc((g.event_date_iso || "").slice(0, 10))}" data-venue="${esc(g.venue || "")}">+ SALE</button>
         <span class="evt-stats">
           <span class="ratio">${ratioText}</span>
           ${money(cost)} cost · ${money(payout)} payout ·
@@ -1645,6 +1692,89 @@ document.addEventListener("keydown", (e) => {
   if (!document.getElementById("modal-bg").classList.contains("open")) return;
   if (e.key === "Escape") { e.preventDefault(); closeEditModal(); }
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEditModal(); }
+});
+
+// --- add my own sale ---
+function _qtyFromSeats(seats) {
+  const s = (seats || "").trim();
+  if (!s) return null;
+  let n = 0;
+  for (const part of s.split(/[,\s]+/).filter(Boolean)) {
+    const m = part.match(/^(\d+)-(\d+)$/);
+    if (m) n += Math.abs(Number(m[2]) - Number(m[1])) + 1;
+    else n += 1;
+  }
+  return n || null;
+}
+
+function openAddSaleModal(name, dateIso, venue) {
+  const dl = document.getElementById("add-sale-events");
+  const names = [...new Set(_rows.map(r => r.event_name).filter(Boolean))].sort();
+  dl.innerHTML = names.map(n => `<option value="${esc(n)}">`).join("");
+  for (const id of ["section", "row", "seats", "qty", "cost", "sale_price", "platform", "buyer", "note"]) {
+    document.getElementById("as-" + id).value = "";
+  }
+  document.getElementById("as-qty").placeholder = "auto from seats";
+  document.getElementById("as-event_name").value = name || "";
+  document.getElementById("as-event_date_iso").value = dateIso || "";
+  document.getElementById("as-venue").value = venue || "";
+  document.getElementById("as-sale_date").value = new Date().toLocaleDateString("en-CA");
+  document.getElementById("add-sale-bg").classList.add("open");
+  document.getElementById(name ? "as-section" : "as-event_name").focus();
+}
+
+function closeAddSaleModal() {
+  document.getElementById("add-sale-bg").classList.remove("open");
+}
+
+async function saveAddSale() {
+  const v = (id) => document.getElementById("as-" + id).value.trim();
+  const num = (id) => { const x = v(id).replace(/[$,]/g, ""); return x === "" ? 0 : parseFloat(x); };
+  const qty = parseInt(v("qty"), 10) || _qtyFromSeats(v("seats"));
+  if (!v("event_name") || !v("event_date_iso")) { alert("Event name and date are required"); return; }
+  if (!qty || qty < 1) { alert("Enter a qty (or seats like 5-6)"); return; }
+  const res = await fetch("/api/sales/manual-add", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      event_name: v("event_name"), event_date_iso: v("event_date_iso"), venue: v("venue"),
+      section: v("section"), row: v("row"), seats: v("seats"), qty,
+      cost: num("cost"), sale_price: num("sale_price"),
+      platform: v("platform"), buyer: v("buyer"),
+      sale_date: v("sale_date"), note: v("note"),
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert("Failed to save sale" + (err.error ? `: ${err.error}` : ""));
+    return;
+  }
+  closeAddSaleModal();
+  showToast(`sale added // ${v("event_name")} · ${qty} tix`);
+  await load();
+}
+
+document.getElementById("as-seats").addEventListener("input", () => {
+  const q = _qtyFromSeats(document.getElementById("as-seats").value);
+  document.getElementById("as-qty").placeholder = q ? `auto — ${q}` : "auto from seats";
+});
+document.getElementById("add-sale-btn").addEventListener("click", () => openAddSaleModal());
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button.grp-add-sale");
+  if (!btn) return;
+  e.stopPropagation();
+  openAddSaleModal(btn.dataset.name, btn.dataset.date, btn.dataset.venue);
+});
+document.getElementById("as-close").addEventListener("click", closeAddSaleModal);
+document.getElementById("as-cancel").addEventListener("click", closeAddSaleModal);
+document.getElementById("as-save").addEventListener("click", saveAddSale);
+document.getElementById("add-sale-bg").addEventListener("click", (e) => {
+  if (e.target.id === "add-sale-bg") closeAddSaleModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (!document.getElementById("add-sale-bg").classList.contains("open")) return;
+  if (e.key === "Escape") { e.preventDefault(); closeAddSaleModal(); }
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveAddSale(); }
 });
 
 load();

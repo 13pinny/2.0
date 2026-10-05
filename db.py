@@ -1193,6 +1193,9 @@ def init():
             "WHERE h.source = 'lysted' AND t.hidden_id IS NULL"
         ).fetchall():
             _add_lysted_tombstone(conn, _h["source_id"], _h["hidden_at"])
+        ms_cols = {row["name"] for row in conn.execute("PRAGMA table_info(manual_sales)").fetchall()}
+        if "buyer" not in ms_cols:
+            conn.execute("ALTER TABLE manual_sales ADD COLUMN buyer TEXT")
         ls_cols = {row["name"] for row in conn.execute("PRAGMA table_info(lysted_sales)").fetchall()}
         if "cost" not in ls_cols:
             conn.execute("ALTER TABLE lysted_sales ADD COLUMN cost REAL")
@@ -2253,13 +2256,13 @@ def insert_manual_sale(row, now_iso):
             INSERT INTO manual_sales (id, inv_source, inv_source_id, event_name,
                 event_date, event_date_iso, venue, section, row_label, seats,
                 qty, sale_price, cost, sale_date, sale_date_iso, platform,
-                is_loss, note, created_at)
+                is_loss, note, buyer, created_at)
             VALUES (:id, :inv_source, :inv_source_id, :event_name,
                 :event_date, :event_date_iso, :venue, :section, :row_label, :seats,
                 :qty, :sale_price, :cost, :sale_date, :sale_date_iso, :platform,
-                :is_loss, :note, :created_at)
+                :is_loss, :note, :buyer, :created_at)
             """,
-            {**row, "created_at": now_iso},
+            {"buyer": None, **row, "created_at": now_iso},
         )
 
 

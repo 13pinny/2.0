@@ -1565,15 +1565,7 @@ def _bought_by_event(groups_map):
     # bought and spawning a phantom "still listed" row. A row absent from the
     # last couple of scrapes (48h at the hourly cadence) is treated as gone.
     all_vg = db.all_viagogo()
-    latest_vg_seen = max((r.get("last_seen_at") or "" for r in all_vg), default="")
-    vg_stale_cutoff = ""
-    if latest_vg_seen:
-        try:
-            vg_stale_cutoff = (
-                datetime.fromisoformat(latest_vg_seen) - timedelta(hours=48)
-            ).isoformat()
-        except ValueError:
-            pass
+    vg_stale_cutoff = _viagogo_stale_cutoff(all_vg)
     for r in all_vg:
         if ("viagogo", str(r.get("id"))) in hidden:
             continue
@@ -1650,6 +1642,19 @@ def _ga_like(text):
     return "ga" in tokens or "pit" in tokens
 
 
+def _viagogo_stale_cutoff(rows):
+    """last_seen_at below which a viagogo row is gone (absent from the last
+    48h of scrapes). Nothing prunes viagogo_listings, so sold/deleted listings
+    otherwise keep their last snapshot forever. "" when it can't be computed."""
+    latest = max((r.get("last_seen_at") or "" for r in rows), default="")
+    if not latest:
+        return ""
+    try:
+        return (datetime.fromisoformat(latest) - timedelta(hours=48)).isoformat()
+    except ValueError:
+        return ""
+
+
 def _build_unified_inventory():
     """Combine unsold tickets from Lysted + Viagogo + JeruJam.
 
@@ -1663,6 +1668,7 @@ def _build_unified_inventory():
     hidden = db.all_hidden_keys()
     lysted = db.all_lysted_purchases()
     viagogo = _enrich_viagogo(db.all_viagogo())
+    vg_stale_cutoff = _viagogo_stale_cutoff(viagogo)
     jerujam = db.all_jerujam_tickets()
     j_sales = db.all_jerujam_sales()
     groups = _event_groups()
@@ -1842,6 +1848,10 @@ def _build_unified_inventory():
         if _ga_like(sec_n):
             viagogo_ga_events.add(ek)
         if ("viagogo", str(r.get("id"))) in hidden:
+            continue
+        # Gone from viagogo (sold/deleted) -- still feeds the JeruJam dedupe
+        # keys above, but don't show its last snapshot as live stock.
+        if vg_stale_cutoff and (r.get("last_seen_at") or "") < vg_stale_cutoff:
             continue
         consumed = matched_qty.get(("viagogo", str(r.get("id"))), 0)
         avail_remaining = max(0, avail - consumed)
@@ -2383,6 +2393,10 @@ def _build_combined_sales(only_canceled=False):
             "cost": m.get("cost") or 0,
             "is_loss": bool(m.get("is_loss")),
             "is_new": False,
+            "buyer": m.get("buyer") or "",
+            # Standalone sales carry a cost the user typed -- keep it over
+            # the whole-event split, same as a per-row cost edit.
+            "cost_typed": not m.get("inv_source"),
         })
 
     sale_overrides = db.all_sale_overrides()
@@ -2396,7 +2410,7 @@ def _build_combined_sales(only_canceled=False):
         # Whole-event cost split beats whatever cost the scrapers guessed --
         # but a cost the user typed on this specific row beats both.
         cpu = group_cpu.get(r["event_group"])
-        if cpu is not None and not (ov and "cost" in ov):
+        if cpu is not None and not (ov and "cost" in ov) and not r.get("cost_typed"):
             r["cost"] = round(cpu * (r.get("qty") or 0), 2)
             r["cost_per_unit"] = round(cpu, 2)
             r["cost_source"] = "event_split"
@@ -4989,6 +5003,63 @@ def api_sales_manual_record():
         inv_source=inv_source, inv_source_id=inv_source_id,
         qty=qty, reason="manual" + ("/loss" if is_loss else ""), now_iso=now_iso,
     )
+    return jsonify({"ok": True, "sale_id": sale_id})
+
+
+@app.route("/api/sales/manual-add", methods=["POST"])
+def api_sales_manual_add():
+    """Standalone sale for an event -- not tied to an inventory row (tickets
+    sold privately, bought off-platform, etc). Cost and sale total are what
+    the user typed, both for the whole sale."""
+    from flask import request
+    import uuid
+    body = request.get_json(silent=True) or {}
+    event_name = (body.get("event_name") or "").strip()
+    event_date_iso = (body.get("event_date_iso") or "").strip()
+    if not event_name or not event_date_iso:
+        return jsonify({"error": "event name and date required"}), 400
+    try:
+        qty = int(body.get("qty") or 0)
+        sale_price = float(body.get("sale_price") or 0)
+        cost = float(body.get("cost") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "qty, cost and sale total must be numbers"}), 400
+    if qty <= 0:
+        return jsonify({"error": "qty must be at least 1"}), 400
+    sale_date = (body.get("sale_date") or "").strip() or datetime.now().strftime("%Y-%m-%d")
+    venue = (body.get("venue") or "").strip()
+    if not venue:
+        # The event group key includes venue -- borrow it from an existing
+        # sale of the same event so this lands in that group, not a new one.
+        want = (_norm_event_name(event_name), _date_only(event_date_iso))
+        venue = next(
+            (r.get("venue") for r in _build_combined_sales()
+             if r.get("venue")
+             and (_norm_event_name(r.get("event_name")), _date_only(r.get("event_date_iso") or "")) == want),
+            "",
+        )
+    sale_id = "manual-" + uuid.uuid4().hex[:12]
+    db.insert_manual_sale({
+        "id": sale_id,
+        "inv_source": None,
+        "inv_source_id": None,
+        "event_name": event_name,
+        "event_date": (body.get("event_date") or "").strip() or event_date_iso,
+        "event_date_iso": event_date_iso,
+        "venue": venue,
+        "section": (body.get("section") or "").strip(),
+        "row_label": (body.get("row") or "").strip(),
+        "seats": (body.get("seats") or "").strip(),
+        "qty": qty,
+        "sale_price": round(sale_price, 2),
+        "cost": round(cost, 2),
+        "sale_date": sale_date,
+        "sale_date_iso": sale_date[:10],
+        "platform": (body.get("platform") or "").strip() or "manual",
+        "is_loss": 0,
+        "note": (body.get("note") or "").strip(),
+        "buyer": (body.get("buyer") or "").strip() or None,
+    }, datetime.now(timezone.utc).isoformat())
     return jsonify({"ok": True, "sale_id": sale_id})
 
 
