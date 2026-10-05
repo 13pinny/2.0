@@ -98,6 +98,17 @@ CREATE TABLE IF NOT EXISTS inventory_hidden (
     hidden_at TEXT NOT NULL,
     PRIMARY KEY (source, source_id)
 );
+-- Lysted purchase ids are order|section|row|seats, so a seat/row reassignment
+-- or partial sale on Lysted mints a new id and a hidden line "comes back".
+-- One tombstone per hidden Lysted line: any row for the same order+section
+-- is hidden too, except siblings that already existed at hide time (keep_ids).
+CREATE TABLE IF NOT EXISTS lysted_hide_tombstones (
+    hidden_id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    section_norm TEXT NOT NULL,
+    keep_ids TEXT NOT NULL,
+    hidden_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS inventory_unsold (
     fingerprint TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -1174,6 +1185,14 @@ def init():
             conn.execute("ALTER TABLE viagogo_listings ADD COLUMN published INTEGER")
         if "list_state" not in vg_cols:
             conn.execute("ALTER TABLE viagogo_listings ADD COLUMN list_state TEXT")
+        # Backfill tombstones for Lysted hides made before they existed. Siblings
+        # present now are kept visible (can't tell which ones are drifted copies).
+        for _h in conn.execute(
+            "SELECT h.source_id, h.hidden_at FROM inventory_hidden h "
+            "LEFT JOIN lysted_hide_tombstones t ON t.hidden_id = h.source_id "
+            "WHERE h.source = 'lysted' AND t.hidden_id IS NULL"
+        ).fetchall():
+            _add_lysted_tombstone(conn, _h["source_id"], _h["hidden_at"])
         ls_cols = {row["name"] for row in conn.execute("PRAGMA table_info(lysted_sales)").fetchall()}
         if "cost" not in ls_cols:
             conn.execute("ALTER TABLE lysted_sales ADD COLUMN cost REAL")
@@ -1825,26 +1844,107 @@ def all_inventory():
     return [dict(r) for r in rows]
 
 
+def _lysted_section_norm(s):
+    return " ".join(str(s or "").lower().split())
+
+
+def _add_lysted_tombstone(conn, source_id, now_iso):
+    row = conn.execute(
+        "SELECT order_id, section FROM lysted_purchases WHERE id = ?", (source_id,)
+    ).fetchone()
+    if not row or not row["order_id"]:
+        return
+    sec = _lysted_section_norm(row["section"])
+    keep = [
+        r["id"] for r in conn.execute(
+            "SELECT id, section FROM lysted_purchases WHERE order_id = ? AND id <> ?",
+            (row["order_id"], source_id),
+        ).fetchall()
+        if _lysted_section_norm(r["section"]) == sec
+    ]
+    conn.execute(
+        "INSERT OR IGNORE INTO lysted_hide_tombstones "
+        "(hidden_id, order_id, section_norm, keep_ids, hidden_at) VALUES (?, ?, ?, ?, ?)",
+        (source_id, row["order_id"], sec, json.dumps(keep), now_iso),
+    )
+
+
 def hide_inventory(source, source_id, now_iso):
     with connect() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO inventory_hidden (source, source_id, hidden_at) VALUES (?, ?, ?)",
             (source, source_id, now_iso),
         )
+        if source == "lysted":
+            _add_lysted_tombstone(conn, source_id, now_iso)
 
 
 def unhide_inventory(source, source_id):
     with connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             "DELETE FROM inventory_hidden WHERE source = ? AND source_id = ?",
             (source, source_id),
         )
+        if source != "lysted":
+            return
+        conn.execute("DELETE FROM lysted_hide_tombstones WHERE hidden_id = ?", (source_id,))
+        if cur.rowcount:
+            return
+        # Hidden only via a tombstone (a drifted id) -> exempt it from them.
+        row = conn.execute(
+            "SELECT order_id, section FROM lysted_purchases WHERE id = ?", (source_id,)
+        ).fetchone()
+        if not row:
+            return
+        sec = _lysted_section_norm(row["section"])
+        for t in conn.execute(
+            "SELECT hidden_id, keep_ids FROM lysted_hide_tombstones "
+            "WHERE order_id = ? AND section_norm = ?",
+            (row["order_id"], sec),
+        ).fetchall():
+            keep = json.loads(t["keep_ids"])
+            if source_id not in keep:
+                keep.append(source_id)
+                conn.execute(
+                    "UPDATE lysted_hide_tombstones SET keep_ids = ? WHERE hidden_id = ?",
+                    (json.dumps(keep), t["hidden_id"]),
+                )
 
 
 def all_hidden_keys():
     with connect() as conn:
         rows = conn.execute("SELECT source, source_id FROM inventory_hidden").fetchall()
-    return {(r["source"], r["source_id"]) for r in rows}
+        keys = {(r["source"], r["source_id"]) for r in rows}
+        tombs = {}
+        for t in conn.execute(
+            "SELECT hidden_id, order_id, section_norm, keep_ids FROM lysted_hide_tombstones"
+        ).fetchall():
+            tombs.setdefault((t["order_id"], t["section_norm"]), []).append(
+                {t["hidden_id"], *json.loads(t["keep_ids"])}
+            )
+        if tombs:
+            orders = list({k[0] for k in tombs})
+            lp = conn.execute(
+                "SELECT id, order_id, section, last_seen_at FROM lysted_purchases "
+                "WHERE order_id IN (%s)" % ",".join("?" * len(orders)),
+                orders,
+            ).fetchall()
+            seen = {r["id"]: r["last_seen_at"] or "" for r in lp}
+            latest = {}
+            for r in lp:
+                latest[r["order_id"]] = max(latest.get(r["order_id"], ""), seen[r["id"]])
+            for r in lp:
+                for ex in tombs.get((r["order_id"], _lysted_section_norm(r["section"])), ()):
+                    if r["id"] in ex:
+                        continue
+                    # Only a stand-in for the hidden line once that line stopped
+                    # appearing in scrapes; while it's still live, a new id is a
+                    # genuinely different line.
+                    hidden_ids = ex - {r["id"]}
+                    if any(seen.get(h, "") < latest[r["order_id"]] for h in hidden_ids if h in seen):
+                        keys.add(("lysted", r["id"]))
+                        break
+    return keys
 
 
 # --- "Didn't Sell" archive ---
