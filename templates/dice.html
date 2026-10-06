@@ -110,6 +110,22 @@
   .spark .hit:hover { fill: rgba(0,163,215,.10); }
   .climb { font-size: 10px; font-weight: 600; color: var(--orange); }
   .errdot { color: var(--red); font-size: 10px; margin-left: 4px; cursor: help; }
+  .follows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px,100%), 1fr)); gap: 12px; margin-bottom: 8px; }
+  .fol { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+  .fol .hd { display: flex; align-items: center; gap: 10px; }
+  .fol .hd .nm { font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fol .hd .x { margin-left: auto; color: var(--muted); text-decoration: none; font-size: 13px; padding: 0 2px; }
+  .fol .hd .x:hover { color: var(--red); }
+  .fol .kind { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #fff; padding: 1px 7px; border-radius: 6px; background: var(--purple); }
+  .fol .kind.venue { background: var(--cyan); }
+  .fol .meta2 { font-size: 10px; color: var(--muted); margin: 4px 0 6px; }
+  .fol .meta2 .bad { color: var(--red); }
+  .fol .show { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px dashed var(--line); font-size: 11px; text-decoration: none; color: inherit; }
+  .fol .show .art { width: 30px; height: 30px; border-radius: 6px; font-size: 10px; flex: none; }
+  .fol .show .tx { min-width: 0; flex: 1; }
+  .fol .show .tx div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fol .show .when2 { font-size: 10px; color: var(--muted); }
+  .fol .more { font-size: 10px; color: var(--accent); cursor: pointer; padding-top: 4px; }
   .detail .hero { float: right; width: 180px; height: 110px; border-radius: 10px; background-size: cover; background-position: center; margin: 2px 0 8px 16px; }
 </style>
 </head>
@@ -153,6 +169,15 @@
     <tbody id="xrows"></tbody>
   </table>
   </div>
+
+  <h2 id="followH">Following <span style="font-size:10px;color:var(--muted)">(DICE artists + venues · Discord pings on a new show, 1h before sale, and at go-live · found shows are auto-tracked below)</span></h2>
+  <div class="controls">
+    <input type="text" id="folQ" placeholder="paste a dice.fm artist or venue link…" style="width:340px;max-width:60vw" />
+    <button class="act" id="folBtn">Follow</button>
+    <button class="act" id="folRun" title="check every followed page now">Check now</button>
+    <span class="sub" id="folNote" style="margin:0"></span>
+  </div>
+  <div class="follows" id="follows"></div>
 
   <h2 id="trackerH">Tracked events <span style="font-size:10px;color:var(--muted)">(click a row for types + change history)</span></h2>
   <div class="stats" id="totals"></div>
@@ -360,7 +385,9 @@ function detailRows(e){
 function trackerRow(e, held){
   const tier = cheapestTier(e);
   const h = held[e.event_code] || 0;
-  const err = e.error ? `<span class="errdot" title="${escape(e.error)}">● fetch failed</span>` : '';
+  const err = !e.error ? ''
+    : e.page_only ? `<span class="errdot" style="color:var(--amber)" title="DICE's price API is unreachable from the server and the PC relay has nothing fresh, so status + cheapest price come from the public event page; ticket types below are the last full fetch. ${escape(e.error)}">● page only</span>`
+    : `<span class="errdot" title="${escape(e.error)}">● fetch failed</span>`;
   return `<tr class="ev${e.past ? ' isPast' : ''}" data-id="${e.event_code}">
     <td class="artc">${art(e.image, e.name, e.past)}</td>
     <td><div class="evname">${escape(e.name || e.event_code)}${err}</div><div class="evsub">${escape(e.venue||'')} <span class="trk">· ${escape(e.tracked_by)}</span></div></td>
@@ -418,7 +445,9 @@ function renderTotals(){
   ).join('');
   const all = DATA.events || [];
   const freshest = all.map(e => e.fetched_at).filter(Boolean).sort().pop();
-  $('meta').textContent = `${evs.length} upcoming tracked · data ${freshest ? fmtAgo(new Date(freshest*1000).toISOString()) : '—'}`;
+  const rs = DATA.relay_seen_at;
+  const relay = rs && (Date.now() - new Date(rs).getTime()) < 300e3 ? `PC relay ${fmtAgo(rs)}` : (rs ? `PC relay offline since ${fmtAgo(rs)}` : 'PC relay never seen');
+  $('meta').textContent = `${evs.length} upcoming tracked · data ${freshest ? fmtAgo(new Date(freshest*1000).toISOString()) : '—'} · ${relay}`;
 }
 async function load(refresh){
   try {
@@ -670,15 +699,10 @@ function profitCell(g){
   const unk = g.revenue_unknown ? ` <span style="color:var(--amber)" title="${g.revenue_unknown} linked sale(s) have no price scraped">⚠</span>` : '';
   return `<span class="${g.profit >= 0 ? 'pos' : 'neg'}">${money0(g.profit)}</span>${unk}`;
 }
-// ROI on the tickets actually sold: profit ÷ their cost. Unsold tickets
-// stay out of the denominator, same as the "Realized profit" tile.
-function roiPct(profit, costSold){
-  return (profit == null || !costSold) ? null : Math.round(profit / costSold * 100);
-}
-function roiCell(g){
-  const r = roiPct(g.profit, g.cost_sold);
+function roiOf(profit, cost){ return (profit == null || !cost) ? null : profit / cost * 100; }
+function roiCell(r){
   if (r == null) return '<span class="when">—</span>';
-  return `<span class="${r >= 0 ? 'pos' : 'neg'}">${r >= 0 ? '+' : ''}${r}%</span>`;
+  return `<span class="${r >= 0 ? 'pos' : 'neg'}">${r >= 0 ? '+' : '−'}${Math.abs(Math.round(r))}%</span>`;
 }
 function purchaseRow(g, tmap){
   const key = g.event_slug || g.event_name;
@@ -697,13 +721,13 @@ function purchaseRow(g, tmap){
     <td class="num">${money0(g.spend)}</td>
     <td class="num">${g.revenue ? money0(g.revenue) : '<span class="when">—</span>'}</td>
     <td class="num">${profitCell(g)}</td>
-    <td class="num">${roiCell(g)}</td>
+    <td class="num">${roiCell(roiOf(g.profit, g.cost_sold))}</td>
     <td>${g.url ? `<a class="buy" href="${escape(g.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">DICE</a>` : ''}</td>
   </tr>`;
   if (opened){
     const rows = g.purchases.map(p => {
       const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
-      const pr = p.profit != null ? ` · <span class="${p.profit >= 0 ? 'pos' : 'neg'}">${p.profit >= 0 ? '+' : ''}${money0(p.profit)}</span>${roiPct(p.profit, p.cost_sold) != null ? ` (${roiPct(p.profit, p.cost_sold) >= 0 ? '+' : ''}${roiPct(p.profit, p.cost_sold)}%)` : ''}` : '';
+      const pr = p.profit != null ? ` · <span class="${p.profit >= 0 ? 'pos' : 'neg'}">${p.profit >= 0 ? '+' : ''}${money0(p.profit)}</span>${roiOf(p.profit, p.cost_sold) != null ? ' (' + roiCell(roiOf(p.profit, p.cost_sold)) + ')' : ''}` : '';
       return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total), p.currency||'USD')}/tkt · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)}${pr} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
     }).join('');
     const hero = g.image ? `<div class="hero" style="${coverStyle(g.image, g.event_name)}"></div>` : '';
@@ -723,7 +747,7 @@ function renderPurchases(){
     ['Tickets sold', sold, 'matched resale sales'],
     ['Σ spend', money0(evs.reduce((a,g) => a + g.spend, 0)), 'all recorded purchases'],
     ['Revenue', money0(revenue), 'from matched sales'],
-    ['Realized profit', money0(profit), sold ? `ROI ${roiPct(profit, costSold) ?? 0}% on sold tickets` : 'match sales to see it'],
+    ['Realized profit', money0(profit), sold ? `ROI ${costSold ? Math.round(profit / costSold * 100) : 0}% on sold tickets` : 'match sales to see it'],
   ];
   $('ptotals').innerHTML = tiles.map(([l,v,h]) => {
     const isProfit = l === 'Realized profit' && sold;
@@ -747,8 +771,9 @@ function renderPurchases(){
   if (past.length){
     const left = past.reduce((a,g) => a + (g.avail||0), 0);
     const pp = past.reduce((a,g) => a + (g.profit||0), 0);
-    const pr = roiPct(pp, past.reduce((a,g) => a + (g.profit != null ? (g.cost_sold||0) : 0), 0));
-    html += `<tr class="pastsep" id="pastP"><td colspan="13">${pastOpen ? '▾' : '▸'} Past events (${past.length}) · profit ${money0(pp)}${pr != null ? ` (ROI ${pr >= 0 ? '+' : ''}${pr}%)` : ''}${left ? ` · ${left} ticket${left>1?'s':''} never matched to a sale` : ''}</td></tr>`;
+    const pc = past.reduce((a,g) => a + (g.profit != null ? (g.cost_sold||0) : 0), 0);
+    const pr = roiOf(pp, pc);
+    html += `<tr class="pastsep" id="pastP"><td colspan="13">${pastOpen ? '▾' : '▸'} Past events (${past.length}) · profit ${money0(pp)}${pr != null ? ` · ROI ${pr >= 0 ? '+' : '−'}${Math.abs(Math.round(pr))}%` : ''}${left ? ` · ${left} ticket${left>1?'s':''} never matched to a sale` : ''}</td></tr>`;
     if (pastOpen) html += past.map(g => purchaseRow(g, tmap)).join('');
   }
   $('prows').innerHTML = html || '<tr><td colspan="13" class="empty">Nothing matches this filter.</td></tr>';
@@ -901,6 +926,92 @@ $('pollBtn').onclick = async () => {
   } catch (e) { note.textContent = 'poll failed: ' + e.message; }
   btn.disabled = false;
 };
+// ---- follows (dice_follow.py) ----------------------------------------------
+let FDATA = null;
+const folOpen = new Set();
+function saleLine(e){
+  if (e.status === 'onsale') return '<span class="badge selling">On sale</span>';
+  if (e.status === 'soldout') return '<span class="badge soldout">Sold out</span>';
+  if (e.sale_start){
+    const t = new Date(e.sale_start);
+    if (t > new Date()) return `<span class="badge upcoming">Sale ${t.toLocaleDateString(undefined,{month:'short',day:'numeric'})} ${t.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}</span>`;
+  }
+  return statusBadge(e.status);
+}
+function renderFollows(){
+  const fs = (FDATA && FDATA.follows) || [];
+  if (!fs.length){
+    $('follows').innerHTML = '<div class="sub" style="margin:0">Not following anyone yet. Paste a dice.fm artist or venue link (or type a name) above.</div>';
+    return;
+  }
+  $('follows').innerHTML = fs.map(f => {
+    const ups = f.upcoming || [];
+    const shown = folOpen.has(f.id) ? ups : ups.slice(0, 3);
+    const shows = shown.map(e => `<a class="show" href="${escape(e.url)}" target="_blank" rel="noopener">
+        ${art(e.image, e.name, false)}
+        <div class="tx"><div><b>${escape(e.name)}</b></div>
+          <div class="when2">${escape(niceDate(e.event_start))}${e.city ? ' · ' + escape(e.city) : ''}${f.kind === 'artist' && e.venue ? ' · ' + escape(e.venue) : ''}</div></div>
+        ${saleLine(e)}</a>`).join('');
+    const more = ups.length > 3 ? `<div class="more" data-id="${f.id}">${folOpen.has(f.id) ? 'show less' : `+${ups.length - 3} more`}</div>` : '';
+    const checked = f.last_checked_at ? 'checked ' + fmtAgo(f.last_checked_at) : 'not checked yet';
+    return `<div class="fol">
+      <div class="hd"><span class="kind ${f.kind}">${escape(f.kind)}</span>
+        <a class="nm" href="${escape(f.url)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${escape(f.name || f.slug)}</a>
+        <a class="x" href="#" data-id="${f.id}" title="unfollow">✕</a></div>
+      <div class="meta2">${ups.length} upcoming · ${escape(f.channel)} · ${checked}${f.last_error ? ` · <span class="bad" title="${escape(f.last_error)}">fetch failed</span>` : ''}</div>
+      ${shows || '<div class="sub" style="margin:0">no upcoming shows on DICE</div>'}${more}
+    </div>`;
+  }).join('');
+  $('follows').querySelectorAll('.x').forEach(a => a.onclick = async ev => {
+    ev.preventDefault();
+    if (!confirm('Unfollow ' + (fs.find(f => f.id == a.dataset.id) || {}).name + '?')) return;
+    const r = await fetch('/api/dice/follows/remove', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id: Number(a.dataset.id)})});
+    FDATA = await r.json(); renderFollows();
+  });
+  $('follows').querySelectorAll('.more').forEach(a => a.onclick = () => {
+    const id = Number(a.dataset.id); folOpen.has(id) ? folOpen.delete(id) : folOpen.add(id); renderFollows();
+  });
+}
+async function loadFollows(){
+  try {
+    const r = await fetch('/api/dice/follows', {cache:'no-store'});
+    FDATA = await r.json(); renderFollows();
+    if (FDATA.enabled === false) $('folNote').textContent = 'the watcher runs on the server, not this machine';
+  } catch (e) { /* non-fatal */ }
+}
+async function addFollow(){
+  const q = ($('folQ').value || '').trim();
+  if (!q) return;
+  $('folBtn').disabled = true; $('folNote').textContent = 'looking it up on DICE…';
+  try {
+    const r = await fetch('/api/dice/follows/add', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({q})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    FDATA = d; renderFollows();
+    $('folQ').value = '';
+    $('folNote').textContent = d.warning || (d.created ? `following ${d.added.name}` : `already following ${d.added.name}`);
+    loadManual(); load(false);
+  } catch (e) {
+    $('folNote').textContent = 'Failed: ' + e.message;
+  } finally {
+    $('folBtn').disabled = false;
+  }
+}
+$('folBtn').onclick = addFollow;
+$('folQ').addEventListener('keydown', e => { if (e.key === 'Enter') addFollow(); });
+$('folRun').onclick = async () => {
+  $('folRun').disabled = true; $('folNote').textContent = 'checking DICE…';
+  try {
+    const r = await fetch('/api/dice/follows/run-now', {method:'POST'});
+    FDATA = await r.json(); renderFollows();
+    const s = FDATA.summary;
+    $('folNote').textContent = s ? `checked ${s.checked} · ${s.new} new · ${s.errors} failed` : 'a check is already running';
+    loadManual(); load(false);
+  } catch (e) { $('folNote').textContent = 'Failed: ' + e.message; }
+  $('folRun').disabled = false;
+};
+loadFollows();
+setInterval(loadFollows, 120000);
 $('addBtn').onclick = addManual;
 $('addUrl').addEventListener('keydown', e => { if (e.key === 'Enter') addManual(); });
 load(false);
