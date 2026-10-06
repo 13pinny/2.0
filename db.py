@@ -1578,12 +1578,24 @@ def dice_sale_links_by_purchase():
         for l in links:
             table = _DICE_SALE_TABLES.get(l["sale_source"])
             if table:
+                payout_col = "payout" if table == "lysted_sales" else "NULL"
                 sale = conn.execute(
-                    f"SELECT order_id, event_name, sale_price, sale_date_iso "
+                    f"SELECT order_id, event_name, sale_price, sale_date_iso, "
+                    f"qty AS sale_qty, {payout_col} AS sale_payout "
                     f"FROM {table} WHERE id = ?", (l["sale_id"],)
                 ).fetchone()
                 if sale:
                     l.update(dict(sale))
+            # Revenue attributable to THIS link: the sale's payout (sale_price
+            # is the order total on every platform; lysted's net payout wins
+            # when scraped — same precedence as _build_combined_sales), pro-
+            # rated when only part of the sale's qty is linked here.
+            total = l.get("sale_payout")
+            if total is None:
+                total = l.get("sale_price")
+            sq = l.get("sale_qty") or 0
+            l["revenue"] = (round(total * (l.get("qty") or 0) / sq, 2)
+                            if total is not None and sq else None)
             out.setdefault(l["purchase_id"], []).append(l)
     return out
 

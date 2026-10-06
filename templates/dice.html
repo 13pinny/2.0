@@ -64,6 +64,53 @@
   .chg.hot { color: var(--orange); font-weight: 600; }
   .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
   .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
+  /* ---- artwork, rail, attention strip ---- */
+  .art { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; display: block; background: var(--bg-3); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .art.ph { display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 14px; letter-spacing: 0; }
+  .art.past { filter: grayscale(.85); opacity: .6; }
+  td.artc { width: 52px; padding-right: 0; }
+  .evname { font-weight: 600; color: var(--text); }
+  .evsub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .cd { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; background: var(--bg-3); color: var(--muted); margin-top: 3px; }
+  .cd.today { background: #fde68a; color: #92400e; }
+  .cd.soon { background: #dbeafe; color: #1e40af; }
+  .rail { display: flex; gap: 12px; overflow-x: auto; padding: 2px 2px 10px; margin-bottom: 6px; scroll-snap-type: x proximity; }
+  .card { flex: 0 0 190px; scroll-snap-align: start; border-radius: 12px; overflow: hidden; background: var(--bg-2); border: 1px solid var(--line); cursor: pointer; transition: transform .12s ease, box-shadow .12s ease; }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.10); }
+  .card .cover { height: 110px; background-size: cover; background-position: center; position: relative; }
+  .card .cover .cd { position: absolute; top: 8px; left: 8px; margin: 0; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .card .cover .qty { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,.72); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 9px; }
+  .card .body { padding: 8px 10px 10px; }
+  .card .t { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .s { font-size: 10px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .attn { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); background: var(--bg-2); border-radius: 18px; padding: 5px 12px; font-size: 11px; cursor: pointer; user-select: none; }
+  .chip b { font-size: 13px; }
+  .chip.warn { border-color: #f59e0b; background: #fffbeb; }
+  .chip.bad { border-color: #ef4444; background: #fef2f2; }
+  .chip.info { border-color: #60a5fa; background: #eff6ff; }
+  .chip.ok { border-color: #86efac; background: #f0fdf4; color: var(--green); cursor: default; }
+  .chip.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .filterbar { font-size: 11px; color: var(--muted); margin: -4px 0 8px; display: none; }
+  .filterbar a { color: var(--accent); text-decoration: none; margin-left: 6px; }
+  tr.pastsep td { background: var(--bg); color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; cursor: pointer; padding: 10px; }
+  tr.pastsep td:hover { color: var(--accent); }
+  tr.ev.isPast td { color: var(--muted); }
+  .live { white-space: nowrap; }
+  .live .p { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--green); font-weight: 600; }
+  .neg { color: var(--red); font-weight: 600; }
+  .held { display: inline-block; background: #ecfeff; color: #0e7490; border: 1px solid #a5f3fc; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 8px; white-space: nowrap; }
+  button.track { border: 1px dashed var(--cyan); background: transparent; color: var(--cyan); font: inherit; font-size: 10px; font-weight: 600; padding: 2px 9px; border-radius: 10px; cursor: pointer; }
+  button.track:hover { background: #ecfeff; }
+  .spark { display: block; }
+  .spark .ln { fill: none; stroke: var(--cyan); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .spark .dot { fill: var(--cyan); stroke: var(--bg); stroke-width: 2; }
+  .spark .hit { fill: transparent; }
+  .spark .hit:hover { fill: rgba(0,163,215,.10); }
+  .climb { font-size: 10px; font-weight: 600; color: var(--orange); }
+  .errdot { color: var(--red); font-size: 10px; margin-left: 4px; cursor: help; }
+  .detail .hero { float: right; width: 180px; height: 110px; border-radius: 10px; background-size: cover; background-position: center; margin: 2px 0 8px 16px; }
 </style>
 </head>
 <body>
@@ -76,22 +123,25 @@
 </header>
 <main>
   <div class="err" id="errbox"></div>
+  <div class="attn" id="attn"></div>
 
-  <div class="stats" id="totals"></div>
-  <p class="sub" id="statusline">DICE publishes no ticket counts — the tier/price change log below is the demand signal. History accrues from the hourly market sweep and manual refreshes.</p>
+  <h2>Up next <span style="font-size:10px;color:var(--muted)">(upcoming events you hold tickets for · click a card to open it)</span></h2>
+  <div class="rail" id="rail"></div>
 
   <h2>Purchases &amp; Holdings <span style="font-size:10px;color:var(--muted)">(auto-recorded from forwarded DICE emails · click an event for per-account rows)</span>
     <button class="act" id="pollBtn" style="margin-left:10px">Poll inbox now</button>
     <span id="pollNote" style="font-size:10px;color:var(--muted)"></span></h2>
   <div class="stats" id="ptotals"></div>
+  <div class="filterbar" id="pfilterbar"></div>
   <div class="tablewrap">
   <table>
     <thead><tr>
-      <th>Event</th><th>Venue</th><th>Date</th>
-      <th class="num">Bought</th><th class="num">Transferred</th><th class="num">Sold</th>
-      <th class="num">Avail</th><th class="num">Spend</th><th></th>
+      <th></th><th>Event</th><th>Date</th>
+      <th class="num">Bought</th><th class="num">Sold</th><th class="num">Avail</th><th class="num">Listed</th>
+      <th>DICE now</th>
+      <th class="num">Spend</th><th class="num">Revenue</th><th class="num">Profit</th><th></th>
     </tr></thead>
-    <tbody id="prows"><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
+    <tbody id="prows"><tr><td colspan="12" class="empty">Loading…</td></tr></tbody>
   </table>
   </div>
   <p class="sub"><a href="#" id="xferToggle" style="color:var(--accent);text-decoration:none">Show transfer log</a></p>
@@ -104,7 +154,9 @@
   </table>
   </div>
 
-  <h2>Events <span style="font-size:10px;color:var(--muted)">(click a row for types + change history)</span></h2>
+  <h2 id="trackerH">Tracked events <span style="font-size:10px;color:var(--muted)">(click a row for types + change history)</span></h2>
+  <div class="stats" id="totals"></div>
+  <p class="sub" id="statusline">DICE publishes no ticket counts — the price ladder is the demand signal. History accrues from every watcher check, the hourly market sweep, and manual refreshes.</p>
   <div class="controls">
     <input type="text" id="addUrl" placeholder="paste a dice.fm event URL to track…" style="width:340px;max-width:60vw" />
     <button class="act" id="addBtn">Track</button>
@@ -122,70 +174,62 @@
     <tbody id="rows"></tbody>
   </table>
   </div>
-  <p class="sub" id="footnote">Paste a dice.fm event URL above to track it here (no watcher needed). To also get restock/tier-jump pings, add it as a watcher. "Tier" = DICE's current price tier per cheapest on-sale type; a tier jump means the previous release sold through. Changes = logged state changes (tier / price / on-off-sale) across all ticket types.</p>
+  <p class="sub" id="footnote">Paste a dice.fm event URL above to track it here (no watcher needed). To also get restock/tier-jump pings, add it as a watcher. "Tier" = DICE's current price tier on the cheapest on-sale type; "Trend" = cheapest on-sale price since tracking began.</p>
 </main>
-
 <script>
 const $ = id => document.getElementById(id);
 function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 const CUR = { USD:'$', GBP:'£', EUR:'€', ILS:'₪' };
 const money = (n, c) => (n == null) ? '—' : (CUR[c] || (c ? c + ' ' : '$')) + n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const money0 = (n, c) => (n == null) ? '—' : (n < 0 ? '−' : '') + (CUR[c] || '$') + Math.abs(n).toLocaleString(undefined, {maximumFractionDigits: 0});
 const fmt = n => (n == null) ? '—' : n.toLocaleString();
-
-let DATA = null;
+let DATA = null;      // /api/dice — tracked events
+let PDATA = null;     // /api/dice/purchases — holdings
 let sortKey = 'date';
 let sortDir = 1;
 const open = new Set();
+const popen = new Set();
+let showPastT = false, showPastP = false;
+let pfilter = null;   // attention-chip filter on the holdings table
 
-const COLS = [
-  { key:'name',   label:'Event' },
-  { key:'venue',  label:'Venue' },
-  { key:'date',   label:'Date' },
-  { key:'status', label:'Status' },
-  { key:'types',  label:'On sale', num:true },
-  { key:'tier',   label:'Tier' },
-  { key:'price',  label:'From', num:true },
-  { key:'chg',    label:'Changes', num:true },
-  { key:'last',   label:'Last change' },
-  { key:'buy',    label:'' },
-];
-
-function cheapestTier(e){
-  const on = (e.types||[]).filter(t => t.status === 'on-sale' && t.price != null);
-  if (!on.length) return null;
-  const t = on.reduce((a,b) => a.price <= b.price ? a : b);
-  return t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index+1) : null);
+// ---- artwork -----------------------------------------------------------
+// DICE art lives on imgix; ask it for exactly the crop we draw. Events
+// with no art yet get a gradient tile keyed off the name, so every row
+// still has a face.
+function imgx(url, w, h){ return url ? `${url}?w=${w}&h=${h}&fit=crop&auto=format,compress` : ''; }
+function hueOf(s){ let h = 0; for (const c of String(s||'')) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function initials(s){ return String(s||'?').replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0,2).map(w => w[0]).join('').toUpperCase() || '?'; }
+function art(image, name, past){
+  if (image) return `<img class="art${past ? ' past' : ''}" loading="lazy" src="${escape(imgx(image, 96, 96))}" alt="">`;
+  const h = hueOf(name);
+  return `<div class="art ph${past ? ' past' : ''}" style="background:linear-gradient(135deg,hsl(${h},70%,55%),hsl(${(h+50)%360},70%,42%))">${escape(initials(name))}</div>`;
+}
+function coverStyle(image, name){
+  if (image) return `background-image:url('${escape(imgx(image, 400, 240))}')`;
+  const h = hueOf(name);
+  return `background:linear-gradient(135deg,hsl(${h},70%,55%),hsl(${(h+50)%360},70%,40%))`;
 }
 
-function sortVal(e, key){
-  switch(key){
-    case 'name': return (e.name||'').toLowerCase();
-    case 'venue': return (e.venue||'').toLowerCase();
-    case 'date': return e.first_date_ms || Infinity;
-    case 'status': return e.status === 'selling' ? 0 : 1;
-    case 'types': return e.types_on_sale || 0;
-    case 'tier': return cheapestTier(e) || '';
-    case 'price': return e.min_price == null ? Infinity : e.min_price;
-    case 'chg': return e.changes || 0;
-    case 'last': return e.last_change_at || '';
-    default: return 0;
-  }
+// ---- dates ---------------------------------------------------------------
+function dayDiff(dateIso){   // 'YYYY-MM-DD' (venue-local) vs today local
+  if (!dateIso) return null;
+  const [y,m,d] = dateIso.slice(0,10).split('-').map(Number);
+  const t = new Date(); t.setHours(0,0,0,0);
+  return Math.round((new Date(y, m-1, d) - t) / 86400e3);
 }
-
-function renderHead(){
-  $('head').innerHTML = COLS.map(c => {
-    const arrow = sortKey === c.key ? `<span class="arrow">${sortDir < 0 ? '▼' : '▲'}</span>` : '';
-    return `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label} ${arrow}</th>`;
-  }).join('');
-  $('head').querySelectorAll('th').forEach(th => th.onclick = () => {
-    const k = th.dataset.key;
-    if (!k || k === 'buy') return;
-    if (sortKey === k) sortDir = -sortDir;
-    else { sortKey = k; sortDir = (k === 'name' || k === 'venue' || k === 'date') ? 1 : -1; }
-    render();
-  });
+function countdown(days){
+  if (days == null) return '';
+  if (days === 0) return '<span class="cd today">TONIGHT</span>';
+  if (days === 1) return '<span class="cd soon">tomorrow</span>';
+  if (days > 1 && days <= 7) return `<span class="cd soon">in ${days}d</span>`;
+  if (days > 7) return `<span class="cd">in ${days}d</span>`;
+  return `<span class="cd">${-days}d ago</span>`;
 }
-
+function niceDate(dateIso){
+  if (!dateIso) return '';
+  const [y,m,d] = dateIso.slice(0,10).split('-').map(Number);
+  return new Date(y, m-1, d).toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+}
 function fmtDay(iso){ return iso ? iso.slice(5,10).replace('-','/') : '?'; }
 function fmtAgo(iso){
   if (!iso) return '—';
@@ -196,8 +240,103 @@ function fmtAgo(iso){
   return Math.round(secs/86400)+'d ago';
 }
 
+// ---- joins between the two halves ---------------------------------------
+function trackedById(){ const m = {}; ((DATA && DATA.events) || []).forEach(e => m[e.event_code] = e); return m; }
+function heldById(){
+  const m = {};
+  ((PDATA && PDATA.events) || []).forEach(g => { if (g.dice_id) m[g.dice_id] = (m[g.dice_id] || 0) + (g.avail || 0); });
+  return m;
+}
+function statusBadge(st){
+  return st === 'selling' ? '<span class="badge selling">On sale</span>'
+    : st === 'soldout' ? '<span class="badge soldout">Sold out</span>'
+    : st === 'upcoming' ? '<span class="badge upcoming">Upcoming</span>'
+    : `<span class="badge unknown">${escape(st||'?')}</span>`;
+}
+function cheapestTier(e){
+  const on = (e.types||[]).filter(t => t.status === 'on-sale' && t.price != null);
+  if (!on.length) return null;
+  const t = on.reduce((a,b) => a.price <= b.price ? a : b);
+  return t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index+1) : null);
+}
+
+// ---- price-ladder sparkline (cheapest on-sale price over time) ----------
+// Step line: DICE prices hold until a tier flips, so a slope between
+// observations would invent prices that never existed. Gaps = nothing
+// buyable. Hover a step for its price + date.
+function sparkline(e){
+  const pts = (e.ladder || []);
+  const priced = pts.filter(p => p[1] != null);
+  if (priced.length < 2 && !(priced.length === 1 && pts.length > 1)) return '<span class="when">—</span>';
+  const W = 96, H = 26, pad = 3;
+  const t0 = new Date(pts[0][0]).getTime(), t1 = new Date(pts[pts.length-1][0]).getTime();
+  const vals = priced.map(p => p[1]);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const x = t => pad + (t1 > t0 ? (new Date(t).getTime() - t0) / (t1 - t0) : 1) * (W - 2*pad);
+  const y = v => hi > lo ? H - pad - (v - lo) / (hi - lo) * (H - 2*pad) : H / 2;
+  let d = '', hits = '', last = null;
+  for (let i = 0; i < pts.length - 1; i++){
+    const [ta, va] = pts[i], tb = pts[i+1][0];
+    const xa = x(ta), xb = x(tb);
+    if (va != null){
+      d += (last === null ? `M${xa.toFixed(1)},${y(va).toFixed(1)}` : `V${y(va).toFixed(1)}`) + `H${xb.toFixed(1)}`;
+      last = va;
+    } else last = null;
+    hits += `<rect class="hit" x="${xa.toFixed(1)}" y="0" width="${Math.max(2, xb - xa).toFixed(1)}" height="${H}"><title>${fmtDay(ta)} · ${va == null ? 'nothing on sale' : money(va, e.currency)}</title></rect>`;
+  }
+  const endV = pts[pts.length-1][1];
+  const dot = endV != null ? `<circle class="dot" cx="${x(pts[pts.length-1][0]).toFixed(1)}" cy="${y(endV).toFixed(1)}" r="3"/>` : '';
+  const first = vals[0], climb = endV != null && first ? Math.round((endV - first) / first * 100) : null;
+  return `<div style="display:flex;align-items:center;gap:6px"><svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="cheapest price from ${money(first, e.currency)} to ${money(endV, e.currency)}"><path class="ln" d="${d}"/>${dot}${hits}</svg>${climb ? `<span class="climb">${climb > 0 ? '+' : ''}${climb}%</span>` : ''}</div>`;
+}
+
+// ---- tracked events table ------------------------------------------------
+const COLS = [
+  { key:'art',    label:'' },
+  { key:'name',   label:'Event' },
+  { key:'date',   label:'Date' },
+  { key:'status', label:'Status' },
+  { key:'types',  label:'On sale', num:true },
+  { key:'tier',   label:'Tier' },
+  { key:'price',  label:'From', num:true },
+  { key:'trend',  label:'Trend' },
+  { key:'chg',    label:'Changes', num:true },
+  { key:'last',   label:'Last change' },
+  { key:'held',   label:'Held', num:true },
+  { key:'buy',    label:'' },
+];
+const UNSORTABLE = new Set(['art', 'trend', 'buy']);
+function sortVal(e, key, held){
+  switch(key){
+    case 'name': return (e.name||'').toLowerCase();
+    case 'date': return e.first_date_ms || Infinity;
+    case 'status': return e.status === 'selling' ? 0 : 1;
+    case 'types': return e.types_on_sale || 0;
+    case 'tier': return cheapestTier(e) || '';
+    case 'price': return e.min_price == null ? Infinity : e.min_price;
+    case 'chg': return e.changes || 0;
+    case 'last': return e.last_change_at || '';
+    case 'held': return held[e.event_code] || 0;
+    default: return 0;
+  }
+}
+function renderHead(){
+  $('head').innerHTML = COLS.map(c => {
+    const arrow = sortKey === c.key ? `<span class="arrow">${sortDir < 0 ? '▼' : '▲'}</span>` : '';
+    return `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label} ${arrow}</th>`;
+  }).join('');
+  $('head').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.key;
+    if (!k || UNSORTABLE.has(k)) return;
+    if (sortKey === k) sortDir = -sortDir;
+    else { sortKey = k; sortDir = (k === 'name' || k === 'date') ? 1 : -1; }
+    render();
+  });
+}
 function detailRows(e){
-  let html = (e.types||[]).map(t => {
+  let html = e.image ? `<div class="hero" style="${coverStyle(e.image, e.name)}"></div>` : '';
+  if (e.error) html += `<div class="ty" style="color:var(--red)">Last DICE fetch failed — showing cached data. ${escape(e.error)}</div>`;
+  html += (e.types||[]).map(t => {
     const tier = t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index+1) : '');
     const st = t.status === 'on-sale' ? '<span class="on">on sale</span>' : `<span class="off">${escape(t.status||'?')}</span>`;
     return `<div class="ty"><b>${escape(t.name)}</b>${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} — ${money(t.price, t.currency)} · ${st}</div>`;
@@ -211,58 +350,64 @@ function detailRows(e){
     html += hist.slice().reverse().map(h => {
       const tier = h.tier_name || (h.tier_index != null && h.tier_index > 0 ? 'tier ' + (h.tier_index+1) : '');
       const end = h.ended_at ? `<span class="ended">→ ended ${fmtDay(h.ended_at)}</span>` : '<span class="cur">current</span>';
-      return `<div class="h-row">${fmtDay(h.first_seen_at)} · ${escape(h.type_name)}${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} @ ${money(h.price, h.currency)} · ${escape(h.status||'?')} ${end}</div>`;
+      return `<div class="h-row">${fmtDay(h.first_seen_at)} · ${escape(h.type_name)}${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} @ ${money(h.price, h.currency)} · ${escape(h.status||'?')} ${end}</div>`
     }).join('');
   } else {
-    html += `<div class="hh">Change log</div><div class="h-row">Empty — fills in as sweeps/refreshes observe changes.</div>`;
+    html += `<div class="hh">Change log</div><div class="h-row">Empty — fills in as watcher checks, sweeps and refreshes observe changes.</div>`;
   }
-  return html;
+  return html + '<div style="clear:both"></div>';
 }
-
+function trackerRow(e, held){
+  const tier = cheapestTier(e);
+  const h = held[e.event_code] || 0;
+  const err = e.error ? `<span class="errdot" title="${escape(e.error)}">● fetch failed</span>` : '';
+  return `<tr class="ev${e.past ? ' isPast' : ''}" data-id="${e.event_code}">
+    <td class="artc">${art(e.image, e.name, e.past)}</td>
+    <td><div class="evname">${escape(e.name || e.event_code)}${err}</div><div class="evsub">${escape(e.venue||'')} <span class="trk">· ${escape(e.tracked_by)}</span></div></td>
+    <td class="when">${escape(e.date_text||'')}<br>${countdown(e.first_date_ms ? dayDiff(e.date_text) : null)}</td>
+    <td>${statusBadge(e.status)}</td>
+    <td class="num">${fmt(e.types_on_sale)}</td>
+    <td>${tier ? `<span class="tier">${escape(tier)}</span>` : '—'}</td>
+    <td class="num"><b>${money(e.min_price, e.currency)}</b></td>
+    <td>${sparkline(e)}</td>
+    <td class="num chg${(e.changes||0) > 0 ? ' hot' : ''}">${fmt(e.changes||0)}</td>
+    <td class="when">${e.last_change_at ? fmtAgo(e.last_change_at) : '—'}</td>
+    <td class="num">${h ? `<span class="held">${h}</span>` : ''}</td>
+    <td><a class="buy${e.status === 'selling' ? '' : ' off'}" href="${escape(e.url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a></td>
+  </tr>` + (open.has(e.event_code) ? `<tr class="detail"><td colspan="${COLS.length}">${detailRows(e)}</td></tr>` : '');
+}
 function render(){
   if (!DATA) return;
   renderHead();
+  const held = heldById();
   const q = ($('q').value || '').trim().toLowerCase();
   let evs = DATA.events || [];
   if (q) evs = evs.filter(e => ((e.name||'') + ' ' + (e.venue||'')).toLowerCase().includes(q));
-  evs.sort((a,b) => { const va = sortVal(a, sortKey), vb = sortVal(b, sortKey);
+  evs = evs.slice().sort((a,b) => { const va = sortVal(a, sortKey, held), vb = sortVal(b, sortKey, held);
     return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir; });
   if (!evs.length){
-    $('rows').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No DICE events tracked yet — paste a dice.fm URL on the ISRAEL MARKET page or add a watcher.</td></tr>`;
+    $('rows').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No DICE events tracked yet — paste a dice.fm URL above, or add a watcher.</td></tr>`;
     return;
   }
-  $('rows').innerHTML = evs.map(e => {
-    const st = e.status === 'selling' ? '<span class="badge selling">On sale</span>'
-      : e.status === 'soldout' ? '<span class="badge soldout">Sold out</span>'
-      : e.status === 'upcoming' ? '<span class="badge upcoming">Upcoming</span>'
-      : `<span class="badge unknown">${escape(e.status||'?')}</span>`;
-    const tier = cheapestTier(e);
-    const opened = open.has(e.event_code);
-    return `<tr class="ev" data-id="${e.event_code}">
-      <td><b>${escape(e.name || e.event_code)}</b> <span class="trk">${escape(e.tracked_by)}</span></td>
-      <td>${escape(e.venue||'')}</td>
-      <td class="when">${escape(e.date_text||'')}</td>
-      <td>${st}</td>
-      <td class="num">${fmt(e.types_on_sale)}</td>
-      <td>${tier ? `<span class="tier">${escape(tier)}</span>` : '—'}</td>
-      <td class="num">${money(e.min_price, e.currency)}</td>
-      <td class="num chg${(e.changes||0) > 0 ? ' hot' : ''}">${fmt(e.changes||0)}</td>
-      <td class="when">${e.last_change_at ? fmtAgo(e.last_change_at) : '—'}</td>
-      <td><a class="buy${e.status === 'selling' ? '' : ' off'}" href="${escape(e.url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a></td>
-    </tr>` + (opened ? `<tr class="detail"><td colspan="${COLS.length}">${detailRows(e)}</td></tr>` : '');
-  }).join('');
+  const up = evs.filter(e => !e.past), past = evs.filter(e => e.past);
+  let html = up.map(e => trackerRow(e, held)).join('');
+  if (past.length){
+    html += `<tr class="pastsep" id="pastT"><td colspan="${COLS.length}">${showPastT ? '▾' : '▸'} Past events (${past.length})</td></tr>`;
+    if (showPastT) html += past.map(e => trackerRow(e, held)).join('');
+  }
+  $('rows').innerHTML = html;
   $('rows').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
     const id = tr.dataset.id;
     open.has(id) ? open.delete(id) : open.add(id);
     render();
   });
+  const sep = $('pastT'); if (sep) sep.onclick = () => { showPastT = !showPastT; render(); };
 }
-
 function renderTotals(){
-  const evs = DATA.events || [];
+  const evs = (DATA.events || []).filter(e => !e.past);
   const changed24 = evs.filter(e => e.last_change_at && (Date.now() - new Date(e.last_change_at).getTime()) < 86400e3).length;
   const tiles = [
-    ['Events tracked', evs.length, 'market + watchers'],
+    ['Upcoming tracked', evs.length, 'market + watchers'],
     ['On sale', evs.filter(e => e.status === 'selling').length, ''],
     ['Sold out', evs.filter(e => e.status === 'soldout').length, ''],
     ['Changed last 24h', changed24, 'tier / price / status moves'],
@@ -271,10 +416,10 @@ function renderTotals(){
   $('totals').innerHTML = tiles.map(([l,v,h]) =>
     `<div class="stat"><div class="label">${l}</div><div class="value${l==='Changed last 24h' && v ? ' green' : ''}${v ? '' : ' zero'}">${fmt(v)}</div>${h ? `<div class="hint">${h}</div>` : ''}</div>`
   ).join('');
-  const freshest = evs.map(e => e.fetched_at).filter(Boolean).sort().pop();
-  $('meta').textContent = `${evs.length} events · data ${freshest ? fmtAgo(new Date(freshest*1000).toISOString()) : '—'}`;
+  const all = DATA.events || [];
+  const freshest = all.map(e => e.fetched_at).filter(Boolean).sort().pop();
+  $('meta').textContent = `${evs.length} upcoming tracked · data ${freshest ? fmtAgo(new Date(freshest*1000).toISOString()) : '—'}`;
 }
-
 async function load(refresh){
   try {
     if (refresh){ $('refreshBtn').disabled = true; $('refreshNote').textContent = 'fetching from DICE…'; }
@@ -284,8 +429,11 @@ async function load(refresh){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     DATA = await r.json();
     $('errbox').style.display = 'none';
-    renderTotals(); render();
-    if (refresh) $('refreshNote').textContent = 'refreshed just now';
+    renderTotals(); render(); renderPurchases(); renderAttention();
+    if (refresh){
+      const bad = (DATA.events || []).filter(e => e.error).length;
+      $('refreshNote').textContent = bad ? `refreshed — ${bad} event${bad>1?'s':''} failed to fetch (cached data shown)` : 'refreshed just now';
+    }
   } catch (e) {
     $('errbox').textContent = 'Failed to load: ' + e.message;
     $('errbox').style.display = 'block';
@@ -331,8 +479,6 @@ async function addManual(){
 }
 
 // ---- Purchases & Holdings -------------------------------------------
-let PDATA = null;
-const popen = new Set();
 
 function acctShort(a){
   // DICE accounts are really name+phone identities — append the vault
@@ -503,57 +649,182 @@ function wireSales(){
   });
 }
 
+// ---- holdings table -------------------------------------------------------
+const PFILTERS = {
+  unlisted:  { label: 'with unlisted tickets', test: g => !g.past && (g.avail||0) > (g.listed||0) },
+  soon:      { label: 'this week, still holding', test: g => { const d = dayDiff(g.event_date_iso); return !g.past && d != null && d <= 7 && (g.avail||0) > 0; } },
+  untracked: { label: 'held but not tracked', test: g => !g.past && (g.avail||0) > 0 && !(g.dice_id && trackedById()[g.dice_id]) },
+  pastleft:  { label: 'past, avail never matched to a sale', test: g => g.past && (g.avail||0) > 0 },
+};
+function liveCell(g, tmap){
+  const e = g.dice_id && tmap[g.dice_id];
+  if (e){
+    const tier = cheapestTier(e);
+    return `<div class="live">${statusBadge(e.status)} <span class="p">${money(e.min_price, e.currency)}</span></div>${tier ? `<div class="evsub"><span class="tier">${escape(tier)}</span></div>` : ''}`;
+  }
+  if (g.past || !g.url) return '<span class="when">—</span>';
+  return `<button class="track" data-url="${escape(g.url)}" title="start tracking this event's price ladder">+ Track</button>`;
+}
+function profitCell(g){
+  if (g.profit == null) return '<span class="when">—</span>';
+  const unk = g.revenue_unknown ? ` <span style="color:var(--amber)" title="${g.revenue_unknown} linked sale(s) have no price scraped">⚠</span>` : '';
+  return `<span class="${g.profit >= 0 ? 'pos' : 'neg'}">${money0(g.profit)}</span>${unk}`;
+}
+function purchaseRow(g, tmap){
+  const key = g.event_slug || g.event_name;
+  const opened = popen.has(key);
+  const availCls = g.avail > 0 ? 'style="color:var(--green);font-weight:600"' : 'style="color:var(--muted)"';
+  const unlisted = !g.past && (g.avail||0) > (g.listed||0);
+  let html = `<tr class="ev${g.past ? ' isPast' : ''}" data-pid="${escape(key)}" id="p-${escape(key)}">
+    <td class="artc">${art(g.image, g.event_name, g.past)}</td>
+    <td><div class="evname">${escape(g.event_name)}</div><div class="evsub">${escape(g.venue||'')}</div></td>
+    <td class="when">${escape(niceDate(g.event_date_iso))}<br>${countdown(dayDiff(g.event_date_iso))}</td>
+    <td class="num">${fmt(g.qty)}</td>
+    <td class="num">${fmt(g.sold||0)}</td>
+    <td class="num" ${availCls}>${fmt(g.avail!=null?g.avail:g.qty)}</td>
+    <td class="num"${unlisted ? ' style="color:var(--amber);font-weight:600" title="fewer listed than available"' : ''}>${fmt(g.listed||0)}</td>
+    <td>${liveCell(g, tmap)}</td>
+    <td class="num">${money0(g.spend)}</td>
+    <td class="num">${g.revenue ? money0(g.revenue) : '<span class="when">—</span>'}</td>
+    <td class="num">${profitCell(g)}</td>
+    <td>${g.url ? `<a class="buy" href="${escape(g.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">DICE</a>` : ''}</td>
+  </tr>`;
+  if (opened){
+    const rows = g.purchases.map(p => {
+      const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
+      const pr = p.profit != null ? ` · <span class="${p.profit >= 0 ? 'pos' : 'neg'}">${p.profit >= 0 ? '+' : ''}${money0(p.profit)}</span>` : '';
+      return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total), p.currency||'USD')}/tkt · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)}${pr} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
+    }).join('');
+    const hero = g.image ? `<div class="hero" style="${coverStyle(g.image, g.event_name)}"></div>` : '';
+    html += `<tr class="detail"><td colspan="12">${hero}${rows}<div style="clear:both"></div></td></tr>`;
+  }
+  return html;
+}
 function renderPurchases(){
   if (!PDATA) return;
   const evs = PDATA.events || [];
+  const sold = evs.reduce((a,g) => a + (g.sold||0), 0);
+  const revenue = evs.reduce((a,g) => a + (g.revenue||0), 0);
+  const costSold = evs.reduce((a,g) => a + (g.cost_sold||0), 0);
+  const profit = revenue - costSold;
   const tiles = [
-    ['Events held', evs.filter(g => g.held > 0).length, ''],
-    ['Tickets avail', evs.reduce((a,g) => a + (g.avail||0), 0), 'bought − sold'],
-    ['Tickets sold', evs.reduce((a,g) => a + (g.sold||0), 0), 'matched resale sales'],
-    ['Tickets transferred', evs.reduce((a,g) => a + g.transferred, 0), ''],
-    ['Σ spend', '$' + evs.reduce((a,g) => a + g.spend, 0).toLocaleString(undefined,{maximumFractionDigits:0}), 'all recorded purchases'],
-    ['Transfers needing review', PDATA.problem_count || 0, 'unmatched / overflow'],
+    ['Tickets avail', evs.filter(g => !g.past).reduce((a,g) => a + (g.avail||0), 0), 'upcoming · bought − sold'],
+    ['Tickets sold', sold, 'matched resale sales'],
+    ['Σ spend', money0(evs.reduce((a,g) => a + g.spend, 0)), 'all recorded purchases'],
+    ['Revenue', money0(revenue), 'from matched sales'],
+    ['Realized profit', money0(profit), sold ? `ROI ${costSold ? Math.round(profit / costSold * 100) : 0}% on sold tickets` : 'match sales to see it'],
   ];
-  $('ptotals').innerHTML = tiles.map(([l,v,h]) =>
-    `<div class="stat"><div class="label">${l}</div><div class="value${l.startsWith('Transfers') && v ? '' : v ? '' : ' zero'}"${l.startsWith('Transfers') && v ? ' style="color:var(--red)"' : ''}>${typeof v === 'number' ? fmt(v) : v}</div>${h ? `<div class="hint">${h}</div>` : ''}</div>`
-  ).join('');
+  $('ptotals').innerHTML = tiles.map(([l,v,h]) => {
+    const isProfit = l === 'Realized profit' && sold;
+    const cls = isProfit ? (profit >= 0 ? ' green' : '') : (v === 0 || v === '$0' ? ' zero' : '');
+    const style = isProfit && profit < 0 ? ' style="color:var(--red)"' : '';
+    return `<div class="stat"><div class="label">${l}</div><div class="value${cls}"${style}>${typeof v === 'number' ? fmt(v) : v}</div>${h ? `<div class="hint">${h}</div>` : ''}</div>`;
+  }).join('');
+  const fb = $('pfilterbar');
+  if (pfilter){ fb.style.display = 'block'; fb.innerHTML = `Showing events ${PFILTERS[pfilter].label}<a href="#" id="pclear">show all</a>`; $('pclear').onclick = ev => { ev.preventDefault(); setPFilter(null); }; }
+  else fb.style.display = 'none';
   if (!evs.length){
-    $('prows').innerHTML = '<tr><td colspan="9" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
+    $('prows').innerHTML = '<tr><td colspan="12" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
+    renderRail();
     return;
   }
-  $('prows').innerHTML = evs.map(g => {
-    const key = g.event_slug || g.event_name;
-    const opened = popen.has(key);
-    const availCls = g.avail > 0 ? 'style="color:var(--green);font-weight:600"' : 'style="color:var(--muted)"';
-    let html = `<tr class="ev" data-pid="${escape(key)}">
-      <td><b>${escape(g.event_name)}</b></td>
-      <td>${escape(g.venue||'')}</td>
-      <td class="when">${escape(g.event_date_iso||'')}</td>
-      <td class="num">${fmt(g.qty)}</td>
-      <td class="num">${fmt(g.transferred)}</td>
-      <td class="num">${fmt(g.sold||0)}</td>
-      <td class="num" ${availCls}>${fmt(g.avail!=null?g.avail:g.qty)}</td>
-      <td class="num">${money(g.spend, 'USD')}</td>
-      <td>${g.url ? `<a class="buy" href="${escape(g.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">DICE</a>` : ''}</td>
-    </tr>`;
-    if (opened){
-      const rows = g.purchases.map(p => {
-        const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
-        return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total), p.currency||'USD')}/tkt · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
-      }).join('');
-      html += `<tr class="detail"><td colspan="9">${rows}</td></tr>`;
-    }
-    return html;
-  }).join('');
+  const tmap = trackedById();
+  const shown = pfilter ? evs.filter(PFILTERS[pfilter].test) : evs;
+  const up = shown.filter(g => !g.past), past = shown.filter(g => g.past).reverse();
+  const pastOpen = showPastP || pfilter === 'pastleft';
+  let html = up.map(g => purchaseRow(g, tmap)).join('');
+  if (past.length){
+    const left = past.reduce((a,g) => a + (g.avail||0), 0);
+    const pp = past.reduce((a,g) => a + (g.profit||0), 0);
+    html += `<tr class="pastsep" id="pastP"><td colspan="12">${pastOpen ? '▾' : '▸'} Past events (${past.length}) · profit ${money0(pp)}${left ? ` · ${left} ticket${left>1?'s':''} never matched to a sale` : ''}</td></tr>`;
+    if (pastOpen) html += past.map(g => purchaseRow(g, tmap)).join('');
+  }
+  $('prows').innerHTML = html || '<tr><td colspan="12" class="empty">Nothing matches this filter.</td></tr>';
   $('prows').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
     const id = tr.dataset.pid;
     popen.has(id) ? popen.delete(id) : popen.add(id);
     renderPurchases();
   });
+  const sep = $('pastP'); if (sep) sep.onclick = () => { showPastP = !showPastP; renderPurchases(); };
+  $('prows').querySelectorAll('button.track').forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    b.disabled = true; b.textContent = 'tracking…';
+    try {
+      const r = await fetch('/api/market/add', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url: b.dataset.url})});
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      await Promise.all([load(false), loadManual()]);
+    } catch (e) { b.disabled = false; b.textContent = '+ Track'; alert('track failed: ' + e.message); }
+  });
   wireListed();
   wireSales();
+  renderRail();
 }
 
+// ---- "Up next" poster rail -----------------------------------------------
+function renderRail(){
+  const evs = ((PDATA && PDATA.events) || []).filter(g => !g.past && (g.avail||0) > 0)
+    .sort((a,b) => (a.event_date_iso||'9') < (b.event_date_iso||'9') ? -1 : 1).slice(0, 12);
+  const tmap = trackedById();
+  if (!evs.length){
+    $('rail').innerHTML = '<div class="sub" style="padding:8px 0">Nothing upcoming in hand — every held ticket is sold or the shows are past.</div>';
+    return;
+  }
+  $('rail').innerHTML = evs.map(g => {
+    const e = g.dice_id && tmap[g.dice_id];
+    const live = e ? (e.status === 'selling' ? `DICE ${money0(e.min_price, e.currency)}` : e.status === 'soldout' ? 'DICE sold out 🔥' : '') : '';
+    const key = g.event_slug || g.event_name;
+    return `<div class="card" data-pid="${escape(key)}">
+      <div class="cover" style="${coverStyle(g.image, g.event_name)}">${countdown(dayDiff(g.event_date_iso))}<span class="qty">${g.avail} in hand</span></div>
+      <div class="body"><div class="t" title="${escape(g.event_name)}">${escape(g.event_name)}</div>
+      <div class="s">${escape(niceDate(g.event_date_iso))}${g.venue ? ' · ' + escape(g.venue) : ''}</div>
+      <div class="s">${(g.listed||0) < g.avail ? `<span style="color:var(--amber)">${g.avail - (g.listed||0)} unlisted</span>` : '<span style="color:var(--green)">all listed</span>'}${live ? ' · ' + live : ''}</div></div>
+    </div>`;
+  }).join('');
+  $('rail').querySelectorAll('.card').forEach(c => c.onclick = () => {
+    popen.add(c.dataset.pid);
+    if (pfilter) pfilter = null;
+    renderPurchases(); renderAttention();
+    const row = document.getElementById('p-' + c.dataset.pid);
+    if (row) row.scrollIntoView({behavior:'smooth', block:'center'});
+  });
+}
+
+// ---- attention strip ------------------------------------------------------
+function setPFilter(k){
+  pfilter = pfilter === k ? null : k;
+  renderPurchases(); renderAttention();
+  if (pfilter) $('ptotals').scrollIntoView({behavior:'smooth', block:'start'});
+}
+function renderAttention(){
+  if (!PDATA) return;
+  const evs = PDATA.events || [];
+  const sumBy = (f, v) => evs.filter(f).reduce((a,g) => a + v(g), 0);
+  const unlistedT = sumBy(PFILTERS.unlisted.test, g => (g.avail||0) - (g.listed||0));
+  const soon = evs.filter(PFILTERS.soon.test);
+  const untracked = DATA ? evs.filter(PFILTERS.untracked.test).length : 0;
+  const pastLeft = sumBy(PFILTERS.pastleft.test, g => g.avail || 0);
+  const xfer = PDATA.problem_count || 0;
+  const fetchErr = DATA ? (DATA.events || []).filter(e => e.error && !e.past).length : 0;
+  const chips = [];
+  const chip = (cls, key, n, text) => chips.push(`<span class="chip ${cls}${pfilter === key ? ' active' : ''}" data-k="${key}"><b>${n}</b> ${text}</span>`);
+  if (soon.length) chip('bad', 'soon', soon.length, `event${soon.length>1?'s':''} this week still holding ${soon.reduce((a,g) => a + g.avail, 0)} tickets`);
+  if (unlistedT) chip('warn', 'unlisted', unlistedT, `ticket${unlistedT>1?'s':''} not listed anywhere`);
+  if (untracked) chip('info', 'untracked', untracked, `held event${untracked>1?'s':''} with no price tracking`);
+  if (xfer) chip('bad', 'xfer', xfer, xfer > 1 ? 'transfers need review' : 'transfer needs review');
+  if (pastLeft) chip('warn', 'pastleft', pastLeft, `past ticket${pastLeft>1?'s':''} never matched to a sale`);
+  if (fetchErr) chip('bad', 'fetch', fetchErr, `tracked event${fetchErr>1?'s':''} failing to fetch`);
+  $('attn').innerHTML = chips.length ? chips.join('') : '<span class="chip ok">✓ All clear — everything held is listed, tracked and matched</span>';
+  $('attn').querySelectorAll('.chip[data-k]').forEach(c => c.onclick = () => {
+    const k = c.dataset.k;
+    if (k === 'xfer'){
+      $('xferwrap').style.display = ''; $('xferToggle').textContent = 'Hide transfer log';
+      $('xferwrap').scrollIntoView({behavior:'smooth', block:'start'});
+    } else if (k === 'fetch'){
+      $('trackerH').scrollIntoView({behavior:'smooth', block:'start'});
+    } else setPFilter(k);
+  });
+}
 function renderTransfers(){
   const xs = (PDATA && PDATA.transfers) || [];
   $('xrows').innerHTML = xs.length ? xs.map(t => {
@@ -570,16 +841,14 @@ function renderTransfers(){
     </tr>`;
   }).join('') : '<tr><td colspan="6" class="empty">No transfers recorded.</td></tr>';
 }
-
 async function loadPurchases(){
   try {
     const r = await fetch('/api/dice/purchases', {cache:'no-store'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     PDATA = await r.json();
-    renderPurchases(); renderTransfers();
+    renderPurchases(); renderTransfers(); renderAttention(); render();
   } catch (e) { /* section-local; main err box stays for the tracker */ }
 }
-
 $('xferToggle').onclick = ev => {
   ev.preventDefault();
   const w = $('xferwrap');

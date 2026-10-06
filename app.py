@@ -5552,6 +5552,16 @@ def _check_one_watcher(w, now_iso):
         "last_seat_count": len(seats),
     })
 
+    if src_name == "dice":
+        # Feed the /dice tier/price change log off the fetch we just made
+        # (fetch_selectable_seats rewrote the labels cache) — without this
+        # a watcher-only event got history only on a manual Refresh.
+        # (Keep in sync with watcher_only.py.)
+        try:
+            db.dice_tier_log_update(w["event_code"], dice.cached_blocks(w["event_code"]), now_iso)
+        except Exception:
+            pass
+
     if is_baseline:
         return 0, None
 
@@ -6541,35 +6551,69 @@ def dice_page():
 
 def _dice_tracked_codes():
     """Every DICE event we track, from both halves: manual /market entries
-    and drop watchers. Returns {event_code: source_of_tracking_label}."""
-    codes = {}
-    for r in db.market_manual_all():
-        if r["source"] == "dice":
-            codes[str(r["code"])] = "market"
-    for w in db.tm_all_watchers():
-        if (w.get("source") or "") == "dice":
-            codes.setdefault(str(w["event_code"]), "watcher")
-            codes[str(w["event_code"])] = "both" if codes[str(w["event_code"])] == "market" else codes[str(w["event_code"])]
-    return codes
+    and drop watchers. Returns {event_code: "market" | "watcher" | "both"}."""
+    market = {str(r["code"]) for r in db.market_manual_all() if r["source"] == "dice"}
+    watched = {str(w["event_code"]) for w in db.tm_all_watchers()
+               if (w.get("source") or "") == "dice"}
+    return {c: ("both" if c in market and c in watched
+                else "market" if c in market else "watcher")
+            for c in market | watched}
+
+
+def _dice_price_ladder(history, now_iso):
+    """Cheapest ON-SALE price over time, from the tier log: [[iso, price]]
+    with a point only where it moved (None = nothing buyable). The /dice
+    sparkline — DICE publishes no counts, so the climb IS the demand curve."""
+    if not history:
+        return []
+    stamps = sorted({h["first_seen_at"] for h in history}
+                    | {h["ended_at"] for h in history if h.get("ended_at")})
+    out = []
+    for t in stamps:
+        live = [h["price"] for h in history
+                if h["first_seen_at"] <= t and (not h.get("ended_at") or h["ended_at"] > t)
+                and h.get("status") == "on-sale" and h.get("price") is not None]
+        p = min(live) if live else None
+        if not out or out[-1][1] != p:
+            out.append([t, p])
+    if out and out[-1][0] < now_iso:
+        out.append([now_iso, out[-1][1]])
+    return out
 
 
 def _dice_payload(force=False):
     """Shared by GET /api/dice and the refresh endpoint. force=True hits
-    the DICE API for every event (and logs changes); otherwise serves the
-    1h labels cache."""
+    the DICE API for every event in parallel (and logs changes); otherwise
+    serves the labels cache (1h TTL, refreshed by every watcher tick)."""
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
+    now_ms = now.timestamp() * 1000
+    tracked = _dice_tracked_codes()
+    if force:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            labels_by = dict(zip(tracked, ex.map(
+                lambda c: dice.get_labels(c, "0", force=True), list(tracked))))
+        for code, labels in labels_by.items():
+            if not labels.get("_error"):
+                try:
+                    db.dice_tier_log_update(code, labels.get("blocks") or {}, now_iso)
+                except Exception:
+                    pass
+    else:
+        labels_by = {c: dice.get_labels(c, "0") for c in tracked}
     log_map = db.dice_tier_log_all()
+    pages = dice.page_info_many(list(tracked))
+    # Name fallback when DICE is unreachable and nothing is cached yet.
+    manual_labels = {str(r["code"]): r["label"] for r in db.market_manual_all()
+                     if r["source"] == "dice" and r["label"]}
+    manual_labels.update({str(w["event_code"]): w.get("label") for w in db.tm_all_watchers()
+                          if (w.get("source") or "") == "dice" and w.get("label")})
     events = []
-    for code, tracked_by in _dice_tracked_codes().items():
-        labels = dice.get_labels(code, "0", force=force)
-        meta = (labels or {}).get("meta") or {}
-        blocks = (labels or {}).get("blocks") or {}
-        if force:
-            try:
-                db.dice_tier_log_update(code, blocks, now_iso)
-            except Exception:
-                pass
+    for code, tracked_by in tracked.items():
+        labels = labels_by.get(code) or {}
+        meta = labels.get("meta") or {}
+        blocks = labels.get("blocks") or {}
         types = sorted((
             {"name": b.get("name"), "price": b.get("price"),
              "currency": b.get("currency"), "status": b.get("status"),
@@ -6579,24 +6623,28 @@ def _dice_payload(force=False):
         on_sale = [t for t in types if t["status"] == "on-sale"]
         history = log_map.get(code, [])
         # Change count = log states beyond each type's first sighting.
-        first_states = {}
+        seen_types = set()
         changes = 0
         last_change_at = None
         for h in history:
-            if h["type_name"] in first_states:
+            if h["type_name"] in seen_types:
                 changes += 1
                 last_change_at = h["first_seen_at"]
             else:
-                first_states[h["type_name"]] = True
+                seen_types.add(h["type_name"])
+        first_ms = meta.get("firstPerfMs")
         events.append({
             "event_code": code,
             "tracked_by": tracked_by,
-            "name": meta.get("eventName"),
+            "name": meta.get("eventName") or manual_labels.get(code),
             "venue": " · ".join(v for v in ((meta.get("venueName") or "").strip(),
                                             (meta.get("venueCity") or "").strip()) if v),
             "date_text": meta.get("firstPerfText"),
-            "first_date_ms": meta.get("firstPerfMs"),
+            "first_date_ms": first_ms,
+            # Past = start + 12h, so tonight's show stays "upcoming" while it runs.
+            "past": bool(first_ms and first_ms + 12 * 3600e3 < now_ms),
             "url": dice.perf_url(code),
+            "image": (pages.get(code) or {}).get("image"),
             "status": meta.get("status"),
             "event_status": meta.get("eventStatus"),
             "sale_end": meta.get("saleEnd"),
@@ -6605,9 +6653,11 @@ def _dice_payload(force=False):
             "types": types,
             "types_on_sale": len(on_sale),
             "history": history,
+            "ladder": _dice_price_ladder(history, now_iso),
             "changes": changes,
             "last_change_at": last_change_at,
             "fetched_at": labels.get("_fetched_at"),
+            "error": labels.get("_error"),
         })
     events.sort(key=lambda e: e.get("first_date_ms") or float("inf"))
     return {"events": events, "now": now_iso}
@@ -6665,6 +6715,10 @@ def api_dice_purchases():
     purchases = db.dice_purchases_all()
     transfers = db.dice_transfers_all()
     sale_links = db.dice_sale_links_by_purchase()
+    # slug → 24-hex id + artwork (one cached event-page fetch per slug), so
+    # the page can join each holding to its tracked event's live price and
+    # offer Track for held events nobody is watching.
+    pages = dice.page_info_many([p.get("event_slug") for p in purchases])
     groups = {}
     for p in purchases:
         key = p.get("event_slug") or ("name:" + (p.get("event_name") or "").lower())
@@ -6674,8 +6728,12 @@ def api_dice_purchases():
             "event_date_iso": p.get("event_date_iso") or "",
             "venue": p.get("venue") or "",
             "url": f"https://dice.fm/event/{p['event_slug']}" if p.get("event_slug") else "",
+            "dice_id": (pages.get((p.get("event_slug") or "").lower()) or {}).get("id"),
+            "image": (pages.get((p.get("event_slug") or "").lower()) or {}).get("image"),
             "purchases": [],
             "qty": 0, "transferred": 0, "held": 0, "spend": 0.0,
+            "sold": 0, "avail": 0, "listed": 0,
+            "revenue": 0.0, "cost_sold": 0.0, "revenue_unknown": 0,
         })
         held = (p.get("qty") or 0) - (p.get("qty_transferred") or 0)
         links = sale_links.get(p["id"], [])
@@ -6683,19 +6741,44 @@ def api_dice_purchases():
         # avail deliberately ignores transfers — delivery info is unreliable,
         # so sold (user-matched resale-platform sales) is the deduction.
         avail = (p.get("qty") or 0) - sold
+        ppu = p.get("price_per_unit")
+        if ppu is None and p.get("qty"):
+            ppu = (p.get("price_total") or 0) / p["qty"]
+        revenue = sum(l["revenue"] for l in links if l.get("revenue") is not None)
+        unknown = sum(1 for l in links if l.get("revenue") is None)
+        cost_sold = round((ppu or 0) * sold, 2)
+        try:
+            listed = sum(int(v) for v in json.loads(p.get("listed_json") or "{}").values())
+        except (ValueError, TypeError, AttributeError):
+            listed = 0
         g["purchases"].append({**p, "held": held, "sold": sold, "avail": avail,
+                               "listed": listed, "revenue": round(revenue, 2),
+                               "cost_sold": cost_sold,
+                               "profit": round(revenue - cost_sold, 2) if sold else None,
                                "sale_links": links})
         g["qty"] += p.get("qty") or 0
         g["transferred"] += p.get("qty_transferred") or 0
         g["held"] += held
-        g["sold"] = g.get("sold", 0) + sold
-        g["avail"] = g.get("avail", 0) + avail
+        g["sold"] += sold
+        g["avail"] += avail
+        g["listed"] += listed
+        g["revenue"] += revenue
+        g["cost_sold"] += cost_sold
+        g["revenue_unknown"] += unknown
         g["spend"] += p.get("price_total") or 0.0
         # Prefer a dated/venued row's metadata over an undated one's.
         if not g["event_date_iso"] and p.get("event_date_iso"):
             g["event_date_iso"] = p["event_date_iso"]
         if not g["venue"] and p.get("venue"):
             g["venue"] = p["venue"]
+    today = datetime.now(timezone.utc).date().isoformat()
+    for g in groups.values():
+        g["revenue"] = round(g["revenue"], 2)
+        g["cost_sold"] = round(g["cost_sold"], 2)
+        g["profit"] = round(g["revenue"] - g["cost_sold"], 2) if g["sold"] else None
+        # Date-only and venue-local; a UTC "today" flips ~8pm ET, a few hours
+        # after doors at worst — close enough for a "past" grouping.
+        g["past"] = bool(g["event_date_iso"]) and g["event_date_iso"][:10] < today
     events = sorted(groups.values(),
                     key=lambda g: (not g["event_date_iso"], g["event_date_iso"], g["event_name"]))
     problem_transfers = [t for t in transfers if t.get("match_status") != "matched"]
