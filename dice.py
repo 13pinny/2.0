@@ -62,6 +62,15 @@ REQUEST_HEADERS = {
     "Accept-Language": "en-US,en;q=0.8",
 }
 
+# Since 2026-10 api.dice.fm 403s (empty body) any call without the web
+# client's identity headers; either of these alone restores 200. Values
+# are what dice.fm's own bundle sends. Sent to the API host only. (Hetzner
+# IPs are additionally blocked from api.dice.fm whatever the headers.)
+API_HEADERS = {
+    "X-Client-Platform": "web",
+    "X-Api-Timestamp": "2024-04-15",
+}
+
 _ID_MAP_FILE = CACHE_DIR / "dice_ids.json"
 _id_map = None  # {slug: internal_id} — immutable, cached forever
 
@@ -79,6 +88,8 @@ class DiceError(RuntimeError):
 
 def _http_get(url, accept=None):
     headers = dict(REQUEST_HEADERS)
+    if url.startswith(API_BASE):
+        headers.update(API_HEADERS)
     if accept:
         headers["Accept"] = accept
     req = urllib.request.Request(url, headers=headers)
