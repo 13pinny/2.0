@@ -30,6 +30,7 @@ import kupat
 import kupat_credits
 import kupat_events
 import dice
+import dice_autolink
 import kupat_pdf
 import mail_intake
 import market
@@ -323,6 +324,7 @@ def run_mail_intake():
     _last_intake["running"] = True
     try:
         summary = mail_intake.run_intake()
+        _dice_autolink_safe()
         _last_intake.update(
             at=datetime.now(timezone.utc).isoformat(),
             error=None,
@@ -1141,12 +1143,23 @@ def _prune_old_backups():
             pass
 
 
+def _dice_autolink_safe():
+    """Link new resale sales to DICE purchases (dice_autolink). Never lets a
+    matching problem break the caller."""
+    try:
+        return dice_autolink.run()
+    except Exception:
+        traceback.print_exc()
+        return {"linked": [], "skipped": []}
+
+
 def run_scraper():
     if not _run_lock.acquire(blocking=False):
         return
     _last_run["running"] = True
     try:
         counts = scraper.run_and_save()
+        _dice_autolink_safe()
         _last_run.update(
             at=datetime.now(timezone.utc).isoformat(),
             count=counts,
@@ -6945,7 +6958,9 @@ def api_dice_purchases():
     """The /dice page's Purchases & Holdings section: every auto-recorded
     DICE purchase (from forwarded confirmation emails) grouped by event,
     with per-account bought/transferred/held rows, plus the transfer log.
-    Rows are written by mail_intake's dice branch — this is read-only."""
+    Rows are written by mail_intake's dice branch. Opening the page also
+    runs the sale auto-matcher, so a freshly scraped sale shows up linked."""
+    autolink = _dice_autolink_safe()
     purchases = db.dice_purchases_all()
     transfers = db.dice_transfers_all()
     sale_links = db.dice_sale_links_by_purchase()
@@ -7021,6 +7036,7 @@ def api_dice_purchases():
         "transfers": transfers,
         "accounts": _dice_vault_accounts(),
         "problem_count": len(problem_transfers),
+        "autolink_skipped": autolink["skipped"],
         "now": datetime.now(timezone.utc).isoformat(),
     })
 

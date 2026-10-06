@@ -1348,6 +1348,15 @@ def init():
         dp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dice_purchases)").fetchall()}
         if "listed_json" not in dp_cols:
             conn.execute("ALTER TABLE dice_purchases ADD COLUMN listed_json TEXT")
+        # Sale links made by dice_autolink (vs. the /dice picker), plus the
+        # sales the user unlinked from an auto match so it never re-links them.
+        dsl_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dice_sale_links)").fetchall()}
+        if "auto" not in dsl_cols:
+            conn.execute("ALTER TABLE dice_sale_links ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dice_autolink_skip ("
+            " sale_source TEXT NOT NULL, sale_id TEXT NOT NULL, skipped_at TEXT NOT NULL,"
+            " PRIMARY KEY (sale_source, sale_id))")
         # Tao Group's venue calendars auto-populate edm_tracked_events, so a
         # row now records which catalog discovered it. NULL = added by hand
         # (the original rows, and anything from --add / the /edm Track box),
@@ -1600,20 +1609,47 @@ def dice_sale_links_by_purchase():
     return out
 
 
-def dice_sale_link_add(purchase_id, sale_source, sale_id, qty, now_iso):
+def dice_sale_link_add(purchase_id, sale_source, sale_id, qty, now_iso, auto=False):
     import uuid
     with connect() as conn:
         conn.execute(
-            "INSERT INTO dice_sale_links (id, purchase_id, sale_source, sale_id, qty, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            ("dsl-" + uuid.uuid4().hex[:12], purchase_id, sale_source, sale_id, qty, now_iso),
+            "INSERT INTO dice_sale_links (id, purchase_id, sale_source, sale_id, qty, created_at, auto) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("dsl-" + uuid.uuid4().hex[:12], purchase_id, sale_source, sale_id, qty, now_iso,
+             1 if auto else 0),
         )
 
 
 def dice_sale_link_delete(link_id):
+    """Unlinking an AUTO link also records the sale in dice_autolink_skip,
+    so the next auto-match pass doesn't put it straight back."""
+    import datetime as _d
     with connect() as conn:
+        row = conn.execute(
+            "SELECT sale_source, sale_id, auto FROM dice_sale_links WHERE id = ?", (link_id,)
+        ).fetchone()
         cur = conn.execute("DELETE FROM dice_sale_links WHERE id = ?", (link_id,))
+        if row and row["auto"]:
+            conn.execute(
+                "INSERT OR IGNORE INTO dice_autolink_skip (sale_source, sale_id, skipped_at) "
+                "VALUES (?, ?, ?)",
+                (row["sale_source"], row["sale_id"],
+                 _d.datetime.now(_d.timezone.utc).isoformat()))
         return cur.rowcount > 0
+
+
+def dice_autolink_skipped():
+    with connect() as conn:
+        return {(r["sale_source"], r["sale_id"])
+                for r in conn.execute("SELECT sale_source, sale_id FROM dice_autolink_skip")}
+
+
+def sales_excluded_keys():
+    """(source, sale_id) of every hidden or canceled sale."""
+    with connect() as conn:
+        out = {(r["source"], r["sale_id"]) for r in conn.execute("SELECT source, sale_id FROM sales_hidden")}
+        out |= {(r["source"], r["sale_id"]) for r in conn.execute("SELECT source, sale_id FROM sales_canceled")}
+    return out
 
 
 def dice_purchase_set_listed(purchase_id, listed_json):
