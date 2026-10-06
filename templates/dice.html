@@ -126,6 +126,11 @@
   .fol .show .tx div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .fol .show .when2 { font-size: 10px; color: var(--muted); }
   .fol .more { font-size: 10px; color: var(--accent); cursor: pointer; padding-top: 4px; }
+  .types { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .tchip { font-size: 10px; padding: 1px 7px; border-radius: 8px; background: #ecfdf5; color: #166534; border: 1px solid #bbf7d0; white-space: nowrap; }
+  .tchip b { font-variant-numeric: tabular-nums; }
+  .tchip.off { background: var(--bg-3); color: var(--muted); border-color: var(--line); text-decoration: line-through; }
+  .tchip.off b { font-weight: 400; }
   .detail .hero { float: right; width: 180px; height: 110px; border-radius: 10px; background-size: cover; background-position: center; margin: 2px 0 8px 16px; }
 </style>
 </head>
@@ -278,6 +283,20 @@ function statusBadge(st){
     : st === 'upcoming' ? '<span class="badge upcoming">Upcoming</span>'
     : `<span class="badge unknown">${escape(st||'?')}</span>`;
 }
+// Every ticket type with its price, on-sale first then cheapest first;
+// sold-out / off-sale types are struck through so the whole menu shows.
+function typeChips(e){
+  const ts = (e.types||[]).slice().sort((a,b) =>
+    ((a.status === 'on-sale' ? 0 : 1) - (b.status === 'on-sale' ? 0 : 1))
+    || ((a.price ?? Infinity) - (b.price ?? Infinity)));
+  if (!ts.length) return '';
+  return '<div class="types">' + ts.map(t => {
+    const on = t.status === 'on-sale';
+    const tier = t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index+1) : '');
+    const tip = `${t.name}${tier ? ' [' + tier + ']' : ''} · ${on ? 'on sale' : (t.status || '?')}`;
+    return `<span class="tchip${on ? '' : ' off'}" title="${escape(tip)}">${escape(t.name)} <b>${money(t.price, t.currency)}</b></span>`;
+  }).join('') + '</div>';
+}
 function cheapestTier(e){
   const on = (e.types||[]).filter(t => t.status === 'on-sale' && t.price != null);
   if (!on.length) return null;
@@ -390,7 +409,7 @@ function trackerRow(e, held){
     : `<span class="errdot" title="${escape(e.error)}">● fetch failed</span>`;
   return `<tr class="ev${e.past ? ' isPast' : ''}" data-id="${e.event_code}">
     <td class="artc">${art(e.image, e.name, e.past)}</td>
-    <td><div class="evname">${escape(e.name || e.event_code)}${err}</div><div class="evsub">${escape(e.venue||'')} <span class="trk">· ${escape(e.tracked_by)}</span></div></td>
+    <td><div class="evname">${escape(e.name || e.event_code)}${err}</div><div class="evsub">${escape(e.venue||'')} <span class="trk">· ${escape(e.tracked_by)}</span></div>${typeChips(e)}</td>
     <td class="when">${escape(e.date_text||'')}<br>${countdown(e.first_date_ms ? dayDiff(e.date_text) : null)}</td>
     <td>${statusBadge(e.status)}</td>
     <td class="num">${fmt(e.types_on_sale)}</td>
@@ -689,7 +708,7 @@ function liveCell(g, tmap){
   const e = g.dice_id && tmap[g.dice_id];
   if (e){
     const tier = cheapestTier(e);
-    return `<div class="live">${statusBadge(e.status)} <span class="p">${money(e.min_price, e.currency)}</span></div>${tier ? `<div class="evsub"><span class="tier">${escape(tier)}</span></div>` : ''}`;
+    return `<div class="live">${statusBadge(e.status)} <span class="p">${money(e.min_price, e.currency)}</span></div>${tier ? `<div class="evsub"><span class="tier">${escape(tier)}</span></div>` : ''}${typeChips(e)}`;
   }
   if (g.past || !g.url) return '<span class="when">—</span>';
   return `<button class="track" data-url="${escape(g.url)}" title="start tracking this event's price ladder">+ Track</button>`;
