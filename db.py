@@ -1357,6 +1357,22 @@ def init():
             "CREATE TABLE IF NOT EXISTS dice_autolink_skip ("
             " sale_source TEXT NOT NULL, sale_id TEXT NOT NULL, skipped_at TEXT NOT NULL,"
             " PRIMARY KEY (sale_source, sale_id))")
+        # DICE artists/venues followed for new shows (dice_follow.py) and the
+        # shows found on each followed page.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dice_follows ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, slug TEXT NOT NULL,"
+            " name TEXT, url TEXT, added_at TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0,"
+            " baselined INTEGER NOT NULL DEFAULT 0, last_checked_at TEXT, last_error TEXT,"
+            " UNIQUE (kind, slug))")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dice_follow_events ("
+            " follow_id INTEGER NOT NULL, slug TEXT NOT NULL, dice_id TEXT, name TEXT,"
+            " event_start TEXT, sale_start TEXT, venue TEXT, city TEXT, status TEXT,"
+            " url TEXT, image TEXT, foreign_ INTEGER NOT NULL DEFAULT 0,"
+            " reminder_sent INTEGER NOT NULL DEFAULT 0, live_sent INTEGER NOT NULL DEFAULT 0,"
+            " first_seen_at TEXT NOT NULL, checked_at TEXT,"
+            " PRIMARY KEY (follow_id, slug))")
         # Tao Group's venue calendars auto-populate edm_tracked_events, so a
         # row now records which catalog discovered it. NULL = added by hand
         # (the original rows, and anything from --add / the /edm Track box),
@@ -1677,6 +1693,86 @@ def dice_autolink_skipped():
     with connect() as conn:
         return {(r["sale_source"], r["sale_id"])
                 for r in conn.execute("SELECT sale_source, sale_id FROM dice_autolink_skip")}
+
+
+def dice_follows_all():
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM dice_follows ORDER BY name COLLATE NOCASE")]
+
+
+def dice_follow_add(kind, slug, name, url, now_iso):
+    """Returns (id, created). Re-adding an existing follow un-pauses it."""
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM dice_follows WHERE kind = ? AND slug = ?",
+                           (kind, slug)).fetchone()
+        if row:
+            conn.execute("UPDATE dice_follows SET paused = 0 WHERE id = ?", (row["id"],))
+            return row["id"], False
+        cur = conn.execute(
+            "INSERT INTO dice_follows (kind, slug, name, url, added_at) VALUES (?, ?, ?, ?, ?)",
+            (kind, slug, name, url, now_iso))
+        return cur.lastrowid, True
+
+
+def dice_follow_remove(follow_id):
+    with connect() as conn:
+        conn.execute("DELETE FROM dice_follow_events WHERE follow_id = ?", (follow_id,))
+        return conn.execute("DELETE FROM dice_follows WHERE id = ?", (follow_id,)).rowcount > 0
+
+
+def dice_follow_events(follow_id):
+    """{slug: row} for one follow; `foreign` is the stored foreign_ flag."""
+    with connect() as conn:
+        out = {}
+        for r in conn.execute("SELECT * FROM dice_follow_events WHERE follow_id = ?", (follow_id,)):
+            d = dict(r)
+            d["foreign"] = bool(d.pop("foreign_"))
+            out[d["slug"]] = d
+        return out
+
+
+def dice_follow_event_put(follow_id, ev, now_iso, foreign=False, live_sent=False, update=False):
+    """Insert a newly seen show, or (update=True) refresh its facts while
+    keeping the sent flags and foreign verdict."""
+    vals = (ev.get("dice_id"), ev.get("name"), ev.get("event_start"), ev.get("sale_start"),
+            ev.get("venue"), ev.get("city"), ev.get("status"), ev.get("url"), ev.get("image"))
+    with connect() as conn:
+        if update:
+            conn.execute(
+                "UPDATE dice_follow_events SET dice_id = ?, name = ?, event_start = ?, sale_start = ?,"
+                " venue = ?, city = ?, status = ?, url = ?, image = COALESCE(?, image), checked_at = ?"
+                " WHERE follow_id = ? AND slug = ?",
+                vals + (now_iso, follow_id, ev["slug"]))
+        else:
+            conn.execute(
+                "INSERT OR REPLACE INTO dice_follow_events (follow_id, slug, dice_id, name,"
+                " event_start, sale_start, venue, city, status, url, image, foreign_,"
+                " reminder_sent, live_sent, first_seen_at, checked_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                (follow_id, ev["slug"]) + vals
+                + (1 if foreign else 0, 1 if live_sent else 0, now_iso, now_iso))
+
+
+def dice_follow_event_mark(follow_id, slug, reminder=False, live=False):
+    sets = []
+    if reminder:
+        sets.append("reminder_sent = 1")
+    if live:
+        sets.append("live_sent = 1")
+    if not sets:
+        return
+    with connect() as conn:
+        conn.execute(f"UPDATE dice_follow_events SET {', '.join(sets)} "
+                     "WHERE follow_id = ? AND slug = ?", (follow_id, slug))
+
+
+def dice_follow_checked(follow_id, now_iso, error=None, name=None, baselined=None):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE dice_follows SET last_checked_at = ?, last_error = ?,"
+            " name = COALESCE(?, name),"
+            " baselined = CASE WHEN ? IS NULL THEN baselined ELSE ? END WHERE id = ?",
+            (now_iso, error, name, baselined, 1 if baselined else 0, follow_id))
 
 
 def sales_excluded_keys():

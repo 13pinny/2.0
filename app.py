@@ -31,6 +31,7 @@ import kupat_credits
 import kupat_events
 import dice
 import dice_autolink
+import dice_follow
 import kupat_pdf
 import mail_intake
 import market
@@ -258,6 +259,12 @@ _edm_events_lock = threading.Lock()
 EDM_MONITOR_INTERVAL_MINUTES = int(os.getenv("KARTIS_EDM_MONITOR_INTERVAL_MINUTES") or 2)
 EDM_MONITOR_ENABLED = (os.getenv("KARTIS_EDM_MONITOR_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 EDM_MAX_PINGS_PER_TICK = 12
+# DICE artist/venue follows (dice_follow.py). Same single-machine rule as
+# the EDM monitor, and off wherever that is unless overridden.
+DICE_FOLLOW_ENABLED = (os.getenv("KARTIS_DICE_FOLLOW_ENABLED")
+                       or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
+_dice_follow_lock = threading.Lock()
+_last_dice_follow = {"at": None, "summary": None, "error": None}
 # Low-stock alert: ping once when the current release's remaining count
 # crosses at/below this. Re-armed when the lead tier changes.
 EDM_LOW_STOCK_THRESHOLD = int(os.getenv("KARTIS_EDM_LOW_STOCK_THRESHOLD") or 20)
@@ -6920,6 +6927,102 @@ def api_dice():
     return jsonify(_dice_payload(force=False))
 
 
+def run_dice_follow(force=False):
+    """Every minute: fetch the followed DICE artist/venue pages that are due
+    (each every dice_follow.FETCH_MINUTES) and send new-show, 1h-reminder
+    and go-live pings. The minute cadence is for the sale-time pings."""
+    if not _dice_follow_lock.acquire(blocking=False):
+        return None
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if db.setting_get_bool("master_paused", default=False):
+            _last_dice_follow.update(at=now_iso, error=None)
+            return None
+        summary = dice_follow.run_tick(force=force)
+        _last_dice_follow.update(at=now_iso, summary=summary, error=None)
+        return summary
+    except Exception as e:
+        _last_dice_follow.update(at=datetime.now(timezone.utc).isoformat(),
+                                 error=f"{type(e).__name__}: {e}")
+        print(f"[dice-follow] tick failed: {e}")
+        return None
+    finally:
+        _dice_follow_lock.release()
+
+
+def _dice_follows_payload():
+    now = datetime.now(timezone.utc)
+    out = []
+    for f in db.dice_follows_all():
+        evs = [e for e in db.dice_follow_events(f["id"]).values() if not e["foreign"]]
+        upcoming = []
+        for e in evs:
+            start = dice_follow._parse_dt(e.get("event_start"))
+            if start and start < now - timedelta(hours=12):
+                continue
+            upcoming.append({k: e.get(k) for k in ("slug", "name", "event_start", "sale_start",
+                                                   "venue", "city", "status", "url", "image")})
+        upcoming.sort(key=lambda e: e.get("event_start") or "~")
+        out.append({**{k: f.get(k) for k in ("id", "kind", "slug", "name", "url", "added_at",
+                                             "paused", "last_checked_at", "last_error")},
+                    "channel": "#" + dice_follow._channel_name(f),
+                    "upcoming": upcoming})
+    return {"follows": out, "enabled": DICE_FOLLOW_ENABLED,
+            "last_tick": _last_dice_follow}
+
+
+@app.route("/api/dice/follows")
+def api_dice_follows():
+    return jsonify(_dice_follows_payload())
+
+
+@app.route("/api/dice/follows/add", methods=["POST"])
+def api_dice_follows_add():
+    """Body: {"q": dice.fm artist/venue link, or a name}. Resolves it, stores
+    the follow and runs its silent baseline fetch right away."""
+    from flask import request
+    q = ((request.get_json(silent=True) or {}).get("q") or "").strip()
+    try:
+        t = dice_follow.resolve(q)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    fid, created = db.dice_follow_add(t["kind"], t["slug"], t["name"], t["url"], now_iso)
+    warning = None
+    if created and DICE_FOLLOW_ENABLED:
+        follow = next((f for f in db.dice_follows_all() if f["id"] == fid), None)
+        # Under the tick's lock so the baseline can't race a running tick.
+        got = _dice_follow_lock.acquire(timeout=60)
+        try:
+            dice_follow.check_follow(follow, now_iso)
+        except Exception as e:
+            warning = f"followed, but the first fetch failed: {e}"
+            db.dice_follow_checked(fid, now_iso, error=str(e))
+        finally:
+            if got:
+                _dice_follow_lock.release()
+    elif created:
+        warning = "followed; this machine doesn't run the DICE watcher, so the server will pick it up"
+    return jsonify({"added": {**t, "id": fid}, "created": created, "warning": warning,
+                    **_dice_follows_payload()})
+
+
+@app.route("/api/dice/follows/remove", methods=["POST"])
+def api_dice_follows_remove():
+    from flask import request
+    fid = (request.get_json(silent=True) or {}).get("id")
+    if not fid:
+        return jsonify({"error": "id is required"}), 400
+    db.dice_follow_remove(int(fid))
+    return jsonify(_dice_follows_payload())
+
+
+@app.route("/api/dice/follows/run-now", methods=["POST"])
+def api_dice_follows_run_now():
+    summary = run_dice_follow(force=True)
+    return jsonify({"summary": summary, **_dice_follows_payload()})
+
+
 @app.route("/api/dice/refresh", methods=["POST"])
 def api_dice_refresh():
     """Force-fetch every tracked event from the DICE API right now and log
@@ -9088,6 +9191,11 @@ if EDM_MONITOR_ENABLED:
                       start_date=datetime.now() + timedelta(minutes=3))
 else:
     print("[edm] disabled via KARTIS_EDM_MONITOR_ENABLED=0 — the monitor runs elsewhere (e.g. the VPS)")
+if DICE_FOLLOW_ENABLED:
+    scheduler.add_job(run_dice_follow, "interval", minutes=1, id="dice_follow",
+                      start_date=datetime.now() + timedelta(minutes=2))
+else:
+    print("[dice-follow] disabled via KARTIS_DICE_FOLLOW_ENABLED=0 — it runs elsewhere (e.g. the VPS)")
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
 # Festival/GA sales snapshots — fire one immediately (next_run_time) so the
 # Festival / GA Tracker pages have a baseline right after a restart, then
