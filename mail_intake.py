@@ -13,6 +13,7 @@ Per-provider parsers are intentionally rough — they extract what's
 recognisable from the subject + body. Forward sample emails so the regexes
 can be tightened.
 """
+import html as html_mod
 import imaplib
 import json
 import os
@@ -64,7 +65,45 @@ PROVIDER_HINTS = (
     ("2207.co.il", "kupat"),   # real sender domain (donotreply1@2207.co.il)
     ("kupat", "kupat"),
     ("tickchak", "tickchak"),
+    # US primary-market platforms. These all go through _parse_us_receipt;
+    # until a platform gets a dedicated parser (forward a real sample), the
+    # tag mostly matters for currency + getting the mail staged at all —
+    # without a hint the email was dropped as "unknown" and never seen.
+    ("posh.vip", "posh"),
+    ("shotgun.live", "shotgun"),
+    ("tixr.com", "tixr"),
+    ("eventim.us", "eventim_us"),
+    ("taogroup.com", "tao"),
+    ("axs.com", "axs"),
+    ("seatgeek.com", "seatgeek"),
+    ("eventbrite.com", "eventbrite"),
+    ("ticketweb.com", "ticketweb"),
+    ("etix.com", "etix"),
+    ("seetickets.us", "seetickets_us"),
 )
+
+# Currency a provider's receipts are in. Providers absent here (the bare
+# "ticketmaster" tag, unknown senders) get the currency from the symbol on
+# the amount instead. cost / cost_per_unit on pending_intake are in THIS
+# currency; Confirm converts to USD for manual_inventory.
+PROVIDER_CURRENCY = {
+    "kupat": "ILS",
+    "tickchak": "ILS",
+    "ticketmaster_il": "ILS",
+    "ticketmaster_us": "USD",
+    "posh": "USD",
+    "shotgun": "USD",
+    "tixr": "USD",
+    "eventim_us": "USD",
+    "tao": "USD",
+    "axs": "USD",
+    "seatgeek": "USD",
+    "eventbrite": "USD",
+    "ticketweb": "USD",
+    "etix": "USD",
+    "seetickets_us": "USD",
+}
+US_PROVIDERS = frozenset(k for k, v in PROVIDER_CURRENCY.items() if v == "USD")
 
 # Senders inside known providers that we still want to skip — newsletters
 # and pure marketing lists. Match is a sender substring (case-insensitive).
@@ -264,6 +303,23 @@ _DATE_PATTERNS = [
     re.compile(r"\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\b", re.I),
 ]
 _MONTHS = {m: i for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split(), 1)}
+
+# Symbol / code -> ISO currency, for amounts whose provider doesn't pin one.
+_CURRENCY_MARKERS = (
+    (re.compile(r"₪|\bILS\b|ש\"ח|ש״ח|\bNIS\b", re.I), "ILS"),
+    (re.compile(r"€|\bEUR\b"), "EUR"),
+    (re.compile(r"\$|\bUSD\b"), "USD"),
+)
+
+
+def _detect_currency(text):
+    """Currency of the first amount-like marker in text, or ""."""
+    best = None
+    for rx, code in _CURRENCY_MARKERS:
+        m = rx.search(text or "")
+        if m and (best is None or m.start() < best[0]):
+            best = (m.start(), code)
+    return best[1] if best else ""
 
 
 def _to_iso(text):
@@ -1226,7 +1282,160 @@ def _parse_ticketmaster_il(subject, body, html=None, links=None):
     return out
 
 
-def extract_fields(provider, subject, sender, body, attachments, links=None, html=None):
+# ---- US primary-market receipts -----------------------------------------
+#
+# One shared parser for posh / shotgun / tixr / eventim US / tao / axs /
+# seatgeek / TM US / ... — English receipts that all say roughly the same
+# things ("Order Total $84.30", "Section 112 Row G Seats 5-6", "Sat, Oct 18,
+# 2026"). Written WITHOUT real samples for most platforms, so every field is
+# best-effort and anything it can't find falls through to the generic
+# fallbacks + a parse warning; the user still reviews every row on /pending.
+# When a platform's receipts consistently come out wrong, give it a
+# dedicated parser off a forwarded sample rather than loosening these.
+
+_US_SUBJECT_PREFIX_RX = re.compile(
+    r"^\s*(?:"
+    r"you(?:'|’)re going to|you(?:'|’)re in[!:.]?\s*(?:-|–|:)?\s*(?:for|to)?|you(?:'|’)ve got tickets(?: to| for)?|"
+    r"your (?:e-?)?(?:tickets?|order|receipt|purchase|booking|confirmation)"
+    r"(?:\s+confirmation)?(?:\s+(?:for|to|from)|\s*[-–:|])|"
+    r"(?:order|purchase|booking|ticket) (?:confirmation|confirmed|receipt)\s*(?:for|[-–:|])|"
+    r"tickets? (?:for|to)|confirmation\s*(?:for|[-–:|])|thanks? (?:you )?for (?:your order|purchasing)\s*(?:for|[-–:|])?"
+    r")\s*",
+    re.I,
+)
+_US_ORDER_SUFFIX_RX = re.compile(r"\s*(?:[-–|(]\s*)?(?:order|confirmation)\s*(?:#|no\.?|number)\s*[\w-]+\)?\s*$", re.I)
+
+_US_MONTH_DATE_RX = re.compile(
+    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b",
+    re.I,
+)
+_US_DAY_MONTH_RX = re.compile(
+    r"\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?,?\s+(\d{4})\b", re.I,
+)
+_US_NUMERIC_DATE_RX = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
+_US_ISO_DATE_RX = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
+# Ordered most- to least-specific; the first family that matches wins.
+_US_TOTAL_RXS = (
+    re.compile(r"\b(?:order|grand|purchase)\s+total\b[^\d$\n]{0,25}(?:USD\s*)?\$?\s*(\d[\d,]*\.\d{2})", re.I),
+    re.compile(r"\b(?:total\s+(?:paid|charged|amount|price|cost)|amount\s+(?:paid|charged))\b[^\d$\n]{0,25}(?:USD\s*)?\$?\s*(\d[\d,]*\.\d{2})", re.I),
+    re.compile(r"\btotal\b[^\d$\n]{0,25}(?:USD\s*)?\$\s*(\d[\d,]*\.\d{2})", re.I),
+)
+# [ \t] rather than \s throughout: "Seats 5 - 6\nTicket Price" must not
+# read as "6 Ticket".
+_US_QTY_RXS = (
+    re.compile(r"\b(?:qty|quantity)\b[ \t]*[:#]?[ \t]*(\d{1,2})\b", re.I),
+    re.compile(r"\$[ \t]*\d[\d,]*(?:\.\d{2})?[ \t]*[x×][ \t]*(\d{1,2})\b"),
+    re.compile(r"(?:^|[ \t])(\d{1,2})[ \t]*[x×][ \t]+[A-Za-z]", re.M),
+    re.compile(r"\b(\d{1,2})[ \t]+(?:general admission[ \t]+|ga[ \t]+|vip[ \t]+)?(?:e-?)?tickets?\b", re.I),
+)
+_US_SECTION_RX = re.compile(r"\bsec(?:tion)?\b\.?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{0,11})\b", re.I)
+_US_ROW_RX = re.compile(r"\brow\b\s*[:#]?\s*([A-Z0-9]{1,4})\b", re.I)
+_US_SEATS_RX = re.compile(r"\bseats?\b\s*[:#]?\s*(\d{1,4}(?:\s*(?:-|–|,|&|to|thru)\s*\d{1,4})*)\b", re.I)
+_US_VENUE_RX = re.compile(r"\b(?:venue|location|where)\b\s*[:\-]\s*([^\n]{3,80})", re.I)
+_US_TICKET_LINK_RX = re.compile(
+    r"(posh\.vip/(?:e|t|tickets|orders?|receipt)|shotgun\.live/.*(?:ticket|order)|tixr\.com/.*(?:order|ticket)|"
+    r"my\.ticketmaster\.com|ticketmaster\.com/(?:user|my-?account|orders?)|seatgeek\.com/.*ticket|"
+    r"axs\.com/.*(?:ticket|order)|tickets\.taogroup\.com|eventbrite\.com/.*(?:ticket|order)|"
+    r"eventim\.us/.*(?:order|ticket)|etix\.com/.*(?:order|ticket))",
+    re.I,
+)
+# Words that, as the "section" capture, mean the regex hit prose not a seat.
+_US_SECTION_STOPWORDS = {"OF", "THE", "AND", "FOR", "TO", "IN", "IS", "A"}
+
+
+def _us_dates(text):
+    """Every plausible event date in text as (pos, 'YYYY-MM-DD'), in text order."""
+    out = []
+    for m in _US_MONTH_DATE_RX.finditer(text):
+        mo = _MONTHS.get(m.group(1)[:3].lower())
+        out.append((m.start(), mo, int(m.group(2)), int(m.group(3))))
+    for m in _US_DAY_MONTH_RX.finditer(text):
+        mo = _MONTHS.get(m.group(2)[:3].lower())
+        out.append((m.start(), mo, int(m.group(1)), int(m.group(3))))
+    for m in _US_NUMERIC_DATE_RX.finditer(text):   # US receipts: m/d/y
+        out.append((m.start(), int(m.group(1)), int(m.group(2)), int(m.group(3))))
+    for m in _US_ISO_DATE_RX.finditer(text):
+        out.append((m.start(), int(m.group(2)), int(m.group(3)), int(m.group(1))))
+    dates = []
+    for pos, mo, d, y in sorted(out):
+        try:
+            dates.append((pos, datetime(y, mo, d).date().isoformat()))
+        except (TypeError, ValueError):
+            continue
+    return dates
+
+
+def _parse_us_receipt(subject, body, links=None, received_at=None):
+    """Best-effort English receipt parser shared by the US platforms. Amounts
+    are USD; the caller pins the currency from PROVIDER_CURRENCY."""
+    out = {"warnings": []}
+    text = html_mod.unescape(body or "").replace("\xa0", " ")
+
+    ev = _US_SUBJECT_PREFIX_RX.sub("", (subject or "").strip(), count=1)
+    # Not stripping "." — artist names end in them ("Fred again..").
+    ev = _US_ORDER_SUFFIX_RX.sub("", ev).strip(" -–:|!")
+    if ev:
+        out["event_name"] = ev
+
+    # The receipt usually carries the ORDER date too, which is the day the
+    # mail arrived — so the event is the first date AFTER that day, then
+    # (a same-day show) the first on it, then whatever date there is.
+    dates = [d for _p, d in _us_dates(text)]
+    if dates:
+        floor = (received_at or "")[:10]
+        after = [d for d in dates if floor and d > floor]
+        same = [d for d in dates if floor and d == floor]
+        out["event_date_iso"] = (after or same or dates)[0]
+
+    total = None
+    for rx in _US_TOTAL_RXS:
+        vals = []
+        for m in rx.finditer(text):
+            try:
+                vals.append(float(m.group(1).replace(",", "")))
+            except ValueError:
+                pass
+        if vals:
+            # Within one family the largest is the grand total (a plain
+            # "Total" also labels per-line and subtotal-ish amounts).
+            total = max(vals)
+            break
+    if total is not None:
+        out["cost"] = total
+
+    for rx in _US_QTY_RXS:
+        m = rx.search(text)
+        if m:
+            q = int(m.group(1))
+            if 0 < q < 50:
+                out["qty"] = q
+                break
+
+    if re.search(r"\bgeneral admission\b", text, re.I):
+        out["section"] = "GA"
+    m = _US_SECTION_RX.search(text)
+    if m and m.group(1).upper() not in _US_SECTION_STOPWORDS:
+        out["section"] = m.group(1)
+    m = _US_ROW_RX.search(text)
+    if m and m.group(1).upper() not in _US_SECTION_STOPWORDS:
+        out["row_label"] = m.group(1)
+    m = _US_SEATS_RX.search(text)
+    if m:
+        out["seats"] = re.sub(r"\s*(?:–|to|thru)\s*", " - ", m.group(1)).strip()
+    m = _US_VENUE_RX.search(text)
+    if m:
+        out["venue"] = m.group(1).strip(" ,.")
+
+    for url in (links or []):
+        if _US_TICKET_LINK_RX.search(url):
+            out["ticket_url"] = html_mod.unescape(url)
+            break
+    return out
+
+
+def extract_fields(provider, subject, sender, body, attachments, links=None, html=None,
+                   received_at=None):
     """Dispatch to per-provider extractors, then fall back to generic
     regex search for any field still missing. Returned dict includes a
     `warnings` list with parser quibbles (e.g. cost_not_found)."""
@@ -1238,6 +1447,8 @@ def extract_fields(provider, subject, sender, body, attachments, links=None, htm
         out = _parse_tickchak(subject, sender, body, links=links)
     elif provider in ("ticketmaster_il",):
         out = _parse_ticketmaster_il(subject, body, html=html, links=links)
+    elif provider in US_PROVIDERS:
+        out = _parse_us_receipt(subject, body, links=links, received_at=received_at)
     else:
         out = {"warnings": []}
 
@@ -1270,6 +1481,12 @@ def extract_fields(provider, subject, sender, body, attachments, links=None, htm
     # Derive cost_per_unit when we have total + qty
     if out.get("cost_per_unit") is None and out.get("cost") and out.get("qty"):
         out["cost_per_unit"] = round(out["cost"] / out["qty"], 2)
+    # Currency of cost / cost_per_unit. The provider pins it where it can
+    # (kupat's "₪399" and a stray "$" in a footer must not disagree);
+    # otherwise read it off the amount's symbol.
+    currency = out.get("currency") or PROVIDER_CURRENCY.get(provider) or _detect_currency(text)
+    if not currency and out.get("cost") is not None:
+        warnings.append("currency_unknown")
 
     return {
         "event_name": out.get("event_name") or "",
@@ -1282,8 +1499,30 @@ def extract_fields(provider, subject, sender, body, attachments, links=None, htm
         "cost": out.get("cost"),
         "cost_per_unit": out.get("cost_per_unit"),
         "ticket_url": out.get("ticket_url"),
+        "currency": currency or None,
         "warnings": warnings,
     }
+
+
+def usd_fields(fields):
+    """Copy of extract_fields' output with cost / cost_per_unit converted to
+    USD, for consumers whose costs are USD-only (/series). On a currency we
+    can't convert (or an FX outage with no cached rate) the costs come back
+    None — a missing cost is fixable by hand, a shekel stored as a dollar
+    silently inflates every P&L figure downstream."""
+    out = dict(fields)
+    cur = (fields.get("currency") or "").upper()
+    if cur == "USD":
+        return out
+    try:
+        rate = fx.to_usd_rate(cur)
+    except Exception:
+        rate = None
+    for k in ("cost", "cost_per_unit"):
+        v = fields.get(k)
+        out[k] = round(v * rate, 2) if (v is not None and rate is not None) else None
+    out["currency"] = "USD"
+    return out
 
 
 # ---- IMAP plumbing -----------------------------------------------------
@@ -1663,7 +1902,7 @@ def run_intake():
             _msg = message_from_bytes(raw)
             html = _email_html(_msg)
             links = re.findall(r'href=["\']([^"\']+)["\']', html, re.IGNORECASE) if html else []
-            fields = extract_fields(provider, parsed["subject"], parsed["from"], parsed["body"], parsed["attachments"], links=links, html=html)
+            fields = extract_fields(provider, parsed["subject"], parsed["from"], parsed["body"], parsed["attachments"], links=links, html=html, received_at=parsed["received_at"])
             fields["buyer_email"] = _buyer_email(_msg, parsed["body"])
             intake_id = "intake-" + uuid.uuid4().hex[:12]
             row = {
@@ -1686,6 +1925,7 @@ def run_intake():
                 "parse_warnings": ",".join(fields.get("warnings") or []),
                 "ticket_url": (fields or {}).get("ticket_url"),
                 "buyer_email": (fields or {}).get("buyer_email"),
+                "currency": fields.get("currency"),
                 "status": "new",
             }
             db.insert_pending_intake(row, datetime.now(timezone.utc).isoformat())
@@ -1693,7 +1933,8 @@ def run_intake():
             # it there too. Failure here must never lose the intake row, so it
             # is caught separately from the viagogo push below.
             try:
-                if series.record_from_intake(fields, fields.get("buyer_email"), intake_id):
+                # /series costs are USD; the receipt may be in shekels.
+                if series.record_from_intake(usd_fields(fields), fields.get("buyer_email"), intake_id):
                     series_saved += 1
             except Exception:
                 pass

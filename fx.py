@@ -72,3 +72,19 @@ if __name__ == "__main__":
     r = ils_to_usd_rate(force=True)
     print(f"1 ILS = {r:.5f} USD")
     print(f"₪100 = ${ils_to_usd(100):.2f}")
+
+
+# Currencies to_usd_rate can convert. Receipts in anything else are left
+# unconverted for the user to price by hand rather than guessed at.
+SUPPORTED_CURRENCIES = ("USD", "ILS")
+
+
+def to_usd_rate(currency, now_iso=None):
+    """Rate such that amount_in_currency * rate = USD. Raises FxError for a
+    currency we can't convert (and on an FX outage with no cached rate)."""
+    cur = (currency or "").strip().upper()
+    if cur == "USD":
+        return 1.0
+    if cur == "ILS":
+        return ils_to_usd_rate(now_iso=now_iso)
+    raise FxError(f"unsupported currency: {currency!r}")

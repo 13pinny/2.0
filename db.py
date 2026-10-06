@@ -201,7 +201,18 @@ CREATE TABLE IF NOT EXISTS manual_inventory (
     matched_source TEXT,
     matched_source_id TEXT,
     matched_at TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    email TEXT,
+    -- Carried over from pending_intake on Confirm. cost_per_unit is ALWAYS
+    -- USD; orig_* keep what the receipt actually said (e.g. ILS) and the
+    -- rate used, so a conversion can be audited or redone.
+    provider TEXT,
+    buyer_email TEXT,
+    ticket_url TEXT,
+    intake_id TEXT,
+    orig_currency TEXT,
+    orig_cost_per_unit REAL,
+    fx_rate REAL
 );
 -- Hand-entered tickets that are BOUGHT but not yet listed anywhere -- either
 -- the user hasn't gotten to it or no secondary market exists yet. Unlike
@@ -474,6 +485,7 @@ CREATE TABLE IF NOT EXISTS pending_intake (
     parse_warnings TEXT,
     ticket_url TEXT,
     buyer_email TEXT,
+    currency TEXT,              -- currency of cost/cost_per_unit as parsed (ILS/USD/EUR); NULL = unknown
     status TEXT NOT NULL DEFAULT 'new',
     created_at TEXT NOT NULL
 );
@@ -1209,6 +1221,14 @@ def init():
         mi_cols = {row["name"] for row in conn.execute("PRAGMA table_info(manual_inventory)").fetchall()}
         if "email" not in mi_cols:
             conn.execute("ALTER TABLE manual_inventory ADD COLUMN email TEXT")
+        for _c, _t in (("provider", "TEXT"), ("buyer_email", "TEXT"), ("ticket_url", "TEXT"),
+                       ("intake_id", "TEXT"), ("orig_currency", "TEXT"),
+                       ("orig_cost_per_unit", "REAL"), ("fx_rate", "REAL")):
+            if _c not in mi_cols:
+                conn.execute(f"ALTER TABLE manual_inventory ADD COLUMN {_c} {_t}")
+        pi_cols = {row["name"] for row in conn.execute("PRAGMA table_info(pending_intake)").fetchall()}
+        if "currency" not in pi_cols:
+            conn.execute("ALTER TABLE pending_intake ADD COLUMN currency TEXT")
         # tm_watchers grew multi-source + per-watcher mute + channel routing.
         # SQLite can't add NOT NULL with default to existing rows in one shot,
         # so we add nullable columns and backfill.
@@ -2204,18 +2224,29 @@ def set_sale_override(source, sale_id, field, value, now_iso):
             )
 
 
+# Intake-provenance columns; hand-added rows (no email behind them) omit them.
+_MANUAL_INVENTORY_OPTIONAL = {
+    "email": None, "provider": None, "buyer_email": None, "ticket_url": None,
+    "intake_id": None, "orig_currency": None, "orig_cost_per_unit": None, "fx_rate": None,
+}
+
+
 def insert_manual_inventory(row, now_iso):
     with connect() as conn:
         conn.execute(
             """
             INSERT INTO manual_inventory (id, event_name, event_date, event_date_iso,
                 venue, section, row_label, seats, qty, cost_per_unit, note, email,
+                provider, buyer_email, ticket_url, intake_id,
+                orig_currency, orig_cost_per_unit, fx_rate,
                 matched_source, matched_source_id, matched_at, created_at)
             VALUES (:id, :event_name, :event_date, :event_date_iso,
                 :venue, :section, :row_label, :seats, :qty, :cost_per_unit, :note, :email,
+                :provider, :buyer_email, :ticket_url, :intake_id,
+                :orig_currency, :orig_cost_per_unit, :fx_rate,
                 NULL, NULL, NULL, :created_at)
             """,
-            {**row, "created_at": now_iso},
+            {**_MANUAL_INVENTORY_OPTIONAL, **row, "created_at": now_iso},
         )
 
 
@@ -2911,14 +2942,14 @@ def insert_pending_intake(row, now_iso):
             INSERT INTO pending_intake (id, message_id, provider, email_from,
                 email_subject, email_received_at, event_name, event_date_iso,
                 venue, section, row_label, seats, qty, cost, cost_per_unit,
-                raw_text, parse_warnings, ticket_url, buyer_email, status, created_at)
+                raw_text, parse_warnings, ticket_url, buyer_email, currency, status, created_at)
             VALUES (:id, :message_id, :provider, :email_from,
                 :email_subject, :email_received_at, :event_name, :event_date_iso,
                 :venue, :section, :row_label, :seats, :qty, :cost, :cost_per_unit,
-                :raw_text, :parse_warnings, :ticket_url, :buyer_email, :status, :created_at)
+                :raw_text, :parse_warnings, :ticket_url, :buyer_email, :currency, :status, :created_at)
             ON CONFLICT(message_id) DO NOTHING
             """,
-            {**row, "created_at": now_iso},
+            {"currency": None, **row, "created_at": now_iso},
         )
 
 
