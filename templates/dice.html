@@ -139,9 +139,9 @@
       <th></th><th>Event</th><th>Date</th>
       <th class="num">Bought</th><th class="num">Sold</th><th class="num">Avail</th><th class="num">Listed</th>
       <th>DICE now</th>
-      <th class="num">Spend</th><th class="num">Revenue</th><th class="num">Profit</th><th></th>
+      <th class="num">Spend</th><th class="num">Revenue</th><th class="num">Profit</th><th class="num" title="profit ÷ cost of the tickets sold">ROI</th><th></th>
     </tr></thead>
-    <tbody id="prows"><tr><td colspan="12" class="empty">Loading…</td></tr></tbody>
+    <tbody id="prows"><tr><td colspan="13" class="empty">Loading…</td></tr></tbody>
   </table>
   </div>
   <p class="sub"><a href="#" id="xferToggle" style="color:var(--accent);text-decoration:none">Show transfer log</a></p>
@@ -670,6 +670,16 @@ function profitCell(g){
   const unk = g.revenue_unknown ? ` <span style="color:var(--amber)" title="${g.revenue_unknown} linked sale(s) have no price scraped">⚠</span>` : '';
   return `<span class="${g.profit >= 0 ? 'pos' : 'neg'}">${money0(g.profit)}</span>${unk}`;
 }
+// ROI on the tickets actually sold: profit ÷ their cost. Unsold tickets
+// stay out of the denominator, same as the "Realized profit" tile.
+function roiPct(profit, costSold){
+  return (profit == null || !costSold) ? null : Math.round(profit / costSold * 100);
+}
+function roiCell(g){
+  const r = roiPct(g.profit, g.cost_sold);
+  if (r == null) return '<span class="when">—</span>';
+  return `<span class="${r >= 0 ? 'pos' : 'neg'}">${r >= 0 ? '+' : ''}${r}%</span>`;
+}
 function purchaseRow(g, tmap){
   const key = g.event_slug || g.event_name;
   const opened = popen.has(key);
@@ -687,16 +697,17 @@ function purchaseRow(g, tmap){
     <td class="num">${money0(g.spend)}</td>
     <td class="num">${g.revenue ? money0(g.revenue) : '<span class="when">—</span>'}</td>
     <td class="num">${profitCell(g)}</td>
+    <td class="num">${roiCell(g)}</td>
     <td>${g.url ? `<a class="buy" href="${escape(g.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">DICE</a>` : ''}</td>
   </tr>`;
   if (opened){
     const rows = g.purchases.map(p => {
       const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
-      const pr = p.profit != null ? ` · <span class="${p.profit >= 0 ? 'pos' : 'neg'}">${p.profit >= 0 ? '+' : ''}${money0(p.profit)}</span>` : '';
+      const pr = p.profit != null ? ` · <span class="${p.profit >= 0 ? 'pos' : 'neg'}">${p.profit >= 0 ? '+' : ''}${money0(p.profit)}</span>${roiPct(p.profit, p.cost_sold) != null ? ` (${roiPct(p.profit, p.cost_sold) >= 0 ? '+' : ''}${roiPct(p.profit, p.cost_sold)}%)` : ''}` : '';
       return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total), p.currency||'USD')}/tkt · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)}${pr} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
     }).join('');
     const hero = g.image ? `<div class="hero" style="${coverStyle(g.image, g.event_name)}"></div>` : '';
-    html += `<tr class="detail"><td colspan="12">${hero}${rows}<div style="clear:both"></div></td></tr>`;
+    html += `<tr class="detail"><td colspan="13">${hero}${rows}<div style="clear:both"></div></td></tr>`;
   }
   return html;
 }
@@ -712,7 +723,7 @@ function renderPurchases(){
     ['Tickets sold', sold, 'matched resale sales'],
     ['Σ spend', money0(evs.reduce((a,g) => a + g.spend, 0)), 'all recorded purchases'],
     ['Revenue', money0(revenue), 'from matched sales'],
-    ['Realized profit', money0(profit), sold ? `ROI ${costSold ? Math.round(profit / costSold * 100) : 0}% on sold tickets` : 'match sales to see it'],
+    ['Realized profit', money0(profit), sold ? `ROI ${roiPct(profit, costSold) ?? 0}% on sold tickets` : 'match sales to see it'],
   ];
   $('ptotals').innerHTML = tiles.map(([l,v,h]) => {
     const isProfit = l === 'Realized profit' && sold;
@@ -724,7 +735,7 @@ function renderPurchases(){
   if (pfilter){ fb.style.display = 'block'; fb.innerHTML = `Showing events ${PFILTERS[pfilter].label}<a href="#" id="pclear">show all</a>`; $('pclear').onclick = ev => { ev.preventDefault(); setPFilter(null); }; }
   else fb.style.display = 'none';
   if (!evs.length){
-    $('prows').innerHTML = '<tr><td colspan="12" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
+    $('prows').innerHTML = '<tr><td colspan="13" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
     renderRail();
     return;
   }
@@ -736,10 +747,11 @@ function renderPurchases(){
   if (past.length){
     const left = past.reduce((a,g) => a + (g.avail||0), 0);
     const pp = past.reduce((a,g) => a + (g.profit||0), 0);
-    html += `<tr class="pastsep" id="pastP"><td colspan="12">${pastOpen ? '▾' : '▸'} Past events (${past.length}) · profit ${money0(pp)}${left ? ` · ${left} ticket${left>1?'s':''} never matched to a sale` : ''}</td></tr>`;
+    const pr = roiPct(pp, past.reduce((a,g) => a + (g.profit != null ? (g.cost_sold||0) : 0), 0));
+    html += `<tr class="pastsep" id="pastP"><td colspan="13">${pastOpen ? '▾' : '▸'} Past events (${past.length}) · profit ${money0(pp)}${pr != null ? ` (ROI ${pr >= 0 ? '+' : ''}${pr}%)` : ''}${left ? ` · ${left} ticket${left>1?'s':''} never matched to a sale` : ''}</td></tr>`;
     if (pastOpen) html += past.map(g => purchaseRow(g, tmap)).join('');
   }
-  $('prows').innerHTML = html || '<tr><td colspan="12" class="empty">Nothing matches this filter.</td></tr>';
+  $('prows').innerHTML = html || '<tr><td colspan="13" class="empty">Nothing matches this filter.</td></tr>';
   $('prows').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
     const id = tr.dataset.pid;
     popen.has(id) ? popen.delete(id) : popen.add(id);
