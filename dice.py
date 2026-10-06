@@ -37,6 +37,7 @@ CLI probe (house convention):
     python dice.py <url-or-id>
 """
 import json
+import os
 import re
 import time
 import urllib.error
@@ -272,12 +273,129 @@ def perf_url(event_code, perf_code="0"):
     return f"{SITE_BASE}/event/{perm or event_code}"
 
 
-def _fetch_ticket_types(event_code):
-    raw = _http_get(f"{API_BASE}/events/{event_code}/ticket_types")
+# --- desktop relay ----------------------------------------------------------
+# api.dice.fm 403s the VPS's (Hetzner) IP whatever the headers, while a home
+# connection gets through. dice_relay.py on the desktop fetches ticket_types
+# for every tracked event and POSTs the raw JSON to /api/dice/relay; it lands
+# here, and _fetch_ticket_types serves it when the API refuses this machine.
+RELAY_DIR = CACHE_DIR / "dice_relay"
+RELAY_MAX_AGE_SECONDS = int(os.getenv("KARTIS_DICE_RELAY_MAX_AGE_SECONDS") or 900)
+# After a 403 from the API, go straight to the relay for this long instead of
+# hammering an endpoint that has blocked us.
+API_BLOCK_BACKOFF_SECONDS = 600
+_api_blocked_until = 0.0
+
+
+def _relay_path(event_code):
+    code = str(event_code).strip().lower()
+    if not _HEX24_RE.fullmatch(code):
+        raise DiceError(f"relay: not a DICE event id: {event_code!r}")
+    return RELAY_DIR / f"{code}.json"
+
+
+def relay_store(event_code, data):
+    """Keep a desktop-fetched ticket_types payload. Refuses anything that
+    isn't one, so an error body can never overwrite a good copy."""
+    if not isinstance(data, dict) or not isinstance(data.get("ticket_types"), list) \
+            or not isinstance(data.get("dates"), dict):
+        raise DiceError(f"relay: payload for {event_code} isn't a ticket_types response")
+    path = _relay_path(event_code)
+    RELAY_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def relay_age(event_code):
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise DiceError(f"unparseable ticket_types JSON: {e}") from e
+        return time.time() - _relay_path(event_code).stat().st_mtime
+    except (OSError, DiceError):
+        return None
+
+
+def _relay_load(event_code):
+    age = relay_age(event_code)
+    if age is None or age > RELAY_MAX_AGE_SECONDS:
+        return None
+    try:
+        return json.loads(_relay_path(event_code).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _fetch_ticket_types(event_code):
+    global _api_blocked_until
+    err = None
+    if time.time() >= _api_blocked_until:
+        try:
+            raw = _http_get(f"{API_BASE}/events/{event_code}/ticket_types")
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError as e:
+                raise DiceError(f"unparseable ticket_types JSON: {e}") from e
+        except DiceError as e:
+            if "HTTP 403" in str(e):
+                _api_blocked_until = time.time() + API_BLOCK_BACKOFF_SECONDS
+            err = e
+    else:
+        err = DiceError("api.dice.fm is refusing this machine (HTTP 403)")
+    data = _relay_load(event_code)
+    if data is not None:
+        return data
+    age = relay_age(event_code)
+    when = f"{age / 60:.0f} min ago" if age is not None else "never"
+    raise DiceError(f"{err} — desktop relay last sent this event {when}; "
+                    "is dice_relay.py running on the PC?") from err
+
+
+# --- event page summary (display fallback) ----------------------------------
+# The public event page loads from the VPS even while the API doesn't. Its
+# __NEXT_DATA__ (props.pageProps.initialState, a JSON string) carries the
+# event-level status and cheapest price -- NOT per-type tiers -- so it only
+# ever feeds the /dice page's headline when nothing better is available,
+# never the watcher diff.
+_NEXT_DATA_RE = re.compile(r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
+PAGE_SUMMARY_TTL_SECONDS = 600
+_page_summary = {}
+
+
+def _parse_page_summary(html):
+    m = _NEXT_DATA_RE.search(html or "")
+    if not m:
+        return None
+    try:
+        nd = json.loads(m.group(1))
+        st = ((nd.get("props") or {}).get("pageProps") or {}).get("initialState")
+        if isinstance(st, str):
+            st = json.loads(st)
+        ev = ((st or {}).get("event") or {}).get("event") or {}
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(ev, dict) or not ev:
+        return None
+    price = ev.get("price") if isinstance(ev.get("price"), dict) else {}
+    cents = price.get("amount_from") if price.get("amount_from") is not None else price.get("amount")
+    return {
+        "status": str(ev.get("status") or "").lower() or None,
+        "min_price": round(cents / 100, 2) if isinstance(cents, (int, float)) else None,
+        "currency": price.get("currency"),
+    }
+
+
+def page_summary(event_code):
+    """{status, min_price, currency} off the public event page, cached
+    10 min in memory; None when the page can't be read."""
+    code = str(event_code).strip().lower()
+    hit = _page_summary.get(code)
+    if hit and time.time() - hit[0] < PAGE_SUMMARY_TTL_SECONDS:
+        return hit[1]
+    try:
+        out = _parse_page_summary(_http_get(f"{SITE_BASE}/event/{code}",
+                                            accept="text/html,application/xhtml+xml"))
+    except Exception:
+        out = None
+    _page_summary[code] = (time.time(), out)
+    return out
 
 
 def _tier_text(tt):

@@ -6915,8 +6915,29 @@ def _dice_payload(force=False):
             "fetched_at": labels.get("_fetched_at"),
             "error": labels.get("_error"),
         })
+    # DICE's API blocks the VPS; when neither it nor the desktop relay has
+    # fresh data, the public event page still gives status + cheapest price.
+    stale = [e for e in events if e["error"] and not e["past"]]
+    if stale:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            summaries = list(ex.map(lambda e: dice.page_summary(e["event_code"]), stale))
+        for e, ps in zip(stale, summaries):
+            if not ps:
+                continue
+            st = ps.get("status")
+            e["page_only"] = True
+            if st == "on-sale":
+                e["status"] = "selling"
+            elif st in ("sold-out", "off-sale", "locked"):
+                e["status"] = "soldout"
+            if ps.get("min_price") is not None and st == "on-sale":
+                e["min_price"] = ps["min_price"]
+                e["currency"] = ps.get("currency") or e["currency"]
+            elif st and st != "on-sale":
+                e["min_price"] = None
     events.sort(key=lambda e: e.get("first_date_ms") or float("inf"))
-    return {"events": events, "now": now_iso}
+    return {"events": events, "now": now_iso, "relay_seen_at": _dice_relay_seen.get("at")}
 
 
 @app.route("/api/dice")
@@ -7021,6 +7042,40 @@ def api_dice_follows_remove():
 def api_dice_follows_run_now():
     summary = run_dice_follow(force=True)
     return jsonify({"summary": summary, **_dice_follows_payload()})
+
+
+_dice_relay_seen = {"at": None}
+
+
+@app.route("/api/dice/relay/targets")
+def api_dice_relay_targets():
+    """What the desktop relay (dice_relay.py) should fetch from api.dice.fm,
+    which blocks this server's IP: every tracked DICE event id (watchers +
+    /dice tracker). The poll doubles as the relay's heartbeat."""
+    err = _cvauth_secret_error()
+    if err:
+        return err
+    _dice_relay_seen["at"] = datetime.now(timezone.utc).isoformat()
+    codes = [c for c in _dice_tracked_codes() if re.fullmatch(r"[0-9a-f]{24}", c)]
+    return jsonify({"targets": codes})
+
+
+@app.route("/api/dice/relay", methods=["POST"])
+def api_dice_relay():
+    """Desktop relay drop-off: {"payloads": {event_id: ticket_types JSON}}."""
+    from flask import request
+    err = _cvauth_secret_error()
+    if err:
+        return err
+    payloads = (request.get_json(silent=True) or {}).get("payloads") or {}
+    stored, bad = 0, {}
+    for code, data in payloads.items():
+        try:
+            dice.relay_store(code, data)
+            stored += 1
+        except dice.DiceError as e:
+            bad[code] = str(e)
+    return jsonify({"stored": stored, "rejected": bad})
 
 
 @app.route("/api/dice/refresh", methods=["POST"])
