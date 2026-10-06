@@ -4742,3 +4742,16 @@ def series_purchases_every():
             "SELECT * FROM series_purchases ORDER BY event_date_iso, series, section, row_label"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# Clean-slate cutoff for purchase tracking (set 2026-10-06 at Pinny's ask).
+# Purchase emails received before it are neither staged on /pending nor
+# shown, and /purchases lists only purchases from that day on -- except
+# DICE, which keeps its full history. Nothing older is deleted: moving the
+# setting back brings it all back.
+PURCHASES_START_DEFAULT = "2026-10-06"
+
+
+def purchases_start_date():
+    v = (setting_get("purchases_start_date") or "").strip()
+    return v[:10] if v else PURCHASES_START_DEFAULT

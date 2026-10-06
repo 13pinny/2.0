@@ -180,7 +180,7 @@ const COLS = [
 const STORE_KEY = "kartis.purchases.v1";
 const FILTER_IDS = ["q", "fSource", "fPlatform", "fAccount", "fWhen", "fFrom", "fTo", "fGroup", "fUnmapped", "fHidden"];
 
-let ITEMS = [], TODAY = "", sortKey = "purchased_on", sortDir = -1, openKey = null, lastView = [];
+let ITEMS = [], TODAY = "", START = "", sortKey = "purchased_on", sortDir = -1, openKey = null, lastView = [];
 
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function money(v) { return v == null ? "—" : "$" + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -242,6 +242,7 @@ async function load() {
     const data = await r.json();
     ITEMS = data.items || [];
     TODAY = data.today || new Date().toISOString().slice(0, 10);
+    START = data.start_date || "";
     const pb = document.getElementById("pendingBanner");
     if (data.pending_count) {
       pb.innerHTML = `${data.pending_count} purchase email${data.pending_count === 1 ? "" : "s"} waiting to be confirmed. They aren't counted here until confirmed on <a href="/pending">Pending</a>.`;
@@ -446,7 +447,8 @@ function render() {
     (a, b) => (b[0] || "").localeCompare(a[0] || ""));
   breakdown("byAccount", rows, r => r.account || "", k => k ? esc(k) : '<span class="muted">(none)</span>');
   const tot = ITEMS.filter(r => !r.hidden).length;
-  document.getElementById("meta").textContent = `${rows.length} of ${tot} purchases`;
+  document.getElementById("meta").textContent = `${rows.length} of ${tot} purchases` +
+    (START ? ` · tracking since ${fmtDate(START)} (DICE: full history)` : "");
 }
 
 document.getElementById("tbody").addEventListener("click", e => {

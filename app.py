@@ -3351,9 +3351,18 @@ def listings_page():
     return render_template("listings.html")
 
 
+def _pending_since_start():
+    """Unconfirmed intake rows, minus anything received before the
+    purchase-tracking start date. Older rows stay in the table untouched;
+    they're just out of view (see db.purchases_start_date)."""
+    start = db.purchases_start_date()
+    return [r for r in db.all_pending_intake(status="new")
+            if not r.get("email_received_at") or r["email_received_at"][:10] >= start]
+
+
 @app.route("/api/pending-intake")
 def api_pending_intake():
-    rows = db.all_pending_intake(status="new")
+    rows = _pending_since_start()
     ids = [r["id"] for r in rows]
     atts = db.list_attachments_for_owners("manual_intake", ids)
     for r in rows:
@@ -4689,7 +4698,22 @@ def _build_purchases():
     for r in rows:
         r["event_group"] = _row_group(groups, r["event_name"], r["event_date_iso"], r["venue"])
     _apply_group_displays(rows, _event_group_displays())
+    # Clean slate from the start date; DICE keeps its whole history.
+    start = db.purchases_start_date()
+    rows = [r for r in rows
+            if r["source"] == "dice" or (r["purchased_on"] or "") >= start]
     return rows
+
+
+@app.route("/api/purchases/start-date", methods=["POST"])
+def api_purchases_start_date():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    v = (body.get("date") or "").strip()
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    db.setting_set("purchases_start_date", v, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "start_date": v})
 
 
 @app.route("/purchases")
@@ -4715,7 +4739,8 @@ def api_purchases():
         if r["source"] == "manual" and intake_of.get(r["source_id"]):
             files += intake_att.get(intake_of[r["source_id"]], [])
         r["attachments"] = [{"id": a["id"], "filename": a["filename"]} for a in files]
-    return jsonify({"items": rows, "pending_count": len(db.all_pending_intake(status="new")),
+    return jsonify({"items": rows, "pending_count": len(_pending_since_start()),
+                    "start_date": db.purchases_start_date(),
                     "today": date.today().isoformat()})
 
 
