@@ -114,6 +114,15 @@ def check_one(w, now_iso):
         "last_check_error": None,
         "last_seat_count": len(seats),
     })
+    if src_name == "dice":
+        # Feed the /dice tier/price change log off the fetch we just made
+        # (fetch_selectable_seats rewrote the labels cache) — without this
+        # a watcher-only event got history only on a manual Refresh.
+        # (Keep in sync with app.py._check_one_watcher.)
+        try:
+            db.dice_tier_log_update(w["event_code"], dice.cached_blocks(w["event_code"]), now_iso)
+        except Exception:
+            pass
     if is_baseline:
         return 0, None
 

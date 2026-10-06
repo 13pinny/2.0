@@ -134,6 +134,88 @@ def _resolve_internal_id(slug):
     return internal_id
 
 
+# --- event page info (artwork + id) ----------------------------------------
+# The ticket_types API carries no artwork, but every public event page has
+# an og:image on dice-media.imgix.net. We keep the BASE attachment URL (the
+# og:image's rect/w/h query is a 1300x630 social crop) so the page can ask
+# imgix for whatever thumbnail size it wants. One page fetch also yields the
+# 24-hex id, which is how /dice joins a purchase's slug to a tracked event.
+
+_PAGE_INFO_FILE = CACHE_DIR / "dice_pages.json"
+PAGE_INFO_TTL_SECONDS = 7 * 86400
+PAGE_INFO_FAIL_TTL_SECONDS = 6 * 3600
+_page_info = None
+_OG_IMAGE_RE = re.compile(
+    r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"')
+
+
+def _load_page_info():
+    global _page_info
+    if _page_info is None:
+        try:
+            _page_info = json.loads(_PAGE_INFO_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            _page_info = {}
+    return _page_info
+
+
+def _fetch_page_info(key):
+    """key = slug or 24-hex id. dice.fm redirects an id to the canonical
+    slug URL, so both forms work."""
+    try:
+        html = _http_get(f"{SITE_BASE}/event/{key}",
+                         accept="text/html,application/xhtml+xml")
+    except Exception:
+        return {"id": None, "image": None, "at": time.time(), "failed": True}
+    m = _DEEPLINK_RE.search(html) or _RETAILER_RE.search(html)
+    img = _OG_IMAGE_RE.search(html)
+    image = None
+    if img:
+        image = img.group(1).replace("&amp;", "&").split("?", 1)[0]
+        if "dice-media" not in image:
+            image = None    # generic site logo, not event art
+    return {"id": m.group(1) if m else None, "image": image, "at": time.time()}
+
+
+def page_info_many(keys, max_fetch=16, workers=6):
+    """{key: {"id", "image"}} for slugs/ids, fetching only stale or missing
+    entries (at most max_fetch per call, in parallel) so a page load never
+    stalls on a big backlog — the rest fill in on later loads. Failures are
+    negative-cached for 6h."""
+    info = _load_page_info()
+    now = time.time()
+    keys = [k for k in dict.fromkeys(str(k).strip().lower() for k in keys if k)]
+    def stale(k):
+        e = info.get(k)
+        if not e:
+            return True
+        ttl = PAGE_INFO_FAIL_TTL_SECONDS if e.get("failed") else PAGE_INFO_TTL_SECONDS
+        return now - (e.get("at") or 0) > ttl
+    todo = [k for k in keys if stale(k)][:max_fetch]
+    if todo:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(workers, len(todo))) as ex:
+            results = list(ex.map(_fetch_page_info, todo))
+        for k, r in zip(todo, results):
+            if r.get("failed") and info.get(k, {}).get("image"):
+                info[k]["at"] = now - PAGE_INFO_TTL_SECONDS + PAGE_INFO_FAIL_TTL_SECONDS
+                continue   # keep the last good art through a blip
+            info[k] = r
+            if r.get("id") and not _HEX24_RE.fullmatch(k):
+                _remember_id(k, r["id"])
+        try:
+            CACHE_DIR.mkdir(exist_ok=True)
+            _PAGE_INFO_FILE.write_text(json.dumps(info), encoding="utf-8")
+        except OSError:
+            pass
+    out = {}
+    for k in keys:
+        e = info.get(k) or {}
+        ident = e.get("id") or (k if _HEX24_RE.fullmatch(k) else _load_id_map().get(k))
+        out[k] = {"id": ident, "image": e.get("image")}
+    return out
+
+
 # --- Public source-plugin API ----------------------------------------------
 
 def parse_url(url):
@@ -228,6 +310,10 @@ def fetch_selectable_seats(event_code, perf_code="0"):
     restock (or a new type, or a tier/price move) appears as an added
     seat and pings; a type selling out is a silent removal."""
     data = _fetch_ticket_types(event_code)
+    try:
+        _store_payload(event_code, data)
+    except Exception:
+        pass   # cache refresh is a bonus; never fail the tick over it
     out = []
     for tt in data.get("ticket_types") or []:
         if not isinstance(tt, dict):
@@ -308,8 +394,13 @@ def fetch_fresh(event_code, perf_code="0", lang="iw"):
     """Single API fetch → labels payload, same shape as the other sources
     so app.py / notify.py / the filter modal need no branching. lang is
     ignored (DICE is English) but kept for interface parity."""
-    data = _fetch_ticket_types(event_code)
+    return _store_payload(event_code, _fetch_ticket_types(event_code), lang)
 
+
+def _store_payload(event_code, data, lang="iw"):
+    """ticket_types JSON → labels payload, written to the 1h cache. Shared
+    by fetch_fresh and fetch_selectable_seats, so a watcher tick (every
+    15-60s) keeps the /dice page's data fresh for free."""
     blocks = {}
     any_on_sale = False
     for tt in data.get("ticket_types") or []:
@@ -393,12 +484,21 @@ def get_labels(event_code, perf_code="0", lang="iw", force=False, missing_block=
         return cached
     try:
         return fetch_fresh(event_code, perf_code, lang)
-    except Exception:
-        return cached or {
+    except Exception as e:
+        out = dict(cached) if cached else {
             "source": SOURCE_NAME, "event_code": str(event_code),
             "perf_code": "0", "lang": lang,
             "meta": {}, "blocks": {},
         }
+        out["_error"] = f"{type(e).__name__}: {e}"   # not persisted
+        return out
+
+
+def cached_blocks(event_code):
+    """Ticket-type blocks from the labels cache, no network. The tick calls
+    this right after fetch_selectable_seats (which just rewrote the cache)
+    to feed db.dice_tier_log_update."""
+    return ((_read_cache(event_code) or {}).get("blocks")) or {}
 
 
 def event_summary(labels):
