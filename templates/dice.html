@@ -565,7 +565,7 @@ const SRC_LBL = {viagogo:'VG', lysted:'LY', crowdvolt:'CV'};
 
 function saleChip(p){
   const links = (p.sale_links || []).map(l =>
-    `<span style="white-space:nowrap">${SRC_LBL[l.sale_source]||l.sale_source} ${fmt(l.qty)}${l.order_id ? ' #' + escape(l.order_id) : ''}<a href="#" class="sunlink" data-id="${escape(l.id)}" title="unlink this sale" style="color:var(--red);margin-left:3px;text-decoration:none">✕</a></span>`
+    `<span style="white-space:nowrap">${SRC_LBL[l.sale_source]||l.sale_source} ${fmt(l.qty)}${l.order_id ? ' #' + escape(l.order_id) : ''}${l.auto ? ' <span title="matched automatically" style="font-size:9px;color:var(--muted);border:1px solid var(--line);padding:0 3px">auto</span>' : ''}<a href="#" class="sunlink" data-id="${escape(l.id)}" title="unlink this sale" style="color:var(--red);margin-left:3px;text-decoration:none">✕</a></span>`
   ).join(' · ');
   if (saleOpen.has(p.id)){
     const opts = (SALES || []).map((s, i) => {
@@ -813,6 +813,8 @@ function renderAttention(){
   if (untracked) chip('info', 'untracked', untracked, `held event${untracked>1?'s':''} with no price tracking`);
   if (xfer) chip('bad', 'xfer', xfer, xfer > 1 ? 'transfers need review' : 'transfer needs review');
   if (pastLeft) chip('warn', 'pastleft', pastLeft, `past ticket${pastLeft>1?'s':''} never matched to a sale`);
+  const skipped = PDATA.autolink_skipped || [];
+  if (skipped.length) chips.push(`<span class="chip warn" title="${escape(skipped.map(k => k.event_name + ' — ' + k.reason).join('\n'))}"><b>${skipped.length}</b> sale${skipped.length>1?'s':''} couldn't be matched automatically (hover for why)</span>`);
   if (fetchErr) chip('bad', 'fetch', fetchErr, `tracked event${fetchErr>1?'s':''} failing to fetch`);
   $('attn').innerHTML = chips.length ? chips.join('') : '<span class="chip ok">✓ All clear — everything held is listed, tracked and matched</span>';
   $('attn').querySelectorAll('.chip[data-k]').forEach(c => c.onclick = () => {
