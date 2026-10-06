@@ -1855,7 +1855,9 @@ def run_intake():
     series_saved = 0
     skipped_dupe = 0
     skipped_provider = 0
+    skipped_old = 0
     errors = 0
+    start_date = db.purchases_start_date()
     for _uid, raw, mid in fetched:
         seen += 1
         try:
@@ -1891,6 +1893,12 @@ def run_intake():
                     dice_purchases_saved += 1
                 elif kind == "transfer":
                     dice_transfers_saved += 1
+                continue
+            # Clean slate: purchase mail from before the tracking start date
+            # is ignored (DICE and cashback above keep their own history).
+            _day = (parsed.get("received_at") or "")[:10]
+            if _day and _day < start_date:
+                skipped_old += 1
                 continue
             provider = _detect_provider(parsed["from"])
             if provider == "unknown" and not allow_unknown:
@@ -1974,5 +1982,6 @@ def run_intake():
         "series_saved": series_saved,
         "skipped_dupe": skipped_dupe,
         "skipped_provider": skipped_provider,
+        "skipped_before_start": skipped_old,
         "errors": errors,
     }
