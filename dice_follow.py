@@ -1,12 +1,17 @@
 """DICE new-show watcher for followed ARTISTS and VENUES.
 
-You follow a dice.fm artist or venue (paste its page link, or type a name
-and it is looked up). Every DICE_FOLLOW_FETCH_MINUTES the page is fetched
-and every /event/<slug> it links to is collected. Each slug we have never
-seen gets ONE detail fetch -- the event page for the 24-hex id, then the
-same anonymous ticket_types API the drop checker uses -- which gives the
-name, date, venue, city, sale start and status. After that the event costs
-nothing until its sale is near.
+You follow a dice.fm artist or venue by pasting its page link (real
+artist slugs carry an id suffix, e.g. /artist/adiel-6dxgq, so a typed name
+only works when DICE happens to have a suffix-less page). Every
+FETCH_MINUTES the page is fetched. Its Next.js __NEXT_DATA__ embeds the
+upcoming shows (props.pageProps.initialProfile.sections[].items[].event:
+id, name, status, price, venues[0], dates incl. sale_start_date), so one
+page fetch per follow covers everything and NO api.dice.fm call is made --
+which matters because api.dice.fm 403s the VPS's (Hetzner) IP whatever
+the headers, while dice.fm pages still load from it (verified 2026-10-06).
+A page without that embedded data falls back to collecting /event/<slug>
+links and reading each new one through the ticket_types API, which only
+works from a machine DICE doesn't block.
 
 Pings (one Discord channel per followed artist/venue, `dice-<name>`, made
 by the bot on first use; falls back to the shared new-events channel):
@@ -21,10 +26,11 @@ still fire for its shows that aren't on sale yet.
 Every upcoming show found is also added to the /dice price tracker
 (market_manual, source dice), so its ladder starts recording on its own.
 
-Guards against the page linking to OTHER artists' shows (recommendations):
-an artist's show must mention the artist's name somewhere in its API
-payload (name / lineup / description), and a venue's show must be AT that
-venue. A show that fails the check is remembered as `foreign` and ignored.
+Guards against the page listing OTHER artists' shows (recommendations):
+embedded shows are read from the "upcoming" section only when the page
+labels one; on the API fallback an artist's show must mention the
+artist's name somewhere in its payload. A venue's show must be AT that
+venue either way. A show that fails the check is remembered as `foreign`.
 
 CLI:
     python dice_follow.py --probe "<dice.fm artist/venue URL or name>"
@@ -118,10 +124,12 @@ def resolve(text):
             last = e
             continue
         return {"kind": kind, "slug": slug,
-                "name": _page_title(html) or text, "url": _page_url(kind, slug)}
+                "name": _profile_name(html) or _page_title(html) or text,
+                "url": _page_url(kind, slug)}
     if hit:
         raise FollowError(f"couldn't open {text}: {last}")
-    raise FollowError(f"no DICE artist or venue page found for \"{text}\" — paste its dice.fm link instead")
+    raise FollowError(f"no DICE page found for \"{text}\" — DICE artist links carry an id "
+                      "(e.g. dice.fm/artist/adiel-6dxgq), so paste the link from the artist's page")
 
 
 # --- reading a followed page -----------------------------------------------
@@ -133,6 +141,114 @@ def event_slugs(html):
         if s not in seen:
             seen.append(s)
     return seen
+
+
+_NEXT_DATA_RE = re.compile(
+    r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
+
+
+def _next_data(html):
+    m = _NEXT_DATA_RE.search(html or "")
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except ValueError:
+        return None
+
+
+def _profile(html):
+    nd = _next_data(html) or {}
+    prof = ((nd.get("props") or {}).get("pageProps") or {}).get("initialProfile")
+    if isinstance(prof, str):
+        try:
+            prof = json.loads(prof)
+        except ValueError:
+            prof = None
+    return prof if isinstance(prof, dict) else None
+
+
+def _image_of(ev):
+    imgs = ev.get("images")
+    if isinstance(imgs, dict):
+        for k in ("square", "portrait", "landscape", "brand"):
+            if isinstance(imgs.get(k), str) and imgs[k]:
+                return imgs[k].split("?", 1)[0]
+    for k in ("image_url", "image"):
+        if isinstance(ev.get(k), str) and ev[k].startswith("http"):
+            return ev[k].split("?", 1)[0]
+    return None
+
+
+def _status_of(raw, sale_start):
+    raw = str(raw or "").lower()
+    if raw == "on-sale":
+        return "onsale"
+    sale = _parse_dt(sale_start)
+    if sale and sale > _now():
+        return "upcoming"
+    if raw in ("sold-out", "off-sale", "locked"):
+        return "soldout"
+    return "unknown"
+
+
+def _from_embedded(e):
+    """One __NEXT_DATA__ profile event -> the same dict event_details
+    returns. The 24-hex id doubles as the stored slug."""
+    dates = e.get("dates") if isinstance(e.get("dates"), dict) else {}
+    venues = e.get("venues") or []
+    ven = venues[0] if venues and isinstance(venues[0], dict) else {}
+    city = ven.get("city")
+    city = (city.get("name") if isinstance(city, dict) else city) or ""
+    eid = str(e.get("id") or "").lower()
+    perm = e.get("perm_name")
+    sale_start = dates.get("sale_start_date")
+    return {
+        "slug": eid,
+        "dice_id": eid if re.fullmatch(r"[0-9a-f]{24}", eid) else None,
+        "name": (e.get("name") or "").strip() or eid,
+        "event_start": dates.get("event_start_date"),
+        "sale_start": sale_start,
+        "venue": (ven.get("name") or "").strip(),
+        "city": str(city).strip(),
+        "status": _status_of(e.get("status"), sale_start),
+        "url": f"{dice.SITE_BASE}/event/{perm or eid}",
+        "image": _image_of(e),
+        "_embedded": True,
+    }
+
+
+def page_events(html):
+    """Shows embedded in an artist/venue page, or None when the page has no
+    such data (then the caller falls back to links + the API). Only the
+    section(s) titled 'upcoming' are read when any is labelled so; else
+    every section."""
+    prof = _profile(html)
+    if not prof or not isinstance(prof.get("sections"), list):
+        return None
+    secs = [x for x in prof["sections"] if isinstance(x, dict)]
+    def label(x):
+        return " ".join(str(x.get(k) or "") for k in ("title", "type", "name", "id")).lower()
+    upcoming = [x for x in secs if "upcoming" in label(x)]
+    out, seen = [], set()
+    for sec in (upcoming or secs):
+        for it in sec.get("items") or []:
+            e = it.get("event") if isinstance(it, dict) else None
+            if not isinstance(e, dict) or not e.get("id"):
+                continue
+            ev = _from_embedded(e)
+            if ev["slug"] not in seen:
+                seen.add(ev["slug"])
+                out.append(ev)
+    return out
+
+
+def _profile_name(html):
+    prof = _profile(html) or {}
+    for k in ("name", "title", "display_name"):
+        if isinstance(prof.get(k), str) and prof[k].strip():
+            return prof[k].strip()
+    return None
 
 
 def event_details(slug):
@@ -176,6 +292,8 @@ def _belongs(follow, ev):
     if follow["kind"] == "venue":
         v = _norm(ev.get("venue"))
         return bool(v) and (name in v or v in name)
+    if ev.get("_embedded"):
+        return True   # listed on the artist's own profile
     return f" {name} " in f" {ev.get('_text', '')} "
 
 
@@ -269,43 +387,66 @@ def _track(ev, now_iso):
         print(f"[dice-follow] couldn't track {ev.get('slug')}: {e}")
 
 
+def _record_new(follow, ev, now_iso, baseline, notify_new, pings):
+    foreign = not _belongs(follow, ev)
+    past = _is_past(ev)
+    sale = _parse_dt(ev.get("sale_start"))
+    already_live = ev["status"] in ("onsale", "soldout") or bool(sale and sale <= _now())
+    db.dice_follow_event_put(follow["id"], ev, now_iso, foreign=foreign or past,
+                             live_sent=already_live)
+    if foreign or past:
+        return
+    if ev.get("dice_id"):
+        _track(ev, now_iso)
+    if notify_new and not baseline:
+        pings.append(("new", ev))
+        if sale and sale - _now() <= timedelta(minutes=REMINDER_MINUTES):
+            db.dice_follow_event_mark(follow["id"], ev["slug"], reminder=True)
+
+
 def check_follow(follow, now_iso, notify_new=True):
-    """Fetch one followed page, record new shows, return pings to send as
-    [(kind, ev)]. Sale-time pings are handled separately in due_pings."""
+    """Fetch one followed page, record new shows and refresh known ones.
+    Returns (pings [(kind, ev)], embedded) -- embedded=False means the page
+    carried no show data and refresh_pending must re-read shows through the
+    API. Sale-time pings are handled separately in due_pings."""
     html = _fetch_page(follow["kind"], follow["slug"])
     known = db.dice_follow_events(follow["id"])
     baseline = not follow.get("baselined")
-    pings, fetched = [], 0
-    for slug in event_slugs(html):
-        row = known.get(slug)
-        if row is not None:
-            continue
-        if fetched >= MAX_NEW_DETAILS_PER_FOLLOW:
-            break  # the rest next tick
-        fetched += 1
-        try:
-            ev = event_details(slug)
-        except Exception as e:
-            print(f"[dice-follow] {slug}: {e}")
-            continue  # not stored, so retried next tick
-        foreign = not _belongs(follow, ev)
-        past = _is_past(ev)
-        info = dice.page_info_many([slug]).get(slug) or {}
-        ev["image"] = info.get("image")
-        sale = _parse_dt(ev.get("sale_start"))
-        already_live = ev["status"] in ("onsale", "soldout") or (sale and sale <= _now())
-        db.dice_follow_event_put(follow["id"], ev, now_iso, foreign=foreign or past,
-                                 live_sent=bool(already_live))
-        if foreign or past:
-            continue
-        _track(ev, now_iso)
-        if notify_new and not baseline:
-            pings.append(("new", ev))
-            if sale and sale - _now() <= timedelta(minutes=REMINDER_MINUTES):
-                db.dice_follow_event_mark(follow["id"], slug, reminder=True)
+    pings = []
+    embedded = page_events(html)
+    if embedded is not None:
+        for ev in embedded:
+            row = known.get(ev["slug"])
+            if row is None:
+                _record_new(follow, ev, now_iso, baseline, notify_new, pings)
+                continue
+            if row["foreign"]:
+                continue
+            # Known show: keep its facts current (a moved sale time, or a
+            # flip to on-sale with no announced time -> go-live ping).
+            db.dice_follow_event_put(follow["id"], ev, now_iso, update=True)
+            if (not row["live_sent"] and ev["status"] == "onsale"
+                    and not _parse_dt(ev.get("sale_start"))):
+                pings.append(("live", ev))
+    else:
+        fetched = 0
+        for slug in event_slugs(html):
+            if slug in known:
+                continue
+            if fetched >= MAX_NEW_DETAILS_PER_FOLLOW:
+                break  # the rest next tick
+            fetched += 1
+            try:
+                ev = event_details(slug)
+            except Exception as e:
+                print(f"[dice-follow] {slug}: {e}")
+                continue  # not stored, so retried next tick
+            info = dice.page_info_many([slug]).get(slug) or {}
+            ev["image"] = info.get("image")
+            _record_new(follow, ev, now_iso, baseline, notify_new, pings)
     db.dice_follow_checked(follow["id"], now_iso, error=None,
-                           name=_page_title(html), baselined=True)
-    return pings
+                           name=_profile_name(html) or _page_title(html), baselined=True)
+    return pings, embedded is not None
 
 
 def refresh_pending(follow, now_iso):
@@ -365,8 +506,9 @@ def run_tick(force=False):
             continue
         summary["checked"] += 1
         try:
-            pings = check_follow(follow, now_iso)
-            pings += refresh_pending(follow, now_iso)
+            pings, embedded = check_follow(follow, now_iso)
+            if not embedded:
+                pings += refresh_pending(follow, now_iso)
         except Exception as e:
             summary["errors"] += 1
             db.dice_follow_checked(follow["id"], now_iso, error=f"{type(e).__name__}: {e}")
@@ -387,9 +529,19 @@ def run_tick(force=False):
 def probe(text):
     t = resolve(text)
     html = _fetch_page(t["kind"], t["slug"])
-    slugs = event_slugs(html)
-    print(f"{t['kind']}: {t['name']}  ({t['url']})  — {len(slugs)} event links")
     follow = {"kind": t["kind"], "name": t["name"], "slug": t["slug"]}
+    embedded = page_events(html)
+    if embedded is not None:
+        print(f"{t['kind']}: {t['name']}  ({t['url']})  — {len(embedded)} shows embedded in the page")
+        for ev in embedded:
+            flag = "" if _belongs(follow, ev) else "  [ignored: not this " + t["kind"] + "]"
+            if _is_past(ev):
+                flag += "  [past]"
+            print(f"  {ev['event_start'] or '?':25} {ev['name'][:50]:50} {ev['venue']}, {ev['city']}"
+                  f"  status={ev['status']} sale={ev['sale_start']}{flag}")
+        return
+    slugs = event_slugs(html)
+    print(f"{t['kind']}: {t['name']}  ({t['url']})  — no embedded shows; {len(slugs)} event links (API path)")
     for s in slugs[:25]:
         try:
             ev = event_details(s)
