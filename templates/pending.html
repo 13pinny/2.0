@@ -274,6 +274,7 @@ async function load() {
   }
   if (intakeR.ok) {
     const ind = await intakeR.json();
+    _ilsUsd = ind.fx_ils_usd || null;
     renderInbox(ind.rows || [], ind.last_intake || {});
   }
   if (vgR.ok) {
@@ -320,6 +321,12 @@ function renderInbox(rows, lastIntake) {
         <label>Qty *</label><input data-f="qty" type="number" min="1" value="${r.qty ?? ''}">
         <label>Cost / ea</label><input data-f="cost_per_unit" type="number" step="0.01" value="${r.cost_per_unit ?? ''}">
         <label>Total cost</label><input data-f="cost_total" type="number" step="0.01" value="${r.cost ?? ''}">
+        <label>Currency</label><select data-f="currency">
+          ${["USD", "ILS"].map(c => `<option value="${c}" ${(r.currency || "USD").toUpperCase() === c ? "selected" : ""}>${c}</option>`).join("")}
+          ${r.currency && !["USD", "ILS"].includes(r.currency.toUpperCase()) ? `<option value="${esc(r.currency)}" selected>${esc(r.currency)} (enter USD instead)</option>` : ""}
+        </select>
+        <span class="ic-usd muted" style="grid-column: span 2; align-self:center; font-size:11px;"></span>
+        ${r.buyer_email ? `<label>Bought on</label><span style="grid-column: span 3; align-self:center; font-size:12px;">${esc(r.buyer_email)}</span>` : ""}
       </div>
       <div class="ic-files">
         ${atts.length
@@ -332,6 +339,7 @@ function renderInbox(rows, lastIntake) {
       </div>
     `;
     container.appendChild(card);
+    _updateUsdPreview(card);
   }
 }
 
@@ -447,9 +455,39 @@ async function teachViagogoPushName(card) {
   setTimeout(() => load(), 5000);
 }
 
+// Rate (1 ILS = X USD) for the inbox card's live "≈ $" preview only — the
+// server does the real conversion on Confirm with its own cached rate.
+let _ilsUsd = null;
+
+function _updateUsdPreview(card) {
+  const out = card.querySelector(".ic-usd");
+  if (!out) return;
+  const f = _readCardFields(card);
+  const cur = (f.currency || "USD").toUpperCase();
+  const cpu = parseFloat(f.cost_per_unit);
+  if (cur === "USD" || !isFinite(cpu)) { out.textContent = ""; return; }
+  if (cur === "ILS" && _ilsUsd) {
+    out.textContent = `≈ $${(cpu * _ilsUsd).toFixed(2)}/ea USD (fx ${_ilsUsd.toFixed(4)})`;
+  } else if (cur === "ILS") {
+    out.textContent = "converted to USD on confirm";
+  } else {
+    out.textContent = `${cur} can't be converted — switch to USD and enter the dollar cost`;
+  }
+}
+
+// Live USD preview as the inbox card's cost / currency fields change.
+document.addEventListener("input", (e) => {
+  const card = e.target.closest && e.target.closest("#inbox-container .inbox-card");
+  if (card) _updateUsdPreview(card);
+});
+document.addEventListener("change", (e) => {
+  const card = e.target.closest && e.target.closest("#inbox-container .inbox-card");
+  if (card) _updateUsdPreview(card);
+});
+
 function _readCardFields(card) {
   const fields = {};
-  card.querySelectorAll("input[data-f]").forEach(el => {
+  card.querySelectorAll("input[data-f], select[data-f]").forEach(el => {
     const k = el.dataset.f;
     fields[k] = el.value;
   });
@@ -488,6 +526,7 @@ async function confirmIntake(card) {
     seats: (fields.seats || "").trim(),
     qty: parseInt(fields.qty || "0", 10),
     cost_per_unit: isFinite(parseFloat(fields.cost_per_unit)) ? parseFloat(fields.cost_per_unit) : null,
+    currency: (fields.currency || "USD").toUpperCase(),
   };
   if (!body.event_name) { alert("Event name required"); return; }
   if (!body.qty || body.qty <= 0) { alert("Qty must be > 0"); return; }

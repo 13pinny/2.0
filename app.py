@@ -23,6 +23,7 @@ import barby_events
 import db
 import discord_bot
 import filters as watcher_filters
+import fx
 import haku
 import import_jerujam
 import kupat
@@ -3357,9 +3358,19 @@ def api_pending_intake():
     atts = db.list_attachments_for_owners("manual_intake", ids)
     for r in rows:
         r["attachments"] = atts.get(r["id"], [])
+        # Rows staged before the currency column existed: the provider
+        # still says what the receipt was in.
+        if not r.get("currency"):
+            r["currency"] = mail_intake.PROVIDER_CURRENCY.get(r.get("provider") or "")
+    # For the inbox card's "≈ $" preview only; Confirm converts server-side.
+    try:
+        ils_usd = fx.ils_to_usd_rate() if any((r.get("currency") or "").upper() == "ILS" for r in rows) else None
+    except Exception:
+        ils_usd = None
     return jsonify({
         "rows": rows,
         "last_intake": _last_intake,
+        "fx_ils_usd": ils_usd,
     })
 
 
@@ -3400,6 +3411,22 @@ def api_pending_intake_confirm():
         cost_per = float(cost_per) if cost_per not in (None, "") else None
     except (TypeError, ValueError):
         cost_per = None
+    # The inbox card's cost is in the RECEIPT's currency (kupat/TM-IL/
+    # tickchak: shekels). manual_inventory.cost_per_unit is USD everywhere
+    # downstream (/inventory, profit, maaser), so convert here and keep the
+    # original amount + rate on the row. A currency we can't convert is
+    # refused rather than stored as if it were dollars.
+    currency = (body.get("currency") or intake.get("currency")
+                or mail_intake.PROVIDER_CURRENCY.get(intake.get("provider") or "")
+                or "USD").strip().upper()
+    orig_cost_per = cost_per
+    fx_rate = None
+    if cost_per is not None:
+        try:
+            fx_rate = fx.to_usd_rate(currency)
+        except Exception as e:
+            return jsonify({"error": f"can't convert {currency} to USD ({e}) — enter the cost in USD"}), 400
+        cost_per = round(cost_per * fx_rate, 4)
     iso = (body.get("event_date_iso") or intake.get("event_date_iso") or "").strip()
     new_id = "pending-" + uuid.uuid4().hex[:12]
     row = {
@@ -3414,7 +3441,16 @@ def api_pending_intake_confirm():
         "qty": qty,
         "cost_per_unit": cost_per,
         "note": (body.get("note") or "").strip(),
-        "email": (body.get("email") or intake.get("email_from") or "").strip(),
+        # The account the tickets were bought on — NOT email_from, which is
+        # the provider's sender address (or the forwarder's).
+        "email": (body.get("email") or intake.get("buyer_email") or "").strip(),
+        "provider": intake.get("provider"),
+        "buyer_email": intake.get("buyer_email"),
+        "ticket_url": intake.get("ticket_url"),
+        "intake_id": intake_id,
+        "orig_currency": currency if orig_cost_per is not None else None,
+        "orig_cost_per_unit": orig_cost_per,
+        "fx_rate": fx_rate,
     }
     now_iso = datetime.now(timezone.utc).isoformat()
     db.insert_manual_inventory(row, now_iso)
@@ -3435,7 +3471,7 @@ def api_pending_intake_confirm():
                 ("manual_inventory", new_id, new_stored, a["id"]),
             )
     db.update_pending_intake(intake_id, {"status": "confirmed"})
-    return jsonify({"ok": True, "id": new_id})
+    return jsonify({"ok": True, "id": new_id, "cost_per_unit_usd": cost_per})
 
 
 @app.route("/api/pending-intake/reject", methods=["POST"])
