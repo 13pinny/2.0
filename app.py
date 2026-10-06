@@ -6941,6 +6941,9 @@ def _dice_payload(force=False):
             "last_change_at": last_change_at,
             "fetched_at": labels.get("_fetched_at"),
             "error": labels.get("_error"),
+            "region": dice.region_of(meta.get("country"),
+                                     next((t["currency"] for t in types if t["currency"]), None),
+                                     meta.get("timezone"), meta.get("startIso")),
         })
     # DICE's API blocks the VPS; when neither it nor the desktop relay has
     # fresh data, the public event page still gives status + cheapest price.
@@ -6958,6 +6961,8 @@ def _dice_payload(force=False):
                 e["status"] = "selling"
             elif st in ("sold-out", "off-sale", "locked"):
                 e["status"] = "soldout"
+            if e["region"] is None and ps.get("currency"):
+                e["region"] = dice.region_of(currency=ps["currency"])
             if ps.get("min_price") is not None and st == "on-sale":
                 e["min_price"] = ps["min_price"]
                 e["currency"] = ps.get("currency") or e["currency"]
@@ -7008,8 +7013,10 @@ def _dice_follows_payload():
             start = dice_follow._parse_dt(e.get("event_start"))
             if start and start < now - timedelta(hours=12):
                 continue
-            upcoming.append({k: e.get(k) for k in ("slug", "name", "event_start", "sale_start",
-                                                   "venue", "city", "status", "url", "image")})
+            row = {k: e.get(k) for k in ("slug", "name", "event_start", "sale_start",
+                                         "venue", "city", "status", "url", "image")}
+            row["region"] = dice.region_of(start_iso=e.get("event_start"))
+            upcoming.append(row)
         upcoming.sort(key=lambda e: e.get("event_start") or "~")
         out.append({**{k: f.get(k) for k in ("id", "kind", "slug", "name", "url", "added_at",
                                              "paused", "last_checked_at", "last_error")},
@@ -7202,6 +7209,8 @@ def api_dice_purchases():
         g["cost_sold"] += cost_sold
         g["revenue_unknown"] += unknown
         g["spend"] += p.get("price_total") or 0.0
+        if not g.get("region") and p.get("currency"):
+            g["region"] = dice.region_of(currency=p["currency"])
         # Prefer a dated/venued row's metadata over an undated one's.
         if not g["event_date_iso"] and p.get("event_date_iso"):
             g["event_date_iso"] = p["event_date_iso"]

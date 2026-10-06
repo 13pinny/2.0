@@ -398,6 +398,37 @@ def page_summary(event_code):
     return out
 
 
+_US_COUNTRIES = {"US", "USA"}
+_NON_US_AMERICA_TZ = ("America/Toronto", "America/Vancouver", "America/Montreal",
+                      "America/Edmonton", "America/Winnipeg", "America/Halifax",
+                      "America/Mexico_City", "America/Cancun", "America/Tijuana",
+                      "America/Sao_Paulo", "America/Buenos_Aires", "America/Bogota",
+                      "America/Lima", "America/Santiago")
+
+
+def region_of(country=None, currency=None, tz=None, start_iso=None):
+    """'us' | 'intl' | None (unknown) for the /dice "US only" toggle.
+    Strongest signal first: the venue's country, then the ticket currency
+    (DICE prices US shows in USD, Canada in CAD, the UK in GBP...), then the
+    venue time zone, then the start time's UTC offset (US = UTC-4..-10)."""
+    c = (country or "").strip().upper()
+    if c:
+        return "us" if c in _US_COUNTRIES else "intl"
+    cur = (currency or "").strip().upper()
+    if cur:
+        return "us" if cur == "USD" else "intl"
+    z = (tz or "").strip()
+    if z:
+        if z in _NON_US_AMERICA_TZ:
+            return "intl"
+        return "us" if z.startswith(("America/", "US/", "Pacific/Honolulu")) else "intl"
+    m = re.search(r"([+-])(\d{2}):?(\d{2})$", (start_iso or "").strip())
+    if m:
+        off = int(m.group(2)) * (-1 if m.group(1) == "-" else 1)
+        return "us" if -10 <= off <= -4 else "intl"
+    return None
+
+
 def _tier_text(tt):
     tier = tt.get("price_tier") or {}
     name = (tier.get("name") or "").strip()
@@ -590,6 +621,11 @@ def _store_payload(event_code, data, lang="iw"):
             "permName": (data.get("perm_name") or "").strip() or None,
             "eventStatus": data.get("status"),
             "saleEnd": dates.get("sale_end_date"),
+            # Inputs for region_of (the /dice "US only" toggle).
+            "country": (city.get("country_alpha3") or city.get("country_code")
+                        or ven.get("country_alpha3") or ven.get("country_code") or None),
+            "timezone": dates.get("timezone") or ven.get("timezone") or None,
+            "startIso": dates.get("event_start_date"),
         },
         "blocks": blocks,
     }
