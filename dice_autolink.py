@@ -9,7 +9,10 @@ A sale is linked only when the answer is unambiguous:
     on one night never get guessed between;
   - no non-DICE purchase (Lysted / manual / JeruJam) exists for that event,
     because then the sale could be those tickets;
-  - the DICE purchases still have enough unsold tickets for the whole sale.
+  - the ticket type matches (dice_types: Early Entry, VIP etc. must agree;
+    price tiers don't count, so GA at $60 and GA at $75 are one type);
+  - the DICE purchases of that type still have enough unsold tickets for the
+    whole sale.
 Anything else is left for the picker. Within one event the sale is spread
 over the purchases oldest-email-first, the same FIFO the transfer matcher
 uses. Links are stored with auto=1; unlinking one on /dice records the sale
@@ -24,6 +27,7 @@ from difflib import SequenceMatcher
 
 import db
 import dice_email
+import dice_types
 
 AUTO_RATIO = 0.85
 SALE_LOOKBACK_DAYS = 180
@@ -52,6 +56,31 @@ def _other_inventory():
     for r in db.all_jerujam_tickets():
         out.append((r.get("event_name"), _day(r.get("event_date_iso"))))
     return [(n, d) for n, d in out if n and d]
+
+
+def _pick_type(cands, sale):
+    """Narrow the purchases to the sale's ticket type. Returns
+    (purchases, None) or ([], reason). The sale's label must name the same
+    distinctive words as the DICE type (Early Entry ≠ GA); a sale that says
+    nothing extra is plain GA. When the event was bought as a single type,
+    a sale that names fewer words than it still matches (the listing just
+    left the extra word out); a word the DICE type lacks never does."""
+    want = dice_types.type_key(sale.get("section"), sale.get("ticket_type"))
+    by_type = {}
+    for p in cands:
+        by_type.setdefault(dice_types.purchase_type_key(p.get("ticket_type")), []).append(p)
+    if want in by_type:
+        return by_type[want], None
+    typed = {k: v for k, v in by_type.items() if k is not None}
+    if len(typed) == 1:
+        (k, ps), = typed.items()
+        if want <= k:
+            return ps, None
+        return [], f"sale is {dice_types.describe(want)}, DICE tickets are {dice_types.describe(k)}"
+    if not typed:  # only mixed-type purchases
+        return cands, None
+    return [], (f"sale is {dice_types.describe(want)}, DICE has "
+                + " / ".join(sorted(dice_types.describe(k) for k in typed)))
 
 
 def run(apply=True, now_iso=None):
@@ -94,6 +123,8 @@ def run(apply=True, now_iso=None):
         elif any(d == day and _names_match(n, s.get("event_name")) for n, d in others):
             why = "also bought outside DICE"
         else:
+            cands, why = _pick_type(cands, s)
+        if not why:
             open_ = sorted((p for p in cands if avail[p["id"]] > 0),
                            key=lambda p: (p.get("email_date") or "", p["id"]))
             if sum(avail[p["id"]] for p in open_) < need:

@@ -1523,10 +1523,14 @@ def dice_sale_candidates(days=180):
     cutoff = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)).date().isoformat()
     out = []
     with connect() as conn:
+        # Ticket-type text per platform, for matching Early Entry vs GA etc.
+        type_cols = {"viagogo_sales": "section, ticket_type",
+                     "lysted_sales": "section, NULL AS ticket_type",
+                     "crowdvolt_sales": "NULL AS section, ticket_type"}
         for source, table in _DICE_SALE_TABLES.items():
             for r in conn.execute(
                 f"SELECT id, order_id, event_name, event_date_iso, qty, "
-                f"sale_price, sale_date_iso FROM {table} "
+                f"sale_price, sale_date_iso, {type_cols[table]} FROM {table} "
                 f"WHERE COALESCE(sale_date_iso, '') = '' OR sale_date_iso >= ? "
                 f"ORDER BY sale_date_iso DESC", (cutoff,)
             ):
@@ -1543,22 +1547,53 @@ def dice_sale_candidates(days=180):
     return out
 
 
+def dice_avg_ppu_by_purchase():
+    """{purchase_id: per-ticket cost to book sales and holdings at}. Every
+    purchase of the same event AND ticket type (dice_types.type_key) shares
+    one qty-weighted average, so GA bought at $60 and at $75 costs $67.50
+    whichever purchase a sale is linked to; Early Entry, VIP etc. average
+    separately. A mixed-type purchase keeps its own price."""
+    import dice_types
+    import re as _re
+    groups, own = {}, {}
+    for p in dice_purchases_all():
+        qty = p.get("qty") or 0
+        ppu = p.get("price_per_unit")
+        if ppu is None and qty and p.get("price_total") is not None:
+            ppu = p["price_total"] / qty
+        own[p["id"]] = ppu
+        tk = dice_types.purchase_type_key(p.get("ticket_type"))
+        if tk is None or ppu is None or qty <= 0:
+            continue
+        ev = p.get("event_slug") or (
+            _re.sub(r"[^a-z0-9]+", " ", (p.get("event_name") or "").lower()).strip()
+            + "|" + (p.get("event_date_iso") or "")[:10])
+        g = groups.setdefault((ev, tk), {"spend": 0.0, "qty": 0, "ids": []})
+        g["spend"] += ppu * qty
+        g["qty"] += qty
+        g["ids"].append(p["id"])
+    out = dict(own)
+    for g in groups.values():
+        avg = g["spend"] / g["qty"]
+        for pid in g["ids"]:
+            out[pid] = avg
+    return out
+
+
 def dice_cost_by_sale():
     """{(sale_source, sale_id): cost} for every resale-platform sale linked
-    to a DICE purchase on the /dice page. Cost = linked qty x the purchase's
-    per-ticket price (USD), so the sales page needs no manual cost entry for
+    to a DICE purchase on the /dice page. Cost = linked qty x the averaged
+    per-ticket price of that event + ticket type (USD), so the sales page needs no manual cost entry for
     CV/viagogo sales of DICE holdings."""
     out = {}
+    avg = dice_avg_ppu_by_purchase()
     with connect() as conn:
         rows = conn.execute(
-            "SELECT l.sale_source, l.sale_id, l.qty, p.price_per_unit, "
-            "       p.price_total, p.qty AS p_qty "
+            "SELECT l.sale_source, l.sale_id, l.qty, l.purchase_id "
             "FROM dice_sale_links l JOIN dice_purchases p ON p.id = l.purchase_id"
         ).fetchall()
     for r in rows:
-        ppu = r["price_per_unit"]
-        if ppu is None and (r["p_qty"] or 0):
-            ppu = (r["price_total"] or 0) / r["p_qty"]
+        ppu = avg.get(r["purchase_id"])
         cost = round((ppu or 0) * (r["qty"] or 0), 2)
         key = (r["sale_source"], str(r["sale_id"]))
         out[key] = round(out.get(key, 0) + cost, 2)

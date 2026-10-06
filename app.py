@@ -1980,6 +1980,7 @@ def _build_unified_inventory():
     # out). Unsold = qty - linked-sold - any cross-source match. Costs are USD,
     # which the page already renders with '$'.
     dice_linked = db.dice_linked_qty_by_purchase()
+    dice_avg = db.dice_avg_ppu_by_purchase()
     for p in db.dice_purchases_all():
         if ("dice", str(p.get("id"))) in hidden:
             continue
@@ -1991,7 +1992,7 @@ def _build_unified_inventory():
         remaining = max(0, qty - sold - consumed)
         if remaining <= 0:
             continue  # fully sold via linked resale-platform sales
-        cost_per = p.get("price_per_unit")
+        cost_per = dice_avg.get(p["id"])
         rows.append({
             "source": "dice",
             "source_id": str(p.get("id")),
@@ -2621,14 +2622,15 @@ def api_inventory_all():
     dice_links = db.dice_sale_links_by_purchase()
     dice_cost = 0.0
     dice_tickets = 0
+    dice_avg = db.dice_avg_ppu_by_purchase()
     for p in db.dice_purchases_all():
         qty = p.get("qty") or 0
         sold = sum(l.get("qty") or 0 for l in dice_links.get(p["id"], []))
         avail = max(0, qty - sold)
         if avail <= 0:
             continue
-        ppu = p.get("price_per_unit")
-        dice_cost += ppu * avail if ppu else (p.get("price_total") or 0) * (avail / qty if qty else 0)
+        ppu = dice_avg.get(p["id"])
+        dice_cost += (ppu or 0) * avail
         dice_tickets += avail
     if dice_tickets:
         cost_by_source["dice"] = dice_cost
@@ -6964,6 +6966,7 @@ def api_dice_purchases():
     purchases = db.dice_purchases_all()
     transfers = db.dice_transfers_all()
     sale_links = db.dice_sale_links_by_purchase()
+    avg_ppu = db.dice_avg_ppu_by_purchase()
     # slug → 24-hex id + artwork (one cached event-page fetch per slug), so
     # the page can join each holding to its tracked event's live price and
     # offer Track for held events nobody is watching.
@@ -6990,9 +6993,7 @@ def api_dice_purchases():
         # avail deliberately ignores transfers — delivery info is unreliable,
         # so sold (user-matched resale-platform sales) is the deduction.
         avail = (p.get("qty") or 0) - sold
-        ppu = p.get("price_per_unit")
-        if ppu is None and p.get("qty"):
-            ppu = (p.get("price_total") or 0) / p["qty"]
+        ppu = avg_ppu.get(p["id"])  # same-type purchases share one average cost
         revenue = sum(l["revenue"] for l in links if l.get("revenue") is not None)
         unknown = sum(1 for l in links if l.get("revenue") is None)
         cost_sold = round((ppu or 0) * sold, 2)
