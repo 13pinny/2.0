@@ -332,6 +332,7 @@ def run_mail_intake():
     try:
         summary = mail_intake.run_intake()
         _dice_autolink_safe()
+        _dice_autotrack_held()
         _last_intake.update(
             at=datetime.now(timezone.utc).isoformat(),
             error=None,
@@ -1158,6 +1159,32 @@ def _dice_autolink_safe():
     except Exception:
         traceback.print_exc()
         return {"linked": [], "skipped": []}
+
+
+def _dice_autotrack_held():
+    """Price-track every upcoming DICE event we bought tickets for, so the
+    ladder, the relay and the holdings' live price cover it without a
+    manual Track click. Idempotent; never breaks the caller."""
+    try:
+        today = datetime.now(timezone.utc).date().isoformat()
+        slugs = {(p.get("event_slug") or "").lower() for p in db.dice_purchases_all()
+                 if p.get("event_slug") and (p.get("event_date_iso") or "9999")[:10] >= today}
+        if not slugs:
+            return 0
+        tracked = _dice_tracked_codes()
+        pages = dice.page_info_many(list(slugs))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        added = 0
+        for slug in slugs:
+            code = (pages.get(slug) or {}).get("id")
+            if code and code not in tracked:
+                db.market_manual_add("dice", "event", code, f"https://dice.fm/event/{slug}", now_iso)
+                tracked[code] = "market"
+                added += 1
+        return added
+    except Exception:
+        traceback.print_exc()
+        return 0
 
 
 def run_scraper():
@@ -7121,6 +7148,7 @@ def api_dice_purchases():
     Rows are written by mail_intake's dice branch. Opening the page also
     runs the sale auto-matcher, so a freshly scraped sale shows up linked."""
     autolink = _dice_autolink_safe()
+    _dice_autotrack_held()
     purchases = db.dice_purchases_all()
     transfers = db.dice_transfers_all()
     sale_links = db.dice_sale_links_by_purchase()
