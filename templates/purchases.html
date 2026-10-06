@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Purchases</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 14px; }
+  h2 .count { font-size: 10px; border: 1px solid var(--line-2); padding: 1px 6px; letter-spacing: 1px; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  a { color: var(--accent); }
+
+  .banner { background: #fff8c5; border: 1px solid #d4a72c; color: #4d2d00; padding: 9px 14px; font-size: 12px; margin-bottom: 14px; }
+  .banner a { font-weight: 600; }
+
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .stat { background: var(--bg-2); border: 1px solid var(--line); padding: 10px 16px; min-width: 130px; }
+  .stat .k { font-size: 10px; letter-spacing: 1.5px; color: var(--muted); text-transform: uppercase; }
+  .stat .v { font-size: 20px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .stat .s { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .toolbar input[type=search] { min-width: 240px; flex: 1 1 240px; max-width: 380px; }
+  .toolbar label.chk { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .toolbar label.chk input { padding: 0; }
+  .toolbar .sep { width: 1px; height: 22px; background: var(--line-2); }
+  .toolbar .lbl { font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); }
+
+  .tbl-wrap { overflow-x: auto; background: var(--bg-2); border: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line-2); white-space: nowrap; background: var(--bg-2); position: sticky; top: 0; cursor: pointer; user-select: none; }
+  th.sorted { color: var(--accent); }
+  th .arr { font-size: 9px; margin-left: 3px; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  tr.p-row { cursor: pointer; }
+  tr.p-row:hover > td { background: var(--bg-3); }
+  tr.p-row.open > td { background: var(--bg-3); }
+  tr.p-row.past > td { color: var(--muted); }
+  tr.p-row.is-hidden > td { text-decoration: line-through; text-decoration-color: var(--line-2); }
+  tr.grp > td { background: var(--bg-3); font-weight: 600; font-size: 11.5px; border-bottom: 1px solid var(--line-2); padding-top: 9px; }
+  tr.grp .gsub { font-weight: 400; color: var(--muted); margin-left: 10px; }
+  tr.detail > td { background: var(--bg); border-bottom: 1px solid var(--line-2); padding: 12px 16px; }
+  .dgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px 22px; font-size: 12px; }
+  .dgrid .k { font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); }
+  .dgrid .v { word-break: break-word; }
+  .dfiles { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .dfiles a { font-size: 11.5px; border: 1px solid var(--line-2); padding: 3px 8px; text-decoration: none; background: var(--bg-2); }
+
+  .src { display: inline-block; font-size: 10px; letter-spacing: 0.8px; text-transform: uppercase; padding: 1px 6px; border: 1px solid currentColor; white-space: nowrap; }
+  .src-lysted { color: var(--accent); }
+  .src-manual { color: var(--green); }
+  .src-jerujam { color: var(--orange); }
+  .src-dice { color: var(--purple); }
+  .src-series { color: var(--amber); }
+  .src-unmapped { color: var(--muted); }
+  .tag { font-size: 10px; color: var(--muted); margin-left: 4px; }
+  .muted { color: var(--muted); }
+  .warn { color: var(--red); }
+
+  .breakdowns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 18px; }
+  .breakdowns table { background: var(--bg-2); border: 1px solid var(--line); table-layout: fixed; }
+  .breakdowns td:first-child { word-break: break-word; }
+  .breakdowns th { cursor: default; position: static; }
+  .bar { height: 6px; background: var(--accent); opacity: 0.55; min-width: 1px; }
+  .empty { padding: 30px; text-align: center; color: var(--muted); font-size: 12px; }
+
+  @media (max-width: 720px) {
+    header, main { padding-left: 14px; padding-right: 14px; }
+    .toolbar input[type=search] { min-width: 0; max-width: none; }
+    .stat { min-width: 0; flex: 1 1 40%; }
+    .col-venue, .col-account, .col-status { display: none; }
+  }
+</style>
+</head>
+<body>
+{% include "_sidebar.html" %}
+<header>
+  <div class="left">
+    <h1>Purchases</h1>
+    <span class="meta" id="meta">loading…</span>
+  </div>
+  <div class="toolbar" style="margin:0">
+    <button onclick="exportCsv()">Export CSV</button>
+    <button onclick="load()">Refresh</button>
+  </div>
+</header>
+<main>
+  <div id="pendingBanner" class="banner" style="display:none"></div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="Search event, venue, section, account, order…" oninput="render()">
+    <select id="fSource" onchange="render()"><option value="">All sources</option></select>
+    <select id="fPlatform" onchange="render()"><option value="">All platforms</option></select>
+    <select id="fAccount" onchange="render()"><option value="">All accounts</option></select>
+    <select id="fWhen" onchange="render()">
+      <option value="">All events</option>
+      <option value="upcoming">Upcoming events</option>
+      <option value="past">Past events</option>
+    </select>
+  </div>
+  <div class="toolbar">
+    <span class="lbl">Bought</span>
+    <input type="date" id="fFrom" onchange="render()" title="Purchased on or after">
+    <span class="muted">to</span>
+    <input type="date" id="fTo" onchange="render()" title="Purchased on or before">
+    <select id="fRange" onchange="applyRange()">
+      <option value="">Any time</option>
+      <option value="30">Last 30 days</option>
+      <option value="90">Last 90 days</option>
+      <option value="ytd">This year</option>
+    </select>
+    <span class="sep"></span>
+    <span class="lbl">Group</span>
+    <select id="fGroup" onchange="render()">
+      <option value="">None</option>
+      <option value="event">Event</option>
+      <option value="month">Month bought</option>
+      <option value="account">Account</option>
+      <option value="platform">Platform</option>
+      <option value="source">Source</option>
+    </select>
+    <span class="sep"></span>
+    <label class="chk" title="Hand-entered scratch list on /unmapped. It can repeat purchases already recorded elsewhere, so it is left out by default."><input type="checkbox" id="fUnmapped" onchange="render()"> Include unmapped</label>
+    <label class="chk" title="Rows deleted from the inventory page"><input type="checkbox" id="fHidden" onchange="render()"> Show hidden</label>
+    <button onclick="resetFilters()">Reset</button>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr id="thead"></tr></thead>
+      <tbody id="tbody"><tr><td class="empty" colspan="12">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="breakdowns">
+    <div><h2>By source</h2><table id="bySource"></table></div>
+    <div><h2>By month bought</h2><table id="byMonth"></table></div>
+    <div><h2>By account</h2><table id="byAccount"></table></div>
+  </div>
+</main>
+
+<script>
+const SOURCE_LABEL = { lysted: "Lysted", manual: "Manual / email", jerujam: "JeruJam", dice: "DICE", series: "Series", unmapped: "Unmapped" };
+const SOURCE_PAGE = { lysted: "/", manual: "/", jerujam: "/jerujam", dice: "/dice", series: "/series", unmapped: "/unmapped" };
+const COLS = [
+  { key: "purchased_on", label: "Bought" },
+  { key: "event_name", label: "Event" },
+  { key: "event_date_iso", label: "Event date" },
+  { key: "venue", label: "Venue", cls: "col-venue" },
+  { key: "where", label: "Section / Row / Seats" },
+  { key: "qty", label: "Qty", num: true },
+  { key: "cost_per_unit", label: "$ / tkt", num: true },
+  { key: "total_cost", label: "Total", num: true },
+  { key: "platform", label: "Platform" },
+  { key: "account", label: "Account", cls: "col-account" },
+  { key: "source", label: "Source" },
+  { key: "status", label: "Status", cls: "col-status" },
+];
+const STORE_KEY = "kartis.purchases.v1";
+const FILTER_IDS = ["q", "fSource", "fPlatform", "fAccount", "fWhen", "fFrom", "fTo", "fGroup", "fUnmapped", "fHidden"];
+
+let ITEMS = [], TODAY = "", sortKey = "purchased_on", sortDir = -1, openKey = null, lastView = [];
+
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function money(v) { return v == null ? "—" : "$" + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function money0(v) { return "$" + Math.round(v || 0).toLocaleString(); }
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return iso;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+function where(r) { return [r.section, r.row && ("Row " + r.row), r.seats && ("Seats " + r.seats)].filter(Boolean).join(" · "); }
+function rkey(r) { return r.source + ":" + r.source_id; }
+function isPast(r) { return !!(r.event_date_iso && TODAY && r.event_date_iso < TODAY); }
+
+function saveFilters() {
+  const o = { sortKey, sortDir };
+  for (const id of FILTER_IDS) { const el = document.getElementById(id); o[id] = el.type === "checkbox" ? el.checked : el.value; }
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(o)); } catch (e) {}
+}
+function restoreFilters() {
+  let o = null;
+  try { o = JSON.parse(localStorage.getItem(STORE_KEY) || "null"); } catch (e) {}
+  if (!o) return;
+  for (const id of FILTER_IDS) {
+    const el = document.getElementById(id);
+    if (!(id in o)) continue;
+    if (el.type === "checkbox") el.checked = !!o[id];
+    else if (el.tagName !== "SELECT" || [...el.options].some(op => op.value === o[id])) el.value = o[id];
+    else el.dataset.pending = o[id];
+  }
+  if (o.sortKey) { sortKey = o.sortKey; sortDir = o.sortDir || -1; }
+}
+function resetFilters() {
+  for (const id of FILTER_IDS) { const el = document.getElementById(id); if (el.type === "checkbox") el.checked = false; else el.value = ""; }
+  document.getElementById("fRange").value = "";
+  sortKey = "purchased_on"; sortDir = -1;
+  render();
+}
+function applyRange() {
+  const v = document.getElementById("fRange").value, from = document.getElementById("fFrom"), to = document.getElementById("fTo");
+  if (!v) { from.value = ""; to.value = ""; }
+  else if (v === "ytd") { from.value = TODAY.slice(0, 4) + "-01-01"; to.value = ""; }
+  else { const d = new Date(TODAY + "T00:00:00"); d.setDate(d.getDate() - Number(v)); from.value = d.toISOString().slice(0, 10); to.value = ""; }
+  render();
+}
+
+function fillSelect(id, values, labeler) {
+  const el = document.getElementById(id), keep = el.value || el.dataset.pending || "";
+  const first = el.options[0].outerHTML;
+  el.innerHTML = first + values.map(v => `<option value="${esc(v)}">${esc(labeler ? labeler(v) : v)}</option>`).join("");
+  if ([...el.options].some(o => o.value === keep)) el.value = keep;
+  delete el.dataset.pending;
+}
+
+async function load() {
+  document.getElementById("meta").textContent = "loading…";
+  try {
+    const r = await fetch("/api/purchases");
+    const data = await r.json();
+    ITEMS = data.items || [];
+    TODAY = data.today || new Date().toISOString().slice(0, 10);
+    const pb = document.getElementById("pendingBanner");
+    if (data.pending_count) {
+      pb.innerHTML = `${data.pending_count} purchase email${data.pending_count === 1 ? "" : "s"} waiting to be confirmed. They aren't counted here until confirmed on <a href="/pending">Pending</a>.`;
+      pb.style.display = "";
+    } else pb.style.display = "none";
+    const uniq = k => [...new Set(ITEMS.map(i => i[k]).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
+    fillSelect("fSource", Object.keys(SOURCE_LABEL).filter(s => ITEMS.some(i => i.source === s)), s => SOURCE_LABEL[s]);
+    fillSelect("fPlatform", uniq("platform"));
+    fillSelect("fAccount", uniq("account"));
+    render();
+  } catch (e) {
+    document.getElementById("meta").textContent = "load failed: " + e;
+  }
+}
+
+function filtered() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const src = document.getElementById("fSource").value;
+  const plat = document.getElementById("fPlatform").value;
+  const acct = document.getElementById("fAccount").value;
+  const when = document.getElementById("fWhen").value;
+  const from = document.getElementById("fFrom").value;
+  const to = document.getElementById("fTo").value;
+  const withUnmapped = document.getElementById("fUnmapped").checked || src === "unmapped";
+  const withHidden = document.getElementById("fHidden").checked;
+  const terms = q ? q.split(/\s+/) : [];
+  return ITEMS.filter(r => {
+    if (r.hidden && !withHidden) return false;
+    if (r.source === "unmapped" && !withUnmapped) return false;
+    if (src && r.source !== src) return false;
+    if (plat && r.platform !== plat) return false;
+    if (acct && r.account !== acct) return false;
+    if (when === "upcoming" && (isPast(r) || !r.event_date_iso)) return false;
+    if (when === "past" && !isPast(r)) return false;
+    if (from && (!r.purchased_on || r.purchased_on < from)) return false;
+    if (to && (!r.purchased_on || r.purchased_on > to)) return false;
+    if (terms.length) {
+      const hay = [r.event_name, r.venue, r.section, r.row, r.seats, r.account, r.platform, r.order_ref, r.status, r.note, SOURCE_LABEL[r.source]].join(" ").toLowerCase();
+      if (!terms.every(t => hay.includes(t))) return false;
+    }
+    return true;
+  });
+}
+
+function sortVal(r, k) {
+  if (k === "where") return where(r).toLowerCase();
+  const v = r[k];
+  if (v == null || v === "") return null;
+  return typeof v === "string" ? v.toLowerCase() : v;
+}
+function sorted(rows) {
+  return rows.slice().sort((a, b) => {
+    const x = sortVal(a, sortKey), y = sortVal(b, sortKey);
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;  // blanks always last
+    if (y == null) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * sortDir;
+  });
+}
+function setSort(k) {
+  if (sortKey === k) sortDir = -sortDir;
+  else { sortKey = k; sortDir = ["purchased_on", "total_cost", "cost_per_unit", "qty"].includes(k) ? -1 : 1; }
+  render();
+}
+
+function sum(rows) {
+  let n = 0, tix = 0, cost = 0, noCost = 0;
+  for (const r of rows) {
+    n++; tix += r.qty || 0;
+    if (r.total_cost == null) noCost++; else cost += r.total_cost;
+  }
+  return { n, tix, cost, noCost };
+}
+
+function groupKey(r, g) {
+  if (g === "event") return r.event_group || (r.event_name + "|" + (r.event_date_iso || ""));
+  if (g === "month") return r.purchased_on ? r.purchased_on.slice(0, 7) : "";
+  if (g === "account") return r.account || "";
+  if (g === "platform") return r.platform || "";
+  if (g === "source") return r.source;
+  return "";
+}
+function groupLabel(r, g, k) {
+  if (g === "event") return `${esc(r.event_name || "(no name)")} <span class="gsub">${esc(fmtDate(r.event_date_iso))}${r.venue ? " · " + esc(r.venue) : ""}</span>`;
+  if (g === "month") return k ? esc(new Date(k + "-01T00:00:00").toLocaleDateString(undefined, { month: "long", year: "numeric" })) : "No purchase date";
+  if (g === "source") return esc(SOURCE_LABEL[k] || k);
+  return k ? esc(k) : "(none)";
+}
+
+function rowHtml(r) {
+  const k = rkey(r), open = openKey === k;
+  const cls = ["p-row", isPast(r) ? "past" : "", r.hidden ? "is-hidden" : "", open ? "open" : ""].join(" ");
+  const edited = r.edited && r.edited.length ? `<span class="tag" title="Edited on the inventory page: ${esc(r.edited.join(", "))}">✎</span>` : "";
+  const orig = r.orig ? `<span class="tag" title="Paid ${esc(r.orig.currency)} ${esc(r.orig.cost_per_unit)} / tkt">${esc(r.orig.currency)}</span>` : "";
+  let html = `<tr class="${cls}" data-k="${esc(k)}">
+    <td class="nowrap">${esc(fmtDate(r.purchased_on)) || '<span class="muted">—</span>'}</td>
+    <td>${esc(r.event_name)}${edited}</td>
+    <td class="nowrap">${esc(fmtDate(r.event_date_iso))}</td>
+    <td class="col-venue">${esc(r.venue)}</td>
+    <td>${esc(where(r))}</td>
+    <td class="num">${r.qty || 0}</td>
+    <td class="num">${money(r.cost_per_unit)}${orig}</td>
+    <td class="num">${r.total_cost == null ? '<span class="warn" title="No cost recorded">—</span>' : money(r.total_cost)}</td>
+    <td>${esc(r.platform)}</td>
+    <td class="col-account">${esc(r.account)}</td>
+    <td><span class="src src-${esc(r.source)}">${esc(SOURCE_LABEL[r.source] || r.source)}</span></td>
+    <td class="col-status">${esc(r.status)}${r.hidden ? ' <span class="tag">hidden</span>' : ""}</td>
+  </tr>`;
+  if (open) html += detailHtml(r);
+  return html;
+}
+function detailHtml(r) {
+  const f = (k, v) => v === "" || v == null ? "" : `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  const link = r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.link.replace(/^https?:\/\//, "").slice(0, 60))}</a>` : "";
+  const orig = r.orig ? `${esc(r.orig.currency)} ${esc(r.orig.cost_per_unit)} / tkt` + (r.orig.fx_rate ? ` @ ${Number(r.orig.fx_rate).toFixed(4)}` : "") : "";
+  const files = (r.attachments || []).map(a => `<a href="/api/attachments/${encodeURIComponent(a.id)}/download" target="_blank">📎 ${esc(a.filename)}</a>`).join("");
+  return `<tr class="detail"><td colspan="${COLS.length}">
+    <div class="dgrid">
+      ${f("Event", esc(r.event_name))}
+      ${f("Event date", esc(fmtDate(r.event_date_iso)))}
+      ${f("Venue", esc(r.venue))}
+      ${f("Section", esc(r.section))}
+      ${f("Row", esc(r.row))}
+      ${f("Seats", esc(r.seats))}
+      ${f("Quantity", r.qty)}
+      ${f("Cost / ticket", money(r.cost_per_unit))}
+      ${f("Total cost", money(r.total_cost))}
+      ${f("Paid in", orig)}
+      ${f("Bought", esc(fmtDate(r.purchased_on)))}
+      ${f("Platform", esc(r.platform))}
+      ${f("Account", esc(r.account))}
+      ${f("Order", esc(r.order_ref))}
+      ${f("Status", esc(r.status))}
+      ${f("Link", link)}
+      ${f("Note", esc(r.note))}
+      ${f("Recorded in", `<a href="${SOURCE_PAGE[r.source] || "/"}">${esc(SOURCE_LABEL[r.source] || r.source)}</a> <span class="muted">${esc(r.source_id)}</span>`)}
+      ${r.overlap_risk ? f("Heads up", "Unmapped tickets are a hand-kept list and may repeat a purchase recorded elsewhere.") : ""}
+    </div>
+    ${files ? `<div class="dfiles">${files}</div>` : ""}
+  </td></tr>`;
+}
+
+function renderStats(rows) {
+  const all = sum(rows);
+  const up = sum(rows.filter(r => r.event_date_iso && !isPast(r)));
+  const month = TODAY.slice(0, 7);
+  const tm = sum(rows.filter(r => (r.purchased_on || "").startsWith(month)));
+  const avg = all.tix ? all.cost / all.tix : 0;
+  document.getElementById("stats").innerHTML = [
+    ["Purchases", all.n.toLocaleString(), all.noCost ? `${all.noCost} without a cost` : ""],
+    ["Tickets", all.tix.toLocaleString(), ""],
+    ["Total spent", money0(all.cost), ""],
+    ["Avg / ticket", money(avg), ""],
+    ["Upcoming events", money0(up.cost), `${up.tix.toLocaleString()} tickets`],
+    ["Bought this month", money0(tm.cost), `${tm.tix.toLocaleString()} tickets`],
+  ].map(([k, v, s]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
+}
+
+function breakdown(id, rows, keyFn, labelFn, order) {
+  const m = new Map();
+  for (const r of rows) {
+    const k = keyFn(r);
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(r);
+  }
+  let ent = [...m.entries()].map(([k, rs]) => [k, sum(rs)]);
+  ent.sort(order || ((a, b) => b[1].cost - a[1].cost));
+  const max = Math.max(1, ...ent.map(e => e[1].cost));
+  document.getElementById(id).innerHTML = `<thead><tr><th></th><th class="num" style="width:54px">Buys</th><th class="num" style="width:66px">Tickets</th><th class="num" style="width:76px">Spent</th><th style="width:22%"></th></tr></thead><tbody>` +
+    (ent.length ? ent.map(([k, s]) => `<tr><td>${labelFn(k)}</td><td class="num">${s.n}</td><td class="num">${s.tix}</td><td class="num">${money0(s.cost)}</td><td><div class="bar" style="width:${(s.cost / max * 100).toFixed(1)}%"></div></td></tr>`).join("")
+      : `<tr><td colspan="5" class="empty">Nothing to show</td></tr>`) + `</tbody>`;
+}
+
+function render() {
+  saveFilters();
+  document.getElementById("thead").innerHTML = COLS.map(c =>
+    `<th class="${[c.num ? "num" : "", c.cls || "", sortKey === c.key ? "sorted" : ""].join(" ")}" onclick="setSort('${c.key}')">${c.label}${sortKey === c.key ? `<span class="arr">${sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("");
+  const rows = sorted(filtered());
+  lastView = rows;
+  const g = document.getElementById("fGroup").value;
+  let html = "";
+  if (!rows.length) html = `<tr><td class="empty" colspan="${COLS.length}">${ITEMS.length ? "No purchases match these filters." : "No purchases recorded yet."}</td></tr>`;
+  else if (!g) html = rows.map(rowHtml).join("");
+  else {
+    const groups = new Map();
+    for (const r of rows) { const k = groupKey(r, g); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+    let ent = [...groups.entries()];
+    if (g === "month") ent.sort((a, b) => (b[0] || "").localeCompare(a[0] || ""));
+    else if (g === "event") ent.sort((a, b) => (a[1][0].event_date_iso || "9999").localeCompare(b[1][0].event_date_iso || "9999"));
+    else ent.sort((a, b) => sum(b[1]).cost - sum(a[1]).cost);
+    for (const [k, rs] of ent) {
+      const s = sum(rs);
+      html += `<tr class="grp"><td colspan="5">${groupLabel(rs[0], g, k)}</td><td class="num">${s.tix}</td><td class="num">${s.tix ? money(s.cost / s.tix) : ""}</td><td class="num">${money(s.cost)}</td><td colspan="4" class="muted">${s.n} purchase${s.n === 1 ? "" : "s"}</td></tr>`;
+      html += rs.map(rowHtml).join("");
+    }
+  }
+  document.getElementById("tbody").innerHTML = html;
+  renderStats(rows);
+  breakdown("bySource", rows, r => r.source, k => `<span class="src src-${esc(k)}">${esc(SOURCE_LABEL[k] || k)}</span>`);
+  breakdown("byMonth", rows, r => r.purchased_on ? r.purchased_on.slice(0, 7) : "",
+    k => k ? esc(new Date(k + "-01T00:00:00").toLocaleDateString(undefined, { month: "short", year: "numeric" })) : '<span class="muted">No date</span>',
+    (a, b) => (b[0] || "").localeCompare(a[0] || ""));
+  breakdown("byAccount", rows, r => r.account || "", k => k ? esc(k) : '<span class="muted">(none)</span>');
+  const tot = ITEMS.filter(r => !r.hidden).length;
+  document.getElementById("meta").textContent = `${rows.length} of ${tot} purchases`;
+}
+
+document.getElementById("tbody").addEventListener("click", e => {
+  if (e.target.closest("a")) return;
+  const tr = e.target.closest("tr.p-row");
+  if (!tr) return;
+  openKey = openKey === tr.dataset.k ? null : tr.dataset.k;
+  render();
+});
+
+function exportCsv() {
+  const cols = ["purchased_on", "event_name", "event_date_iso", "venue", "section", "row", "seats", "qty", "cost_per_unit", "total_cost", "platform", "account", "source", "status", "order_ref", "link", "note"];
+  const q = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const lines = [cols.join(",")].concat(lastView.map(r => cols.map(c => q(r[c])).join(",")));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `purchases-${TODAY || "export"}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+restoreFilters();
+load();
+</script>
+</body>
+</html>

@@ -4510,6 +4510,215 @@ def api_unmapped_attach():
     return jsonify({"ok": True, "attachment": row})
 
 
+# --- Purchases ledger ----------------------------------------------------
+# Read-only, cross-source view of everything we BOUGHT, sold or not. The
+# inventory page only shows what is still unsold; this keeps the purchase
+# record after the tickets move. Costs are USD throughout (manual_inventory
+# and series rows are converted at intake; DICE rows are converted here).
+# Dedup rules, so one physical purchase is counted once:
+#   - a manual row matched to a Lysted purchase is represented by that row;
+#   - a /series row whose intake_id was also confirmed into manual_inventory
+#     is the same email, so the manual row wins.
+# Unmapped tickets are a scratch list that can overlap anything, so they are
+# flagged `overlap_risk` and the page leaves them out of totals by default.
+_PURCHASE_TEXT_OVERRIDES = ("event_name", "venue", "section", "row", "seats")
+
+
+def _purchase_day(text):
+    """Best-effort YYYY-MM-DD out of the assorted purchase-date formats
+    (ISO timestamps, Lysted's 'Sep 12, 2026', JeruJam's sheet strings)."""
+    if not text:
+        return None
+    s = str(text).strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        return s[:10]
+    return _parse_event_date(s)
+
+
+def _build_purchases():
+    hidden = db.all_hidden_keys()
+    overrides = db.all_inv_overrides()
+    rows = []
+
+    def add(source, sid, **f):
+        qty = f.get("qty") or 0
+        cpu = f.get("cost_per_unit")
+        total = f.get("total_cost")
+        if total is None and cpu is not None:
+            total = round(cpu * qty, 2)
+        if cpu is None and total is not None and qty:
+            cpu = round(total / qty, 2)
+        row = {
+            "source": source,
+            "source_id": str(sid),
+            "purchased_on": f.get("purchased_on"),
+            "event_name": f.get("event_name") or "",
+            "event_date_iso": _date_only(f.get("event_date_iso")) or None,
+            "venue": f.get("venue") or "",
+            "section": f.get("section") or "",
+            "row": f.get("row") or "",
+            "seats": f.get("seats") or "",
+            "qty": qty,
+            "cost_per_unit": cpu,
+            "total_cost": total,
+            "platform": f.get("platform") or "",
+            "account": f.get("account") or "",
+            "status": f.get("status") or "",
+            "order_ref": f.get("order_ref") or "",
+            "link": f.get("link") or "",
+            "note": f.get("note") or "",
+            "orig": f.get("orig"),
+            "hidden": (source, str(sid)) in hidden,
+            "overlap_risk": source == "unmapped",
+        }
+        ov = overrides.get((source, str(sid)))
+        if ov:
+            edited = []
+            for k in _PURCHASE_TEXT_OVERRIDES:
+                if k in ov and ov[k] not in (None, ""):
+                    row[k] = ov[k]
+                    edited.append(k)
+            if ov.get("cost_per_unit") not in (None, ""):
+                try:
+                    row["cost_per_unit"] = float(ov["cost_per_unit"])
+                    row["total_cost"] = round(row["cost_per_unit"] * qty, 2)
+                    edited.append("cost_per_unit")
+                except (TypeError, ValueError):
+                    pass
+            if edited:
+                row["edited"] = edited
+        rows.append(row)
+
+    for r in db.all_lysted_purchases():
+        add("lysted", r.get("id"),
+            purchased_on=_purchase_day(r.get("order_date")),
+            event_name=r.get("event_name"), event_date_iso=_resolve_iso(r),
+            venue=r.get("venue"), section=r.get("section"), row=r.get("row_label"),
+            seats=r.get("seats"), qty=r.get("qty"),
+            cost_per_unit=r.get("cost_per_unit"), total_cost=r.get("total_cost"),
+            platform=r.get("delivery_type"), account=r.get("account_email"),
+            status=r.get("status"), order_ref=r.get("order_id"))
+
+    manual_intakes = set()
+    for m in db.all_manual_inventory():
+        if m.get("matched_source") == "lysted":
+            continue
+        if m.get("intake_id"):
+            manual_intakes.add(m["intake_id"])
+        orig = None
+        if m.get("orig_currency") and m.get("orig_currency") != "USD":
+            orig = {"currency": m["orig_currency"],
+                    "cost_per_unit": m.get("orig_cost_per_unit"),
+                    "fx_rate": m.get("fx_rate")}
+        add("manual", m.get("id"),
+            purchased_on=_purchase_day(m.get("created_at")),
+            event_name=m.get("event_name"), event_date_iso=_resolve_iso(m),
+            venue=m.get("venue"), section=m.get("section"), row=m.get("row_label"),
+            seats=m.get("seats"), qty=m.get("qty"),
+            cost_per_unit=m.get("cost_per_unit"),
+            platform=m.get("provider") or ("email" if m.get("intake_id") else "manual"),
+            account=m.get("buyer_email") or m.get("email"),
+            status=("listed on " + m["matched_source"]) if m.get("matched_source") else "not listed",
+            link=m.get("ticket_url"), note=m.get("note"), orig=orig)
+
+    for t in db.all_jerujam_tickets():
+        add("jerujam", t.get("id"),
+            purchased_on=_purchase_day(t.get("purchase_date")),
+            event_name=t.get("event_name"), event_date_iso=_resolve_iso(t),
+            venue=t.get("venue"), section=t.get("section"), row=t.get("row_label"),
+            seats=t.get("seat_numbers"), qty=t.get("quantity"),
+            cost_per_unit=t.get("cost_per_ticket"),
+            total_cost=t.get("total_purchase_cost"),
+            platform=t.get("purchase_platform"), account=t.get("purchase_account"),
+            status=t.get("status"), note=t.get("notes"))
+
+    dice_linked = db.dice_linked_qty_by_purchase()
+    for p in db.dice_purchases_all():
+        cur = (p.get("currency") or "USD").upper()
+        cpu, total, orig = p.get("price_per_unit"), p.get("price_total"), None
+        if cur != "USD":
+            orig = {"currency": cur, "cost_per_unit": cpu}
+            try:
+                rate = fx.to_usd_rate(cur)
+                orig["fx_rate"] = rate
+                cpu = round(cpu * rate, 2) if cpu is not None else None
+                total = round(total * rate, 2) if total is not None else None
+            except Exception:
+                cpu = total = None  # never show a foreign amount as dollars
+        qty = p.get("qty") or 0
+        sold = dice_linked.get(p.get("id"), 0)
+        add("dice", p.get("id"),
+            purchased_on=_purchase_day(p.get("email_date") or p.get("created_at")),
+            event_name=p.get("event_name"), event_date_iso=p.get("event_date_iso"),
+            venue=p.get("venue"), section=p.get("ticket_type"), qty=qty,
+            cost_per_unit=cpu, total_cost=total, platform="DICE",
+            account=p.get("account_email"),
+            status=f"{sold}/{qty} sold" if sold else "unsold",
+            link=f"https://dice.fm/event/{p['event_slug']}" if p.get("event_slug") else "",
+            orig=orig)
+
+    for s in db.series_purchases_every():
+        if s.get("intake_id") and s["intake_id"] in manual_intakes:
+            continue
+        add("series", s.get("id"),
+            purchased_on=_purchase_day(s.get("created_at")),
+            event_name=s.get("series") or "NEXT",
+            event_date_iso=s.get("event_date_iso"), venue=s.get("venue"),
+            section=s.get("section"), row=s.get("row_label"), seats=s.get("seats"),
+            qty=s.get("qty"), cost_per_unit=s.get("unit_cost"),
+            total_cost=s.get("total_cost"),
+            platform=f"{s.get('series') or 'NEXT'} ({s.get('source') or 'sheet'})",
+            account=s.get("account"),
+            status=(f"listed on {s.get('marketplace') or 'viagogo'}" if s.get("listed")
+                    else "not listed"),
+            note=s.get("note"))
+
+    for u in db.all_unmapped_tickets():
+        add("unmapped", u.get("id"),
+            purchased_on=_purchase_day(u.get("created_at")),
+            event_name=u.get("event_name"), event_date_iso=_resolve_iso(u),
+            venue=u.get("venue"), section=u.get("section"), row=u.get("row_label"),
+            seats=u.get("seats"), qty=u.get("qty"),
+            cost_per_unit=u.get("cost_per_unit"),
+            platform=u.get("purchase_source"),
+            account=u.get("account") or u.get("email"),
+            status="listed" if u.get("listed") else "not listed",
+            link=u.get("link"), note=u.get("notes"))
+
+    groups = _event_groups()
+    for r in rows:
+        r["event_group"] = _row_group(groups, r["event_name"], r["event_date_iso"], r["venue"])
+    _apply_group_displays(rows, _event_group_displays())
+    return rows
+
+
+@app.route("/purchases")
+def purchases_page():
+    return render_template("purchases.html")
+
+
+@app.route("/api/purchases")
+def api_purchases():
+    rows = _build_purchases()
+    # Receipts/PDFs: manual rows carry their own uploads plus whatever came
+    # in on the intake email; unmapped rows have their own owner type.
+    att = {
+        "manual": db.list_attachments_for_owners(
+            "manual_inventory", [r["source_id"] for r in rows if r["source"] == "manual"]),
+        "unmapped": db.list_attachments_for_owners(
+            "unmapped", [r["source_id"] for r in rows if r["source"] == "unmapped"]),
+    }
+    intake_of = {str(m["id"]): m.get("intake_id") for m in db.all_manual_inventory() if m.get("intake_id")}
+    intake_att = db.list_attachments_for_owners("manual_intake", list(intake_of.values()))
+    for r in rows:
+        files = list(att.get(r["source"], {}).get(r["source_id"], []))
+        if r["source"] == "manual" and intake_of.get(r["source_id"]):
+            files += intake_att.get(intake_of[r["source_id"]], [])
+        r["attachments"] = [{"id": a["id"], "filename": a["filename"]} for a in files]
+    return jsonify({"items": rows, "pending_count": len(db.all_pending_intake(status="new")),
+                    "today": date.today().isoformat()})
+
+
 # --- Cashback ledger -----------------------------------------------------
 # Manual log of credit-card cashback rewards. Purely informational — does
 # not feed into Maaser (user opted out: cashback is treated as a rebate,

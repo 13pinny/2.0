@@ -4733,3 +4733,12 @@ def series_purchase_update(pid, fields, now_iso):
 def series_purchase_delete(pid):
     with connect() as conn:
         conn.execute("DELETE FROM series_purchases WHERE id=?", (pid,))
+
+
+def series_purchases_every():
+    """Every series_purchases row across all series (the /purchases ledger)."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM series_purchases ORDER BY event_date_iso, series, section, row_label"
+        ).fetchall()
+    return [dict(r) for r in rows]
