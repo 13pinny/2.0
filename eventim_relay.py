@@ -1,4 +1,5 @@
-"""Desktop relay for the Eventim tracker on /edm (DESKTOP only).
+"""Desktop relay for the Eventim tracker on /edm and the Marquee (tao) pages
+on /marquee (DESKTOP only).
 
 Cloudflare challenges the VPS on every route to eventim.us — plain HTTP with
 the full Chrome header set, and a real Chrome on the box alike — while the same
@@ -8,6 +9,13 @@ Chrome, and POST the rendered HTML to /api/edm/eventim-relay. The server's EDM
 tick reads it from there (eventim_events.fetch_event), so diffing, Discord pings
 and the /edm page work exactly as for every other source. Add / remove events
 on /edm; nothing here needs editing.
+
+Marquee: tickets.taogroup.com shows a Cloudflare check to every non-browser
+request (the VPS, a residential proxy, even this PC's plain HTTP), so the
+targets list also carries every tracked tao event (source "tao"), loaded the
+same way and posted back with its source. A real browser load only -- nothing
+here solves or skips a challenge; a page that doesn't show its tickets within
+the wait is logged and skipped.
 
 Chrome: its own profile (%LOCALAPPDATA%\\eventim-relay-chrome) on CDP :9333,
 launched minimized when it isn't already running. It is NOT the :9222 scraper
@@ -68,14 +76,21 @@ def ensure_chrome():
     raise RuntimeError(f"Chrome didn't open CDP on :{CDP_PORT}")
 
 
-def render(ctx, url):
+# What a loaded page shows once its tickets are on screen, per source.
+READY_SELECTOR = {
+    "eventim": "ul.ticket-list .ticket-type",
+    "tao": "#ticket-types-content .ticket-type-item",
+}
+
+
+def render(ctx, url, source="eventim"):
     pg = ctx.new_page()
     try:
         pg.goto(url, timeout=60000, wait_until="domcontentloaded")
         # A Cloudflare check on a home IP usually clears itself in a few
         # seconds; give it that long before calling the page tierless.
         try:
-            pg.wait_for_selector("ul.ticket-list .ticket-type", timeout=25000)
+            pg.wait_for_selector(READY_SELECTOR[source], timeout=25000)
         except Exception:
             return None, pg.title()
         return pg.content(), pg.title()
@@ -100,8 +115,11 @@ def main():
         # Never browser.close() — on a CDP connection that closes the user's Chrome.
         ctx = p.chromium.connect_over_cdp(CDP).contexts[0]
         for t in targets:
+            source = t.get("source") or "eventim"
+            if source not in READY_SELECTOR:
+                continue
             try:
-                html, title = render(ctx, t["url"])
+                html, title = render(ctx, t["url"], source)
             except Exception as e:
                 log(f"{t['event_key']}: load failed {type(e).__name__}: {e}")
                 continue
@@ -109,7 +127,8 @@ def main():
                 log(f"{t['event_key']}: no ticket list (page title {title!r})")
                 continue
             status, raw = cv_link_client.call("/api/edm/eventim-relay",
-                                              {"event_key": t["event_key"], "html": html})
+                                              {"source": source, "event_key": t["event_key"],
+                                               "html": html})
             log(f"{t['event_key']}: HTTP {status} {raw[:160]}")
     return 0
 

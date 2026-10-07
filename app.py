@@ -6840,24 +6840,36 @@ def api_eventim_relay_targets():
     if err:
         return err
     _last_edm_events["relay_seen_at"] = datetime.now(timezone.utc).isoformat()
-    rows = [r for r in db.edm_tracked_all(include_paused=False)
-            if r["source"] == eventim_events.SOURCE_NAME]
-    return jsonify({"targets": [{"event_key": r["event_key"],
-                                 "url": r.get("url") or eventim_events.fetch_url(r["event_key"])}
-                                for r in rows]})
+    rows = db.edm_tracked_all(include_paused=False)
+    targets = [{"source": "eventim", "event_key": r["event_key"],
+                "url": r.get("url") or eventim_events.fetch_url(r["event_key"])}
+               for r in rows if r["source"] == eventim_events.SOURCE_NAME]
+    # tao (Marquee) pages sit behind a browser-only check too -- see the
+    # DESKTOP RELAY note in tao_events. Past shows drop out of the poll list
+    # with the catalog sync, so every row here is worth loading.
+    import tao_events
+    targets += [{"source": "tao", "event_key": r["event_key"],
+                 "url": tao_events.event_page_url(r["event_key"])}
+                for r in rows if r["source"] == tao_events.SOURCE_NAME]
+    return jsonify({"targets": targets})
 
 
 @app.route("/api/edm/eventim-relay", methods=["POST"])
 def api_eventim_relay():
-    """Desktop relay drop-off: {event_key, html}. Stored for the next EDM
-    tick to read (see eventim_events' DESKTOP RELAY note)."""
+    """Desktop relay drop-off: {source?, event_key, html}; source "tao" for
+    Marquee pages, else eventim. Stored for the next EDM tick to read (see
+    the DESKTOP RELAY notes in eventim_events / tao_events)."""
     from flask import request
     body = request.get_json(silent=True) or {}
     err = _cvauth_secret_error()
     if err:
         return err
+    store = eventim_events.relay_store
+    if body.get("source") == "tao":
+        import tao_events
+        store = tao_events.relay_store
     try:
-        n = eventim_events.relay_store(body.get("event_key") or "", body.get("html") or "")
+        n = store(body.get("event_key") or "", body.get("html") or "")
     except (EdmEventsError, ValueError) as e:
         return jsonify({"error": str(e)}), 422
     return jsonify({"ok": True, "tiers": n})
