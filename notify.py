@@ -1102,6 +1102,57 @@ def notify_dice(kind, info):
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
+def notify_dice_price(kind, info):
+    """Tracked-DICE-event ping from dice_alerts.py. `kind` is the most urgent
+    change ('restock' / 'price_down' / 'soldout' / 'price_up' / 'type_soldout'
+    / 'onsale');
+    info["lines"] lists every change. Routed like the EDM pings: restock and
+    price drops to shocks, sell-outs to status, climbs to jumps, on-sale to
+    new_events."""
+    if kind in ("price_down", "restock"):
+        discord_url = _pacha_shocks_webhook()
+    elif kind == "price_up":
+        discord_url = _discord_webhook("jumps")
+    elif kind in ("soldout", "type_soldout"):
+        discord_url = _discord_webhook("status")
+    else:
+        discord_url = _discord_webhook("new_events")
+    if not discord_url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+    name = info.get("name") or "DICE event"
+    sym = {"USD": "$", "GBP": "£", "EUR": "€"}.get(info.get("currency") or "USD", "")
+    old_p, new_p = info.get("old_min_price"), info.get("min_price")
+    if kind == "restock":
+        title, color = f"⚡ DICE: {name} is BACK on sale", 0x00B0F4
+    elif kind == "soldout":
+        title, color = f"🚫 DICE: {name} sold out — waitlist only", 0x99AAB5
+    elif kind == "onsale":
+        title, color = f"🎟️ DICE: {name} is ON SALE", 0x56D364
+    elif kind == "type_soldout":
+        title, color = f"⏳ DICE: {name} — a ticket type sold out", 0xED4245
+    elif kind == "price_down":
+        title = (f"⚡ DICE: {name} {sym}{old_p:,.0f} → {sym}{new_p:,.0f}"
+                 if old_p is not None and new_p is not None and new_p < old_p
+                 else f"⚡ DICE: {name} price DROPPED")
+        color = 0x00B0F4
+    else:
+        title = (f"📈 DICE: {name} {sym}{old_p:,.0f} → {sym}{new_p:,.0f}"
+                 if old_p is not None and new_p is not None and new_p > old_p
+                 else f"📈 DICE: {name} price went up")
+        color = 0xFAA61A
+    where = " · ".join(x for x in (info.get("venue"), info.get("date_text")) if x)
+    lines = ([f"**{where}**"] if where else []) + list(info.get("lines") or [])
+    if info.get("url"):
+        lines.append(f"[Open on DICE]({info['url']})")
+    embed = {"title": title[:250], "description": "\n".join(lines)[:4000], "color": color}
+    if info.get("url"):
+        embed["url"] = info["url"]
+    payload = {"embeds": [embed]}
+    if kind in ("price_down", "restock", "price_up", "soldout", "type_soldout"):
+        payload["content"] = title[:1990]  # the phone push shows only content
+    return {"discord": _post_discord(discord_url, payload)}
+
+
 _SITE_EVENT_LABELS = {"kupat": "Kupat", "tm": "Ticketmaster IL", "zappa": "Zappa",
                       "barby": "Barby"}
 
