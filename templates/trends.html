@@ -37,7 +37,15 @@
   button { cursor: pointer; }
   button:hover { border-color: var(--accent); color: var(--accent); }
   button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
-  #q { min-width: 320px; flex: 1 1 320px; max-width: 520px; }
+  .filters { background: var(--bg-2); border: 1px solid var(--line); padding: 10px 14px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .frow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .flab { width: 84px; flex: 0 0 auto; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .fhint { font-size: 11px; }
+  #q, #addShow { min-width: 260px; flex: 1 1 260px; max-width: 460px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; background: #ddf4ff; border: 1px solid #b6d3f5; color: #0a3069; font-size: 11.5px; padding: 3px 4px 3px 9px; }
+  .chip button { border: 0; background: transparent; padding: 0 4px; font-size: 14px; line-height: 1; color: #0a3069; }
+  .chip button:hover { color: var(--red); }
   .sel-title { font-size: 20px; font-weight: 600; margin: 4px 0 14px; }
   .sel-title .sub { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 8px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
@@ -77,7 +85,8 @@
     main { padding: 14px 16px 50px; }
     header { padding: 12px 16px; }
     .cols { grid-template-columns: 1fr; }
-    #q { min-width: 0; }
+    #q, #addShow { min-width: 0; }
+    .flab { width: 100%; }
   }
 </style>
 </head>
@@ -93,11 +102,38 @@
 <main>
   <div id="err" class="err" style="display:none"></div>
 
-  <div class="picker">
-    <div class="presets" id="presets"></div>
-    <input id="q" list="events" placeholder="event name (comma = several), or pick a show…" autocomplete="off" />
-    <datalist id="events"></datalist>
-    <button id="go">Show</button>
+  <div class="filters">
+    <div class="frow">
+      <span class="flab">View</span>
+      <div class="presets" id="presets"></div>
+    </div>
+    <div class="frow">
+      <span class="flab">Shows</span>
+      <input id="addShow" list="events" placeholder="type to find a show, Enter to add…" autocomplete="off" />
+      <datalist id="events"></datalist>
+      <div class="chips" id="chips"></div>
+    </div>
+    <div class="frow">
+      <span class="flab">Keywords</span>
+      <input id="q" placeholder="e.g.  fisher, next rita, -vip" autocomplete="off" />
+      <span class="muted fhint">comma = or · words together = and · <b>-word</b> excludes</span>
+    </div>
+    <div class="frow">
+      <span class="flab">Show dates</span>
+      <input type="date" id="dFrom" /> <span class="muted">to</span> <input type="date" id="dTo" />
+      <div class="presets" id="datePresets">
+        <button data-d="past30">Last 30 days</button>
+        <button data-d="past90">Last 90 days</button>
+        <button data-d="upcoming">Upcoming</button>
+        <button data-d="year">This year</button>
+        <button data-d="any">Any date</button>
+      </div>
+    </div>
+    <div class="frow">
+      <span class="flab"></span>
+      <button id="go" class="on">Apply</button>
+      <button id="clear">Clear all</button>
+    </div>
   </div>
 
   <div class="sel-title" id="selTitle"></div>
@@ -129,7 +165,7 @@
     <h2>Days-out breakdown</h2>
     <div class="scroll"><table id="tBuckets"></table></div>
 
-    <h2>By show <span class="hint">click a row to drill into that show</span></h2>
+    <h2>By show <span class="hint">click a row to open just that show · Ctrl/⌘-click to add it to the selection</span></h2>
     <div class="scroll"><table id="tEvents"></table></div>
 
     <h2>Sales over time <span class="hint">tickets sold per calendar day</span></h2>
@@ -214,7 +250,7 @@ function yTicks(min, max, n) {
 // Vertical bar chart: items [{label, value, tip}], fmt for the label above.
 function barChart(el, items, fmt, opts = {}) {
   const W = opts.W || 560, H = opts.H || 230, L = 40, R = 8, T = 18, B = 34;
-  if (!items.length) { el.innerHTML = '<div class="muted" style="padding:20px">no data</div>'; return; }
+  if (!items.some(i => i.value != null)) { el.innerHTML = `<div class="muted" style="padding:20px">${esc(opts.empty || "no data")}</div>`; return; }
   const vals = items.map(i => i.value ?? 0);
   let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
   hi = hi > 0 ? niceMax(hi) : 0; lo = lo < 0 ? -niceMax(-lo) : 0;
@@ -358,7 +394,7 @@ function sortableTable(el, cols, rows, opts = {}) {
     el.querySelectorAll("th.sortable").forEach(th => th.onclick = () => {
       const k = th.dataset.k; if (sortK === k) dir = -dir; else { sortK = k; dir = -1; } render();
     });
-    if (opts.onClick) el.querySelectorAll("tr.click").forEach(tr => tr.onclick = () => opts.onClick(rows[+tr.dataset.i]));
+    if (opts.onClick) el.querySelectorAll("tr.click").forEach(tr => tr.onclick = (e) => opts.onClick(rows[+tr.dataset.i], e));
   }
   render();
 }
@@ -385,19 +421,13 @@ function render(d) {
   DATA = d;
   const t = d.totals, sel = d.selection;
   $("meta").textContent = `as of ${d.today} · ${t.events} show${t.events === 1 ? "" : "s"}`;
+  const range = sel.from || sel.to ? `shows ${sel.from || "…"} → ${sel.to || "…"}` : "";
+  const kind = sel.series ? "series · matched by date + venue, costs from /series blocks"
+    : (sel.groups.length || sel.q) ? "selection" : "every sale";
   $("selTitle").innerHTML = esc(d.title || "All sales") +
-    `<span class="sub">${sel.series ? "series · matched by date + venue, costs from /series blocks" : sel.group ? "one show" : sel.q ? "name match" : "every sale"}</span>`;
-  // presets
-  const pres = [`<button data-p="all" class="${!sel.series && !sel.group && !sel.q ? "on" : ""}">All sales</button>`]
-    .concat((d.catalog.series || []).map(n => `<button data-p="series:${esc(n)}" class="${sel.series === n ? "on" : ""}">${esc(n)} series</button>`));
-  $("presets").innerHTML = pres.join("");
-  $("presets").querySelectorAll("button").forEach(b => b.onclick = () => {
-    const p = b.dataset.p;
-    if (p === "all") load({});
-    else load({series: p.slice(7)});
-  });
-  $("events").innerHTML = (d.catalog.events || []).map(e =>
-    `<option value="${esc(e.event_name)} · ${esc(e.event_date_iso || "no date")}">${e.qty} sold${e.venue ? " · " + esc(e.venue) : ""}</option>`).join("");
+    `<span class="sub">${[kind, range].filter(Boolean).join(" · ")}</span>`;
+  CATALOG = d.catalog;
+  renderFilters();
 
   $("stats").innerHTML = [
     stat("Tickets sold", t.qty.toLocaleString(), "", `${t.orders} orders`),
@@ -428,7 +458,8 @@ function render(d) {
     `payout ${money(b.payout)} · ${money2(b.avg_payout)}/tkt<br>profit ${money(b.profit)} · ROI ${pct(b.roi)}`;
   barChart($("chBuckets"), bk.map(b => ({label: b.label.replace(" days", "d").replace(" day", "d"), value: b.qty, tip: bTip(b)})), v => Math.round(v).toLocaleString());
   barChart($("chRoi"), bk.map(b => ({label: b.label.replace(" days", "d").replace(" day", "d"), value: b.roi, tip: bTip(b)})),
-    v => (v > 0 ? "+" : "") + Math.round(v) + "%", {color: v => v >= 0 ? "var(--green)" : "var(--red)", axis: v => Math.round(v) + "%"});
+    v => (v > 0 ? "+" : "") + Math.round(v) + "%", {color: v => v >= 0 ? "var(--green)" : "var(--red)", axis: v => Math.round(v) + "%",
+     empty: "no costed sales in this selection - add costs on /sales to see ROI"});
   curveChart($("chCurve"), d.curve);
   scatterChart($("chScatter"), d.points);
 
@@ -443,8 +474,11 @@ function render(d) {
     {k: "first_days_out", label: "First sale", num: true, f: r => days(r.first_days_out)},
     {k: "holding_qty", label: "Held", num: true, f: r => r.holding_qty || ""},
     {k: "days_until", label: "Until show", num: true, f: r => r.days_until == null ? "" : (r.days_until < 0 ? "past" : r.days_until + "d")},
-  ], d.events, {sortK: "event_date_iso", dir: 1, onClick: r => {
-    if (r.key && !r.key.startsWith("|") && !r.key.startsWith("series:")) load({group: r.key});
+  ], d.events, {sortK: "event_date_iso", dir: 1, onClick: (r, e) => {
+    if (!r.key || r.key.startsWith("|") || r.key.startsWith("series:")) return;
+    // Plain click = just this show; Ctrl/Cmd/Shift-click = add or remove it.
+    if (e && (e.ctrlKey || e.metaKey || e.shiftKey)) toggleGroup(r.key);
+    else { SEL = {series: "", groups: [r.key], q: "", from: "", to: ""}; load(); }
   }});
 
   barChart($("chTimeline"), d.timeline.map(r => ({label: r.date.slice(5), value: r.qty,
@@ -483,31 +517,101 @@ function render(d) {
   ], d.sales, {sortK: "sale_date_iso"});
 }
 
-// ------------------------------------------------------------------- load ---
-function load(sel, push = true) {
+// ------------------------------------------------------------- selection ---
+// SEL is the single source of truth; the URL mirrors it so a view can be
+// bookmarked or shared.
+let SEL = {series: "", groups: [], q: "", from: "", to: ""};
+let CATALOG = {series: [], events: []};
+
+const showLabel = e => `${e.event_name} · ${e.event_date_iso || "no date"}`;
+function groupLabel(g) {
+  const e = (CATALOG.events || []).find(x => x.group === g);
+  return e ? showLabel(e) : g.split("|").slice(0, 2).join(" · ");
+}
+
+function renderFilters() {
+  const none = !SEL.series && !SEL.groups.length && !SEL.q;
+  $("presets").innerHTML = [`<button data-p="" class="${none ? "on" : ""}">All sales</button>`]
+    .concat((CATALOG.series || []).map(n => `<button data-p="${esc(n)}" class="${SEL.series === n ? "on" : ""}">${esc(n)} series</button>`)).join("");
+  $("presets").querySelectorAll("button").forEach(b => b.onclick = () => {
+    SEL = {series: b.dataset.p, groups: [], q: "", from: SEL.from, to: SEL.to}; load();
+  });
+  $("events").innerHTML = (CATALOG.events || []).filter(e => !SEL.groups.includes(e.group)).map(e =>
+    `<option value="${esc(showLabel(e))}">${e.qty} sold${e.venue ? " · " + esc(e.venue) : ""}</option>`).join("");
+  $("chips").innerHTML = SEL.groups.map((g, i) =>
+    `<span class="chip">${esc(groupLabel(g))}<button title="remove" data-i="${i}">×</button></span>`).join("");
+  $("chips").querySelectorAll("button").forEach(b => b.onclick = () => { SEL.groups.splice(+b.dataset.i, 1); load(); });
+  $("q").value = SEL.q;
+  $("dFrom").value = SEL.from;
+  $("dTo").value = SEL.to;
+}
+
+function toggleGroup(g) {
+  SEL.series = "";
+  const i = SEL.groups.indexOf(g);
+  if (i >= 0) SEL.groups.splice(i, 1); else SEL.groups.push(g);
+  load();
+}
+
+function readInputs() {
+  SEL.q = $("q").value.trim();
+  SEL.from = $("dFrom").value;
+  SEL.to = $("dTo").value;
+  if (SEL.q) SEL.series = "";   // keywords pick events by name; a series is matched by date
+}
+
+function load(push = true) {
   const qs = new URLSearchParams();
-  for (const k of ["series", "group", "q"]) if (sel[k]) qs.set(k, sel[k]);
+  if (SEL.series) qs.set("series", SEL.series);
+  for (const g of SEL.groups) qs.append("group", g);
+  if (SEL.q) qs.set("q", SEL.q);
+  if (SEL.from) qs.set("from", SEL.from);
+  if (SEL.to) qs.set("to", SEL.to);
   if (push) history.replaceState(null, "", "/trends?" + (qs.toString() || "all=1"));
-  $("q").value = sel.q || "";
+  renderFilters();
   $("meta").textContent = "loading…";
   fetch("/api/trends?" + qs).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
     .then(render)
     .catch(e => { $("err").style.display = ""; $("err").textContent = "Failed to load: " + e.message; $("meta").textContent = ""; });
 }
 
-function submitQuery() {
-  const v = $("q").value.trim();
-  if (!v) return load({});
-  // A pick from the datalist ("Name · 2026-10-10") jumps to that one show.
-  const hit = (DATA?.catalog.events || []).find(e => `${e.event_name} · ${e.event_date_iso || "no date"}` === v);
-  if (hit) return load({group: hit.group});
-  load({q: v});
+function addShowFromBox() {
+  const v = $("addShow").value.trim();
+  if (!v) return;
+  const hit = (CATALOG.events || []).find(e => showLabel(e) === v);
+  if (hit) {
+    $("addShow").value = "";
+    if (!SEL.groups.includes(hit.group)) { SEL.series = ""; SEL.groups.push(hit.group); readInputs(); load(); }
+    return;
+  }
+  // Not an exact pick: treat what was typed as a keyword instead.
+  $("addShow").value = "";
+  $("q").value = [$("q").value.trim(), v].filter(Boolean).join(", ");
+  readInputs(); load();
 }
-$("go").onclick = submitQuery;
-$("q").addEventListener("keydown", e => { if (e.key === "Enter") submitQuery(); });
-$("q").addEventListener("change", () => {
-  const v = $("q").value;
-  if ((DATA?.catalog.events || []).some(e => `${e.event_name} · ${e.event_date_iso || "no date"}` === v)) submitQuery();
+$("addShow").addEventListener("change", () => {
+  if ((CATALOG.events || []).some(e => showLabel(e) === $("addShow").value)) addShowFromBox();
+});
+$("addShow").addEventListener("keydown", e => { if (e.key === "Enter") addShowFromBox(); });
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") { readInputs(); load(); } });
+$("dFrom").addEventListener("change", () => { readInputs(); load(); });
+$("dTo").addEventListener("change", () => { readInputs(); load(); });
+$("go").onclick = () => { readInputs(); load(); };
+$("clear").onclick = () => { SEL = {series: "", groups: [], q: "", from: "", to: ""}; load(); };
+
+const isoDay = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+$("datePresets").querySelectorAll("button").forEach(b => b.onclick = () => {
+  readInputs();
+  const now = new Date(), today = isoDay(now);
+  const ago = n => isoDay(new Date(now.getTime() - n * 86400000));
+  ({
+    past30: () => { SEL.from = ago(30); SEL.to = today; },
+    past90: () => { SEL.from = ago(90); SEL.to = today; },
+    upcoming: () => { SEL.from = today; SEL.to = ""; },
+    year: () => { SEL.from = today.slice(0, 4) + "-01-01"; SEL.to = today.slice(0, 4) + "-12-31"; },
+    any: () => { SEL.from = ""; SEL.to = ""; },
+  })[b.dataset.d]();
+  load();
 });
 
 $("csv").onclick = () => {
@@ -524,8 +628,9 @@ $("csv").onclick = () => {
 
 // Default to the first tracked series (NEXT) - that's what this page is for.
 const params = new URLSearchParams(location.search);
-const init = {series: params.get("series"), group: params.get("group"), q: params.get("q")};
-if (!init.series && !init.group && !init.q && !params.has("all")) init.series = "NEXT";
-load(init, false);
+SEL = {series: params.get("series") || "", groups: params.getAll("group"), q: params.get("q") || "",
+       from: params.get("from") || "", to: params.get("to") || ""};
+if (!params.toString()) SEL.series = "NEXT";
+load(false);
 </script>
 </body>
