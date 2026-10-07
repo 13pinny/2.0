@@ -72,17 +72,11 @@ API_HEADERS = {
     "X-Api-Timestamp": "2024-04-15",
 }
 
-# The VPS's whole hosting network is refused by api.dice.fm, so the server
-# can only reach it through another address. Either, API-host calls only:
-#   KARTIS_DICE_PROXY     an HTTP(S) proxy, e.g. a residential one:
-#                         http://user:pass@host:port
-#   KARTIS_DICE_API_BASE  a forwarding endpoint (e.g. a Cloudflare Worker)
-#                         that relays <base>/<path> to api.dice.fm/<path>
-#                         (scripts/dice_worker.js), authenticated with
-#                         KARTIS_DICE_API_KEY
+# api.dice.fm refuses the VPS's whole hosting network (and Cloudflare
+# Workers, tested 2026-10-07), so the server can only reach it through a
+# residential address: KARTIS_DICE_PROXY = http://user:pass@host:port.
+# API-host calls only; dice.fm pages still go direct.
 DICE_PROXY = os.environ.get("KARTIS_DICE_PROXY", "").strip()
-DICE_API_FORWARD = os.environ.get("KARTIS_DICE_API_BASE", "").strip().rstrip("/")
-DICE_API_KEY = os.environ.get("KARTIS_DICE_API_KEY", "").strip()  # the forwarder's shared secret
 _api_opener = None
 
 
@@ -118,10 +112,7 @@ def _http_get(url, accept=None):
         headers.update(API_HEADERS)
     if accept:
         headers["Accept"] = accept
-    fetch_url = DICE_API_FORWARD + url[len(API_BASE):] if is_api and DICE_API_FORWARD else url
-    if is_api and DICE_API_FORWARD and DICE_API_KEY:
-        headers["X-Kartis-Key"] = DICE_API_KEY
-    req = urllib.request.Request(fetch_url, headers=headers)
+    req = urllib.request.Request(url, headers=headers)
     try:
         resp = _api_urlopen(req) if is_api else urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
     except urllib.error.HTTPError as e:
