@@ -125,18 +125,66 @@ def _group(rows, keyfn):
 
 # ------------------------------------------------------------- selection ---
 
-def match_query(sales, q):
-    """Comma-separated tokens, each a case-insensitive substring of the event
-    name (or venue); a row matches when ANY token does. Empty = everything."""
-    toks = [t.strip().lower() for t in (q or "").split(",") if t.strip()]
-    if not toks:
-        return list(sales)
+def parse_terms(q):
+    """Keyword box -> (include, exclude) lists of word-lists.
+
+    Commas separate alternatives (ANY may match); the words inside one
+    alternative must ALL appear, in any order, so "next rita" finds
+    "NEXT with ... and Rita". A leading "-" excludes: "fisher, -vip"."""
+    inc, exc = [], []
+    for raw in (q or "").split(","):
+        t = raw.strip().lower()
+        if not t:
+            continue
+        neg = t.startswith("-")
+        words = t.lstrip("-").split()
+        if words:
+            (exc if neg else inc).append(words)
+    return inc, exc
+
+
+def _hay(s):
+    return f"{s.get('event_name') or ''} | {s.get('venue') or ''}".lower()
+
+
+def in_dates(s, date_from=None, date_to=None):
+    """Show date inside [from, to] (inclusive ISO dates). A row with no
+    show date never matches once a range is set."""
+    if not date_from and not date_to:
+        return True
+    d = (s.get("event_date_iso") or "")[:10]
+    if not d:
+        return False
+    return (not date_from or d >= date_from) and (not date_to or d <= date_to)
+
+
+def select(sales, q="", groups=(), date_from=None, date_to=None):
+    """The multi-event selection.
+
+    Picked shows (event-group keys) and keyword alternatives are UNIONED -
+    "these three shows plus anything matching 'fisher'"; with neither, every
+    sale is a candidate. Exclusions and the show-date range then apply to the
+    whole result."""
+    inc, exc = parse_terms(q)
+    groups = set(groups or ())
     out = []
     for s in sales:
-        hay = f"{s.get('event_name') or ''} | {s.get('venue') or ''}".lower()
-        if any(t in hay for t in toks):
-            out.append(s)
+        hay = _hay(s)
+        if groups or inc:
+            hit = (s.get("event_group") in groups
+                   or any(all(w in hay for w in words) for words in inc))
+            if not hit:
+                continue
+        if any(all(w in hay for w in words) for words in exc):
+            continue
+        if not in_dates(s, date_from, date_to):
+            continue
+        out.append(s)
     return out
+
+
+def match_query(sales, q):
+    return select(sales, q)
 
 
 def _venue_agrees(a, b):

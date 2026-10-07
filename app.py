@@ -2780,15 +2780,24 @@ def trends_page():
 
 @app.route("/api/trends")
 def api_trends():
-    """Sales analytics for a selection: ?series=NEXT (a /series run, matched
-    by date + venue and re-costed from its purchased blocks), ?group=<event
-    group key> (one show), or ?q=<comma-separated name tokens>. With none of
-    them, every sale. Always returns `catalog` so the picker can be filled."""
+    """Sales analytics for a selection.
+
+    ?series=NEXT  a /series run, matched by date + venue and re-costed from
+                  its purchased blocks
+    ?group=<key>  one show (repeatable - several shows at once)
+    ?q=<terms>    keywords: commas = OR, words inside a term = AND, a
+                  leading "-" excludes (see trends.parse_terms)
+    ?from=&to=    show-date range (inclusive), applied on top of any of the
+                  above, series included
+    Shows and keywords are unioned; nothing picked = every sale. Always
+    returns `catalog` so the picker can be filled."""
     from flask import request
     all_sales = _build_combined_sales()
     series_name = (request.args.get("series") or "").strip()
-    group = (request.args.get("group") or "").strip()
+    groups = [g for g in (x.strip() for x in request.args.getlist("group")) if g]
     q = (request.args.get("q") or "").strip()
+    date_from = (request.args.get("from") or "").strip()[:10] or None
+    date_to = (request.args.get("to") or "").strip()[:10] or None
 
     holdings, unsold = [], []
     sdata = None
@@ -2801,10 +2810,11 @@ def api_trends():
             trends.recost_series(all_sales, built, key_fn)
     if series_name:
         sdata = sdata or series.build(series_name)
-        sales = trends.apply_series(all_sales, sdata, key_fn)
+        sales = [s for s in trends.apply_series(all_sales, sdata, key_fn)
+                 if trends.in_dates(s, date_from, date_to)]
         today = datetime.now().date().isoformat()
         for b in sdata.get("blocks") or []:
-            if not b.get("unsold_qty"):
+            if not b.get("unsold_qty") or not trends.in_dates(b, date_from, date_to):
                 continue
             row = {"event_date_iso": b["event_date_iso"], "venue": b.get("venue") or "",
                    "event_name": series_name, "section": b.get("section") or "",
@@ -2814,24 +2824,43 @@ def api_trends():
             (unsold if b["event_date_iso"] < today else holdings).append(row)
         title = series_name
     else:
-        if group:
-            sales = [s for s in all_sales if s.get("event_group") == group]
-        else:
-            sales = trends.match_query(all_sales, q)
-        names = {(s.get("event_name") or "").lower() for s in sales}
+        sales = trends.select(all_sales, q, groups, date_from, date_to)
+        # "Didn't sell" rows for the selected shows: same name, and the same
+        # date where the archive row has one.
+        picked = {((s.get("event_name") or "").lower(), (s.get("event_date_iso") or "")[:10])
+                  for s in sales}
+        names = {n for n, _ in picked}
         for u in db.all_unsold():
-            if (u.get("event_name") or "").lower() in names and (
-                    not group or any((u.get("event_date_iso") or "")[:10] == (s.get("event_date_iso") or "")[:10]
-                                     for s in sales)):
-                unsold.append({"event_name": u.get("event_name") or "",
-                               "event_date_iso": (u.get("event_date_iso") or "")[:10],
-                               "qty": u.get("qty") or 0, "cost": u.get("cost") or 0})
-        title = (sales[0].get("event_name") if group and sales else q) or "All sales"
+            n = (u.get("event_name") or "").lower()
+            d = (u.get("event_date_iso") or "")[:10]
+            if n not in names or (d and (n, d) not in picked):
+                continue
+            unsold.append({"event_name": u.get("event_name") or "", "event_date_iso": d,
+                           "qty": u.get("qty") or 0, "cost": u.get("cost") or 0})
+        title = _trends_title(sales, groups, q)
 
     payload = trends.build(sales, holdings=holdings, unsold=unsold, title=title)
-    payload["selection"] = {"series": series_name, "group": group, "q": q}
+    payload["selection"] = {"series": series_name, "groups": groups, "q": q,
+                            "from": date_from or "", "to": date_to or ""}
     payload["catalog"] = _trends_catalog(all_sales)
     return jsonify(payload)
+
+
+def _trends_title(sales, groups, q):
+    if not groups and not q:
+        return "All sales"
+    names = []
+    for s in sales:
+        if s.get("event_group") in groups:
+            n = s.get("event_name") or ""
+            if n not in names:
+                names.append(n)
+    parts = []
+    if names:
+        parts.append(names[0] if len(names) == 1 else f"{len(groups)} shows")
+    if q:
+        parts.append(f"\u201c{q}\u201d")
+    return " + ".join(parts) or "No match"
 
 
 def _trends_catalog(all_sales):
