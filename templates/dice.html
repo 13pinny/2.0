@@ -17,6 +17,7 @@
   header .left { display: flex; align-items: baseline; gap: 24px; }
   header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--cyan); }
   header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  button.act.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg-2)); }
   main { padding: 18px 24px 60px; }
   h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; }
   h2:first-child { margin-top: 0; }
@@ -141,6 +142,7 @@
     <h1>DICE</h1>
     <span class="meta" id="meta">—</span>
   </div>
+  <button class="act" id="usBtn" title="hide events outside the US (Europe, UK, Canada…) everywhere on this page">US only</button>
 </header>
 <main>
   <div class="err" id="errbox"></div>
@@ -221,6 +223,13 @@ const open = new Set();
 const popen = new Set();
 let showPastT = false, showPastP = false;
 let pfilter = null;   // attention-chip filter on the holdings table
+let usOnly = false;   // the header's "US only" toggle; remembered per browser
+try { usOnly = localStorage.getItem('dice.usOnly') === '1'; } catch (e) {}
+// region: 'us' | 'intl' | null (unknown — kept, never hidden by a guess).
+const keepRegion = r => !usOnly || r !== 'intl';
+function tEvents(){ return ((DATA && DATA.events) || []).filter(e => keepRegion(e.region)); }
+function pRegion(g){ return g.region || ((DATA && g.dice_id && (DATA.events || []).find(e => e.event_code === g.dice_id)) || {}).region || null; }
+function pEvents(){ return ((PDATA && PDATA.events) || []).filter(g => keepRegion(pRegion(g))); }
 
 // ---- artwork -----------------------------------------------------------
 // DICE art lives on imgix; ask it for exactly the crop we draw. Events
@@ -427,12 +436,12 @@ function render(){
   renderHead();
   const held = heldById();
   const q = ($('q').value || '').trim().toLowerCase();
-  let evs = DATA.events || [];
+  let evs = tEvents();
   if (q) evs = evs.filter(e => ((e.name||'') + ' ' + (e.venue||'')).toLowerCase().includes(q));
   evs = evs.slice().sort((a,b) => { const va = sortVal(a, sortKey, held), vb = sortVal(b, sortKey, held);
     return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir; });
   if (!evs.length){
-    $('rows').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No DICE events tracked yet — paste a dice.fm URL above, or add a watcher.</td></tr>`;
+    $('rows').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">${(DATA.events || []).length ? 'Nothing matches — try clearing the filter or turning off "US only".' : 'No DICE events tracked yet — paste a dice.fm URL above, or add a watcher.'}</td></tr>`;
     return;
   }
   const up = evs.filter(e => !e.past), past = evs.filter(e => e.past);
@@ -450,7 +459,7 @@ function render(){
   const sep = $('pastT'); if (sep) sep.onclick = () => { showPastT = !showPastT; render(); };
 }
 function renderTotals(){
-  const evs = (DATA.events || []).filter(e => !e.past);
+  const evs = tEvents().filter(e => !e.past);
   const changed24 = evs.filter(e => e.last_change_at && (Date.now() - new Date(e.last_change_at).getTime()) < 86400e3).length;
   const tiles = [
     ['Upcoming tracked', evs.length, 'market + watchers'],
@@ -478,6 +487,7 @@ async function load(refresh){
     DATA = await r.json();
     $('errbox').style.display = 'none';
     renderTotals(); render(); renderPurchases(); renderAttention();
+    if (FDATA) renderFollows();
     if (refresh){
       const bad = (DATA.events || []).filter(e => e.error).length;
       $('refreshNote').textContent = bad ? `refreshed — ${bad} event${bad>1?'s':''} failed to fetch (cached data shown)` : 'refreshed just now';
@@ -756,7 +766,7 @@ function purchaseRow(g, tmap){
 }
 function renderPurchases(){
   if (!PDATA) return;
-  const evs = PDATA.events || [];
+  const evs = pEvents();
   const sold = evs.reduce((a,g) => a + (g.sold||0), 0);
   const revenue = evs.reduce((a,g) => a + (g.revenue||0), 0);
   const costSold = evs.reduce((a,g) => a + (g.cost_sold||0), 0);
@@ -778,7 +788,9 @@ function renderPurchases(){
   if (pfilter){ fb.style.display = 'block'; fb.innerHTML = `Showing events ${PFILTERS[pfilter].label}<a href="#" id="pclear">show all</a>`; $('pclear').onclick = ev => { ev.preventDefault(); setPFilter(null); }; }
   else fb.style.display = 'none';
   if (!evs.length){
-    $('prows').innerHTML = '<tr><td colspan="13" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
+    $('prows').innerHTML = (PDATA.events || []).length
+      ? '<tr><td colspan="13" class="empty">No US events held — turn off "US only" to see the rest.</td></tr>'
+      : '<tr><td colspan="13" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
     renderRail();
     return;
   }
@@ -819,7 +831,7 @@ function renderPurchases(){
 
 // ---- "Up next" poster rail -----------------------------------------------
 function renderRail(){
-  const evs = ((PDATA && PDATA.events) || []).filter(g => !g.past && (g.avail||0) > 0)
+  const evs = pEvents().filter(g => !g.past && (g.avail||0) > 0)
     .sort((a,b) => (a.event_date_iso||'9') < (b.event_date_iso||'9') ? -1 : 1).slice(0, 12);
   const tmap = trackedById();
   if (!evs.length){
@@ -854,14 +866,14 @@ function setPFilter(k){
 }
 function renderAttention(){
   if (!PDATA) return;
-  const evs = PDATA.events || [];
+  const evs = pEvents();
   const sumBy = (f, v) => evs.filter(f).reduce((a,g) => a + v(g), 0);
   const unlistedT = sumBy(PFILTERS.unlisted.test, g => (g.avail||0) - (g.listed||0));
   const soon = evs.filter(PFILTERS.soon.test);
   const untracked = DATA ? evs.filter(PFILTERS.untracked.test).length : 0;
   const pastLeft = sumBy(PFILTERS.pastleft.test, g => g.avail || 0);
   const xfer = PDATA.problem_count || 0;
-  const fetchErr = DATA ? (DATA.events || []).filter(e => e.error && !e.past).length : 0;
+  const fetchErr = DATA ? tEvents().filter(e => e.error && !e.past).length : 0;
   const chips = [];
   const chip = (cls, key, n, text) => chips.push(`<span class="chip ${cls}${pfilter === key ? ' active' : ''}" data-k="${key}"><b>${n}</b> ${text}</span>`);
   if (soon.length) chip('bad', 'soon', soon.length, `event${soon.length>1?'s':''} this week still holding ${soon.reduce((a,g) => a + g.avail, 0)} tickets`);
@@ -964,7 +976,8 @@ function renderFollows(){
     return;
   }
   $('follows').innerHTML = fs.map(f => {
-    const ups = f.upcoming || [];
+    const tm = trackedById();
+    const ups = (f.upcoming || []).filter(e => keepRegion((tm[e.slug] || {}).region || e.region));
     const shown = folOpen.has(f.id) ? ups : ups.slice(0, 3);
     const shows = shown.map(e => `<a class="show" href="${escape(e.url)}" target="_blank" rel="noopener">
         ${art(e.image, e.name, false)}
@@ -1029,6 +1042,16 @@ $('folRun').onclick = async () => {
   } catch (e) { $('folNote').textContent = 'Failed: ' + e.message; }
   $('folRun').disabled = false;
 };
+function paintUs(){ $('usBtn').classList.toggle('on', usOnly); $('usBtn').textContent = usOnly ? '✓ US only' : 'US only'; }
+$('usBtn').onclick = () => {
+  usOnly = !usOnly;
+  try { localStorage.setItem('dice.usOnly', usOnly ? '1' : '0'); } catch (e) {}
+  paintUs();
+  if (DATA){ renderTotals(); render(); }
+  if (PDATA){ renderPurchases(); renderRail(); renderAttention(); }
+  if (FDATA) renderFollows();
+};
+paintUs();
 loadFollows();
 setInterval(loadFollows, 120000);
 $('addBtn').onclick = addManual;
