@@ -78,8 +78,11 @@ API_HEADERS = {
 #                         http://user:pass@host:port
 #   KARTIS_DICE_API_BASE  a forwarding endpoint (e.g. a Cloudflare Worker)
 #                         that relays <base>/<path> to api.dice.fm/<path>
+#                         (scripts/dice_worker.js), authenticated with
+#                         KARTIS_DICE_API_KEY
 DICE_PROXY = os.environ.get("KARTIS_DICE_PROXY", "").strip()
 DICE_API_FORWARD = os.environ.get("KARTIS_DICE_API_BASE", "").strip().rstrip("/")
+DICE_API_KEY = os.environ.get("KARTIS_DICE_API_KEY", "").strip()  # the forwarder's shared secret
 _api_opener = None
 
 
@@ -116,6 +119,8 @@ def _http_get(url, accept=None):
     if accept:
         headers["Accept"] = accept
     fetch_url = DICE_API_FORWARD + url[len(API_BASE):] if is_api and DICE_API_FORWARD else url
+    if is_api and DICE_API_FORWARD and DICE_API_KEY:
+        headers["X-Kartis-Key"] = DICE_API_KEY
     req = urllib.request.Request(fetch_url, headers=headers)
     try:
         resp = _api_urlopen(req) if is_api else urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
