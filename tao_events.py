@@ -69,6 +69,7 @@ CLI probe:
     python tao_events.py <url-or-slug>       # one ticket page
 """
 import json
+import os
 import re
 import sys
 import time
@@ -107,6 +108,18 @@ _CATALOG_FIELDS = ("id,slug,link,status,acf.event_title,acf.start_epoch,"
                    "acf.event_start_date,acf.links")
 _CATALOG_PAGE_SIZE = 100
 _CATALOG_MAX_PAGES = 20          # 2000 events — a runaway-paging backstop
+
+# DESKTOP RELAY. As of 2026-10-07 tickets.taogroup.com shows a Cloudflare
+# managed challenge to every non-browser request -- the VPS, a residential
+# proxy and the desktop's own home connection alike -- while a real Chrome
+# loads it. So eventim_relay.py on the desktop also loads every tracked tao
+# page in its Chrome and POSTs the rendered HTML to /api/edm/eventim-relay
+# (source "tao"); fetch_event reads that copy while it is younger than
+# RELAY_MAX_AGE_SECONDS and only falls back to its own HTTP fetch otherwise,
+# so a dead relay surfaces as last_error on /marquee, never as a sell-out.
+RELAY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "tm_cache", "tao_relay")
+RELAY_MAX_AGE_SECONDS = int(os.getenv("KARTIS_TAO_RELAY_MAX_AGE_SECONDS") or 1800)
 
 # https://tickets.taogroup.com/e/<slug>/tickets
 _URL_RE = re.compile(r"tickets\.taogroup\.com/e/([A-Za-z0-9._~-]+)", re.I)
@@ -348,11 +361,52 @@ def _date_text(ld):
     return dt.strftime("%a, %b %d, %Y · %I:%M %p").replace(" 0", " ")
 
 
+def _relay_path(slug):
+    return os.path.join(RELAY_DIR, f"{slug}.html")
+
+
+def relay_age(slug):
+    """Seconds since the desktop relay last stored this event, or None."""
+    try:
+        return time.time() - os.path.getmtime(_relay_path(parse_url(slug)))
+    except (OSError, ValueError):
+        return None
+
+
+def relay_store(slug, html):
+    """Keep a desktop-rendered page for fetch_event. Refuses a page without
+    ticket rows, so a challenge page the desktop happened to get can never
+    overwrite a good one."""
+    slug = parse_url(slug)
+    rows = _ticket_rows(html or "")
+    if not rows:
+        raise EdmEventsError(f"tao relay: page for {slug} has no ticket rows")
+    os.makedirs(RELAY_DIR, exist_ok=True)
+    path = _relay_path(slug)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        f.write(html)
+    os.replace(path + ".tmp", path)
+    return len(rows)
+
+
+def _load_html(slug, url):
+    age = relay_age(slug)
+    if age is not None and age <= RELAY_MAX_AGE_SECONDS:
+        with open(_relay_path(slug), encoding="utf-8") as f:
+            return f.read()
+    try:
+        return edm_common.fetch_text(url)
+    except EdmEventsError as e:
+        when = f"{age / 60:.0f} min ago" if age is not None else "never"
+        raise EdmEventsError(f"{e} — desktop relay last sent this page {when}; "
+                             "is eventim_relay.py running?") from e
+
+
 def fetch_event(slug):
     """One tickets.taogroup.com event, normalized (see edm_common)."""
     slug = parse_url(slug)
     url = event_page_url(slug)
-    html = edm_common.fetch_text(url)
+    html = _load_html(slug, url)
 
     ld = _ld_event(html)
     rows = _ticket_rows(html)
