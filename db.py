@@ -706,6 +706,13 @@ CREATE TABLE IF NOT EXISTS dice_tier_log (
     ended_at     TEXT                    -- null = this is the current state
 );
 CREATE INDEX IF NOT EXISTS idx_dice_tier_log_event ON dice_tier_log(event_code, type_name, id);
+-- dice_alerts.py: last price/availability summary per tracked DICE event,
+-- diffed each tick to ping price moves / sell-outs / restocks.
+CREATE TABLE IF NOT EXISTS dice_alert_state (
+    event_code TEXT PRIMARY KEY,
+    state_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 -- Israeli-sites new-event monitor (kupat_events.py / tm_events.py +
 -- app.py run_il_events). One row per (source, event) ever seen on the
 -- site's listing feed; rows persist after the event drops off the feed
@@ -1773,6 +1780,27 @@ def dice_follow_checked(follow_id, now_iso, error=None, name=None, baselined=Non
             " name = COALESCE(?, name),"
             " baselined = CASE WHEN ? IS NULL THEN baselined ELSE ? END WHERE id = ?",
             (now_iso, error, name, baselined, 1 if baselined else 0, follow_id))
+
+
+def dice_alert_state_all():
+    with connect() as conn:
+        rows = conn.execute("SELECT event_code, state_json FROM dice_alert_state").fetchall()
+    out = {}
+    for r in rows:
+        try:
+            out[r["event_code"]] = json.loads(r["state_json"])
+        except (ValueError, TypeError):
+            pass
+    return out
+
+
+def dice_alert_state_put(event_code, state, now_iso):
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO dice_alert_state (event_code, state_json, updated_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(event_code) DO UPDATE SET state_json = excluded.state_json,"
+            " updated_at = excluded.updated_at",
+            (str(event_code), json.dumps(state), now_iso))
 
 
 def sales_excluded_keys():

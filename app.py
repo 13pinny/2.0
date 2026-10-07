@@ -265,6 +265,13 @@ DICE_FOLLOW_ENABLED = (os.getenv("KARTIS_DICE_FOLLOW_ENABLED")
                        or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
 _dice_follow_lock = threading.Lock()
 _last_dice_follow = {"at": None, "summary": None, "error": None}
+# Price / sell-out / restock pings for every event on the /dice tracker
+# (dice_alerts.py). Same single machine as the follows (the VPS).
+DICE_ALERTS_ENABLED = (os.getenv("KARTIS_DICE_ALERTS_ENABLED")
+                       or ("1" if DICE_FOLLOW_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
+DICE_ALERTS_INTERVAL_SECONDS = int(os.getenv("KARTIS_DICE_ALERTS_SECONDS") or 120)
+_dice_alerts_lock = threading.Lock()
+_last_dice_alerts = {"at": None, "summary": None, "error": None}
 # Low-stock alert: ping once when the current release's remaining count
 # crosses at/below this. Re-armed when the lead tier changes.
 EDM_LOW_STOCK_THRESHOLD = int(os.getenv("KARTIS_EDM_LOW_STOCK_THRESHOLD") or 20)
@@ -7003,6 +7010,38 @@ def run_dice_follow(force=False):
         _dice_follow_lock.release()
 
 
+def run_dice_alerts():
+    """Every KARTIS_DICE_ALERTS_SECONDS: diff every tracked DICE event's
+    prices / availability and ping what moved (dice_alerts.py)."""
+    if not _dice_alerts_lock.acquire(blocking=False):
+        return None
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if db.setting_get_bool("master_paused", default=False):
+            _last_dice_alerts.update(at=now_iso, error=None)
+            return None
+        muted = db.setting_get_bool("master_muted", default=False)
+        import dice_alerts
+        summary = dice_alerts.run_tick(list(_dice_tracked_codes()),
+                                       notify_fn=None if muted else notify.notify_dice_price,
+                                       now_iso=now_iso)
+        _last_dice_alerts.update(at=now_iso, summary=summary, error=None)
+        return summary
+    except Exception as e:
+        _last_dice_alerts.update(at=datetime.now(timezone.utc).isoformat(),
+                                 error=f"{type(e).__name__}: {e}")
+        print(f"[dice-alerts] tick failed: {e}")
+        return None
+    finally:
+        _dice_alerts_lock.release()
+
+
+@app.route("/api/dice/alerts/status")
+def api_dice_alerts_status():
+    return jsonify({"enabled": DICE_ALERTS_ENABLED,
+                    "interval_seconds": DICE_ALERTS_INTERVAL_SECONDS, **_last_dice_alerts})
+
+
 def _dice_follows_payload():
     now = datetime.now(timezone.utc)
     out = []
@@ -9288,6 +9327,9 @@ if DICE_FOLLOW_ENABLED:
                       start_date=datetime.now() + timedelta(minutes=2))
 else:
     print("[dice-follow] disabled via KARTIS_DICE_FOLLOW_ENABLED=0 — it runs elsewhere (e.g. the VPS)")
+if DICE_ALERTS_ENABLED:
+    scheduler.add_job(run_dice_alerts, "interval", seconds=DICE_ALERTS_INTERVAL_SECONDS,
+                      id="dice_alerts", start_date=datetime.now() + timedelta(minutes=2))
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
 # Festival/GA sales snapshots — fire one immediately (next_run_time) so the
 # Festival / GA Tracker pages have a baseline right after a restart, then
