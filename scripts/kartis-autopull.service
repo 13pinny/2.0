@@ -1,0 +1,10 @@
+[Unit]
+Description=Kartis auto-deploy (git pull + restart kartis-flask on new commits)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=kartis
+ExecStart=/bin/bash /opt/kartis/scripts/vps_autopull.sh
+# Runs as kartis (the repo owner) so git credentials work; the final
+# service restart uses the kartis user's passwordless sudo.

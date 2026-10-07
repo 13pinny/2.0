@@ -1,0 +1,16 @@
+[Unit]
+Description=Kartis Xvfb (virtual display for headed Chrome)
+After=network.target
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+# :99 matches DISPLAY=:99 in kartis-chrome.service. 1280x800 is enough for
+# the dashboards; bigger just wastes RAM.
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x800x24
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

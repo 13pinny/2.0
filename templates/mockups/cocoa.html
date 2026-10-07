@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Cocoa</title>
+<style>
+  :root {
+    --bg: #faf6f1;
+    --paper: #fffdf8;
+    --ink: #2d2419;
+    --soft: #6b5d4a;
+    --rule: #e7dcc7;
+    --rule-2: #d6c5a8;
+    --accent: #8b3a00;
+    --green: #4a7a2a;
+    --red: #b22222;
+    --amber: #b8860b;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Iowan Old Style", "Charter", Georgia, serif; margin: 0; background: var(--bg); color: var(--ink); line-height: 1.45; }
+  .ui { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; }
+  header { padding: 28px 36px 8px; border-bottom: 1px solid var(--rule-2); }
+  h1 { font-size: 32px; margin: 0 0 4px; font-weight: 700; letter-spacing: -0.5px; }
+  header .sub { font-family: -apple-system, system-ui, sans-serif; color: var(--soft); font-size: 13px; }
+  nav { padding: 14px 36px; border-bottom: 1px solid var(--rule); display: flex; gap: 22px; font-family: -apple-system, system-ui, sans-serif; font-size: 13px; }
+  nav a { color: var(--soft); text-decoration: none; padding: 4px 0; border-bottom: 2px solid transparent; }
+  nav a:hover { color: var(--ink); }
+  nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+  main { padding: 24px 36px; max-width: 1280px; margin: 0 auto; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .stat { background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 18px; box-shadow: 0 1px 0 rgba(0,0,0,0.02); }
+  .stat .label { font-family: -apple-system, system-ui, sans-serif; font-size: 11px; color: var(--soft); letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 26px; font-weight: 700; color: var(--ink); font-feature-settings: "lnum"; }
+  .stat.accent .value { color: var(--accent); }
+  .stat.green .value { color: var(--green); }
+  .bar { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+  .bar input, .bar select, .bar button { font-family: -apple-system, system-ui, sans-serif; font-size: 13px; padding: 8px 12px; border: 1px solid var(--rule-2); border-radius: 6px; background: var(--paper); color: var(--ink); }
+  .bar input:focus, .bar select:focus { outline: none; border-color: var(--accent); }
+  .bar button { background: var(--ink); color: var(--paper); border-color: var(--ink); cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+  th { font-family: -apple-system, system-ui, sans-serif; text-align: left; padding: 11px 14px; color: var(--soft); font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; border-bottom: 1px solid var(--rule-2); background: #f6efe1; }
+  th.num, td.num { text-align: right; font-feature-settings: "tnum"; }
+  td { padding: 10px 14px; border-bottom: 1px dashed var(--rule); font-size: 14px; }
+  tbody tr:last-child td { border-bottom: none; }
+  tr.hdr td { background: #f6efe1; padding: 13px 14px; cursor: pointer; user-select: none; border-bottom: 1px solid var(--rule-2); border-top: 1px solid var(--rule-2); }
+  tr.hdr td:hover { background: #efe5d0; }
+  tr.hdr .title { font-size: 16px; font-weight: 700; color: var(--ink); }
+  tr.hdr .meta-line { font-family: -apple-system, system-ui, sans-serif; color: var(--soft); margin-left: 10px; font-size: 13px; }
+  tr.hdr .stats-line { font-family: -apple-system, system-ui, sans-serif; float: right; color: var(--ink); font-size: 13px; font-feature-settings: "tnum"; }
+  tr.hdr .stats-line .sold { color: var(--green); margin-left: 8px; }
+  .src { font-family: -apple-system, system-ui, sans-serif; display: inline-block; padding: 3px 9px; font-size: 11px; border-radius: 999px; font-weight: 600; }
+  .src-lysted { background: #e2e8ff; color: #1a4ea3; }
+  .src-viagogo { background: #f5e2c8; color: #8a4400; }
+  .src-jerujam { background: #e8dcef; color: #5a1f8a; }
+  .src-crowdvolt { background: #f5d6e0; color: #911042; }
+  .status { font-family: -apple-system, system-ui, sans-serif; font-size: 11px; padding: 3px 9px; border-radius: 999px; background: #efe5d0; color: var(--soft); display: inline-block; }
+  .status-active, .status-lysted { background: #e2e8ff; color: #1a4ea3; }
+  .status-sold { background: #ddebcf; color: var(--green); }
+  .status-partial { background: #f8e7c0; color: var(--amber); }
+  .empty { text-align: center; color: var(--soft); padding: 40px; font-style: italic; }
+  .chev { color: var(--soft); display: inline-block; width: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kartis</h1>
+  <div class="sub" id="sub">Inventory ledger · loading…</div>
+</header>
+<nav>
+  <a href="/mockups/cocoa" class="active">Inventory</a>
+  <a href="/sales">Sales</a>
+  <a href="/sources">Sources</a>
+  <a href="/jerujam">JeruJam</a>
+  <a href="/mockups" style="margin-left:auto;">← compare</a>
+</nav>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Unsold tickets</div><div class="value" id="s-tickets">0</div></div>
+    <div class="stat"><div class="label">Listings</div><div class="value" id="s-rows">0</div></div>
+    <div class="stat accent"><div class="label">Cash tied up</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat"><div class="label">Lysted</div><div class="value" id="s-lysted">0</div></div>
+    <div class="stat"><div class="label">Viagogo</div><div class="value" id="s-viagogo">0</div></div>
+    <div class="stat"><div class="label">JeruJam</div><div class="value" id="s-jerujam">0</div></div>
+    <div class="stat green"><div class="label">Auto-sold</div><div class="value" id="s-matched">0</div></div>
+  </div>
+
+  <div class="bar">
+    <button id="refresh">Refresh now</button>
+    <input type="search" id="q-search" placeholder="Search event, venue, or section" style="flex:1; min-width:240px;">
+    <select id="q-source"><option value="all">All sources</option><option value="lysted">Lysted</option><option value="viagogo">Viagogo</option><option value="jerujam">JeruJam</option></select>
+    <select id="q-sort"><option value="date-asc">Date (soonest)</option><option value="date-desc">Date (latest)</option><option value="cost-desc">Cost (high → low)</option></select>
+  </div>
+
+  <table>
+    <thead><tr><th>Source</th><th>Section</th><th>Row</th><th class="num">Qty</th><th>Seats</th><th>Delivery</th><th class="num">Cost</th><th class="num">Cost/ea</th><th>Status</th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">Nothing matches the filters.</div>
+</main>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+let _rows = [];
+
+function _sortCmp(mode) {
+  const k = (r) => r.event_date_iso || "zzz";
+  if (mode === "date-desc") return (a,b) => k(b).localeCompare(k(a));
+  if (mode === "cost-desc") return (a,b) => (b.cost || 0) - (a.cost || 0);
+  return (a,b) => k(a).localeCompare(k(b));
+}
+
+function render() {
+  const q = document.getElementById("q-search").value.toLowerCase();
+  const src = document.getElementById("q-source").value;
+  const sort = document.getElementById("q-sort").value;
+  const rows = _rows.filter(r => {
+    if (src !== "all" && r.source !== src) return false;
+    if (q && !((r.event_name||"").toLowerCase().includes(q) || (r.venue||"").toLowerCase().includes(q) || (r.section||"").toLowerCase().includes(q))) return false;
+    return true;
+  });
+  const groups = new Map();
+  for (const r of rows) {
+    const key = (r.event_name||"") + "|" + (r.event_date_iso||"");
+    if (!groups.has(key)) groups.set(key, {event_name:r.event_name, event_date:r.event_date, venue:r.venue, event_date_iso:r.event_date_iso, rows:[]});
+    groups.get(key).rows.push(r);
+  }
+  const sorted = [...groups.values()].sort(_sortCmp(sort));
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  for (const g of sorted) {
+    const qty = g.rows.reduce((s,r) => s + (r.qty_unsold||0), 0);
+    const cost = g.rows.reduce((s,r) => s + (r.cost||0), 0);
+    const hdr = document.createElement("tr");
+    hdr.className = "hdr";
+    hdr.innerHTML = `<td colspan="9"><span class="chev">▸</span><span class="title">${esc(g.event_name)}</span><span class="meta-line">${esc(g.event_date)} · ${esc(g.venue)}</span><span class="stats-line">${qty} unsold · ${money(cost)}</span></td>`;
+    tbody.appendChild(hdr);
+    for (const r of g.rows) {
+      const costPer = r.cost_per_unit != null ? r.cost_per_unit : (r.qty_unsold ? (r.cost||0)/r.qty_unsold : null);
+      const statusKey = (r.status||"").toLowerCase().replace(/[^a-z0-9_]/g, "_");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><span class="src src-${esc(r.source)}">${esc(r.source)}</span></td>
+        <td>${esc(r.section)}</td>
+        <td>${esc(r.row)}</td>
+        <td class="num">${r.qty_unsold ?? ""}</td>
+        <td>${esc(r.seats)}</td>
+        <td>${esc(r.delivery_type)}</td>
+        <td class="num">${money(r.cost)}</td>
+        <td class="num">${money(costPer)}</td>
+        <td><span class="status status-${statusKey}">${esc(r.status)}</span></td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+  document.getElementById("empty").style.display = sorted.length ? "none" : "block";
+}
+
+async function load() {
+  const d = await (await fetch("/api/inventory-all")).json();
+  _rows = d.rows || [];
+  const t = d.totals || {};
+  document.getElementById("s-tickets").textContent = t.tickets ?? 0;
+  document.getElementById("s-rows").textContent = t.rows ?? 0;
+  document.getElementById("s-cost").textContent = money(t.total_cost);
+  const bs = t.by_source || {};
+  document.getElementById("s-lysted").textContent = bs.lysted || 0;
+  document.getElementById("s-viagogo").textContent = bs.viagogo || 0;
+  document.getElementById("s-jerujam").textContent = bs.jerujam || 0;
+  document.getElementById("s-matched").textContent = t.auto_matched || 0;
+  const lr = d.last_run || {};
+  document.getElementById("sub").textContent = lr.at ? `Inventory ledger · last scrape ${new Date(lr.at).toLocaleString()}` : "Inventory ledger · no scrape yet";
+  render();
+}
+
+document.getElementById("refresh").addEventListener("click", async (e) => {
+  e.currentTarget.disabled = true;
+  e.currentTarget.textContent = "Refreshing…";
+  await fetch("/api/refresh", {method: "POST"});
+  setTimeout(() => { e.currentTarget.disabled = false; e.currentTarget.textContent = "Refresh now"; load(); }, 4000);
+});
+for (const id of ["q-search","q-source","q-sort"]) {
+  document.getElementById(id).addEventListener("input", render);
+  document.getElementById(id).addEventListener("change", render);
+}
+load();
+</script>
+</body>
+</html>

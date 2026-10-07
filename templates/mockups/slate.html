@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kartis — Slate</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --line: #21262d;
+    --text: #c9d1d9;
+    --muted: #6e7681;
+    --accent: #58a6ff;
+    --green: #56d364;
+    --red: #f85149;
+    --amber: #d29922;
+    --orange: #f97316;
+    --purple: #a78bfa;
+    --pink: #f06595;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 18px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; color: var(--text); text-transform: uppercase; }
+  header .nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  header .nav a:hover, header .nav a.active { color: var(--accent); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  main { padding: 18px 24px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.green .value { color: var(--green); }
+  .stat.amber .value { color: var(--amber); }
+  .bar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #1f262e; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  tbody tr:hover td { background: #11161d; }
+  tr.hdr td { background: #161b22; padding: 9px 12px; border-top: 1px solid var(--line); cursor: pointer; user-select: none; }
+  tr.hdr td:hover { background: #1c232b; }
+  tr.hdr .title { color: var(--text); font-weight: 700; letter-spacing: 0.5px; }
+  tr.hdr .meta { color: var(--muted); margin-left: 8px; font-size: 11px; }
+  tr.hdr .stats-line { float: right; color: var(--muted); font-size: 11px; }
+  tr.hdr .stats-line .sold { color: var(--green); margin-left: 8px; }
+  .src { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1.5px; border: 1px solid; border-radius: 1px; }
+  .src-lysted { color: var(--accent); border-color: var(--accent); }
+  .src-viagogo { color: var(--orange); border-color: var(--orange); }
+  .src-jerujam { color: var(--purple); border-color: var(--purple); }
+  .src-crowdvolt { color: var(--pink); border-color: var(--pink); }
+  .status { display: inline-block; padding: 1px 6px; font-size: 10px; border: 1px solid var(--line); color: var(--muted); border-radius: 1px; }
+  .status.active { color: var(--accent); border-color: var(--accent); }
+  .status.sold { color: var(--green); border-color: var(--green); }
+  .status.partial { color: var(--amber); border-color: var(--amber); }
+  .chev { display: inline-block; width: 10px; color: var(--muted); }
+  .empty { color: var(--muted); padding: 30px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <div style="display:flex;align-items:baseline;gap:24px;">
+    <h1>// KARTIS</h1>
+    <span class="meta" id="metaline">—</span>
+  </div>
+  <nav class="nav">
+    <a href="/mockups/slate" class="active">INVENTORY</a>
+    <a href="/sales">SALES</a>
+    <a href="/sources">SOURCES</a>
+    <a href="/jerujam">JERUJAM</a>
+    <a href="/mockups">← compare</a>
+  </nav>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Unsold</div><div class="value" id="s-tickets">0</div></div>
+    <div class="stat"><div class="label">Listings</div><div class="value" id="s-rows">0</div></div>
+    <div class="stat amber"><div class="label">Cash Tied</div><div class="value" id="s-cost">$0</div></div>
+    <div class="stat"><div class="label">Lysted</div><div class="value" id="s-lysted">0</div></div>
+    <div class="stat"><div class="label">Viagogo</div><div class="value" id="s-viagogo">0</div></div>
+    <div class="stat"><div class="label">JeruJam</div><div class="value" id="s-jerujam">0</div></div>
+    <div class="stat green"><div class="label">Auto-Sold</div><div class="value" id="s-matched">0</div></div>
+  </div>
+
+  <div class="bar">
+    <input type="search" id="q-search" placeholder="search // event venue section" style="flex:1; min-width: 200px;">
+    <select id="q-source"><option value="all">SRC: ALL</option><option value="lysted">LYSTED</option><option value="viagogo">VIAGOGO</option><option value="jerujam">JERUJAM</option></select>
+    <select id="q-sort"><option value="date-asc">DATE ↑</option><option value="date-desc">DATE ↓</option><option value="cost-desc">COST ↓</option></select>
+  </div>
+
+  <table>
+    <thead><tr><th>SRC</th><th>SECTION</th><th>ROW</th><th class="num">QTY</th><th>SEATS</th><th>DELIV</th><th class="num">COST</th><th class="num">/EA</th><th>STATUS</th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">// no matches</div>
+</main>
+
+<script>
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2});
+const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+let _rows = [];
+
+function _sortCmp(mode) {
+  const k = (r) => r.event_date_iso || "zzz";
+  if (mode === "date-desc") return (a,b) => k(b).localeCompare(k(a));
+  if (mode === "cost-desc") return (a,b) => (b.cost || 0) - (a.cost || 0);
+  return (a,b) => k(a).localeCompare(k(b));
+}
+
+function render() {
+  const q = document.getElementById("q-search").value.toLowerCase();
+  const src = document.getElementById("q-source").value;
+  const sort = document.getElementById("q-sort").value;
+  const rows = _rows.filter(r => {
+    if (src !== "all" && r.source !== src) return false;
+    if (q && !((r.event_name||"").toLowerCase().includes(q) || (r.venue||"").toLowerCase().includes(q) || (r.section||"").toLowerCase().includes(q))) return false;
+    return true;
+  });
+  const groups = new Map();
+  for (const r of rows) {
+    const key = (r.event_name||"") + "|" + (r.event_date_iso||"");
+    if (!groups.has(key)) groups.set(key, {event_name:r.event_name, event_date:r.event_date, venue:r.venue, event_date_iso:r.event_date_iso, rows:[]});
+    groups.get(key).rows.push(r);
+  }
+  const sorted = [...groups.values()].sort(_sortCmp(sort));
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  for (const g of sorted) {
+    const qty = g.rows.reduce((s,r) => s + (r.qty_unsold||0), 0);
+    const cost = g.rows.reduce((s,r) => s + (r.cost||0), 0);
+    const hdr = document.createElement("tr");
+    hdr.className = "hdr";
+    hdr.innerHTML = `<td colspan="9"><span class="chev">▸</span><span class="title">${esc(g.event_name)}</span><span class="meta">// ${esc(g.event_date)} · ${esc(g.venue)}</span><span class="stats-line">${qty} unsold · ${money(cost)}</span></td>`;
+    tbody.appendChild(hdr);
+    for (const r of g.rows) {
+      const costPer = r.cost_per_unit != null ? r.cost_per_unit : (r.qty_unsold ? (r.cost||0)/r.qty_unsold : null);
+      const statusKey = ((r.status||"").toLowerCase().includes("sold")) ? "sold" : ((r.status||"").toLowerCase()==="partial" ? "partial" : "active");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><span class="src src-${esc(r.source)}">${esc((r.source||"").toUpperCase())}</span></td>
+        <td>${esc(r.section)}</td>
+        <td>${esc(r.row)}</td>
+        <td class="num">${r.qty_unsold ?? ""}</td>
+        <td>${esc(r.seats)}</td>
+        <td>${esc(r.delivery_type)}</td>
+        <td class="num">${money(r.cost)}</td>
+        <td class="num">${money(costPer)}</td>
+        <td><span class="status ${statusKey}">${esc((r.status||"").toUpperCase())}</span></td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+  document.getElementById("empty").style.display = sorted.length ? "none" : "block";
+}
+
+async function load() {
+  const d = await (await fetch("/api/inventory-all")).json();
+  _rows = d.rows || [];
+  const t = d.totals || {};
+  document.getElementById("s-tickets").textContent = t.tickets ?? 0;
+  document.getElementById("s-rows").textContent = t.rows ?? 0;
+  document.getElementById("s-cost").textContent = money(t.total_cost);
+  const bs = t.by_source || {};
+  document.getElementById("s-lysted").textContent = bs.lysted || 0;
+  document.getElementById("s-viagogo").textContent = bs.viagogo || 0;
+  document.getElementById("s-jerujam").textContent = bs.jerujam || 0;
+  document.getElementById("s-matched").textContent = t.auto_matched || 0;
+  const lr = d.last_run || {};
+  document.getElementById("metaline").textContent = lr.at ? `last_scrape=${new Date(lr.at).toLocaleString()}` : "no_scrape_yet";
+  render();
+}
+for (const id of ["q-search","q-source","q-sort"]) {
+  document.getElementById(id).addEventListener("input", render);
+  document.getElementById(id).addEventListener("change", render);
+}
+load();
+</script>
+</body>
+</html>

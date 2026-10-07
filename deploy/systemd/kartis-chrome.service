@@ -1,0 +1,28 @@
+[Unit]
+Description=Kartis Chrome (CDP target for scraper, Lysted/Viagogo/CrowdVolt session)
+Requires=kartis-xvfb.service
+After=kartis-xvfb.service
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+WorkingDirectory=/opt/kartis
+Environment=DISPLAY=:99
+# --remote-allow-origins=* required since Chrome 111+ silently drops CDP
+# WebSocket upgrades without an allowlisted origin. Same flag login.py
+# already sets on local dev (commit f14bbc9). Safe because Chrome only
+# listens on localhost.
+ExecStart=/usr/bin/chromium \
+    --remote-debugging-port=9222 \
+    --remote-allow-origins=* \
+    --user-data-dir=/opt/kartis/user_data \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-features=Translate \
+    --disable-background-networking
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
