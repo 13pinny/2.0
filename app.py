@@ -45,6 +45,7 @@ import pacha_tickets
 import scraper
 import series
 import tickchak
+import trends
 import tickchak_pdf
 import ticketmaster
 import tm_discover
@@ -2770,6 +2771,84 @@ def api_series():
     from flask import request
     name = (request.args.get("series") or "NEXT").strip()
     return jsonify(series.build(name))
+
+
+@app.route("/trends")
+def trends_page():
+    return render_template("trends.html")
+
+
+@app.route("/api/trends")
+def api_trends():
+    """Sales analytics for a selection: ?series=NEXT (a /series run, matched
+    by date + venue and re-costed from its purchased blocks), ?group=<event
+    group key> (one show), or ?q=<comma-separated name tokens>. With none of
+    them, every sale. Always returns `catalog` so the picker can be filled."""
+    from flask import request
+    all_sales = _build_combined_sales()
+    series_name = (request.args.get("series") or "").strip()
+    group = (request.args.get("group") or "").strip()
+    q = (request.args.get("q") or "").strip()
+
+    holdings, unsold = [], []
+    sdata = None
+    key_fn = series.sale_key_fn()
+    for name in sorted({r["series"] for r in db.series_purchases_all_any_series()}):
+        built = series.build(name)
+        if name == series_name:
+            sdata = built
+        else:
+            trends.recost_series(all_sales, built, key_fn)
+    if series_name:
+        sdata = sdata or series.build(series_name)
+        sales = trends.apply_series(all_sales, sdata, key_fn)
+        today = datetime.now().date().isoformat()
+        for b in sdata.get("blocks") or []:
+            if not b.get("unsold_qty"):
+                continue
+            row = {"event_date_iso": b["event_date_iso"], "venue": b.get("venue") or "",
+                   "event_name": series_name, "section": b.get("section") or "",
+                   "row": b.get("row_label") or "", "qty": b["unsold_qty"],
+                   "cost": round((b.get("unit_cost") or 0) * b["unsold_qty"], 2)}
+            # A block still unsold after its show is a realised loss, not a holding.
+            (unsold if b["event_date_iso"] < today else holdings).append(row)
+        title = series_name
+    else:
+        if group:
+            sales = [s for s in all_sales if s.get("event_group") == group]
+        else:
+            sales = trends.match_query(all_sales, q)
+        names = {(s.get("event_name") or "").lower() for s in sales}
+        for u in db.all_unsold():
+            if (u.get("event_name") or "").lower() in names and (
+                    not group or any((u.get("event_date_iso") or "")[:10] == (s.get("event_date_iso") or "")[:10]
+                                     for s in sales)):
+                unsold.append({"event_name": u.get("event_name") or "",
+                               "event_date_iso": (u.get("event_date_iso") or "")[:10],
+                               "qty": u.get("qty") or 0, "cost": u.get("cost") or 0})
+        title = (sales[0].get("event_name") if group and sales else q) or "All sales"
+
+    payload = trends.build(sales, holdings=holdings, unsold=unsold, title=title)
+    payload["selection"] = {"series": series_name, "group": group, "q": q}
+    payload["catalog"] = _trends_catalog(all_sales)
+    return jsonify(payload)
+
+
+def _trends_catalog(all_sales):
+    """Picker options: every tracked series, then every event group that has
+    at least one sale, newest show first."""
+    seen = {}
+    for s in all_sales:
+        g = s.get("event_group")
+        if not g:
+            continue
+        e = seen.setdefault(g, {"group": g, "event_name": s.get("event_name") or "",
+                                "event_date_iso": (s.get("event_date_iso") or "")[:10],
+                                "venue": s.get("venue") or "", "qty": 0})
+        e["qty"] += s.get("qty") or 0
+    events = sorted(seen.values(), key=lambda e: e["event_date_iso"] or "", reverse=True)
+    series_names = sorted({r["series"] for r in db.series_purchases_all_any_series()})
+    return {"series": series_names, "events": events}
 
 
 @app.route("/api/series/purchase", methods=["POST"])

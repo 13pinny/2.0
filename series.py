@@ -138,6 +138,7 @@ def build(series="NEXT"):
             "venue": rows[0].get("venue") or venue_by_date.get(d, ""),
             "section": rows[0].get("section"),
             "section_key": sec,
+            "row_key": row,
             "row_label": rows[0].get("row_label"),
             "seats": ", ".join(r.get("seats") or "" for r in rows).strip(", "),
             "accounts": sorted({(r.get("account") or "").lower() for r in rows}),
@@ -187,6 +188,19 @@ def build(series="NEXT"):
         "totals": _totals(blocks, purchases),
         "cap_per_account": CAP_PER_ACCOUNT,
     }
+
+
+def sale_key_fn():
+    """key(sale) -> the (date, section, row) match key for a combined-sale
+    row, built with the same normalisation as the blocks in build(). Lets
+    /trends re-cost a NEXT sale from its purchased block."""
+    ov = _overrides()
+
+    def key(s):
+        return ((s.get("event_date_iso") or "")[:10],
+                norm_section(s.get("section"), s.get("venue"), ov),
+                _norm_row(s.get("row") if s.get("row") is not None else s.get("row_label")))
+    return key
 
 
 def match_series(event_date_iso, venue=None):
