@@ -72,6 +72,27 @@ API_HEADERS = {
     "X-Api-Timestamp": "2024-04-15",
 }
 
+# The VPS's whole hosting network is refused by api.dice.fm, so the server
+# can only reach it through another address. Either, API-host calls only:
+#   KARTIS_DICE_PROXY     an HTTP(S) proxy, e.g. a residential one:
+#                         http://user:pass@host:port
+#   KARTIS_DICE_API_BASE  a forwarding endpoint (e.g. a Cloudflare Worker)
+#                         that relays <base>/<path> to api.dice.fm/<path>
+DICE_PROXY = os.environ.get("KARTIS_DICE_PROXY", "").strip()
+DICE_API_FORWARD = os.environ.get("KARTIS_DICE_API_BASE", "").strip().rstrip("/")
+_api_opener = None
+
+
+def _api_urlopen(req):
+    global _api_opener
+    if not DICE_PROXY:
+        return urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
+    if _api_opener is None:
+        _api_opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": DICE_PROXY, "https": DICE_PROXY}))
+    return _api_opener.open(req, timeout=REQUEST_TIMEOUT)
+
+
 _ID_MAP_FILE = CACHE_DIR / "dice_ids.json"
 _id_map = None  # {slug: internal_id} — immutable, cached forever
 
@@ -89,13 +110,15 @@ class DiceError(RuntimeError):
 
 def _http_get(url, accept=None):
     headers = dict(REQUEST_HEADERS)
-    if url.startswith(API_BASE):
+    is_api = url.startswith(API_BASE)
+    if is_api:
         headers.update(API_HEADERS)
     if accept:
         headers["Accept"] = accept
-    req = urllib.request.Request(url, headers=headers)
+    fetch_url = DICE_API_FORWARD + url[len(API_BASE):] if is_api and DICE_API_FORWARD else url
+    req = urllib.request.Request(fetch_url, headers=headers)
     try:
-        resp = urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
+        resp = _api_urlopen(req) if is_api else urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
     except urllib.error.HTTPError as e:
         raise DiceError(f"HTTP {e.code} from {url}") from e
     except urllib.error.URLError as e:
