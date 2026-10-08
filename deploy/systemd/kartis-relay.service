@@ -1,0 +1,17 @@
+[Unit]
+Description=Kartis relay pass: load tracked Marquee pages in kartis-chrome-relay, hand the HTML to Flask
+Requires=kartis-chrome-relay.service
+After=kartis-chrome-relay.service kartis-flask.service
+
+[Service]
+Type=oneshot
+User=kartis
+Group=kartis
+WorkingDirectory=/opt/kartis
+# Straight to gunicorn, skipping Caddy's basic auth; KARTIS_CVAUTH_SECRET
+# and the Discord webhooks come from /opt/kartis/.env (load_dotenv never
+# overrides the two values set here).
+Environment=KARTIS_BASE_URL=http://127.0.0.1:8000
+Environment=KARTIS_RELAY_SOURCES=tao
+ExecStart=/opt/kartis/.venv/bin/python eventim_relay.py
+TimeoutStartSec=900

@@ -211,6 +211,34 @@ The restart is the part that matters: gunicorn compiles the Jinja
 templates once and caches them, so a bare `git pull` leaves the old UI
 serving indefinitely.
 
+## Marquee relay on the box (no PC needed)
+
+tickets.taogroup.com only serves real browsers (see the DESKTOP RELAY note in
+`tao_events.py`). Instead of the PC's `eventim_relay.py`, the box can load the
+Marquee pages in its own headed Chrome and hand the HTML to Flask:
+
+```bash
+cd /opt/kartis && git pull --ff-only
+sudo cp deploy/systemd/kartis-chrome-relay.service deploy/systemd/kartis-relay.service \
+        deploy/systemd/kartis-relay.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kartis-chrome-relay kartis-relay.timer
+sudo systemctl start kartis-relay          # one pass right now
+journalctl -u kartis-relay -n 40 --no-pager
+```
+
+- `<key>: HTTP 200 {"ok": true, "tiers": N}` lines mean it works; /marquee
+  prices stay fresh and price jumps keep going to #jumps with the PC off.
+- `no ticket list (page title 'Just a moment...')` means Cloudflare is holding
+  it. Open `https://vnc.kartis.homes/vnc.html`, find the relay Chrome window
+  (the third one, offset to 120,120), click the checkbox, then
+  `sudo systemctl start kartis-relay` again. While it stays held, #status gets
+  one ping (repeated every 6 h); another ping says when pages load again.
+- Once it works, the PC no longer needs to run `eventim_relay.py` for Marquee.
+  Running both is harmless (whichever copy is newest wins, alerts are sent
+  only by the server).
+- To undo: `sudo systemctl disable --now kartis-relay.timer kartis-chrome-relay`.
+
 ## 9. Backups to B2
 
 ```sh
