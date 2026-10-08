@@ -1,0 +1,48 @@
+name: Shotgun watch
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      test_ping:
+        description: "Send a test ping for the next upcoming event"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: shotgun-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check for new events
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+        run: python shotgun_watch.py ${{ inputs.test_ping && '--test-ping' || '' }}
+
+      - name: Save seen events
+        run: |
+          if [ -n "$(git status --porcelain seen_events.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add seen_events.json
+            git commit -m "Update seen Shotgun events"
+            # the price watch also commits on this schedule, so retry on a race
+            for i in 1 2 3; do git pull --rebase -q && git push && break; sleep 5; done
+            git log origin/main -1 --format=%H | grep -q "$(git rev-parse HEAD)"
+          fi
