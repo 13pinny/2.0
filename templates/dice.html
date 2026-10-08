@@ -45,6 +45,15 @@
   tr.detail td { background: var(--bg-2); padding: 6px 10px 12px 26px; font-size: 11px; color: var(--muted); }
   tr.detail .ty { padding: 2px 0; overflow-wrap: anywhere; }
   tr.detail .ty .tt { color: var(--text); font-weight: 600; }
+  /* per-purchase mini table under an opened holdings row */
+  table.ptab { width: auto; min-width: 100%; font-size: 11px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  table.ptab th { font-size: 9px; padding: 5px 8px; cursor: default; background: var(--bg-3); }
+  table.ptab td { padding: 6px 8px; border-bottom: 1px solid var(--line); color: var(--text); background: transparent; vertical-align: middle; }
+  table.ptab tbody tr:last-child td { border-bottom: 0; }
+  table.ptab .tt { font-weight: 600; }
+  table.ptab .on { color: var(--green); font-weight: 600; }
+  table.ptab .off { color: var(--muted); }
+  table.ptab td.sl { font-size: 10px; color: var(--muted); }
   /* vault buyer name after an account: capped so a long name can't push
      the ticket type and counts off the line */
   .vn { color: var(--muted); font-size: 10px; display: inline-block; max-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
@@ -794,13 +803,33 @@ function purchaseRow(g, tmap){
     <td>${g.url ? `<a class="buy" href="${escape(g.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">DICE</a>` : ''}</td>
   </tr>`;
   if (opened){
+    // One aligned row per purchase: type and account up front, then the
+    // numbers in fixed columns, then the listed / sale controls.
     const rows = g.purchases.map(p => {
       const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
-      const pr = p.profit != null ? ` · <span class="${p.profit >= 0 ? 'pos' : 'neg'}">${p.profit >= 0 ? '+' : ''}${money0(p.profit)}</span>${roiOf(p.profit, p.cost_sold) != null ? ' (' + roiCell(roiOf(p.profit, p.cost_sold)) + ')' : ''}` : '';
-      return `<div class="ty"><span class="tt">${fmt(p.qty)} × ${escape(p.ticket_type||'?')}</span> — ${acctShort(p.account_email)} · ${money(p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total), p.currency||'USD')}/tkt · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)}${pr} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
+      const ppu = p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total);
+      const r = roiOf(p.profit, p.cost_sold);
+      const prof = p.profit != null
+        ? `<span class="${p.profit >= 0 ? 'pos' : 'neg'}">${p.profit >= 0 ? '+' : ''}${money0(p.profit)}</span>${r != null ? `<div class="evsub">${roiCell(r)}</div>` : ''}`
+        : '<span class="when">—</span>';
+      const z = n => n ? fmt(n) : '<span class="when">0</span>';
+      const av = p.avail != null ? p.avail : p.qty;
+      return `<tr>
+        <td><span class="tt">${escape(p.ticket_type||'?')}</span>${warn}</td>
+        <td>${acctShort(p.account_email)}</td>
+        <td class="num">${money(ppu, p.currency||'USD')}</td>
+        <td class="num">${fmt(p.qty)}</td>
+        <td class="num">${z(p.qty_transferred)}</td>
+        <td class="num">${z(p.sold||0)}</td>
+        <td class="num"><span class="${av>0?'on':'off'}">${fmt(av)}</span></td>
+        <td class="num">${prof}</td>
+        <td>${listedChip(p)}</td>
+        <td class="sl">${saleChip(p)}</td>
+      </tr>`;
     }).join('');
-    const hero = g.image ? `<div class="hero" style="${coverStyle(g.image, g.event_name)}"></div>` : '';
-    html += `<tr class="detail"><td colspan="13">${hero}${rows}<div style="clear:both"></div></td></tr>`;
+    html += `<tr class="detail"><td colspan="13"><table class="ptab">
+      <thead><tr><th>Ticket type</th><th>Account</th><th class="num">Per tkt</th><th class="num">Bought</th><th class="num">Xfer</th><th class="num">Sold</th><th class="num">Avail</th><th class="num">Profit</th><th>Listed on</th><th>Sales</th></tr></thead>
+      <tbody>${rows}</tbody></table></td></tr>`;
   }
   return html;
 }
