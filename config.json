@@ -1,0 +1,13 @@
+{
+  "ticket_urls": [
+    "https://tickets.taogroup.com/e/marquee-new-york-10-16-26/tickets"
+  ],
+  "search": ["marquee"],
+  "days_ahead": 21,
+  "max_events": 15,
+  "delay_between_pages_seconds": 5,
+  "ntfy_topic": "",
+  "alert_price_drops": false,
+  "alert_new_tiers": false,
+  "alert_sold_out": true
+}

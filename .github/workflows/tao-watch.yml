@@ -1,0 +1,54 @@
+name: Tao price watch
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 minutes (GitHub may delay runs a bit)
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "Save page text/HTML as a downloadable artifact"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tao-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Check prices
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python tao_watch.py --once ${{ inputs.debug && '--debug' || '' }}
+
+      - name: Upload debug pages
+        if: ${{ inputs.debug }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-pages
+          path: debug/
+          if-no-files-found: ignore
+
+      - name: Save price history
+        run: |
+          git config user.name "tao-watch-bot"
+          git config user.email "tao-watch-bot@users.noreply.github.com"
+          git add prices.json 2>/dev/null || true
+          git diff --cached --quiet || (git commit -m "Update prices" && git push)
