@@ -1,7 +1,7 @@
 # Tao Group price watch
 
 Checks ticket prices for Tao Group events (Marquee, OMNIA, TAO, Hakkasan, etc.) every 30 minutes
-in **GitHub Actions** and sends a phone notification when a price goes up. Nothing runs on your
+in **GitHub Actions** and posts to Discord when a price goes up. Nothing runs on your
 computer or in your browser.
 
 ## How it works
@@ -11,12 +11,13 @@ computer or in your browser.
 2. Opens each `tickets.taogroup.com` page in a headless browser in the cloud and reads the ticket tiers and prices.
 3. Compares them to the last run (stored in `prices.json`, committed back to the repo) and alerts on increases.
 
-## Set up phone alerts (2 minutes)
+## Set up Discord alerts (2 minutes)
 
-1. Install the free **ntfy** app (iOS / Android).
-2. In the app, subscribe to a topic with a hard-to-guess name, e.g. `tao-prices-8f3k2q`.
-3. In this GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**,
-   name `NTFY_TOPIC`, value = your topic name.
+1. In Discord, open the channel you want alerts in → **Edit Channel → Integrations → Webhooks → New Webhook** → **Copy Webhook URL**.
+2. In this GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**,
+   name `DISCORD_WEBHOOK_URL`, value = the URL you copied.
+
+(Optional: an `NTFY_TOPIC` secret also sends alerts to the ntfy phone app.)
 
 ## Choose what to watch
 

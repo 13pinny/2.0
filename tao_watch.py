@@ -138,6 +138,16 @@ def scrape(page, url, debug=False):
 
 def notify(cfg, title, body):
     log(f"ALERT: {title}\n{body}")
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL") or cfg.get("discord_webhook_url")
+    if webhook:
+        payload = json.dumps({"username": "Tao Price Watch", "content": f"**{title}**\n{body}"[:2000]})
+        req = urllib.request.Request(
+            webhook, data=payload.encode(), headers={"Content-Type": "application/json", "User-Agent": UA}
+        )
+        try:
+            urllib.request.urlopen(req, timeout=15)
+        except Exception as e:  # noqa: BLE001
+            log(f"Discord alert failed: {e}")
     topic = os.environ.get("NTFY_TOPIC") or cfg.get("ntfy_topic")
     if topic:
         req = urllib.request.Request(

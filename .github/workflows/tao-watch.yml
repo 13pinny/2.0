@@ -35,6 +35,7 @@ jobs:
 
       - name: Check prices
         env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python tao_watch.py --once ${{ inputs.debug && '--debug' || '' }}
 
