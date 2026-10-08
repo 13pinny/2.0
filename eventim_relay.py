@@ -24,6 +24,16 @@ Chrome, so it can't disturb a Lysted/viagogo session.
 Auth is the same pair cv_link_client uses: Caddy basic auth
 (KARTIS_WEB_USER / KARTIS_WEB_PASS) + KARTIS_CVAUTH_SECRET, all from .env.
 
+SERVER MODE (Linux, the VPS): the same script runs on the box every 5 min
+from kartis-relay.timer, driving its own headed Chrome (kartis-chrome-relay,
+CDP :9333 on the Xvfb display, so it shows up in noVNC) and talking to Flask
+on 127.0.0.1:8000 directly. That keeps Marquee prices flowing with the PC off.
+KARTIS_RELAY_SOURCES=tao limits it to tao (Cloudflare blocks eventim from the
+box even in a real Chrome). When the box's Chrome is held at the Cloudflare
+check, one Discord status ping says so: open vnc.kartis.homes and click the
+box in the "relay" Chrome window; a second ping says when pages load again.
+It never solves or skips a challenge itself. See deploy/README.md.
+
 Run:  .venv\\Scripts\\python eventim_relay.py           one pass, prints results
       .venv\\Scripts\\pythonw eventim_relay.py          what the scheduled task runs
                                                        (logs to logs\\eventim_relay.log)
@@ -50,6 +60,13 @@ CDP = f"http://127.0.0.1:{CDP_PORT}"
 CHROME = os.environ.get("KARTIS_CHROME_EXE") or r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", str(ROOT)), "eventim-relay-chrome")
 LOG = ROOT / "logs" / "eventim_relay.log"
+# On the box systemd owns the Chrome (kartis-chrome-relay.service); never spawn one.
+SERVER_MODE = sys.platform != "win32"
+# Comma list of sources to load here; empty = every source the server lists.
+SOURCES = {x.strip() for x in (os.environ.get("KARTIS_RELAY_SOURCES") or "").split(",") if x.strip()}
+# Remembers whether we already pinged Discord about a Cloudflare hold.
+BLOCK_STATE = ROOT / "logs" / "relay_block.json"
+BLOCK_REPING_SECONDS = 6 * 3600
 
 
 def log(msg):
@@ -65,6 +82,9 @@ def ensure_chrome():
             return False
     if up():
         return
+    if SERVER_MODE:
+        raise RuntimeError(f"no Chrome on CDP :{CDP_PORT} - "
+                           "sudo systemctl restart kartis-chrome-relay")
     subprocess.Popen([CHROME, f"--remote-debugging-port={CDP_PORT}",
                       f"--user-data-dir={PROFILE}", "--no-first-run",
                       "--no-default-browser-check", "--start-minimized",
@@ -98,6 +118,43 @@ def render(ctx, url, source="eventim"):
         pg.close()
 
 
+def _is_challenge(title):
+    t = (title or "").lower()
+    return "just a moment" in t or "attention required" in t
+
+
+def report_block(blocked, loaded):
+    """Server mode: one Discord status ping when the box's Chrome gets held
+    at the Cloudflare check (repeated every BLOCK_REPING_SECONDS while it
+    lasts) and one when pages load again. Nothing on the desktop -- a home
+    connection clears the check by itself."""
+    if not SERVER_MODE:
+        return
+    try:
+        state = json.loads(BLOCK_STATE.read_text())
+    except (OSError, ValueError):
+        state = {}
+    now = time.time()
+    if blocked and not loaded:
+        if now - state.get("pinged_at", 0) < BLOCK_REPING_SECONDS:
+            return
+        msg = (f"⚠️ **Marquee prices paused** — Cloudflare is holding the server's "
+               f"relay Chrome ({blocked} page(s)). Open https://vnc.kartis.homes/vnc.html "
+               f"and click the checkbox in the relay Chrome window.")
+        state = {"blocked": True, "pinged_at": now}
+    elif loaded and state.get("blocked"):
+        msg = "✅ **Marquee prices flowing again** — the server relay loaded the ticket pages."
+        state = {}
+    else:
+        return
+    import notify
+    hook = notify._discord_webhook("status")
+    if hook:
+        log(f"discord status: {notify._post_discord(hook, {'content': msg})}")
+    BLOCK_STATE.parent.mkdir(exist_ok=True)
+    BLOCK_STATE.write_text(json.dumps(state))
+
+
 def main():
     if sys.stdout is None:  # pythonw: no console
         LOG.parent.mkdir(exist_ok=True)
@@ -106,18 +163,19 @@ def main():
     if status != 200:
         log(f"targets: HTTP {status} {raw[:200]}")
         return 1
-    targets = json.loads(raw)["targets"]
+    targets = [t for t in json.loads(raw)["targets"]
+               if (t.get("source") or "eventim") in READY_SELECTOR
+               and (not SOURCES or (t.get("source") or "eventim") in SOURCES)]
     if not targets:
         return 0
     ensure_chrome()
     from patchright.sync_api import sync_playwright
+    blocked = loaded = 0
     with sync_playwright() as p:
         # Never browser.close() — on a CDP connection that closes the user's Chrome.
         ctx = p.chromium.connect_over_cdp(CDP).contexts[0]
         for t in targets:
             source = t.get("source") or "eventim"
-            if source not in READY_SELECTOR:
-                continue
             try:
                 html, title = render(ctx, t["url"], source)
             except Exception as e:
@@ -125,11 +183,18 @@ def main():
                 continue
             if html is None:
                 log(f"{t['event_key']}: no ticket list (page title {title!r})")
+                if _is_challenge(title):
+                    blocked += 1
+                    if blocked >= 2 and not loaded:
+                        log("held at the Cloudflare check - skipping the rest of this pass")
+                        break
                 continue
+            loaded += 1
             status, raw = cv_link_client.call("/api/edm/eventim-relay",
                                               {"source": source, "event_key": t["event_key"],
                                                "html": html})
             log(f"{t['event_key']}: HTTP {status} {raw[:160]}")
+    report_block(blocked, loaded)
     return 0
 
 
