@@ -43,7 +43,11 @@
   tbody tr.ev { cursor: pointer; }
   tbody tr.ev:hover td { background: var(--bg-3); }
   tr.detail td { background: var(--bg-2); padding: 6px 10px 12px 26px; font-size: 11px; color: var(--muted); }
-  tr.detail .ty { padding: 2px 0; }
+  tr.detail .ty { padding: 2px 0; overflow-wrap: anywhere; }
+  tr.detail .ty .tt { color: var(--text); font-weight: 600; }
+  /* vault buyer name after an account: capped so a long name can't push
+     the ticket type and counts off the line */
+  .vn { color: var(--muted); font-size: 10px; display: inline-block; max-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
   tr.detail .ty b { color: var(--text); }
   tr.detail .ty .off { color: var(--red); }
   tr.detail .ty .on { color: var(--green); }
@@ -70,7 +74,15 @@
   .art.ph { display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 14px; letter-spacing: 0; }
   .art.past { filter: grayscale(.85); opacity: .6; }
   td.artc { width: 52px; padding-right: 0; }
-  .evname { font-weight: 600; color: var(--text); }
+  .evname { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+  /* Long event names wrap inside a bounded column, so the type chips and
+     price columns to their right stay on screen instead of being pushed
+     past the table's scroll edge. */
+  td.evc { min-width: 160px; max-width: 300px; }
+  td.nowc { min-width: 170px; max-width: 260px; }
+  .acctsel { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 6px; max-width: 100%; }
+  .acctbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; font-size: 11px; color: var(--muted); }
+  .acctbar a { color: var(--accent); text-decoration: none; }
   .evsub { font-size: 10px; color: var(--muted); margin-top: 2px; }
   .cd { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; background: var(--bg-3); color: var(--muted); margin-top: 3px; }
   .cd.today { background: #fde68a; color: #92400e; }
@@ -82,7 +94,7 @@
   .card .cover .cd { position: absolute; top: 8px; left: 8px; margin: 0; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
   .card .cover .qty { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,.72); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 9px; }
   .card .body { padding: 8px 10px 10px; }
-  .card .t { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .t { font-size: 12px; font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
   .card .s { font-size: 10px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .attn { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; }
   .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); background: var(--bg-2); border-radius: 18px; padding: 5px 12px; font-size: 11px; cursor: pointer; user-select: none; }
@@ -128,8 +140,8 @@
   .fol .show .when2 { font-size: 10px; color: var(--muted); }
   .fol .more { font-size: 10px; color: var(--accent); cursor: pointer; padding-top: 4px; }
   .types { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
-  .tchip { font-size: 10px; padding: 1px 7px; border-radius: 8px; background: #ecfdf5; color: #166534; border: 1px solid #bbf7d0; white-space: nowrap; }
-  .tchip b { font-variant-numeric: tabular-nums; }
+  .tchip { font-size: 10px; padding: 1px 7px; border-radius: 8px; background: #ecfdf5; color: #166534; border: 1px solid #bbf7d0; max-width: 100%; overflow-wrap: anywhere; }
+  .tchip b { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .tchip.off { background: var(--bg-3); color: var(--muted); border-color: var(--line); text-decoration: line-through; }
   .tchip.off b { font-weight: 400; }
   .detail .hero { float: right; width: 180px; height: 110px; border-radius: 10px; background-size: cover; background-position: center; margin: 2px 0 8px 16px; }
@@ -154,6 +166,9 @@
   <h2>Purchases &amp; Holdings <span style="font-size:10px;color:var(--muted)">(auto-recorded from forwarded DICE emails · click an event for per-account rows)</span>
     <button class="act" id="pollBtn" style="margin-left:10px">Poll inbox now</button>
     <span id="pollNote" style="font-size:10px;color:var(--muted)"></span></h2>
+  <div class="acctbar"><label for="acctSel">Account</label>
+    <select class="acctsel" id="acctSel"><option value="">All accounts</option></select>
+    <span id="acctNote"></span></div>
   <div class="stats" id="ptotals"></div>
   <div class="filterbar" id="pfilterbar"></div>
   <div class="tablewrap">
@@ -229,7 +244,32 @@ try { usOnly = localStorage.getItem('dice.usOnly') === '1'; } catch (e) {}
 const keepRegion = r => !usOnly || r !== 'intl';
 function tEvents(){ return ((DATA && DATA.events) || []).filter(e => keepRegion(e.region)); }
 function pRegion(g){ return g.region || ((DATA && g.dice_id && (DATA.events || []).find(e => e.event_code === g.dice_id)) || {}).region || null; }
-function pEvents(){ return ((PDATA && PDATA.events) || []).filter(g => keepRegion(pRegion(g))); }
+let acct = '';         // account picker on Purchases & Holdings ('' = all); lowercased email
+try { acct = localStorage.getItem('dice.acct') || ''; } catch (e) {}
+const acctOf = x => (x.account_email || '').toLowerCase();
+// One event narrowed to the picked account: every number is re-summed from
+// that account's purchase rows, so Bought/Sold/Avail/Spend/Profit are its own.
+function acctGroup(g){
+  const ps = g.purchases.filter(p => acctOf(p) === acct);
+  if (!ps.length) return null;
+  const sum = f => ps.reduce((a,p) => a + (f(p) || 0), 0);
+  const sold = sum(p => p.sold), revenue = sum(p => p.revenue), costSold = sum(p => p.cost_sold);
+  return {...g, purchases: ps,
+    qty: sum(p => p.qty), transferred: sum(p => p.qty_transferred), held: sum(p => p.held),
+    sold, avail: sum(p => p.avail), listed: sum(p => p.listed),
+    spend: sum(p => p.price_total), revenue, cost_sold: costSold,
+    revenue_unknown: sum(p => (p.sale_links||[]).filter(l => l.revenue == null).length),
+    profit: sold ? Math.round((revenue - costSold) * 100) / 100 : null};
+}
+function pEvents(){
+  let evs = ((PDATA && PDATA.events) || []).filter(g => keepRegion(pRegion(g)));
+  if (acct) evs = evs.map(acctGroup).filter(Boolean);
+  return evs;
+}
+function pTransfers(){
+  const xs = (PDATA && PDATA.transfers) || [];
+  return acct ? xs.filter(t => acctOf(t) === acct) : xs;
+}
 
 // ---- artwork -----------------------------------------------------------
 // DICE art lives on imgix; ask it for exactly the crop we draw. Events
@@ -418,7 +458,7 @@ function trackerRow(e, held){
     : `<span class="errdot" title="${escape(e.error)}">● fetch failed</span>`;
   return `<tr class="ev${e.past ? ' isPast' : ''}" data-id="${e.event_code}">
     <td class="artc">${art(e.image, e.name, e.past)}</td>
-    <td><div class="evname">${escape(e.name || e.event_code)}${err}</div><div class="evsub">${escape(e.venue||'')} <span class="trk">· ${escape(e.tracked_by)}</span></div>${typeChips(e)}</td>
+    <td class="evc"><div class="evname">${escape(e.name || e.event_code)}${err}</div><div class="evsub">${escape(e.venue||'')} <span class="trk">· ${escape(e.tracked_by)}</span></div>${typeChips(e)}</td>
     <td class="when">${escape(e.date_text||'')}<br>${countdown(e.first_date_ms ? dayDiff(e.date_text) : null)}</td>
     <td>${statusBadge(e.status)}</td>
     <td class="num">${fmt(e.types_on_sale)}</td>
@@ -545,7 +585,7 @@ function acctShort(a){
   const v = (PDATA && PDATA.accounts || {})[(a||'').toLowerCase()];
   if (!v || (!v.name && !v.phone_last4)) return `<b>${short}</b>`;
   const bits = [v.name, v.phone_last4 ? '…' + v.phone_last4 : ''].filter(Boolean).map(escape);
-  return `<b>${short}</b> <span style="color:var(--muted);font-size:10px">(${bits.join(' · ')})</span>`;
+  return `<b>${short}</b> <span class="vn" title="${bits.join(' · ')}">(${bits.join(' · ')})</span>`;
 }
 
 // ---- "listed on" marker: per-purchase qty split across resale platforms.
@@ -740,13 +780,13 @@ function purchaseRow(g, tmap){
   const unlisted = !g.past && (g.avail||0) > (g.listed||0);
   let html = `<tr class="ev${g.past ? ' isPast' : ''}" data-pid="${escape(key)}" id="p-${escape(key)}">
     <td class="artc">${art(g.image, g.event_name, g.past)}</td>
-    <td><div class="evname">${escape(g.event_name)}</div><div class="evsub">${escape(g.venue||'')}</div></td>
+    <td class="evc"><div class="evname">${escape(g.event_name)}</div><div class="evsub">${escape(g.venue||'')}</div></td>
     <td class="when">${escape(niceDate(g.event_date_iso))}<br>${countdown(dayDiff(g.event_date_iso))}</td>
     <td class="num">${fmt(g.qty)}</td>
-    <td class="num">${fmt(g.sold||0)}</td>
+    <td class="num">${fmt(g.sold||0)}${g.transferred ? `<div class="evsub" title="transferred out of DICE (to buyers or other accounts)">${fmt(g.transferred)} xfer</div>` : ''}</td>
     <td class="num" ${availCls}>${fmt(g.avail!=null?g.avail:g.qty)}</td>
     <td class="num"${unlisted ? ' style="color:var(--amber);font-weight:600" title="fewer listed than available"' : ''}>${fmt(g.listed||0)}</td>
-    <td>${liveCell(g, tmap)}</td>
+    <td class="nowc">${liveCell(g, tmap)}</td>
     <td class="num">${money0(g.spend)}</td>
     <td class="num">${g.revenue ? money0(g.revenue) : '<span class="when">—</span>'}</td>
     <td class="num">${profitCell(g)}</td>
@@ -757,7 +797,7 @@ function purchaseRow(g, tmap){
     const rows = g.purchases.map(p => {
       const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
       const pr = p.profit != null ? ` · <span class="${p.profit >= 0 ? 'pos' : 'neg'}">${p.profit >= 0 ? '+' : ''}${money0(p.profit)}</span>${roiOf(p.profit, p.cost_sold) != null ? ' (' + roiCell(roiOf(p.profit, p.cost_sold)) + ')' : ''}` : '';
-      return `<div class="ty">${acctShort(p.account_email)} — ${fmt(p.qty)} × ${escape(p.ticket_type||'?')} · ${money(p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total), p.currency||'USD')}/tkt · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)}${pr} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
+      return `<div class="ty"><span class="tt">${fmt(p.qty)} × ${escape(p.ticket_type||'?')}</span> — ${acctShort(p.account_email)} · ${money(p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total), p.currency||'USD')}/tkt · transferred ${fmt(p.qty_transferred)} · sold ${fmt(p.sold||0)}${pr} · <span class="${p.avail>0?'on':'off'}">avail ${fmt(p.avail!=null?p.avail:p.qty)}</span>${warn} · ${listedChip(p)} · ${saleChip(p)}</div>`;
     }).join('');
     const hero = g.image ? `<div class="hero" style="${coverStyle(g.image, g.event_name)}"></div>` : '';
     html += `<tr class="detail"><td colspan="13">${hero}${rows}<div style="clear:both"></div></td></tr>`;
@@ -896,7 +936,7 @@ function renderAttention(){
   });
 }
 function renderTransfers(){
-  const xs = (PDATA && PDATA.transfers) || [];
+  const xs = pTransfers();
   $('xrows').innerHTML = xs.length ? xs.map(t => {
     const m = t.match_status === 'matched'
       ? '<span class="badge selling">matched</span>'
@@ -909,16 +949,49 @@ function renderTransfers(){
       <td>${escape(t.recipient||'')}</td>
       <td>${m}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="6" class="empty">No transfers recorded.</td></tr>';
+  }).join('') : `<tr><td colspan="6" class="empty">${acct ? 'No transfers from this account.' : 'No transfers recorded.'}</td></tr>`;
 }
 async function loadPurchases(){
   try {
     const r = await fetch('/api/dice/purchases', {cache:'no-store'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     PDATA = await r.json();
+    renderAcctPicker();
     renderPurchases(); renderTransfers(); renderAttention(); render();
   } catch (e) { /* section-local; main err box stays for the tracker */ }
 }
+// ---- account picker ---------------------------------------------------------
+function acctLabel(a){
+  const short = a.replace(/@gmail\.com$/i, '');
+  const v = (PDATA && PDATA.accounts || {})[a];
+  const bits = v ? [v.name, v.phone_last4 ? '…' + v.phone_last4 : ''].filter(Boolean) : [];
+  return bits.length ? `${short} (${bits.join(' · ')})` : short;
+}
+function renderAcctPicker(){
+  const n = {};
+  ((PDATA && PDATA.events) || []).forEach(g => g.purchases.forEach(p => { const a = acctOf(p); if (a) n[a] = (n[a]||0) + (p.qty||0); }));
+  ((PDATA && PDATA.transfers) || []).forEach(t => { const a = acctOf(t); if (a && !(a in n)) n[a] = 0; });
+  const list = Object.keys(n).sort((a,b) => acctLabel(a).localeCompare(acctLabel(b)));
+  if (acct && !(acct in n)) acct = '';
+  $('acctSel').innerHTML = `<option value="">All accounts (${list.length})</option>` + list.map(a =>
+    `<option value="${escape(a)}"${a === acct ? ' selected' : ''}>${escape(acctLabel(a))} · ${n[a]} bought</option>`).join('');
+  renderAcctNote();
+}
+function renderAcctNote(){
+  if (!acct){ $('acctNote').innerHTML = ''; return; }
+  const evs = pEvents(), xs = pTransfers();
+  const s = f => evs.reduce((a,g) => a + (g[f]||0), 0);
+  $('acctNote').innerHTML = `${evs.length} event${evs.length === 1 ? '' : 's'} · bought ${fmt(s('qty'))} · sold ${fmt(s('sold'))} · transferred ${fmt(s('transferred'))} (${xs.length} transfer email${xs.length === 1 ? '' : 's'}) · avail ${fmt(s('avail'))} <a href="#" id="acctClear">show all accounts</a>`;
+  $('acctClear').onclick = ev => { ev.preventDefault(); setAcct(''); };
+}
+function setAcct(a){
+  acct = a;
+  try { a ? localStorage.setItem('dice.acct', a) : localStorage.removeItem('dice.acct'); } catch (e) {}
+  $('acctSel').value = a;
+  if (a){ $('xferwrap').style.display = ''; $('xferToggle').textContent = 'Hide transfer log'; }
+  renderAcctNote(); renderPurchases(); renderTransfers(); renderAttention();
+}
+$('acctSel').onchange = () => setAcct($('acctSel').value);
 $('xferToggle').onclick = ev => {
   ev.preventDefault();
   const w = $('xferwrap');
