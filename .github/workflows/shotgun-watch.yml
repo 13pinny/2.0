@@ -31,7 +31,8 @@ jobs:
       - name: Check for new events
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # posts to #ai-warehouse-new-events; falls back to the shared channel until that secret is set
+          DISCORD_WEBHOOK_URL: ${{ secrets.SHOTGUN_DISCORD_WEBHOOK_URL || secrets.DISCORD_WEBHOOK_URL }}
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
         run: python shotgun_watch.py ${{ inputs.test_ping && '--test-ping' || '' }}
 

@@ -43,7 +43,9 @@ The schedule is in `.github/workflows/tao-watch.yml` (`cron`). To run it right n
 
 # Shotgun new-event watch
 
-Checks the [Nu Androids Shotgun page](https://shotgun.live/en/venues/nu-androids) every 30 minutes and pings when a new upcoming event is listed. It uses the same `DISCORD_WEBHOOK_URL` and `NTFY_TOPIC` secrets as the price watch above.
+Checks the [Nu Androids Shotgun page](https://shotgun.live/en/venues/nu-androids) every 30 minutes and pings when a new upcoming event is listed.
+
+New-event alerts go to their own Discord channel, **#ai-warehouse-new-events**. To set it up, create a webhook in that channel the same way as above and save it as a repository secret named `SHOTGUN_DISCORD_WEBHOOK_URL`. Until that secret exists, alerts go to the shared `DISCORD_WEBHOOK_URL` channel instead. `NTFY_TOPIC` is shared with the price watch.
 
 - `shotgun_watch.py` is the scraper and uses only the Python standard library.
 - `.github/workflows/shotgun-watch.yml` runs it on a schedule.
