@@ -259,6 +259,8 @@ _edm_events_lock = threading.Lock()
 # hosts here and each tracked event is its own request.
 EDM_MONITOR_INTERVAL_MINUTES = int(os.getenv("KARTIS_EDM_MONITOR_INTERVAL_MINUTES") or 2)
 EDM_MONITOR_ENABLED = (os.getenv("KARTIS_EDM_MONITOR_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+# Whether the PC relay is asked to load Marquee (tao) pages too.
+TAO_RELAY_ENABLED = (os.getenv("KARTIS_TAO_RELAY_ENABLED") or "0").strip().lower() in ("1", "true", "yes", "on")
 EDM_MAX_PINGS_PER_TICK = 12
 # DICE artist/venue follows (dice_follow.py). Same single-machine rule as
 # the EDM monitor, and off wherever that is unless overridden.
@@ -6845,12 +6847,14 @@ def api_eventim_relay_targets():
                 "url": r.get("url") or eventim_events.fetch_url(r["event_key"])}
                for r in rows if r["source"] == eventim_events.SOURCE_NAME]
     # tao (Marquee) pages sit behind a browser-only check too -- see the
-    # DESKTOP RELAY note in tao_events. Past shows drop out of the poll list
-    # with the catalog sync, so every row here is worth loading.
-    import tao_events
-    targets += [{"source": "tao", "event_key": r["event_key"],
-                 "url": tao_events.event_page_url(r["event_key"])}
-                for r in rows if r["source"] == tao_events.SOURCE_NAME]
+    # DESKTOP RELAY note in tao_events. Off by default since 2026-10-08: the
+    # 28 page loads every 5 min kept opening Chrome windows on the PC.
+    # KARTIS_TAO_RELAY_ENABLED=1 on the server turns it back on.
+    if TAO_RELAY_ENABLED:
+        import tao_events
+        targets += [{"source": "tao", "event_key": r["event_key"],
+                     "url": tao_events.event_page_url(r["event_key"])}
+                    for r in rows if r["source"] == tao_events.SOURCE_NAME]
     return jsonify({"targets": targets})
 
 
