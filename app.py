@@ -6056,6 +6056,15 @@ def _check_one_watcher(w, now_iso):
             _icon, _tail = ("⚠️", " (כרטיסים אחרונים)") if _last else ("🎟️", "")
             headline = f"{_icon} {_n} date{'s' if _n != 1 else ''} just opened{_tail} — {_snm}"
 
+        # DICE: every ping about one event (drops AND status flips) goes to
+        # that event night's own #dice-<event>-<date> channel, shared with dice_alerts'
+        # price pings. (Keep in sync with watcher_only.py.)
+        _dice_hook = None
+        if src_name == "dice" and enabled and matched:
+            _dmeta = ((labels or {}).get("meta") or {})
+            _dice_hook = notify.dice_event_channel_webhook(
+                _dmeta.get("eventName") or label, _dmeta.get("firstPerfText"))
+
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,
@@ -6063,7 +6072,8 @@ def _check_one_watcher(w, now_iso):
                 total_now=len(seats), labels=labels,
                 channels=enabled,
                 headline=headline,
-                discord_override=discord_bot.webhook_for(w.get("discord_channel")),
+                discord_override=_dice_hook or discord_bot.webhook_for(w.get("discord_channel")),
+                status_override=_dice_hook,
             )
             # Stamp the physical seats we just pinged so they cool down.
             if SEAT_COOLDOWN_SECONDS > 0:
@@ -6995,6 +7005,36 @@ def _dice_price_ladder(history, now_iso):
     return out
 
 
+def _dice_cv_resolve(items):
+    """{event_key: {"url", "source"}} for the /dice CrowdVolt buttons.
+    items = [(key, name, venue, date_iso)]. Keys with no stored row are
+    matched against CrowdVolt's sitemap (cv_events, 6h cache) and a hit is
+    stored as source 'auto'; manual rows — including a pinned '' "no CV
+    page" — are never touched. A sitemap that can't be fetched just means
+    no new auto-matches this load; the "CV?" search link still shows."""
+    links = db.dice_cv_links_all()
+    todo = [it for it in items if it[0] and it[1] and it[0] not in links]
+    if not todo:
+        return links
+    import cv_events
+    try:
+        slugs = cv_events.event_slugs()
+    except Exception:
+        slugs = []
+    if not slugs:
+        return links
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for key, name, venue, date_iso in todo:
+        try:
+            url = cv_events.match(name, venue, date_iso, slugs)
+        except Exception:
+            url = None
+        if url:
+            db.dice_cv_link_set(key, url, now_iso, source="auto")
+            links[key] = {"url": url, "source": "auto"}
+    return links
+
+
 def _dice_payload(force=False):
     """Shared by GET /api/dice and the refresh endpoint. force=True hits
     the DICE API for every event in parallel (and logs changes); otherwise
@@ -7018,6 +7058,11 @@ def _dice_payload(force=False):
         labels_by = {c: dice.get_labels(c, "0") for c in tracked}
     log_map = db.dice_tier_log_all()
     pages = dice.page_info_many(list(tracked))
+    cv_links = _dice_cv_resolve([
+        (c, (labels_by.get(c) or {}).get("meta", {}).get("eventName"),
+         (labels_by.get(c) or {}).get("meta", {}).get("venueName"),
+         (labels_by.get(c) or {}).get("meta", {}).get("firstPerfText"))
+        for c in tracked])
     # Name fallback when DICE is unreachable and nothing is cached yet.
     manual_labels = {str(r["code"]): r["label"] for r in db.market_manual_all()
                      if r["source"] == "dice" and r["label"]}
@@ -7059,6 +7104,8 @@ def _dice_payload(force=False):
             "past": bool(first_ms and first_ms + 12 * 3600e3 < now_ms),
             "url": dice.perf_url(code),
             "image": (pages.get(code) or {}).get("image"),
+            "cv_url": (cv_links.get(code) or {}).get("url") or None,
+            "cv_source": (cv_links.get(code) or {}).get("source"),
             "status": meta.get("status"),
             "event_status": meta.get("eventStatus"),
             "sale_end": meta.get("saleEnd"),
@@ -7381,6 +7428,16 @@ def api_dice_purchases():
             g["venue"] = p["venue"]
     today = datetime.now(timezone.utc).date().isoformat()
     for g in groups.values():
+        # Same key the tracker uses (24-hex id) so one link shows on both
+        # tables; an unresolved slug keys on "slug:<slug>" until then.
+        g["cv_key"] = g["dice_id"] or ("slug:" + g["event_slug"] if g["event_slug"] else None)
+    cv_links = _dice_cv_resolve([(g["cv_key"], g["event_name"], g["venue"], g["event_date_iso"])
+                                 for g in groups.values() if not g.get("past")])
+    for g in groups.values():
+        row = cv_links.get(g["cv_key"]) or (
+            cv_links.get("slug:" + g["event_slug"]) if g["event_slug"] else None) or {}
+        g["cv_url"] = row.get("url") or None
+        g["cv_source"] = row.get("source")
         g["revenue"] = round(g["revenue"], 2)
         g["cost_sold"] = round(g["cost_sold"], 2)
         g["profit"] = round(g["revenue"] - g["cost_sold"], 2) if g["sold"] else None
@@ -7484,6 +7541,36 @@ def api_dice_link_sale(purchase_id):
     except Exception as e:
         return jsonify({"error": f"already linked? {type(e).__name__}"}), 409
     return jsonify({"ok": True})
+
+
+_CV_EVENT_URL_RX = re.compile(r"^https?://(?:www\.)?crowdvolt\.com/event/([A-Za-z0-9._~%-]+)/?(?:[?#].*)?$", re.I)
+
+
+@app.route("/api/dice/cv-link", methods=["POST"])
+def api_dice_cv_link():
+    """Pin the CrowdVolt event page for a DICE event (overrides the sitemap
+    auto-match). Body: {"key": "<24-hex id or slug:...>", "url": ...} where
+    url is a crowdvolt.com/event/<slug> URL (stored without query/fragment),
+    "" to pin "no CrowdVolt page", or "auto" to go back to auto-matching."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    key = (body.get("key") or "").strip()
+    url = (body.get("url") or "").strip()
+    if not key or len(key) > 200:
+        return jsonify({"error": "key required"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if url.lower() == "auto":
+        db.dice_cv_link_set(key, None, now_iso)       # forget it; re-match next load
+        return jsonify({"ok": True, "cv_url": None, "auto": True})
+    if not url:
+        db.dice_cv_link_set(key, "", now_iso)         # pin "no CrowdVolt page"
+        return jsonify({"ok": True, "cv_url": None})
+    m = _CV_EVENT_URL_RX.match(url)
+    if not m:
+        return jsonify({"error": "paste a crowdvolt.com/event/... URL"}), 400
+    clean = f"https://www.crowdvolt.com/event/{m.group(1)}"
+    db.dice_cv_link_set(key, clean, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "cv_url": clean})
 
 
 @app.route("/api/dice/sale-links/<link_id>/delete", methods=["POST"])
@@ -9455,6 +9542,11 @@ if DICE_ALERTS_ENABLED:
     scheduler.add_job(run_dice_alerts, "interval", seconds=DICE_ALERTS_INTERVAL_SECONDS,
                       id="dice_alerts", start_date=datetime.now() + timedelta(minutes=2))
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
+# Delete DICE event channels 30 days after their show (notify.dice_event_
+# channel_webhook stamps the expiry). Daily, off the hour; a no-op without
+# the Discord bot.
+scheduler.add_job(lambda: discord_bot.delete_expired(), "cron", hour=4, minute=17,
+                  id="discord_channel_cleanup")
 # Festival/GA sales snapshots — fire one immediately (next_run_time) so the
 # Festival / GA Tracker pages have a baseline right after a restart, then
 # every N minutes.

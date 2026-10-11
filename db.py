@@ -1033,6 +1033,17 @@ CREATE INDEX IF NOT EXISTS idx_dice_purchases_acct ON dice_purchases(account_ema
 -- the page = purchase qty - SUM(linked qty); transfers deliberately play
 -- no part in that math (delivery info is often missing). sale_source +
 -- sale_id point into viagogo_sales / lysted_sales / crowdvolt_sales.
+-- /dice: the matching CrowdVolt event page per DICE event. source 'auto' =
+-- matched against CrowdVolt's sitemap by cv_events.match; 'manual' = pasted
+-- by hand and never overwritten. A manual row with cv_url '' means "no CV
+-- page — stop auto-matching this one". event_key = the 24-hex DICE id, or
+-- "slug:<slug>" for a holding whose id hasn't resolved yet.
+CREATE TABLE IF NOT EXISTS dice_cv_links (
+    event_key  TEXT PRIMARY KEY,
+    cv_url     TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'manual',
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS dice_sale_links (
     id           TEXT PRIMARY KEY,             -- dsl-<hex>
     purchase_id  TEXT NOT NULL,
@@ -1270,6 +1281,12 @@ def init():
             )
             """
         )
+        dec_cols = {row["name"] for row in conn.execute("PRAGMA table_info(discord_event_channels)").fetchall()}
+        if "expires_at" not in dec_cols:
+            # When the bot may delete this channel (DICE event channels:
+            # event date + 30 days, see notify.dice_event_channel_webhook).
+            # NULL = keep forever (watcher / venue / category channels).
+            conn.execute("ALTER TABLE discord_event_channels ADD COLUMN expires_at TEXT")
         td_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tm_drops)").fetchall()}
         if "notify_count" not in td_cols:
             conn.execute("ALTER TABLE tm_drops ADD COLUMN notify_count INTEGER")
@@ -1821,6 +1838,27 @@ def dice_purchase_set_listed(purchase_id, listed_json):
             (listed_json, purchase_id),
         )
         return cur.rowcount > 0
+
+
+def dice_cv_links_all():
+    """{event_key: {"url", "source"}} for the /dice CrowdVolt buttons."""
+    with connect() as conn:
+        return {r["event_key"]: {"url": r["cv_url"], "source": r["source"]}
+                for r in conn.execute("SELECT event_key, cv_url, source FROM dice_cv_links")}
+
+
+def dice_cv_link_set(event_key, cv_url, now_iso, source="manual"):
+    """Upsert one event's CrowdVolt link. cv_url None deletes the row (back
+    to auto-matching); '' with source 'manual' pins "no CrowdVolt page"."""
+    with connect() as conn:
+        if cv_url is None:
+            conn.execute("DELETE FROM dice_cv_links WHERE event_key = ?", (event_key,))
+            return
+        conn.execute(
+            "INSERT INTO dice_cv_links (event_key, cv_url, source, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(event_key) DO UPDATE SET "
+            "cv_url = excluded.cv_url, source = excluded.source, "
+            "updated_at = excluded.updated_at", (event_key, cv_url, source, now_iso))
 
 
 def dice_purchase_add_transferred(purchase_id, n):
@@ -3286,6 +3324,32 @@ def discord_channel_get(name):
             "SELECT * FROM discord_event_channels WHERE name = ?", (name,)
         ).fetchone()
     return dict(row) if row else None
+
+
+def discord_channel_set_expiry(name, expires_iso):
+    """Mark a cached bot channel deletable after expires_iso. Only moves the
+    date LATER, so a channel shared by two events lives until the last one's
+    window closes."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE discord_event_channels SET expires_at = ? WHERE name = ? "
+            "AND (expires_at IS NULL OR expires_at < ?)",
+            (expires_iso, name, expires_iso),
+        )
+
+
+def discord_channels_expired(now_iso):
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM discord_event_channels WHERE expires_at IS NOT NULL "
+            "AND expires_at <= ?", (now_iso,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def discord_channel_delete(name):
+    with connect() as conn:
+        conn.execute("DELETE FROM discord_event_channels WHERE name = ?", (name,))
 
 
 def discord_channel_put(name, channel_id, webhook_url, now_iso):

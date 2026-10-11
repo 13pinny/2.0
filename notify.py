@@ -11,7 +11,10 @@ Reads credentials from the environment:
                          each). Unset categories fall back to
                          DISCORD_WEBHOOK_URL, never to silence. (shocks has
                          one extra hop: if unset, the Discord bot auto-creates
-                         a #pacha-shocks channel before falling back.)
+                         a #pacha-shocks channel before falling back. That
+                         channel is Pacha's only — other sources shock into
+                         their own #<source>-shocks, and every DICE ping goes
+                         to its event's own #dice-<event> channel.)
   GMAIL_USER           — Gmail address to send from
   GMAIL_APP_PASSWORD   — 16-char app password (NOT the regular Gmail password)
   NOTIFY_EMAIL_TO      — destination address (defaults to GMAIL_USER if unset)
@@ -45,7 +48,7 @@ _WEBHOOK_ENV = {
     "status":     "DISCORD_WEBHOOK_STATUS",      # sold-out / last-tickets signals (notify_drop)
     "new_events": "DISCORD_WEBHOOK_NEW_EVENTS",  # genuinely-new events + on-sale flips (pacha/kupat/TM-IL/barby/zappa/EDM)
     "jumps":      "DISCORD_WEBHOOK_JUMPS",       # pacha + EDM tier/price jumps and low-stock (price about to jump)
-    "shocks":     "DISCORD_WEBHOOK_SHOCKS",      # pacha + EDM price DROPS and restocks (returns / cheaper re-release — buy NOW)
+    "shocks":     "DISCORD_WEBHOOK_SHOCKS",      # PACHA price DROPS (returns / cheaper re-release — buy NOW); other sources use _shocks_webhook
     "pricer":     "DISCORD_WEBHOOK_PRICER",      # auto-pricer changes/pauses/caps
     "listings":   "DISCORD_WEBHOOK_LISTINGS",    # intake→viagogo push pipeline
     "todos":      "DISCORD_WEBHOOK_TODOS",       # daily to-do digest
@@ -104,17 +107,21 @@ _NEW_EVENTS_CHANNELS = {
 
 
 def _new_events_webhook(key=None):
-    """Webhook for a new-event ping. Resolution mirrors
-    _pacha_shocks_webhook: an explicit DISCORD_WEBHOOK_<CHANNEL> env var
-    pins a channel; otherwise the bot creates (or reuses) the per-venue
-    channel on first ping — zero manual setup, cached in
-    discord_event_channels; otherwise the shared new_events category, and
-    finally DISCORD_WEBHOOK_URL. An unroutable key or a bot failure
-    therefore degrades to the old shared channel rather than dropping the
-    ping on the floor."""
-    channel = _NEW_EVENTS_CHANNELS.get(key or "")
+    """Webhook for a new-event ping: the per-venue channel when the key has
+    one (see _bot_channel_webhook for the env-var → bot → fallback order),
+    else the shared new_events category, and finally DISCORD_WEBHOOK_URL."""
+    return _bot_channel_webhook(_NEW_EVENTS_CHANNELS.get(key or ""), "new_events")
+
+
+def _bot_channel_webhook(channel, fallback=None):
+    """Webhook for a named per-topic channel: an explicit
+    DISCORD_WEBHOOK_<CHANNEL> env var pins it; otherwise the Discord bot
+    creates (or reuses) the channel on first ping (cached in
+    discord_event_channels); otherwise the `fallback` category, which for
+    None is DISCORD_WEBHOOK_URL. Never ''-for-silence while a main webhook
+    exists."""
     if not channel:
-        return _discord_webhook("new_events")
+        return _discord_webhook(fallback)
     url = os.environ.get("DISCORD_WEBHOOK_" + channel.upper().replace("-", "_"),
                          "").strip()
     if url:
@@ -125,7 +132,101 @@ def _new_events_webhook(key=None):
     except Exception as e:
         print(f"[notify] {channel} bot channel failed: {e}")
         url = ""
-    return url or _discord_webhook("new_events")
+    return url or _discord_webhook(fallback)
+
+
+# Price-drop / restock SHOCKS, one channel per source. #pacha-shocks is
+# Pacha's alone (it keeps its DISCORD_WEBHOOK_SHOCKS pin); every other
+# source shocks into "<key>-shocks", except the two Marquee rooms, which
+# keep their short names. Keys are what the notifier passes: tao's
+# venue_key, else the source name. A failed channel falls back to the main
+# webhook, never to #pacha-shocks.
+_SHOCKS_CHANNELS = {
+    "marquee-new-york": "marquee-shocks",
+    "marquee-skydeck":  "skydeck-shocks",
+}
+
+
+def _shocks_webhook(key=None):
+    key = (key or "").strip().lower()
+    if key in ("", "pacha"):
+        return _pacha_shocks_webhook()
+    channel = _SHOCKS_CHANNELS.get(key) or f"{key}-shocks"
+    return _bot_channel_webhook(channel)
+
+
+DICE_CHANNEL_KEEP_DAYS = int(os.environ.get("KARTIS_DICE_CHANNEL_KEEP_DAYS", "30"))
+_MONTH_ABBR = ("jan", "feb", "mar", "apr", "may", "jun",
+               "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def _event_day(date_text):
+    """'YYYY-MM-DD…' (venue-local, as dice meta firstPerfText) → date."""
+    from datetime import date
+    try:
+        return date.fromisoformat(str(date_text or "")[:10])
+    except ValueError:
+        return None
+
+
+def dice_event_channel(name, date_text=None):
+    """Channel name for one DICE event NIGHT: "dice-" + the label slug
+    (discord_bot.slugify_label, which strips any date words from the name)
+    + "-oct-9" from the event date, so each night of a multi-date show gets
+    its own channel. No usable date → the dateless name. '' when nothing
+    survives the slug."""
+    try:
+        import discord_bot
+        slug = discord_bot.slugify_label(name)
+    except Exception:
+        slug = ""
+    if not slug:
+        return ""
+    d = _event_day(date_text)
+    suffix = f"-{_MONTH_ABBR[d.month - 1]}-{d.day}" if d else ""
+    return "dice-" + slug[:90 - 5 - len(suffix)] + suffix
+
+
+def dice_event_channel_webhook(name, date_text=None):
+    """The bot-created #dice-<event>-<date> channel's webhook, or None (no
+    bot, nothing to slug, or an API failure). Callers with their own routing
+    (the drop-watcher ticks) use this so a missing bot leaves it alone.
+    Also stamps the channel deletable DICE_CHANNEL_KEEP_DAYS (30) after the
+    event — discord_bot.delete_expired removes it on the daily sweep."""
+    channel = dice_event_channel(name, date_text)
+    if not channel:
+        return None
+    try:
+        import discord_bot
+        url = discord_bot.webhook_for(channel) or None
+    except Exception as e:
+        print(f"[notify] {channel} bot channel failed: {e}")
+        return None
+    d = _event_day(date_text)
+    if url and d:
+        try:
+            from datetime import datetime, time, timedelta, timezone
+            import db
+            expires = datetime.combine(d + timedelta(days=DICE_CHANNEL_KEEP_DAYS + 1),
+                                       time(0, 0), tzinfo=timezone.utc)
+            db.discord_channel_set_expiry(channel, expires.isoformat())
+        except Exception as e:
+            print(f"[notify] {channel} expiry not stored: {e}")
+    return url
+
+
+def dice_event_webhook(name, fallback=None, date_text=None):
+    """Every ping about a DICE event — drops, restocks/price-drop shocks,
+    sell-outs, climbs, on-sale — goes to that event's own bot-created
+    channel. Without the bot (or on any failure) it degrades to where the
+    ping used to go: shocks → a shared #dice-shocks (never #pacha-shocks),
+    everything else → its category channel."""
+    url = dice_event_channel_webhook(name, date_text)
+    if url:
+        return url
+    if fallback == "shocks":
+        return _bot_channel_webhook("dice-shocks")
+    return _discord_webhook(fallback)
 
 
 def _seat_block(seat):
@@ -363,7 +464,7 @@ def _send_email(subject, body, gmail_user, gmail_pwd, to_addr):
         return f"{type(e).__name__}: {e}"
 
 
-def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, labels=None, channels=None, headline=None, discord_override=None):
+def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, labels=None, channels=None, headline=None, discord_override=None, status_override=None):
     """Send a notification for added seats. Returns {'discord': str, 'email': str}.
 
     `label` — user-facing watcher name (e.g. "אגם בוחבוט · אמפי קיסריה …").
@@ -385,7 +486,9 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
 
     `discord_override` — optional webhook URL for a per-event channel
     (discord_bot.webhook_for). Only applies to buyable-drop pings; status
-    pings keep going to the shared status channel.
+    pings keep going to the shared status channel — unless `status_override`
+    is given (DICE watchers pass their event channel for both, so every ping
+    about one DICE event lands in one place).
     """
     status_only = bool(added_seats) and all(
         (s.get("festival") or s.get("ga"))
@@ -393,7 +496,7 @@ def notify_drop(label, perf_url, added_seats, removed_count=0, total_now=None, l
         for s in added_seats
     )
     if status_only:
-        discord_url = _discord_webhook("status")
+        discord_url = status_override or _discord_webhook("status")
     else:
         discord_url = discord_override or _discord_webhook("drops")
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
@@ -952,12 +1055,13 @@ def notify_edm_event(kind, ev, old=None):
     the previously stored edm_seen_events row.
 
     Routing mirrors pacha's: the perishable kinds ('price_down', 'restock')
-    go to the shocks channel, demand signals ('price_up', 'low_stock') to
+    go to that source's own shocks channel (#marquee-shocks, #posh-shocks,
+    …; never #pacha-shocks), demand signals ('price_up', 'low_stock') to
     'jumps', a full sell-out to 'status', the rest to 'new_events' — or,
     for a source that names its venue (tao's two Marquee rooms), that
     venue's own new-events channel."""
     if kind in ("price_down", "restock"):
-        discord_url = _pacha_shocks_webhook()
+        discord_url = _shocks_webhook(ev.get("venue_key") or ev.get("source"))
     elif kind in ("price_up", "low_stock"):
         discord_url = _discord_webhook("jumps")
     elif kind == "soldout":
@@ -1109,17 +1213,15 @@ def notify_dice_price(kind, info):
     """Tracked-DICE-event ping from dice_alerts.py. `kind` is the most urgent
     change ('restock' / 'price_down' / 'soldout' / 'price_up' / 'type_soldout'
     / 'onsale');
-    info["lines"] lists every change. Routed like the EDM pings: restock and
-    price drops to shocks, sell-outs to status, climbs to jumps, on-sale to
-    new_events."""
-    if kind in ("price_down", "restock"):
-        discord_url = _pacha_shocks_webhook()
-    elif kind == "price_up":
-        discord_url = _discord_webhook("jumps")
-    elif kind in ("soldout", "type_soldout"):
-        discord_url = _discord_webhook("status")
-    else:
-        discord_url = _discord_webhook("new_events")
+    info["lines"] lists every change. Every kind goes to the event night's
+    own #dice-<event>-<date> channel (dice_event_webhook); without the bot it falls back
+    by kind: restock / price drops to #dice-shocks, sell-outs to status,
+    climbs to jumps, on-sale to new_events."""
+    fallback = ("shocks" if kind in ("price_down", "restock")
+                else "jumps" if kind == "price_up"
+                else "status" if kind in ("soldout", "type_soldout")
+                else "new_events")
+    discord_url = dice_event_webhook(info.get("name"), fallback, info.get("date_text"))
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
     name = info.get("name") or "DICE event"

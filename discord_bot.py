@@ -27,6 +27,7 @@ the resolved/created webhook URL.
 import json
 import os
 import re
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
@@ -124,6 +125,37 @@ def webhook_for(name):
         print(f"[discord_bot] webhook_for({name!r}) failed: {type(e).__name__}: {e}", flush=True)
         return None
 
+
+
+def delete_expired(now_iso=None):
+    """Delete every bot channel whose expires_at has passed (DICE event
+    channels, 30 days after the show) and forget it. A channel already gone
+    on Discord (404) just drops out of the cache. Returns {"deleted": [...],
+    "errors": [...]}. Only rows this machine has resolved are known, so each
+    machine running a scheduler cleans up its own; a channel the other
+    machine already deleted is a 404 here. Without the bot, nothing happens
+    and the rows wait."""
+    now_iso = now_iso or datetime.now(timezone.utc).isoformat()
+    out = {"deleted": [], "errors": []}
+    if not configured():
+        return out
+    for row in db.discord_channels_expired(now_iso):
+        name, chan = row["name"], row.get("channel_id")
+        try:
+            if chan:
+                _api("DELETE", f"/channels/{chan}")
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                out["errors"].append(f"{name}: HTTP {e.code}")
+                continue
+        except Exception as e:
+            out["errors"].append(f"{name}: {type(e).__name__}: {e}")
+            continue
+        db.discord_channel_delete(name)
+        out["deleted"].append(name)
+    if out["deleted"] or out["errors"]:
+        print(f"[discord_bot] expired channels: deleted {out['deleted']} errors {out['errors']}", flush=True)
+    return out
 
 if __name__ == "__main__":
     import sys
