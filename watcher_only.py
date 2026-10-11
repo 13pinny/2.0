@@ -216,12 +216,13 @@ def check_one(w, now_iso):
             headline = f"{_icon} {_n} date{'s' if _n != 1 else ''} just opened{_tail} — {_snm}"
 
         # DICE: every ping about one event (drops AND status flips) goes to
-        # that event's own #dice-<event> channel, shared with dice_alerts'
+        # that event night's own #dice-<event>-<date> channel, shared with dice_alerts'
         # price pings. (Keep in sync with app.py._check_one_watcher.)
         _dice_hook = None
         if src_name == "dice" and enabled and matched:
-            _dnm = ((lbls or {}).get("meta") or {}).get("eventName") or label
-            _dice_hook = notify.dice_event_channel_webhook(_dnm)
+            _dmeta = ((lbls or {}).get("meta") or {})
+            _dice_hook = notify.dice_event_channel_webhook(
+                _dmeta.get("eventName") or label, _dmeta.get("firstPerfText"))
 
         if enabled and matched:
             result = notify.notify_drop(
@@ -367,6 +368,10 @@ def main():
 
     sched = BackgroundScheduler(daemon=True, timezone="UTC")
     sched.add_job(tick, "interval", seconds=INTERVAL, id="tm_check")
+    # This box creates DICE event channels too (dice watcher pings), so it
+    # sweeps the ones it knows 30 days after their show. (Same job as app.py.)
+    sched.add_job(lambda: discord_bot.delete_expired(), "cron", hour=4, minute=17,
+                  id="discord_channel_cleanup")
     if DICE_SNIPER_ENABLED:
         sched.add_job(dice_sniper, "interval", seconds=DICE_SNIPER_SECONDS,
                       id="dice_sniper", max_instances=1)

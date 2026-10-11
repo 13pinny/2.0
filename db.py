@@ -1281,6 +1281,12 @@ def init():
             )
             """
         )
+        dec_cols = {row["name"] for row in conn.execute("PRAGMA table_info(discord_event_channels)").fetchall()}
+        if "expires_at" not in dec_cols:
+            # When the bot may delete this channel (DICE event channels:
+            # event date + 30 days, see notify.dice_event_channel_webhook).
+            # NULL = keep forever (watcher / venue / category channels).
+            conn.execute("ALTER TABLE discord_event_channels ADD COLUMN expires_at TEXT")
         td_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tm_drops)").fetchall()}
         if "notify_count" not in td_cols:
             conn.execute("ALTER TABLE tm_drops ADD COLUMN notify_count INTEGER")
@@ -3318,6 +3324,32 @@ def discord_channel_get(name):
             "SELECT * FROM discord_event_channels WHERE name = ?", (name,)
         ).fetchone()
     return dict(row) if row else None
+
+
+def discord_channel_set_expiry(name, expires_iso):
+    """Mark a cached bot channel deletable after expires_iso. Only moves the
+    date LATER, so a channel shared by two events lives until the last one's
+    window closes."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE discord_event_channels SET expires_at = ? WHERE name = ? "
+            "AND (expires_at IS NULL OR expires_at < ?)",
+            (expires_iso, name, expires_iso),
+        )
+
+
+def discord_channels_expired(now_iso):
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM discord_event_channels WHERE expires_at IS NOT NULL "
+            "AND expires_at <= ?", (now_iso,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def discord_channel_delete(name):
+    with connect() as conn:
+        conn.execute("DELETE FROM discord_event_channels WHERE name = ?", (name,))
 
 
 def discord_channel_put(name, channel_id, webhook_url, now_iso):

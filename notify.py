@@ -155,40 +155,73 @@ def _shocks_webhook(key=None):
     return _bot_channel_webhook(channel)
 
 
-def dice_event_channel(name):
-    """Channel name for one DICE event: "dice-" + the dateless label slug
-    (discord_bot.slugify_label — same convention as watcher channels, so
-    the nights of a multi-date show share one). '' when nothing survives."""
+DICE_CHANNEL_KEEP_DAYS = int(os.environ.get("KARTIS_DICE_CHANNEL_KEEP_DAYS", "30"))
+_MONTH_ABBR = ("jan", "feb", "mar", "apr", "may", "jun",
+               "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def _event_day(date_text):
+    """'YYYY-MM-DD…' (venue-local, as dice meta firstPerfText) → date."""
+    from datetime import date
+    try:
+        return date.fromisoformat(str(date_text or "")[:10])
+    except ValueError:
+        return None
+
+
+def dice_event_channel(name, date_text=None):
+    """Channel name for one DICE event NIGHT: "dice-" + the label slug
+    (discord_bot.slugify_label, which strips any date words from the name)
+    + "-oct-9" from the event date, so each night of a multi-date show gets
+    its own channel. No usable date → the dateless name. '' when nothing
+    survives the slug."""
     try:
         import discord_bot
         slug = discord_bot.slugify_label(name)
     except Exception:
         slug = ""
-    return ("dice-" + slug)[:90] if slug else ""
+    if not slug:
+        return ""
+    d = _event_day(date_text)
+    suffix = f"-{_MONTH_ABBR[d.month - 1]}-{d.day}" if d else ""
+    return "dice-" + slug[:90 - 5 - len(suffix)] + suffix
 
 
-def dice_event_channel_webhook(name):
-    """The bot-created #dice-<event> channel's webhook, or None (no bot,
-    nothing to slug, or an API failure). Callers with their own routing
-    (the drop-watcher ticks) use this so a missing bot leaves it alone."""
-    channel = dice_event_channel(name)
+def dice_event_channel_webhook(name, date_text=None):
+    """The bot-created #dice-<event>-<date> channel's webhook, or None (no
+    bot, nothing to slug, or an API failure). Callers with their own routing
+    (the drop-watcher ticks) use this so a missing bot leaves it alone.
+    Also stamps the channel deletable DICE_CHANNEL_KEEP_DAYS (30) after the
+    event — discord_bot.delete_expired removes it on the daily sweep."""
+    channel = dice_event_channel(name, date_text)
     if not channel:
         return None
     try:
         import discord_bot
-        return discord_bot.webhook_for(channel) or None
+        url = discord_bot.webhook_for(channel) or None
     except Exception as e:
         print(f"[notify] {channel} bot channel failed: {e}")
         return None
+    d = _event_day(date_text)
+    if url and d:
+        try:
+            from datetime import datetime, time, timedelta, timezone
+            import db
+            expires = datetime.combine(d + timedelta(days=DICE_CHANNEL_KEEP_DAYS + 1),
+                                       time(0, 0), tzinfo=timezone.utc)
+            db.discord_channel_set_expiry(channel, expires.isoformat())
+        except Exception as e:
+            print(f"[notify] {channel} expiry not stored: {e}")
+    return url
 
 
-def dice_event_webhook(name, fallback=None):
+def dice_event_webhook(name, fallback=None, date_text=None):
     """Every ping about a DICE event — drops, restocks/price-drop shocks,
     sell-outs, climbs, on-sale — goes to that event's own bot-created
     channel. Without the bot (or on any failure) it degrades to where the
     ping used to go: shocks → a shared #dice-shocks (never #pacha-shocks),
     everything else → its category channel."""
-    url = dice_event_channel_webhook(name)
+    url = dice_event_channel_webhook(name, date_text)
     if url:
         return url
     if fallback == "shocks":
@@ -1180,15 +1213,15 @@ def notify_dice_price(kind, info):
     """Tracked-DICE-event ping from dice_alerts.py. `kind` is the most urgent
     change ('restock' / 'price_down' / 'soldout' / 'price_up' / 'type_soldout'
     / 'onsale');
-    info["lines"] lists every change. Every kind goes to the event's own
-    #dice-<event> channel (dice_event_webhook); without the bot it falls back
+    info["lines"] lists every change. Every kind goes to the event night's
+    own #dice-<event>-<date> channel (dice_event_webhook); without the bot it falls back
     by kind: restock / price drops to #dice-shocks, sell-outs to status,
     climbs to jumps, on-sale to new_events."""
     fallback = ("shocks" if kind in ("price_down", "restock")
                 else "jumps" if kind == "price_up"
                 else "status" if kind in ("soldout", "type_soldout")
                 else "new_events")
-    discord_url = dice_event_webhook(info.get("name"), fallback)
+    discord_url = dice_event_webhook(info.get("name"), fallback, info.get("date_text"))
     if not discord_url:
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
     name = info.get("name") or "DICE event"

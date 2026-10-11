@@ -6057,12 +6057,13 @@ def _check_one_watcher(w, now_iso):
             headline = f"{_icon} {_n} date{'s' if _n != 1 else ''} just opened{_tail} — {_snm}"
 
         # DICE: every ping about one event (drops AND status flips) goes to
-        # that event's own #dice-<event> channel, shared with dice_alerts'
+        # that event night's own #dice-<event>-<date> channel, shared with dice_alerts'
         # price pings. (Keep in sync with watcher_only.py.)
         _dice_hook = None
         if src_name == "dice" and enabled and matched:
-            _dnm = ((labels or {}).get("meta") or {}).get("eventName") or label
-            _dice_hook = notify.dice_event_channel_webhook(_dnm)
+            _dmeta = ((labels or {}).get("meta") or {})
+            _dice_hook = notify.dice_event_channel_webhook(
+                _dmeta.get("eventName") or label, _dmeta.get("firstPerfText"))
 
         if enabled and matched:
             result = notify.notify_drop(
@@ -9541,6 +9542,11 @@ if DICE_ALERTS_ENABLED:
     scheduler.add_job(run_dice_alerts, "interval", seconds=DICE_ALERTS_INTERVAL_SECONDS,
                       id="dice_alerts", start_date=datetime.now() + timedelta(minutes=2))
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
+# Delete DICE event channels 30 days after their show (notify.dice_event_
+# channel_webhook stamps the expiry). Daily, off the hour; a no-op without
+# the Discord bot.
+scheduler.add_job(lambda: discord_bot.delete_expired(), "cron", hour=4, minute=17,
+                  id="discord_channel_cleanup")
 # Festival/GA sales snapshots — fire one immediately (next_run_time) so the
 # Festival / GA Tracker pages have a baseline right after a restart, then
 # every N minutes.
