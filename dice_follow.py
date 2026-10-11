@@ -374,7 +374,15 @@ def _ping(follow, kind, ev):
     if ev.get("image"):
         embed["thumbnail"] = {"url": ev["image"] + "?w=300&h=300&fit=crop"}
     payload = {"embeds": [embed], "content": title[:1990]}
-    return notify._post_discord(url, payload)
+    result = notify._post_discord(url, payload)
+    # Also into the show night's own #dice-<event>-<date> channel (the one
+    # dice_alerts' price pings use), so everything about one show is in one
+    # place while the artist channel stays the follow's feed. Same name and
+    # date source (event_start_date) as dice_alerts, so they land together.
+    night = notify.dice_event_channel_webhook(ev.get("name"), ev.get("event_start"))
+    if night and night != url:
+        result = f"{result}; night: {notify._post_discord(night, payload)}"
+    return result
 
 
 # --- the tick --------------------------------------------------------------
