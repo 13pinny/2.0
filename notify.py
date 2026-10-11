@@ -89,7 +89,9 @@ def _pacha_shocks_webhook():
 #
 # Anything NOT listed here (zappa, posh/leap/eventim/shotgun/tixr) keeps
 # going to the shared new_events channel — deliberately, since one-off
-# tracked events don't earn a channel each.
+# tracked events don't earn a channel each. Shotgun VENUE pages are the
+# exception: their key is a shotgun_events.VENUES key, and the Nu Androids
+# page (whose shows are mostly at A.I. Warehouse, DC) has its own channel.
 _NEW_EVENTS_CHANNELS = {
     "pacha":            "pacha-new-events",
     "kupat":            "kupat-new-events",
@@ -97,6 +99,7 @@ _NEW_EVENTS_CHANNELS = {
     "barby":            "barby-new-events",
     "marquee-new-york": "marquee-new-events",
     "marquee-skydeck":  "skydeck-new-events",
+    "nu-androids":      "ai-warehouse-new-events",
 }
 
 

@@ -161,9 +161,69 @@ def _now():
 # rows in edm_tracked_events are maintained by sync_catalogs() below and
 # marked with auto_source, so the poll list stays current without anyone
 # pasting URLs. This is the pacha-style half of the tracker.
+#
+# An entry with track=False (shotgun's venue pages) is ANNOUNCE-ONLY: it is
+# never added to the poll list; sync_catalogs just reports it once, the
+# first time its venue lists it, under "announce" for the caller to ping.
 CATALOG_SOURCES = {
     tao_events.SOURCE_NAME: tao_events,
+    shotgun_events.SOURCE_NAME: shotgun_events,
 }
+
+# Event keys an announce-only venue has ever listed, per venue, so a show is
+# announced once. Capped so the setting can't grow without bound; the oldest
+# keys go first, and those shows are long past by then.
+_ANNOUNCED_KEY = "edm_announced:{source}:{venue}"
+_ANNOUNCED_CAP = 2000
+
+
+def _announced_get(source, venue_key):
+    raw = db.setting_get(_ANNOUNCED_KEY.format(source=source, venue=venue_key))
+    if raw is None:
+        return None
+    try:
+        return list(json.loads(raw))
+    except (ValueError, TypeError):
+        return None
+
+
+def _announced_set(source, venue_key, keys, now_iso):
+    db.setting_set(_ANNOUNCED_KEY.format(source=source, venue=venue_key),
+                   json.dumps(keys[-_ANNOUNCED_CAP:]), now_iso)
+
+
+def _sync_announce_only(name, entries, errors, now_iso):
+    """Announce-only half of sync_catalogs for one source. Returns
+    (announce, baseline_venues): entries listed for the first time, and the
+    venues seen for the very first time — whose whole listing is backfill
+    and is stored silently, like the pacha monitor's first tick. A venue
+    that errored this sync is left untouched."""
+    by_venue = {}
+    for e in entries:
+        by_venue.setdefault(e.get("venue_key") or "catalog", []).append(e)
+    announce, baseline_venues = [], []
+    for venue_key, items in by_venue.items():
+        if venue_key in errors:
+            continue
+        known = _announced_get(name, venue_key)
+        if known is None:
+            baseline_venues.append(venue_key)
+            known = []
+        else:
+            seen = set(known)
+            announce.extend(e for e in items if e["event_key"] not in seen)
+        fresh = [e["event_key"] for e in items if e["event_key"] not in set(known)]
+        if fresh or venue_key in baseline_venues:
+            _announced_set(name, venue_key, known + fresh, now_iso)
+    # A venue that lists nothing today still needs its baseline latched, or
+    # its first show would be swallowed as backfill.
+    mod = CATALOG_SOURCES.get(name)
+    for venue_key in getattr(mod, "VENUES", {}):
+        if (venue_key not in by_venue and venue_key not in errors
+                and _announced_get(name, venue_key) is None):
+            _announced_set(name, venue_key, [], now_iso)
+            baseline_venues.append(venue_key)
+    return announce, baseline_venues
 
 
 def sync_catalogs(source_names=None, now_iso=None, prune=True):
@@ -174,7 +234,12 @@ def sync_catalogs(source_names=None, now_iso=None, prune=True):
     and leaves hand-added rows alone in both directions.
 
     Returns {source: {"added": [...], "known": n, "pruned": [...],
-                      "skipped": n, "baseline": bool, "errors": {...}}}.
+                      "skipped": n, "baseline": bool, "errors": {...},
+                      "announce": [entry, ...], "announce_baseline": [...]}}.
+
+    `announce` holds announce-only entries (track=False) listed for the
+    first time; `announce_baseline` the venues whose listing was stored
+    silently because it was their first successful sync.
 
     `baseline` is True on the very first sync for a source (nothing was
     auto-tracked yet), which means `added` is a backfill of everything
@@ -196,9 +261,15 @@ def sync_catalogs(source_names=None, now_iso=None, prune=True):
             entries, errors = mod.discover()
         except Exception as e:      # a parser bug must not kill the tick
             out[name] = {"added": [], "known": 0, "pruned": [], "skipped": 0,
-                         "baseline": False,
+                         "baseline": False, "announce": [],
+                         "announce_baseline": [],
                          "errors": {"discover": f"{type(e).__name__}: {e}"}}
             continue
+
+        announce, announce_baseline = _sync_announce_only(
+            name, [e for e in entries
+                   if e.get("event_key") and e.get("track") is False],
+            errors, now_iso)
 
         existing = db.edm_tracked_auto_ids(f"{name}:")
         keep, added, skipped = [], [], 0
@@ -206,6 +277,8 @@ def sync_catalogs(source_names=None, now_iso=None, prune=True):
             if not entry.get("event_key"):
                 skipped += 1        # reservations-only show, nothing to poll
                 continue
+            if entry.get("track") is False:
+                continue            # announce-only, handled above
             event_id = f"{name}:{entry['event_key']}"
             keep.append(event_id)
             db.edm_tracked_add(
@@ -221,7 +294,8 @@ def sync_catalogs(source_names=None, now_iso=None, prune=True):
                   if prune and not errors else [])
         out[name] = {"added": added, "known": len(keep), "pruned": pruned,
                      "skipped": skipped, "baseline": not existing,
-                     "errors": errors}
+                     "errors": errors, "announce": announce,
+                     "announce_baseline": announce_baseline}
     return out
 
 
@@ -236,6 +310,11 @@ def cmd_sync_catalogs(args):
             print(f"  + {eid}")
         for eid in r["pruned"]:
             print(f"  - {eid}")
+        for vk in r.get("announce_baseline") or []:
+            print(f"  {vk}: first sync, current listing stored without pings")
+        for e in r.get("announce") or []:
+            print(f"  NEW {e['venue_key']}: {e['name']} — {e.get('date_text')} "
+                  f"{e.get('ticket_url')}")
         for where, msg in (r["errors"] or {}).items():
             print(f"  ERROR {where}: {msg}")
     return 0
@@ -324,9 +403,11 @@ def main(argv):
                     "shotgun / tixr / tao)")
     p.add_argument("--list", action="store_true", help="list tracked events")
     p.add_argument("--sync-catalogs", action="store_true", dest="sync_catalogs",
-                   help="reconcile the venue-catalog sources (tao) into the "
-                        "poll list: add newly announced shows, drop the ones "
-                        "that have happened")
+                   help="reconcile the venue-catalog sources (tao, shotgun "
+                        "venues) into the poll list: add newly announced "
+                        "shows, drop the ones that have happened. Shotgun "
+                        "venue shows found here are marked announced WITHOUT "
+                        "a Discord ping (only the EDM tick pings)")
     p.add_argument("--add", metavar="URL", help="track an event URL")
     p.add_argument("--label", help="optional note to store with --add")
     p.add_argument("--remove", metavar="EVENT_ID", help="stop tracking")

@@ -546,13 +546,16 @@ def _edm_market_rows(events, now_iso):
                                      None, ev["total_available"], None, now_iso)
 
 
-def _edm_sync_catalogs(now_iso):
+def _edm_sync_catalogs(now_iso, muted=False):
     """Reconcile the venue-catalog sources (tao) into the tracked list, at
-    most every EDM_CATALOG_SYNC_MINUTES.
+    most every EDM_CATALOG_SYNC_MINUTES, and ping the announce-only venues'
+    (shotgun) newly listed shows straight to their venue channel.
 
     A discovery failure is recorded in _last_edm_catalogs and otherwise
     ignored: the events already tracked keep polling, and the calendar gets
-    another try on the next sync."""
+    another try on the next sync. master_muted still records announced
+    shows (state stays current) but sends nothing, like the rest of the
+    tick."""
     global _edm_last_catalog_sync_at
     if not edm_events.CATALOG_SOURCES:
         return
@@ -573,6 +576,25 @@ def _edm_sync_catalogs(now_iso):
             print(f"[edm] {name} catalog: dropped {eid} (no longer listed)")
         for where, msg in (r["errors"] or {}).items():
             print(f"[edm] {name} catalog error ({where}): {msg}")
+        for vk in r.get("announce_baseline") or []:
+            print(f"[edm] {name} venue {vk}: baseline stored, no pings")
+        announce = r.get("announce") or []
+        for i, entry in enumerate(announce):
+            if muted:
+                print(f"[edm] {name} venue (muted): {entry['name']}")
+                continue
+            if i >= EDM_MAX_PINGS_PER_TICK:
+                print(f"[edm] {name} venue ping cap hit — "
+                      f"{len(announce) - i} announcement(s) suppressed")
+                break
+            ev = {"source": name, "event_key": entry["event_key"],
+                  "name": entry.get("name"), "venue": entry.get("venue"),
+                  "date_text": entry.get("date_text"),
+                  "page_url": entry.get("ticket_url"),
+                  "venue_key": entry.get("venue_key"), "catalog": True}
+            res = notify.notify_edm_event("new", ev)
+            print(f"[edm] new: {ev['name']} ({name}:{ev['venue_key']}) -> {res}")
+            time.sleep(0.5)
 
 
 def _edm_baseline_sources(seen):
@@ -677,7 +699,8 @@ def run_edm_events():
 
         # Venue-catalog radar first, so a show announced since the last sync
         # is already in `tracked` and gets its state stored on this tick.
-        _edm_sync_catalogs(now_iso)
+        _edm_sync_catalogs(now_iso,
+                           muted=db.setting_get_bool("master_muted", default=False))
 
         tracked = db.edm_tracked_all(include_paused=False)
         events, errors = edm_events.fetch_tracked(tracked)
@@ -6851,14 +6874,21 @@ def api_eventim_relay_targets():
     targets += [{"source": "tao", "event_key": r["event_key"],
                  "url": tao_events.event_page_url(r["event_key"])}
                 for r in rows if r["source"] == tao_events.SOURCE_NAME]
+    # shotgun venue pages (announce-only new-show radar) sit behind Vercel's
+    # bot checkpoint — see the venues block in shotgun_events.
+    # First in the list: one cheap page, and the relay gives up on a pass
+    # after two challenge pages, which the tao rows above could use up.
+    import shotgun_events
+    targets = shotgun_events.relay_targets() + targets
     return jsonify({"targets": targets})
 
 
 @app.route("/api/edm/eventim-relay", methods=["POST"])
 def api_eventim_relay():
     """Desktop relay drop-off: {source?, event_key, html}; source "tao" for
-    Marquee pages, else eventim. Stored for the next EDM tick to read (see
-    the DESKTOP RELAY notes in eventim_events / tao_events)."""
+    Marquee pages, "shotgun" for venue pages, else eventim. Stored for the
+    next EDM tick to read (see the DESKTOP RELAY notes in eventim_events /
+    tao_events and the venues block in shotgun_events)."""
     from flask import request
     body = request.get_json(silent=True) or {}
     err = _cvauth_secret_error()
@@ -6868,6 +6898,9 @@ def api_eventim_relay():
     if body.get("source") == "tao":
         import tao_events
         store = tao_events.relay_store
+    elif body.get("source") == "shotgun":
+        import shotgun_events
+        store = shotgun_events.relay_store
     try:
         n = store(body.get("event_key") or "", body.get("html") or "")
     except (EdmEventsError, ValueError) as e:

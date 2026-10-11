@@ -12,6 +12,6 @@ WorkingDirectory=/opt/kartis
 # and the Discord webhooks come from /opt/kartis/.env (load_dotenv never
 # overrides the two values set here).
 Environment=KARTIS_BASE_URL=http://127.0.0.1:8000
-Environment=KARTIS_RELAY_SOURCES=tao
+Environment=KARTIS_RELAY_SOURCES=tao,shotgun
 ExecStart=/opt/kartis/.venv/bin/python eventim_relay.py
 TimeoutStartSec=900
