@@ -1033,6 +1033,17 @@ CREATE INDEX IF NOT EXISTS idx_dice_purchases_acct ON dice_purchases(account_ema
 -- the page = purchase qty - SUM(linked qty); transfers deliberately play
 -- no part in that math (delivery info is often missing). sale_source +
 -- sale_id point into viagogo_sales / lysted_sales / crowdvolt_sales.
+-- /dice: the matching CrowdVolt event page per DICE event. source 'auto' =
+-- matched against CrowdVolt's sitemap by cv_events.match; 'manual' = pasted
+-- by hand and never overwritten. A manual row with cv_url '' means "no CV
+-- page — stop auto-matching this one". event_key = the 24-hex DICE id, or
+-- "slug:<slug>" for a holding whose id hasn't resolved yet.
+CREATE TABLE IF NOT EXISTS dice_cv_links (
+    event_key  TEXT PRIMARY KEY,
+    cv_url     TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'manual',
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS dice_sale_links (
     id           TEXT PRIMARY KEY,             -- dsl-<hex>
     purchase_id  TEXT NOT NULL,
@@ -1821,6 +1832,27 @@ def dice_purchase_set_listed(purchase_id, listed_json):
             (listed_json, purchase_id),
         )
         return cur.rowcount > 0
+
+
+def dice_cv_links_all():
+    """{event_key: {"url", "source"}} for the /dice CrowdVolt buttons."""
+    with connect() as conn:
+        return {r["event_key"]: {"url": r["cv_url"], "source": r["source"]}
+                for r in conn.execute("SELECT event_key, cv_url, source FROM dice_cv_links")}
+
+
+def dice_cv_link_set(event_key, cv_url, now_iso, source="manual"):
+    """Upsert one event's CrowdVolt link. cv_url None deletes the row (back
+    to auto-matching); '' with source 'manual' pins "no CrowdVolt page"."""
+    with connect() as conn:
+        if cv_url is None:
+            conn.execute("DELETE FROM dice_cv_links WHERE event_key = ?", (event_key,))
+            return
+        conn.execute(
+            "INSERT INTO dice_cv_links (event_key, cv_url, source, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(event_key) DO UPDATE SET "
+            "cv_url = excluded.cv_url, source = excluded.source, "
+            "updated_at = excluded.updated_at", (event_key, cv_url, source, now_iso))
 
 
 def dice_purchase_add_transferred(purchase_id, n):
