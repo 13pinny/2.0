@@ -68,8 +68,12 @@ PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", str(ROOT)), "eventim-relay
 LOG = ROOT / "logs" / "eventim_relay.log"
 # On the box systemd owns the Chrome (kartis-chrome-relay.service); never spawn one.
 SERVER_MODE = sys.platform != "win32"
-# Comma list of sources to load here; empty = every source the server lists.
-SOURCES = {x.strip() for x in (os.environ.get("KARTIS_RELAY_SOURCES") or "").split(",") if x.strip()}
+# Comma list of sources to load here. Unset: the PC loads eventim only
+# (Marquee and Shotgun run from the box's own relay, and loading 28 Marquee
+# pages every 5 min on the PC kept popping Chrome windows); the box loads
+# whatever KARTIS_RELAY_SOURCES names, or every source the server lists.
+SOURCES = {x.strip() for x in (os.environ.get("KARTIS_RELAY_SOURCES") or "").split(",") if x.strip()} \
+    or (set() if SERVER_MODE else {"eventim"})
 # Remembers whether we already pinged Discord about a Cloudflare hold.
 BLOCK_STATE = ROOT / "logs" / "relay_block.json"
 BLOCK_REPING_SECONDS = 6 * 3600
