@@ -6056,6 +6056,14 @@ def _check_one_watcher(w, now_iso):
             _icon, _tail = ("⚠️", " (כרטיסים אחרונים)") if _last else ("🎟️", "")
             headline = f"{_icon} {_n} date{'s' if _n != 1 else ''} just opened{_tail} — {_snm}"
 
+        # DICE: every ping about one event (drops AND status flips) goes to
+        # that event's own #dice-<event> channel, shared with dice_alerts'
+        # price pings. (Keep in sync with watcher_only.py.)
+        _dice_hook = None
+        if src_name == "dice" and enabled and matched:
+            _dnm = ((labels or {}).get("meta") or {}).get("eventName") or label
+            _dice_hook = notify.dice_event_channel_webhook(_dnm)
+
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,
@@ -6063,7 +6071,8 @@ def _check_one_watcher(w, now_iso):
                 total_now=len(seats), labels=labels,
                 channels=enabled,
                 headline=headline,
-                discord_override=discord_bot.webhook_for(w.get("discord_channel")),
+                discord_override=_dice_hook or discord_bot.webhook_for(w.get("discord_channel")),
+                status_override=_dice_hook,
             )
             # Stamp the physical seats we just pinged so they cool down.
             if SEAT_COOLDOWN_SECONDS > 0:
