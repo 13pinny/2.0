@@ -34,6 +34,12 @@ check, one Discord status ping says so: open vnc.kartis.homes and click the
 box in the "relay" Chrome window; a second ping says when pages load again.
 It never solves or skips a challenge itself. See deploy/README.md.
 
+Shotgun: shotgun.live puts a Vercel bot checkpoint in front of every
+datacenter request, so the targets list also carries the watched Shotgun
+VENUE pages (source "shotgun", see the venues block in shotgun_events). For
+those the relay also clicks "See more" until the whole upcoming list is on
+the page, then posts it back; the EDM tick pings each newly listed show.
+
 Run:  .venv\\Scripts\\python eventim_relay.py           one pass, prints results
       .venv\\Scripts\\pythonw eventim_relay.py          what the scheduled task runs
                                                        (logs to logs\\eventim_relay.log)
@@ -100,10 +106,41 @@ def ensure_chrome():
 READY_SELECTOR = {
     "eventim": "ul.ticket-list .ticket-type",
     "tao": "#ticket-types-content .ticket-type-item",
+    # shotgun venue pages: the section headings ("Upcoming events" / "Past
+    # events"); Vercel's checkpoint page has none.
+    "shotgun": "h2[data-slot='heading']",
 }
 
+# Clicks the "See more" button that sits ABOVE the "Past events" heading
+# (the upcoming list's) until it's gone, waiting for new cards after each
+# click. Returns the click count, or -1 if the button never went away.
+_EXPAND_JS = """
+async (label) => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const want = label.trim().toLowerCase();
+  const button = () => {
+    const past = [...document.querySelectorAll('h2')]
+      .find(h => h.textContent.trim().toLowerCase() === 'past events');
+    return [...document.querySelectorAll('button')].find(b =>
+      b.textContent.trim().toLowerCase() === want &&
+      (!past || (b.compareDocumentPosition(past) & Node.DOCUMENT_POSITION_FOLLOWING)));
+  };
+  const cards = () => document.querySelectorAll('a[href*="/events/"]').length;
+  for (let i = 0; i < 40; i++) {
+    const b = button();
+    if (!b) return i;
+    const before = cards();
+    b.scrollIntoView();
+    b.click();
+    for (let t = 0; t < 40 && cards() === before && button(); t++) await sleep(250);
+    await sleep(500);
+  }
+  return button() ? -1 : 40;
+}
+"""
 
-def render(ctx, url, source="eventim"):
+
+def render(ctx, url, source="eventim", expand=None):
     pg = ctx.new_page()
     try:
         pg.goto(url, timeout=60000, wait_until="domcontentloaded")
@@ -113,6 +150,10 @@ def render(ctx, url, source="eventim"):
             pg.wait_for_selector(READY_SELECTOR[source], timeout=25000)
         except Exception:
             return None, pg.title()
+        if expand:
+            clicks = pg.evaluate(_EXPAND_JS, expand)
+            if clicks < 0:
+                log(f"{url}: '{expand}' still showing after 40 clicks")
         return pg.content(), pg.title()
     finally:
         pg.close()
@@ -120,7 +161,8 @@ def render(ctx, url, source="eventim"):
 
 def _is_challenge(title):
     t = (title or "").lower()
-    return "just a moment" in t or "attention required" in t
+    return ("just a moment" in t or "attention required" in t
+            or "security checkpoint" in t)       # Vercel (shotgun.live)
 
 
 def report_block(blocked, loaded):
@@ -138,12 +180,12 @@ def report_block(blocked, loaded):
     if blocked and not loaded:
         if now - state.get("pinged_at", 0) < BLOCK_REPING_SECONDS:
             return
-        msg = (f"⚠️ **Marquee prices paused** — Cloudflare is holding the server's "
+        msg = (f"⚠️ **Relay paused** (Marquee prices / Shotgun new events) — a bot check is holding the server's "
                f"relay Chrome ({blocked} page(s)). Open https://vnc.kartis.homes/vnc.html "
                f"and click the checkbox in the relay Chrome window.")
         state = {"blocked": True, "pinged_at": now}
     elif loaded and state.get("blocked"):
-        msg = "✅ **Marquee prices flowing again** — the server relay loaded the ticket pages."
+        msg = "✅ **Relay flowing again** — the server relay loaded its pages (Marquee / Shotgun)."
         state = {}
     else:
         return
@@ -177,7 +219,7 @@ def main():
         for t in targets:
             source = t.get("source") or "eventim"
             try:
-                html, title = render(ctx, t["url"], source)
+                html, title = render(ctx, t["url"], source, t.get("expand"))
             except Exception as e:
                 log(f"{t['event_key']}: load failed {type(e).__name__}: {e}")
                 continue

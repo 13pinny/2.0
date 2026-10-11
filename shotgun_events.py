@@ -51,11 +51,17 @@ TRAPS
   is trusted over the per-deal rollup.
 
 CLI probe:  python shotgun_events.py [<url-or-slug>] [--json]
+            python shotgun_events.py --venues [--json]   (venue pages)
+
+Venue pages are also watched, announce-only — see the VENUES block below.
 """
+import html as _html
 import json
+import os
 import re
 import sys
 import time
+from datetime import datetime, timezone
 
 import edm_common
 from edm_common import EdmEventsError, make_tier, rollup
@@ -254,12 +260,242 @@ def fetch_event(slug):
     return ev
 
 
+# ---------------------------------------------------------------- venues
+#
+# Venue/organizer pages (shotgun.live/<locale>/venues/<slug>) list every
+# upcoming event as a card. These are watched ANNOUNCE-ONLY: a show that
+# appears on the page gets one 'new' ping in the venue's own channel and
+# is NOT added to the poll list — the point is "they just announced X",
+# and polling ~50 shows for price moves would bury that in noise. See
+# edm_events.sync_catalogs (entries with track=False).
+#
+# Traps:
+# - shotgun.live sits behind a Vercel bot checkpoint ("Vercel Security
+#   Checkpoint", HTTP 429) that blocks plain HTTP from datacenter IPs and
+#   headless browsers, and since 2026-10 the r.jina.ai reader too. So the
+#   relay (eventim_relay.py, source "shotgun") loads the venue page in its
+#   real Chrome and POSTs the HTML to /api/edm/eventim-relay, exactly like
+#   tao; _load_venue_html prefers that copy and only tries its own fetch
+#   when the copy is missing or stale.
+# - The page renders only the first 24 upcoming events; the rest sit behind
+#   a "See more" button that calls a Next server action (no public API —
+#   api.shotgun.live wants an organizer API key). The relay clicks it until
+#   it's gone. A page that still shows the button is TRUNCATED and is
+#   treated as a fetch failure, never as the full list: otherwise events
+#   25+ would look brand new the first time a complete copy arrives.
+# - Cards under "Past events" use the same markup, so only the section
+#   between the "Upcoming events" and "Past events" headings is read.
+# - <time datetime> is UTC; date_text is rendered in the venue's "tz".
+VENUES = {
+    "nu-androids": {
+        "name": "Nu Androids",
+        "slug": "nu-androids",
+        "tz": "America/New_York",
+    },
+}
+
+RELAY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "tm_cache", "shotgun_relay")
+RELAY_MAX_AGE_SECONDS = int(os.getenv("KARTIS_SHOTGUN_RELAY_MAX_AGE_SECONDS")
+                            or 1800)
+VENUE_RELAY_PREFIX = "venue:"
+
+_CARD_RE = re.compile(
+    r'<a[^>]*href="(?:https://shotgun\.live)?/(?:[a-z]{2}(?:-[a-z]{2})?/)?'
+    r'events/([A-Za-z0-9._~-]+)"[^>]*>(.*?)</a>', re.S)
+_CARD_TITLE_RE = re.compile(r"<p[^>]*font-bold[^>]*>(.*?)</p>", re.S)
+_CARD_ALT_RE = re.compile(r'<img[^>]*alt="([^"]*)"')
+_CARD_TIME_RE = re.compile(r'<time datetime="([^"]+)"')
+_CARD_PLACE_RE = re.compile(r'<div class="text-muted-foreground[^"]*">(.*?)</div>', re.S)
+_SEE_MORE_RE = re.compile(r">\s*See more\s*</button>", re.I)
+# The paginated list's own props carry the true count, e.g.
+# {"eventsToQuery":"upcoming","organizerId":220134,"eventsPerPage":6,
+#  "totalEventsNumber":50,"skip":24} — escaped inside the flight payload.
+_TOTAL_UPCOMING_RE = re.compile(
+    r'eventsToQuery\\?"\s*:\s*\\?"upcoming\\?".{0,200}?'
+    r'totalEventsNumber\\?"\s*:\s*(\d+)', re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def venue_page_url(venue_key, locale=DEFAULT_LOCALE):
+    return f"{SITE_BASE}/{locale}/venues/{VENUES[venue_key]['slug']}"
+
+
+def _is_checkpoint(page):
+    return "Vercel Security Checkpoint" in (page or "")[:4000]
+
+
+def _card_text(fragment):
+    return _html.unescape(_TAG_RE.sub("", fragment or "")).strip()
+
+
+def parse_venue_upcoming(page, tz_name="America/New_York"):
+    """Event cards under "Upcoming events" -> list of dicts. Raises
+    EdmEventsError for a checkpoint page, a missing section, or a list the
+    page itself says is incomplete (see the truncation trap above)."""
+    if _is_checkpoint(page):
+        raise EdmEventsError("shotgun venue page is the Vercel bot checkpoint")
+    start = page.find(">Upcoming events<")
+    if start == -1:
+        if "No upcoming events" in page:
+            return []
+        raise EdmEventsError("shotgun venue page has no 'Upcoming events' "
+                             "section — layout change?")
+    end = page.find(">Past events<", start)
+    section = page[start:end if end != -1 else len(page)]
+
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = timezone.utc
+    out, seen = [], set()
+    for m in _CARD_RE.finditer(section):
+        slug, card = m.group(1), m.group(2)
+        if slug in seen:
+            continue
+        seen.add(slug)
+        title = _CARD_TITLE_RE.search(card) or _CARD_ALT_RE.search(card)
+        when = _CARD_TIME_RE.search(card)
+        place = _CARD_PLACE_RE.search(card)
+        start_epoch, date_text = 0, None
+        if when:
+            try:
+                dt = datetime.fromisoformat(when.group(1).replace("Z", "+00:00"))
+                start_epoch = int(dt.timestamp())
+                date_text = (dt.astimezone(tz)
+                             .strftime("%a, %b %d, %Y · %I:%M %p")
+                             .replace(" 0", " "))
+            except ValueError:
+                pass
+        out.append({
+            "event_key": slug,
+            "name": _card_text(title.group(1)) if title else slug,
+            "place": _card_text(place.group(1)) if place else None,
+            "start_epoch": start_epoch,
+            "date_text": date_text,
+            "ticket_url": event_page_url(slug),
+        })
+
+    # The button is the test: it's gone exactly when the list is complete.
+    # totalEventsNumber only feeds the message — it's the server's count at
+    # first render and can disagree with what the client finally shows.
+    total = _TOTAL_UPCOMING_RE.search(page)
+    if _SEE_MORE_RE.search(section):
+        raise EdmEventsError(
+            f"shotgun venue list truncated ({len(out)} of "
+            f"{total.group(1) if total else '?'} upcoming shown) — needs the "
+            "relay's expanded copy (is kartis-relay running with "
+            "KARTIS_RELAY_SOURCES including shotgun?)")
+    return out
+
+
+def _venue_relay_path(venue_key):
+    return os.path.join(RELAY_DIR, f"venue-{venue_key}.html")
+
+
+def relay_age(event_key):
+    """Seconds since the relay last stored this page, or None. Only venue
+    pages ("venue:<key>") are relayed."""
+    key = str(event_key or "")
+    if not key.startswith(VENUE_RELAY_PREFIX):
+        return None
+    try:
+        return time.time() - os.path.getmtime(
+            _venue_relay_path(key[len(VENUE_RELAY_PREFIX):]))
+    except OSError:
+        return None
+
+
+def relay_store(event_key, page):
+    """Keep a relay-rendered venue page ("venue:<key>") for discover().
+    Refuses a checkpoint, a truncated list or an unknown venue, so a bad
+    load can never overwrite a good copy. Returns the number of events."""
+    key = str(event_key or "")
+    if not key.startswith(VENUE_RELAY_PREFIX):
+        raise EdmEventsError(f"shotgun relay: only venue pages are relayed, got {key!r}")
+    venue_key = key[len(VENUE_RELAY_PREFIX):]
+    venue = VENUES.get(venue_key)
+    if venue is None:
+        raise EdmEventsError(f"shotgun relay: unknown venue {venue_key!r}")
+    entries = parse_venue_upcoming(page or "", venue.get("tz") or "America/New_York")
+    os.makedirs(RELAY_DIR, exist_ok=True)
+    path = _venue_relay_path(venue_key)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        f.write(page)
+    os.replace(path + ".tmp", path)
+    return len(entries)
+
+
+def relay_targets():
+    """What the relay should load for this source: every watched venue page,
+    with a hint to click "See more" until the whole list is on the page."""
+    return [{"source": SOURCE_NAME, "event_key": VENUE_RELAY_PREFIX + vk,
+             "url": venue_page_url(vk), "expand": "See more"}
+            for vk in VENUES]
+
+
+def _load_venue_html(venue_key):
+    age = relay_age(VENUE_RELAY_PREFIX + venue_key)
+    if age is not None and age <= RELAY_MAX_AGE_SECONDS:
+        with open(_venue_relay_path(venue_key), encoding="utf-8") as f:
+            return f.read()
+    when = f"{age / 60:.0f} min ago" if age is not None else "never"
+    try:
+        return edm_common.fetch_text(venue_page_url(venue_key))
+    except EdmEventsError as e:
+        raise EdmEventsError(f"{e} — relay last sent this venue page {when}; "
+                             "is kartis-relay running?") from e
+
+
+def discover(venue_keys=None, now_ts=None):
+    """Upcoming events across the watched venue pages, soonest first, in the
+    catalog-entry shape edm_events.sync_catalogs expects. Every entry is
+    track=False (announce-only). Returns (entries, errors) like
+    tao_events.discover; one venue failing doesn't sink the others."""
+    now_ts = int(now_ts if now_ts is not None else time.time())
+    entries, errors = [], {}
+    for venue_key in (venue_keys or VENUES):
+        venue = VENUES[venue_key]
+        try:
+            cards = parse_venue_upcoming(_load_venue_html(venue_key),
+                                         venue.get("tz") or "America/New_York")
+        except (EdmEventsError, ValueError) as e:
+            errors[venue_key] = f"{type(e).__name__}: {e}"
+            continue
+        for c in cards:
+            # A show whose start time has passed can linger on the page for
+            # the night; it isn't news.
+            if c["start_epoch"] and c["start_epoch"] < now_ts:
+                continue
+            entries.append({
+                **c,
+                "venue_key": venue_key,
+                "venue": c.get("place") or venue["name"],
+                "track": False,
+            })
+    entries.sort(key=lambda e: (e["start_epoch"] or 0, e["name"] or ""))
+    return entries, errors
+
+
 DEFAULT_TARGET = "jigitz0912"
 
 
 def main(argv):
     as_json = "--json" in argv
     args = [a for a in argv if not a.startswith("--")]
+    if "--venues" in argv:
+        entries, errors = discover()
+        if as_json:
+            print(json.dumps({"entries": entries, "errors": errors},
+                             indent=1, ensure_ascii=False))
+            return 0
+        for e in entries:
+            print(f"{e['venue_key']:14} {e['date_text'] or '?':32} "
+                  f"{e['name']}  ({e['venue']})  {e['ticket_url']}")
+        for vk, msg in errors.items():
+            print(f"ERROR {vk}: {msg}")
+        return 1 if errors else 0
     ev = fetch_event(args[0] if args else DEFAULT_TARGET)
     if as_json:
         print(json.dumps(ev, indent=1, ensure_ascii=False))

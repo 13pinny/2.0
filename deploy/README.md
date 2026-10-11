@@ -239,6 +239,35 @@ journalctl -u kartis-relay -n 40 --no-pager
   only by the server).
 - To undo: `sudo systemctl disable --now kartis-relay.timer kartis-chrome-relay`.
 
+### Shotgun venue new-event radar (#ai-warehouse-new-events)
+
+shotgun.live answers datacenter requests with a Vercel bot checkpoint, so the
+same relay also loads the watched Shotgun venue pages (`VENUES` in
+`shotgun_events.py`, today the Nu Androids page), clicks "See more" until the
+whole upcoming list shows, and posts it back. The EDM tick's catalog sync
+(every `KARTIS_EDM_CATALOG_SYNC_MINUTES`, default 10) then pings each newly
+listed show once, announce-only: these shows are not added to the poll list.
+
+```bash
+cd /opt/kartis && ./deploy/update.sh
+# the unit now says KARTIS_RELAY_SOURCES=tao,shotgun
+sudo cp deploy/systemd/kartis-relay.service /etc/systemd/system/
+sudo systemctl daemon-reload
+# pin the channel (else the Discord bot creates/reuses #ai-warehouse-new-events)
+echo 'DISCORD_WEBHOOK_AI_WAREHOUSE_NEW_EVENTS=<webhook url>' >> /opt/kartis/.env
+sudo systemctl restart kartis-flask
+sudo systemctl start kartis-relay          # one pass right now
+journalctl -u kartis-relay -n 20 --no-pager   # venue:nu-androids: HTTP 200 {"ok": true, "tiers": 50}
+```
+
+- `tiers` is the number of upcoming shows the page listed.
+- The first successful sync stores the current listing silently
+  (`[edm] shotgun venue nu-androids: baseline stored, no pings` in the Flask
+  log); every show listed after that gets one ping.
+- `shotgun venue list truncated` means the relay hasn't delivered an
+  expanded copy in the last 30 min — check `journalctl -u kartis-relay`.
+- `python shotgun_events.py --venues` prints what the radar currently sees.
+
 ## 9. Backups to B2
 
 ```sh
