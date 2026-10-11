@@ -215,13 +215,23 @@ def check_one(w, now_iso):
             _icon, _tail = ("⚠️", " (כרטיסים אחרונים)") if _last else ("🎟️", "")
             headline = f"{_icon} {_n} date{'s' if _n != 1 else ''} just opened{_tail} — {_snm}"
 
+        # DICE: every ping about one event (drops AND status flips) goes to
+        # that event night's own #dice-<event>-<date> channel, shared with dice_alerts'
+        # price pings. (Keep in sync with app.py._check_one_watcher.)
+        _dice_hook = None
+        if src_name == "dice" and enabled and matched:
+            _dmeta = ((lbls or {}).get("meta") or {})
+            _dice_hook = notify.dice_event_channel_webhook(
+                _dmeta.get("eventName") or label, _dmeta.get("firstPerfText"))
+
         if enabled and matched:
             result = notify.notify_drop(
                 label=label, perf_url=perf_url,
                 added_seats=matched, removed_count=len(removed),
                 total_now=len(seats), labels=lbls, channels=enabled,
                 headline=headline,
-                discord_override=discord_bot.webhook_for(w.get("discord_channel")),
+                discord_override=_dice_hook or discord_bot.webhook_for(w.get("discord_channel")),
+                status_override=_dice_hook,
             )
             # Stamp the physical seats we just pinged so they cool down.
             if SEAT_COOLDOWN_SECONDS > 0:
@@ -358,6 +368,10 @@ def main():
 
     sched = BackgroundScheduler(daemon=True, timezone="UTC")
     sched.add_job(tick, "interval", seconds=INTERVAL, id="tm_check")
+    # This box creates DICE event channels too (dice watcher pings), so it
+    # sweeps the ones it knows 30 days after their show. (Same job as app.py.)
+    sched.add_job(lambda: discord_bot.delete_expired(), "cron", hour=4, minute=17,
+                  id="discord_channel_cleanup")
     if DICE_SNIPER_ENABLED:
         sched.add_job(dice_sniper, "interval", seconds=DICE_SNIPER_SECONDS,
                       id="dice_sniper", max_instances=1)

@@ -117,6 +117,8 @@ _CATALOG_MAX_PAGES = 20          # 2000 events — a runaway-paging backstop
 # (source "tao"); fetch_event reads that copy while it is younger than
 # RELAY_MAX_AGE_SECONDS and only falls back to its own HTTP fetch otherwise,
 # so a dead relay surfaces as last_error on /marquee, never as a sell-out.
+# The same script can run on the box instead (kartis-relay.timer driving the
+# kartis-chrome-relay Chrome; "Marquee relay on the box" in deploy/README.md).
 RELAY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "tm_cache", "tao_relay")
 RELAY_MAX_AGE_SECONDS = int(os.getenv("KARTIS_TAO_RELAY_MAX_AGE_SECONDS") or 1800)

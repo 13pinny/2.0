@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Marquee relay pass every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+Unit=kartis-relay.service
+
+[Install]
+WantedBy=timers.target

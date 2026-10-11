@@ -24,6 +24,22 @@ Chrome, so it can't disturb a Lysted/viagogo session.
 Auth is the same pair cv_link_client uses: Caddy basic auth
 (KARTIS_WEB_USER / KARTIS_WEB_PASS) + KARTIS_CVAUTH_SECRET, all from .env.
 
+SERVER MODE (Linux, the VPS): the same script runs on the box every 5 min
+from kartis-relay.timer, driving its own headed Chrome (kartis-chrome-relay,
+CDP :9333 on the Xvfb display, so it shows up in noVNC) and talking to Flask
+on 127.0.0.1:8000 directly. That keeps Marquee prices flowing with the PC off.
+KARTIS_RELAY_SOURCES=tao limits it to tao (Cloudflare blocks eventim from the
+box even in a real Chrome). When the box's Chrome is held at the Cloudflare
+check, one Discord status ping says so: open vnc.kartis.homes and click the
+box in the "relay" Chrome window; a second ping says when pages load again.
+It never solves or skips a challenge itself. See deploy/README.md.
+
+Shotgun: shotgun.live puts a Vercel bot checkpoint in front of every
+datacenter request, so the targets list also carries the watched Shotgun
+VENUE pages (source "shotgun", see the venues block in shotgun_events). For
+those the relay also clicks "See more" until the whole upcoming list is on
+the page, then posts it back; the EDM tick pings each newly listed show.
+
 Run:  .venv\\Scripts\\python eventim_relay.py           one pass, prints results
       .venv\\Scripts\\pythonw eventim_relay.py          what the scheduled task runs
                                                        (logs to logs\\eventim_relay.log)
@@ -50,6 +66,17 @@ CDP = f"http://127.0.0.1:{CDP_PORT}"
 CHROME = os.environ.get("KARTIS_CHROME_EXE") or r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", str(ROOT)), "eventim-relay-chrome")
 LOG = ROOT / "logs" / "eventim_relay.log"
+# On the box systemd owns the Chrome (kartis-chrome-relay.service); never spawn one.
+SERVER_MODE = sys.platform != "win32"
+# Comma list of sources to load here. Unset: the PC loads eventim only
+# (Marquee and Shotgun run from the box's own relay, and loading 28 Marquee
+# pages every 5 min on the PC kept popping Chrome windows); the box loads
+# whatever KARTIS_RELAY_SOURCES names, or every source the server lists.
+SOURCES = {x.strip() for x in (os.environ.get("KARTIS_RELAY_SOURCES") or "").split(",") if x.strip()} \
+    or (set() if SERVER_MODE else {"eventim"})
+# Remembers whether we already pinged Discord about a Cloudflare hold.
+BLOCK_STATE = ROOT / "logs" / "relay_block.json"
+BLOCK_REPING_SECONDS = 6 * 3600
 
 
 def log(msg):
@@ -65,6 +92,9 @@ def ensure_chrome():
             return False
     if up():
         return
+    if SERVER_MODE:
+        raise RuntimeError(f"no Chrome on CDP :{CDP_PORT} - "
+                           "sudo systemctl restart kartis-chrome-relay")
     subprocess.Popen([CHROME, f"--remote-debugging-port={CDP_PORT}",
                       f"--user-data-dir={PROFILE}", "--no-first-run",
                       "--no-default-browser-check", "--start-minimized",
@@ -80,10 +110,41 @@ def ensure_chrome():
 READY_SELECTOR = {
     "eventim": "ul.ticket-list .ticket-type",
     "tao": "#ticket-types-content .ticket-type-item",
+    # shotgun venue pages: the section headings ("Upcoming events" / "Past
+    # events"); Vercel's checkpoint page has none.
+    "shotgun": "h2[data-slot='heading']",
 }
 
+# Clicks the "See more" button that sits ABOVE the "Past events" heading
+# (the upcoming list's) until it's gone, waiting for new cards after each
+# click. Returns the click count, or -1 if the button never went away.
+_EXPAND_JS = """
+async (label) => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const want = label.trim().toLowerCase();
+  const button = () => {
+    const past = [...document.querySelectorAll('h2')]
+      .find(h => h.textContent.trim().toLowerCase() === 'past events');
+    return [...document.querySelectorAll('button')].find(b =>
+      b.textContent.trim().toLowerCase() === want &&
+      (!past || (b.compareDocumentPosition(past) & Node.DOCUMENT_POSITION_FOLLOWING)));
+  };
+  const cards = () => document.querySelectorAll('a[href*="/events/"]').length;
+  for (let i = 0; i < 40; i++) {
+    const b = button();
+    if (!b) return i;
+    const before = cards();
+    b.scrollIntoView();
+    b.click();
+    for (let t = 0; t < 40 && cards() === before && button(); t++) await sleep(250);
+    await sleep(500);
+  }
+  return button() ? -1 : 40;
+}
+"""
 
-def render(ctx, url, source="eventim"):
+
+def render(ctx, url, source="eventim", expand=None):
     pg = ctx.new_page()
     try:
         pg.goto(url, timeout=60000, wait_until="domcontentloaded")
@@ -93,9 +154,51 @@ def render(ctx, url, source="eventim"):
             pg.wait_for_selector(READY_SELECTOR[source], timeout=25000)
         except Exception:
             return None, pg.title()
+        if expand:
+            clicks = pg.evaluate(_EXPAND_JS, expand)
+            if clicks < 0:
+                log(f"{url}: '{expand}' still showing after 40 clicks")
         return pg.content(), pg.title()
     finally:
         pg.close()
+
+
+def _is_challenge(title):
+    t = (title or "").lower()
+    return ("just a moment" in t or "attention required" in t
+            or "security checkpoint" in t)       # Vercel (shotgun.live)
+
+
+def report_block(blocked, loaded):
+    """Server mode: one Discord status ping when the box's Chrome gets held
+    at the Cloudflare check (repeated every BLOCK_REPING_SECONDS while it
+    lasts) and one when pages load again. Nothing on the desktop -- a home
+    connection clears the check by itself."""
+    if not SERVER_MODE:
+        return
+    try:
+        state = json.loads(BLOCK_STATE.read_text())
+    except (OSError, ValueError):
+        state = {}
+    now = time.time()
+    if blocked and not loaded:
+        if now - state.get("pinged_at", 0) < BLOCK_REPING_SECONDS:
+            return
+        msg = (f"⚠️ **Relay paused** (Marquee prices / Shotgun new events) — a bot check is holding the server's "
+               f"relay Chrome ({blocked} page(s)). Open https://vnc.kartis.homes/vnc.html "
+               f"and click the checkbox in the relay Chrome window.")
+        state = {"blocked": True, "pinged_at": now}
+    elif loaded and state.get("blocked"):
+        msg = "✅ **Relay flowing again** — the server relay loaded its pages (Marquee / Shotgun)."
+        state = {}
+    else:
+        return
+    import notify
+    hook = notify._discord_webhook("status")
+    if hook:
+        log(f"discord status: {notify._post_discord(hook, {'content': msg})}")
+    BLOCK_STATE.parent.mkdir(exist_ok=True)
+    BLOCK_STATE.write_text(json.dumps(state))
 
 
 def main():
@@ -106,30 +209,38 @@ def main():
     if status != 200:
         log(f"targets: HTTP {status} {raw[:200]}")
         return 1
-    targets = json.loads(raw)["targets"]
+    targets = [t for t in json.loads(raw)["targets"]
+               if (t.get("source") or "eventim") in READY_SELECTOR
+               and (not SOURCES or (t.get("source") or "eventim") in SOURCES)]
     if not targets:
         return 0
     ensure_chrome()
     from patchright.sync_api import sync_playwright
+    blocked = loaded = 0
     with sync_playwright() as p:
         # Never browser.close() — on a CDP connection that closes the user's Chrome.
         ctx = p.chromium.connect_over_cdp(CDP).contexts[0]
         for t in targets:
             source = t.get("source") or "eventim"
-            if source not in READY_SELECTOR:
-                continue
             try:
-                html, title = render(ctx, t["url"], source)
+                html, title = render(ctx, t["url"], source, t.get("expand"))
             except Exception as e:
                 log(f"{t['event_key']}: load failed {type(e).__name__}: {e}")
                 continue
             if html is None:
                 log(f"{t['event_key']}: no ticket list (page title {title!r})")
+                if _is_challenge(title):
+                    blocked += 1
+                    if blocked >= 2 and not loaded:
+                        log("held at the Cloudflare check - skipping the rest of this pass")
+                        break
                 continue
+            loaded += 1
             status, raw = cv_link_client.call("/api/edm/eventim-relay",
                                               {"source": source, "event_key": t["event_key"],
                                                "html": html})
             log(f"{t['event_key']}: HTTP {status} {raw[:160]}")
+    report_block(blocked, loaded)
     return 0
 
 

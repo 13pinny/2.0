@@ -153,6 +153,13 @@
   .tchip b { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .tchip.off { background: var(--bg-3); color: var(--muted); border-color: var(--line); text-decoration: line-through; }
   .tchip.off b { font-weight: 400; }
+  .links { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+  .links .pair { display: flex; align-items: center; gap: 4px; }
+  a.buy.cv { background: #0f766e; }
+  a.buy.cvq { background: transparent; color: #0f766e; border: 1px dashed #14b8a6; padding: 2px 9px; }
+  .cvauto { font-size: 9px; color: var(--muted); letter-spacing: .5px; text-transform: uppercase; }
+  a.cvedit { color: var(--muted); text-decoration: none; font-size: 11px; }
+  a.cvedit:hover { color: #0f766e; }
   .detail .hero { float: right; width: 180px; height: 110px; border-radius: 10px; background-size: cover; background-position: center; margin: 2px 0 8px 16px; }
 </style>
 </head>
@@ -477,7 +484,7 @@ function trackerRow(e, held){
     <td class="num chg${(e.changes||0) > 0 ? ' hot' : ''}">${fmt(e.changes||0)}</td>
     <td class="when">${e.last_change_at ? fmtAgo(e.last_change_at) : '—'}</td>
     <td class="num">${h ? `<span class="held">${h}</span>` : ''}</td>
-    <td><a class="buy${e.status === 'selling' ? '' : ' off'}" href="${escape(e.url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a></td>
+    <td><div class="links"><a class="buy${e.status === 'selling' ? '' : ' off'}" href="${escape(e.url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a>${cvLink(e.event_code, e.cv_url, e.name, e.cv_source)}</div></td>
   </tr>` + (open.has(e.event_code) ? `<tr class="detail"><td colspan="${COLS.length}">${detailRows(e)}</td></tr>` : '');
 }
 function render(){
@@ -756,6 +763,37 @@ function wireSales(){
   });
 }
 
+// ---- CrowdVolt links -------------------------------------------------------
+// The server matches each event against CrowdVolt's sitemap (cv_events.py)
+// and stores hits as 'auto'; ✎ pins the right page by hand, blank pins
+// "not on CrowdVolt", and "auto" hands it back to the matcher. With no link
+// "CV?" opens a Google search scoped to CrowdVolt event pages.
+function cvLink(key, url, name, source){
+  if (!key) return '';
+  const edit = `<a href="#" class="cvedit" data-key="${escape(key)}" data-url="${escape(url||'')}" title="${url ? 'fix' : 'set'} the CrowdVolt event link">✎</a>`;
+  if (url){
+    const auto = source === 'auto';
+    return `<span class="pair"><a class="buy cv" href="${escape(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="${auto ? 'auto-matched from CrowdVolt\'s event list — ✎ if it\'s the wrong page' : 'open on CrowdVolt'}">CV</a>${auto ? '<span class="cvauto">auto</span>' : ''}${edit}</span>`;
+  }
+  if (source === 'manual') return `<span class="pair"><span class="cvauto" title="marked as not on CrowdVolt">no CV</span>${edit}</span>`;
+  const q = 'https://www.google.com/search?q=' + encodeURIComponent('site:crowdvolt.com/event ' + (name || ''));
+  return `<span class="pair"><a class="buy cvq" href="${escape(q)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="no CrowdVolt match yet — search for it, then paste its URL with ✎">CV?</a>${edit}</span>`;
+}
+document.addEventListener('click', async ev => {
+  const a = ev.target.closest('a.cvedit');
+  if (!a) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const url = prompt('CrowdVolt event URL (crowdvolt.com/event/...)\n• blank = this event isn\'t on CrowdVolt\n• auto = let it match automatically again', a.dataset.url || '');
+  if (url === null) return;
+  try {
+    const r = await fetch('/api/dice/cv-link', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({key: a.dataset.key, url: url.trim()})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    await Promise.all([load(false), loadPurchases()]);
+  } catch (e) { alert('save failed: ' + e.message); }
+}, true);
+
 // ---- holdings table -------------------------------------------------------
 const PFILTERS = {
   unlisted:  { label: 'with unlisted tickets', test: g => !g.past && (g.avail||0) > (g.listed||0) },
@@ -800,7 +838,7 @@ function purchaseRow(g, tmap){
     <td class="num">${g.revenue ? money0(g.revenue) : '<span class="when">—</span>'}</td>
     <td class="num">${profitCell(g)}</td>
     <td class="num">${roiCell(roiOf(g.profit, g.cost_sold))}</td>
-    <td>${g.url ? `<a class="buy" href="${escape(g.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">DICE</a>` : ''}</td>
+    <td><div class="links">${g.url ? `<a class="buy" href="${escape(g.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">DICE</a>` : ''}${cvLink(g.cv_key, g.cv_url, g.event_name, g.cv_source)}</div></td>
   </tr>`;
   if (opened){
     // One aligned row per purchase: type and account up front, then the
