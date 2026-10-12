@@ -478,10 +478,16 @@ def run_pacha_events():
                 delta = max(0, old["total_available"] - ev["total_available"])
             ev["sold_cum"] = (old.get("sold_cum") or 0) + delta
             ev["sold_cum_since"] = old.get("sold_cum_since") or now_iso
+            ev["_sold_delta"] = delta
 
         for ev in events:
             db.pacha_upsert_seen(ev, now_iso)
             db.pacha_release_sync(ev["event_id"], ev.get("tiers"), now_iso)
+            # Same delta, bucketed per NY day and kept forever — the /pacha
+            # sold-per-day chart (snapshots only reach back 8 days).
+            db.pacha_daily_add(ev["event_id"], now_iso, ev["_sold_delta"],
+                               ev.get("total_available"), ev.get("ga_price"),
+                               ev.get("ga_release"))
         global _pacha_last_market_at
         now_dt = datetime.now(timezone.utc)
         if (_pacha_last_market_at is None
@@ -6482,6 +6488,7 @@ def api_pacha():
     now = datetime.now(timezone.utc)
     series_map = db.sales_snapshot_series_bulk((now - timedelta(days=7)).isoformat())
     release_log = db.pacha_release_log_all()
+    daily = db.pacha_daily_all()
     cutoff = (now - timedelta(hours=24)).isoformat()
     events = []
     for r in db.pacha_all_seen().values():
@@ -6520,6 +6527,7 @@ def api_pacha():
                 for x in release_log.get(r["event_id"], [])
             ],
             "windows": windows,
+            "daily": daily.get(r["event_id"], []),
             "first_seen_at": r.get("first_seen_at"),
             "last_seen_at": r.get("last_seen_at"),
         })
@@ -6531,6 +6539,7 @@ def api_pacha():
                    "enabled": PACHA_MONITOR_ENABLED,
                    "interval_minutes": PACHA_MONITOR_INTERVAL_MINUTES},
         "windows": [k for k, _ in FESTIVAL_WINDOWS],
+        "today": db.ny_day(now.isoformat()),
         "now": now.isoformat(),
     })
 

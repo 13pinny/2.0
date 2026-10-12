@@ -65,6 +65,32 @@
   .vel.zero { color: var(--muted); }
   .vel.hot { color: var(--green); font-weight: 600; }
   .vel .star { color: var(--amber); }
+  .pace { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pace .up { color: var(--green); font-weight: 600; }
+  .pace .down { color: var(--red); font-weight: 600; }
+  .pace .flat, .pace .na { color: var(--muted); }
+  .pace .rate { font-size: 10px; color: var(--muted); }
+  .spark { display: inline-block; vertical-align: middle; margin-right: 6px; }
+  .spark rect { fill: var(--pink); }
+  .spark rect.today { opacity: .35; }
+  .daily { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); position: relative; }
+  .daily .rhh { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 4px; }
+  .daily .sum { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .daily .sum b { color: var(--text); }
+  .chart { width: 100%; max-width: 900px; overflow-x: auto; }
+  .chart svg { display: block; }
+  .chart .dbar { fill: var(--pink); }
+  .chart .dbar.today { opacity: .4; }
+  .chart .hit { fill: transparent; cursor: default; }
+  .chart g:hover .dbar { opacity: .75; }
+  .chart .grid { stroke: var(--line); stroke-width: 1; }
+  .chart .axis { fill: var(--muted); font-size: 9px; }
+  .chart .vlbl { fill: var(--text); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .chart .plbl { fill: var(--purple); font-size: 9px; font-weight: 600; }
+  .chart .pmark { stroke: var(--purple); stroke-width: 1; stroke-dasharray: 2 2; }
+  .tip { position: fixed; pointer-events: none; background: var(--text); color: var(--bg-2); font-size: 11px; padding: 6px 9px; border-radius: 6px; z-index: 50; display: none; white-space: nowrap; line-height: 1.45; }
+  #overview { background: var(--bg-2); border: 1px solid var(--line); padding: 10px 12px 6px; margin-bottom: 8px; }
+  #overview:empty { display: none; }
   .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
   .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; }
 </style>
@@ -83,6 +109,9 @@
   <div class="stats" id="totals"></div>
   <p class="sub" id="statusline">—</p>
 
+  <h2>Sold per day <span class="rel">(all events, New York days)</span></h2>
+  <div id="overview"></div>
+
   <h2>Events <span class="rel">(click a row for the tier breakdown)</span></h2>
   <div class="controls"><input type="text" id="q" placeholder="filter by artist…" /></div>
   <div class="tablewrap">
@@ -93,6 +122,7 @@
   </div>
   <p class="sub" id="footnote"></p>
 </main>
+<div class="tip" id="tip"></div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -117,6 +147,7 @@ const COLS = [
   { key:'w3d',   label:'+3d', num:true },
   { key:'w7d',   label:'+7d', num:true },
   { key:'scum',  label:'Σ Sold', num:true },
+  { key:'pace',  label:'Pace (3d vs prior 3d)' },
   { key:'price', label:'GA $', num:true },
   { key:'buy',   label:'' },
 ];
@@ -132,6 +163,7 @@ function sortVal(e, key){
     case 'w1h': return w('1h'); case 'w6h': return w('6h'); case 'w24h': return w('24h');
     case 'w3d': return w('3d'); case 'w7d': return w('7d');
     case 'scum': return e.sold_cum == null ? -1 : e.sold_cum;
+    case 'pace': { const p = pace(e); return p.change == null ? -Infinity : p.change; }
     case 'price': return e.ga_price == null ? Infinity : e.ga_price;
     default: return 0;
   }
@@ -158,6 +190,179 @@ function velCell(w){
   return `<td class="num vel ${cls}">${fmt(w.sold)}${star}</td>`;
 }
 
+// ---- sold per day -------------------------------------------------------
+// e.daily = [{day:'YYYY-MM-DD', sold, available, ga_price, ga_release}] in NY
+// days, one row per day the monitor ran. Gaps (monitor down) are filled as
+// null = unknown, never 0, so an outage never looks like a slump.
+const DAY_MS = 86400000;
+const dayNum = d => Math.round(Date.parse(d + 'T00:00:00Z') / DAY_MS);
+const dayStr = n => new Date(n * DAY_MS).toISOString().slice(0, 10);
+const md = d => d.slice(5).replace('-', '/');
+const dow = d => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T00:00:00Z').getUTCDay()];
+
+function dailySeries(e, maxDays){
+  const rows = e.daily || [];
+  if (!rows.length) return [];
+  const by = Object.fromEntries(rows.map(r => [r.day, r]));
+  let a = dayNum(rows[0].day);
+  const b = dayNum(DATA.today || rows[rows.length - 1].day);
+  if (maxDays && b - a + 1 > maxDays) a = b - maxDays + 1;
+  const show = e.start_date ? dayNum(e.start_date.slice(0, 10)) : null;
+  const out = [];
+  for (let n = a; n <= b; n++){
+    const d = dayStr(n), r = by[d];
+    out.push({ day: d, sold: r ? r.sold : null, ga_price: r ? r.ga_price : null,
+               ga_release: r ? r.ga_release : null, available: r ? r.available : null,
+               today: d === DATA.today, out: show != null ? show - n : null });
+  }
+  return out;
+}
+
+// Average sold/day over the last 3 COMPLETE days vs the 3 before (today is
+// partial, so it's left out). Needs every one of those 6 days recorded.
+function pace(e){
+  const s = dailySeries(e).filter(x => !x.today);
+  const avg = xs => xs.length === 3 && xs.every(x => x.sold != null) ? xs.reduce((a, x) => a + x.sold, 0) / 3 : null;
+  const recent = avg(s.slice(-3)), prior = avg(s.slice(-6, -3));
+  let change = null;
+  if (recent != null && prior != null) change = prior === 0 ? (recent > 0 ? 1 : 0) : (recent - prior) / prior;
+  return { recent, prior, change };
+}
+
+function sparkSvg(e){
+  const s = dailySeries(e, 14);
+  if (!s.length) return '';
+  const W = 4, G = 1, H = 18, max = Math.max(1, ...s.map(x => x.sold || 0));
+  const bars = s.map((x, i) => {
+    if (x.sold == null) return '';
+    const h = Math.max(x.sold ? 1.5 : 0.5, x.sold / max * H);
+    return `<rect class="${x.today ? 'today' : ''}" x="${i * (W + G)}" y="${H - h}" width="${W}" height="${h}" rx="1"></rect>`;
+  }).join('');
+  return `<svg class="spark" width="${s.length * (W + G)}" height="${H}" aria-hidden="true">${bars}</svg>`;
+}
+
+function paceCell(e){
+  const p = pace(e);
+  const spark = sparkSvg(e);
+  if (p.change == null)
+    return `<td class="pace">${spark}<span class="na" title="needs 6 full days of tracking">—</span></td>`;
+  const pct = Math.round(p.change * 100);
+  const cls = pct >= 15 ? 'up' : pct <= -15 ? 'down' : 'flat';
+  const arrow = cls === 'up' ? '▲' : cls === 'down' ? '▼' : '•';
+  const title = `last 3 days ${p.recent.toFixed(1)}/day vs ${p.prior.toFixed(1)}/day the 3 days before`;
+  return `<td class="pace" title="${title}">${spark}<span class="${cls}">${arrow} ${pct > 0 ? '+' : ''}${pct}%</span> <span class="rate">${p.recent.toFixed(1)}/d</span></td>`;
+}
+
+// Bar chart, one bar per day. tipFn(x) -> tooltip html.
+function barChart(s, tipFn){
+  const BW = Math.max(6, Math.min(22, Math.floor(860 / Math.max(1, s.length)) - 2)), GAP = 2;
+  const L = 34, T = 16, H = 120, B = 30;
+  const W = L + s.length * (BW + GAP) + 8;
+  const max = Math.max(1, ...s.map(x => x.sold || 0));
+  const step = max <= 5 ? 1 : Math.pow(10, Math.floor(Math.log10(max))) * (max / Math.pow(10, Math.floor(Math.log10(max))) > 5 ? 2 : 1);
+  const top = Math.ceil(max / step) * step;
+  const y = v => T + H - v / top * H;
+  let g = '';
+  for (let v = 0; v <= top; v += step)
+    g += `<line class="grid" x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}"></line><text class="axis" x="${L - 5}" y="${y(v) + 3}" text-anchor="end">${v}</text>`;
+  const every = Math.ceil(s.length / 14);
+  // Label only the peak and the latest complete day — not every bar.
+  const complete = s.filter(x => !x.today && x.sold != null);
+  const peak = complete.reduce((m, x) => (m && m.sold >= x.sold ? m : x), null);
+  const last = complete[complete.length - 1];
+  let prevPrice = null;
+  s.forEach((x, i) => {
+    const bx = L + i * (BW + GAP);
+    if (x.sold != null){
+      const h = x.sold ? Math.max(2, x.sold / top * H) : 0;
+      g += `<g data-i="${i}"><rect class="hit" x="${bx - 1}" y="${T}" width="${BW + GAP}" height="${H}"></rect>` +
+           `<rect class="dbar${x.today ? ' today' : ''}" x="${bx}" y="${T + H - h}" width="${BW}" height="${h}" rx="2"></rect></g>`;
+      if (x === peak || x === last)
+        g += `<text class="vlbl" x="${bx + BW / 2}" y="${T + H - h - 3}" text-anchor="middle">${x.sold}</text>`;
+    } else {
+      g += `<g data-i="${i}"><rect class="hit" x="${bx - 1}" y="${T}" width="${BW + GAP}" height="${H}"></rect></g>`;
+    }
+    if (x.ga_price != null && prevPrice != null && x.ga_price !== prevPrice)
+      g += `<line class="pmark" x1="${bx - 1}" x2="${bx - 1}" y1="${T - 4}" y2="${T + H}"></line><text class="plbl" x="${bx + 1}" y="${T - 6}">$${x.ga_price}</text>`;
+    if (x.ga_price != null) prevPrice = x.ga_price;
+    if ((i % every === 0 && s.length - 1 - i >= every) || i === s.length - 1){
+      g += `<text class="axis" x="${bx + BW / 2}" y="${T + H + 12}" text-anchor="middle">${md(x.day)}</text>`;
+      if (x.out != null) g += `<text class="axis" x="${bx + BW / 2}" y="${T + H + 23}" text-anchor="middle">${x.out >= 0 ? x.out + 'd out' : ''}</text>`;
+    }
+  });
+  const id = 'c' + Math.random().toString(36).slice(2, 8);
+  CHART_TIPS[id] = { s, tipFn };
+  return `<div class="chart"><svg id="${id}" width="${W}" height="${T + H + B}" role="img">${g}</svg></div>`;
+}
+const CHART_TIPS = {};
+function wireCharts(root){
+  const tip = $('tip');
+  for (const k in CHART_TIPS) if (!document.getElementById(k)) delete CHART_TIPS[k];
+  root.querySelectorAll('.chart svg').forEach(svg => {
+    const c = CHART_TIPS[svg.id]; if (!c) return;
+    svg.addEventListener('click', ev => ev.stopPropagation());
+    svg.querySelectorAll('g[data-i]').forEach(gEl => {
+      gEl.addEventListener('mousemove', ev => {
+        tip.innerHTML = c.tipFn(c.s[+gEl.dataset.i]);
+        tip.style.display = 'block';
+        const r = tip.getBoundingClientRect();
+        tip.style.left = Math.min(window.innerWidth - r.width - 8, ev.clientX + 12) + 'px';
+        tip.style.top = (ev.clientY - r.height - 10) + 'px';
+      });
+      gEl.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    });
+  });
+}
+
+function eventTip(x){
+  const lines = [`<b>${dow(x.day)} ${md(x.day)}</b>${x.out != null && x.out >= 0 ? ` · ${x.out}d before show` : ''}`];
+  lines.push(x.sold == null ? 'not tracked (monitor down)' : `${x.sold} sold${x.today ? ' so far today' : ''}`);
+  if (x.available != null) lines.push(`${x.available.toLocaleString()} left at end of day`);
+  if (x.ga_price != null) lines.push(`GA $${x.ga_price}${x.ga_release ? ' · ' + escape(x.ga_release) : ''}`);
+  return lines.join('<br>');
+}
+
+function dailyBlock(e){
+  const s = dailySeries(e);
+  if (!s.length) return '<div class="daily"><div class="rhh">Sold per day</div><div class="sum">No daily history yet — fills in from the next check.</div></div>';
+  const p = pace(e);
+  const done = s.filter(x => !x.today && x.sold != null);
+  const best = done.reduce((m, x) => (m && m.sold >= x.sold ? m : x), null);
+  const bits = [];
+  if (p.recent != null) bits.push(`last 3 days <b>${p.recent.toFixed(1)}/day</b>` + (p.prior != null ? ` vs ${p.prior.toFixed(1)}/day before` : ''));
+  if (best) bits.push(`best day <b>${best.sold}</b> (${dow(best.day)} ${md(best.day)})`);
+  if (p.recent && e.total_available != null && e.start_date){
+    const daysLeft = dayNum(e.start_date.slice(0, 10)) - dayNum(DATA.today);
+    const proj = Math.round(p.recent * Math.max(0, daysLeft));
+    bits.push(`at this pace ~<b>${proj.toLocaleString()}</b> more by show day (${fmt(e.total_available)} left now)`);
+  }
+  return `<div class="daily"><div class="rhh">Sold per day — since ${md(s[0].day)}</div>` +
+         `<div class="sum">${bits.join(' · ') || '—'}</div>` +
+         barChart(s, eventTip) +
+         `<div class="sum">Faded bar = today so far. Purple line = GA price changed (new release). "d out" = days before the show.</div></div>`;
+}
+
+function renderOverview(){
+  const evs = DATA.events || [];
+  const tot = {};
+  evs.forEach(e => (e.daily || []).forEach(r => {
+    const t = tot[r.day] || (tot[r.day] = { sold: 0, events: 0 });
+    t.sold += r.sold; t.events += 1;
+  }));
+  const days = Object.keys(tot).sort();
+  if (!days.length){ $('overview').innerHTML = ''; return; }
+  const b = dayNum(DATA.today || days[days.length - 1]);
+  const a = Math.max(dayNum(days[0]), b - 59);
+  const s = [];
+  for (let n = a; n <= b; n++){
+    const d = dayStr(n), t = tot[d];
+    s.push({ day: d, sold: t ? t.sold : null, events: t ? t.events : 0, today: d === DATA.today, out: null, ga_price: null });
+  }
+  $('overview').innerHTML = barChart(s, x =>
+    `<b>${dow(x.day)} ${md(x.day)}</b><br>` + (x.sold == null ? 'not tracked' : `${x.sold} sold${x.today ? ' so far today' : ''} across ${x.events} events`));
+  wireCharts($('overview'));
+}
+
 function tierRows(e){
   let html = !(e.tiers||[]).length ? '<div class="tier">No tier data yet — fills in on the next 10-min check.</div>'
     : e.tiers.map(t => {
@@ -172,6 +377,7 @@ function tierRows(e){
              (t.price != null ? ` ${money(t.price)}` : '') + `</div>`;
     }).join('');
   html += releaseHistory(e);
+  html += dailyBlock(e);
   return html;
 }
 
@@ -226,6 +432,7 @@ function render(){
       <td class="num">${fmt(e.total_available)}</td>
       ${velCell((e.windows||{})['1h'])}${velCell((e.windows||{})['6h'])}${velCell((e.windows||{})['24h'])}${velCell((e.windows||{})['3d'])}${velCell((e.windows||{})['7d'])}
       <td class="num"${scumTitle}>${fmt(e.sold_cum)}</td>
+      ${paceCell(e)}
       <td class="num">${money(e.ga_price)}</td>
       <td><a class="buy${e.on_sale ? '' : ' off'}" href="${escape(e.slug ? 'https://pacha-nyc.com/event/' + e.slug + '#tickets' : (e.buy_url||'#'))}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a></td>
     </tr>` + (opened ? `<tr class="tiers"><td colspan="${COLS.length}">${tierRows(e)}</td></tr>` : '');
@@ -235,6 +442,7 @@ function render(){
     open.has(id) ? open.delete(id) : open.add(id);
     render();
   });
+  wireCharts($('rows'));
 }
 
 function fmtAgo(iso){
@@ -263,7 +471,7 @@ function renderTotals(){
   $('statusline').textContent = `Monitor: ${s.enabled ? 'on' : 'OFF'} · every ${s.interval_minutes} min · last check ${fmtAgo(s.at)}` +
     (s.error ? ` · ⚠ ${s.error}` : '') + ` · pings last tick: ${['new','onsale','price_up','price_down','low_stock'].map(k => `${k} ${s[k]??0}`).join(', ')}`;
   $('meta').textContent = `${evs.length} events`;
-  $('footnote').textContent = 'Counts are per-release (a new release adds inventory at a higher price). +1h/+6h/… = actual tickets sold in that window; * = limited history. Σ Sold = everything sold since tracking began. Release history logs every release from first sighting (releases already open when logging started show that date). BUY opens the event page\'s tickets section (the FourVenues iframe checkout adds tax).';
+  $('footnote').textContent = 'Counts are per-release (a new release adds inventory at a higher price). +1h/+6h/… = actual tickets sold in that window; * = limited history. Σ Sold = everything sold since tracking began. Pace = avg sold/day over the last 3 full days vs the 3 before (▲/▼ at ±15%); the mini bars are the last 14 days. Click a row for the full sold-per-day chart. Release history logs every release from first sighting (releases already open when logging started show that date). BUY opens the event page\'s tickets section (the FourVenues iframe checkout adds tax).';
 }
 
 async function load(){
@@ -272,7 +480,7 @@ async function load(){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     DATA = await r.json();
     $('errbox').style.display = 'none';
-    renderTotals(); render();
+    renderTotals(); renderOverview(); render();
   } catch (e) {
     $('errbox').textContent = 'Failed to load: ' + e.message;
     $('errbox').style.display = 'block';

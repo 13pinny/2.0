@@ -611,6 +611,22 @@ CREATE TABLE IF NOT EXISTS pacha_release_log (
                                        -- then means removed, not sold out)
     UNIQUE(event_id, tier_name)
 );
+-- Tickets sold per pacha event per NEW YORK calendar day — the /pacha
+-- "sold per day" chart. Same arithmetic as sold_cum (availability drops
+-- between ticks; release flips adding inventory are clamped out), bucketed
+-- by day and kept FOREVER, unlike tickchak_sales_snapshots which is pruned
+-- at 8 days. Seeded once from those snapshots when the table is first made.
+-- available / ga_price / ga_release are the day's LAST reading.
+CREATE TABLE IF NOT EXISTS pacha_daily_sales (
+    event_id   TEXT NOT NULL,
+    day        TEXT NOT NULL,          -- YYYY-MM-DD, America/New_York
+    sold       INTEGER NOT NULL DEFAULT 0,
+    available  INTEGER,
+    ga_price   REAL,
+    ga_release TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (event_id, day)
+);
 -- US EDM single-event trackers (posh_events / leap_events / eventim_events
 -- + app.py run_edm_events). Pacha watches a whole venue catalog; these
 -- watch NAMED EVENTS on several ticketing platforms, so the set of things
@@ -1421,6 +1437,10 @@ def init():
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_cashback_source_ref "
             "ON cashback_entries(source_ref) WHERE source_ref IS NOT NULL"
         )
+        # /pacha sold-per-day: the table is new, so seed it from the ~8 days
+        # of 10-min snapshots still on disk instead of starting blank.
+        if conn.execute("SELECT 1 FROM pacha_daily_sales LIMIT 1").fetchone() is None:
+            _pacha_daily_backfill(conn)
 
 
 def upsert_lysted_purchases(rows, now_iso):
@@ -3630,6 +3650,85 @@ def pacha_release_sync(event_id, tiers, now_iso):
                     "WHERE event_id = ? AND tier_name = ?",
                     (now_iso, event_id, name),
                 )
+
+
+_NY_TZ = None
+
+
+def ny_day(iso):
+    """UTC ISO timestamp → its YYYY-MM-DD in New York (Pacha's local day).
+    Falls back to a fixed UTC-4 when the box has no tz database (Windows
+    without the tzdata package) — at worst an hour off around midnight."""
+    global _NY_TZ
+    dt = _dt.datetime.fromisoformat(iso)
+    if _NY_TZ is None:
+        try:
+            from zoneinfo import ZoneInfo
+            _NY_TZ = ZoneInfo("America/New_York")
+        except Exception:
+            _NY_TZ = _dt.timezone(_dt.timedelta(hours=-4))
+    return dt.astimezone(_NY_TZ).date().isoformat()
+
+
+def pacha_daily_add(event_id, now_iso, sold_delta, available, ga_price, ga_release):
+    """Add one tick's sales to its NY day and record the day's latest
+    availability/price. Called every pacha tick for every listed event, so
+    a day with zero sales still gets a row (a real 0, not missing data)."""
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO pacha_daily_sales (event_id, day, sold, available,
+                   ga_price, ga_release, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(event_id, day) DO UPDATE SET
+                   sold = sold + excluded.sold,
+                   available = COALESCE(excluded.available, available),
+                   ga_price = COALESCE(excluded.ga_price, ga_price),
+                   ga_release = COALESCE(excluded.ga_release, ga_release),
+                   updated_at = excluded.updated_at""",
+            (event_id, ny_day(now_iso), max(0, int(sold_delta or 0)), available,
+             ga_price, ga_release, now_iso),
+        )
+
+
+def _pacha_daily_backfill(conn):
+    """Seed pacha_daily_sales from the pacha rows of the snapshot table
+    (source='pacha', one per event per ~10 min). Sums availability drops per
+    NY day exactly like the live tick; price/release aren't in snapshots."""
+    rows = conn.execute(
+        "SELECT event_code, captured_at, available FROM tickchak_sales_snapshots "
+        "WHERE source = 'pacha' AND available IS NOT NULL "
+        "ORDER BY event_code, captured_at"
+    ).fetchall()
+    days = {}  # (event_id, day) -> [sold, last_available, last_at]
+    prev = {}
+    for r in rows:
+        ev, at, avail = r["event_code"], r["captured_at"], r["available"]
+        key = (ev, ny_day(at))
+        d = days.setdefault(key, [0, None, at])
+        if ev in prev:
+            d[0] += max(0, prev[ev] - avail)
+        d[1], d[2] = avail, at
+        prev[ev] = avail
+    conn.executemany(
+        """INSERT OR IGNORE INTO pacha_daily_sales (event_id, day, sold,
+               available, updated_at) VALUES (?, ?, ?, ?, ?)""",
+        [(ev, day, v[0], v[1], v[2]) for (ev, day), v in days.items()],
+    )
+
+
+def pacha_daily_all():
+    """{event_id: [{day, sold, available, ga_price, ga_release}, …]} oldest
+    day first."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT event_id, day, sold, available, ga_price, ga_release "
+            "FROM pacha_daily_sales ORDER BY event_id, day"
+        ).fetchall()
+    out = {}
+    for r in rows:
+        d = dict(r)
+        out.setdefault(d.pop("event_id"), []).append(d)
+    return out
 
 
 def pacha_release_log_all():
