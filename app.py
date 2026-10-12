@@ -478,7 +478,31 @@ def run_pacha_events():
                 delta = max(0, old["total_available"] - ev["total_available"])
             ev["sold_cum"] = (old.get("sold_cum") or 0) + delta
             ev["sold_cum_since"] = old.get("sold_cum_since") or now_iso
-            ev["_sold_delta"] = delta
+            # Per ticket type, for the /pacha hover breakdown: `used` (tickets
+            # sold in that tier) rising, else its count left dropping. Unlike
+            # the total, a release opening (inventory added) can't mask
+            # these, so the day/hour total is the larger of the two.
+            old_tiers = {}
+            if old.get("tiers_json"):
+                try:
+                    old_tiers = {t.get("name"): t for t in json.loads(old["tiers_json"]) if t.get("name")}
+                except (ValueError, TypeError, AttributeError):
+                    old_tiers = {}
+            tier_sold = {}
+            for t in ev.get("tiers") or []:
+                o = old_tiers.get(t.get("name"))
+                if not o:
+                    continue
+                if t.get("used") is not None and o.get("used") is not None:
+                    n = t["used"] - o["used"]
+                elif t.get("available") is not None and o.get("available") is not None:
+                    n = o["available"] - t["available"]
+                else:
+                    n = 0
+                if n > 0:
+                    tier_sold[t["name"]] = n
+            ev["_tier_sold"] = tier_sold
+            ev["_sold_delta"] = max(delta, sum(tier_sold.values()))
 
         for ev in events:
             db.pacha_upsert_seen(ev, now_iso)
@@ -487,7 +511,7 @@ def run_pacha_events():
             # sold-per-day chart (snapshots only reach back 8 days).
             db.pacha_daily_add(ev["event_id"], now_iso, ev["_sold_delta"],
                                ev.get("total_available"), ev.get("ga_price"),
-                               ev.get("ga_release"))
+                               ev.get("ga_release"), ev["_tier_sold"])
         global _pacha_last_market_at
         now_dt = datetime.now(timezone.utc)
         if (_pacha_last_market_at is None
@@ -6541,6 +6565,40 @@ def api_pacha():
         "windows": [k for k, _ in FESTIVAL_WINDOWS],
         "today": db.ny_day(now.isoformat()),
         "now": now.isoformat(),
+    })
+
+
+@app.route("/api/pacha/hourly")
+def api_pacha_hourly():
+    """Tickets sold per New York clock hour for the /pacha hourly charts.
+    ?event=<event_id> (omit = all events summed); ?day=YYYY-MM-DD for that
+    NY day's hours, otherwise the last ?hours=N (default 48, max 336).
+    Hours with no row come back sold=null (monitor down), never 0."""
+    from flask import request
+    event_id = (request.args.get("event") or "").strip() or None
+    day = (request.args.get("day") or "").strip()
+    now = datetime.now(timezone.utc)
+    if day:
+        try:
+            d = datetime.strptime(day, "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"error": "day must be YYYY-MM-DD"}), 400
+        tz = db.ny_tz()
+        start = datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc)
+        end = (datetime(d.year, d.month, d.day, tzinfo=tz) + timedelta(days=1)
+               ).astimezone(timezone.utc) - timedelta(minutes=1)
+        end = min(end, now)
+    else:
+        try:
+            n = max(1, min(336, int(request.args.get("hours") or 48)))
+        except ValueError:
+            n = 48
+        end = now
+        start = now - timedelta(hours=n - 1)
+    return jsonify({
+        "event": event_id, "day": day or None,
+        "hours": db.pacha_hourly_range(event_id, start, end) if start <= end else [],
+        "now_hour": db.ny_hour(now.isoformat()),
     })
 
 

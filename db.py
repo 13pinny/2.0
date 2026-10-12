@@ -625,7 +625,21 @@ CREATE TABLE IF NOT EXISTS pacha_daily_sales (
     ga_price   REAL,
     ga_release TEXT,
     updated_at TEXT NOT NULL,
+    tiers_sold TEXT,                   -- JSON {tier name: sold} (live ticks only)
     PRIMARY KEY (event_id, day)
+);
+-- Same thing per New York clock HOUR ("YYYY-MM-DDTHH"), for the /pacha
+-- hourly view. Written by the same tick, kept forever, seeded once from the
+-- snapshots. The repeated 1am on the DST fall-back night shares one row.
+CREATE TABLE IF NOT EXISTS pacha_hourly_sales (
+    event_id   TEXT NOT NULL,
+    hour       TEXT NOT NULL,          -- YYYY-MM-DDTHH, America/New_York
+    sold       INTEGER NOT NULL DEFAULT 0,
+    available  INTEGER,
+    ga_price   REAL,
+    updated_at TEXT NOT NULL,
+    tiers_sold TEXT,                   -- JSON {tier name: sold} (live ticks only)
+    PRIMARY KEY (event_id, hour)
 );
 -- US EDM single-event trackers (posh_events / leap_events / eventim_events
 -- + app.py run_edm_events). Pacha watches a whole venue catalog; these
@@ -1439,8 +1453,13 @@ def init():
         )
         # /pacha sold-per-day: the table is new, so seed it from the ~8 days
         # of 10-min snapshots still on disk instead of starting blank.
+        for _t in ("pacha_daily_sales", "pacha_hourly_sales"):
+            if "tiers_sold" not in {r["name"] for r in conn.execute(f"PRAGMA table_info({_t})").fetchall()}:
+                conn.execute(f"ALTER TABLE {_t} ADD COLUMN tiers_sold TEXT")
         if conn.execute("SELECT 1 FROM pacha_daily_sales LIMIT 1").fetchone() is None:
             _pacha_daily_backfill(conn)
+        if conn.execute("SELECT 1 FROM pacha_hourly_sales LIMIT 1").fetchone() is None:
+            _pacha_hourly_backfill(conn)
 
 
 def upsert_lysted_purchases(rows, now_iso):
@@ -3655,25 +3674,56 @@ def pacha_release_sync(event_id, tiers, now_iso):
 _NY_TZ = None
 
 
-def ny_day(iso):
-    """UTC ISO timestamp → its YYYY-MM-DD in New York (Pacha's local day).
-    Falls back to a fixed UTC-4 when the box has no tz database (Windows
-    without the tzdata package) — at worst an hour off around midnight."""
+def ny_tz():
+    """America/New_York, or a fixed UTC-4 when the box has no tz database
+    (Windows without the tzdata package) — at worst an hour off."""
     global _NY_TZ
-    dt = _dt.datetime.fromisoformat(iso)
     if _NY_TZ is None:
         try:
             from zoneinfo import ZoneInfo
             _NY_TZ = ZoneInfo("America/New_York")
         except Exception:
             _NY_TZ = _dt.timezone(_dt.timedelta(hours=-4))
-    return dt.astimezone(_NY_TZ).date().isoformat()
+    return _NY_TZ
 
 
-def pacha_daily_add(event_id, now_iso, sold_delta, available, ga_price, ga_release):
-    """Add one tick's sales to its NY day and record the day's latest
+def ny_day(iso):
+    """UTC ISO timestamp → its YYYY-MM-DD in New York (Pacha's local day)."""
+    return _dt.datetime.fromisoformat(iso).astimezone(ny_tz()).date().isoformat()
+
+
+def ny_hour(iso):
+    """UTC ISO timestamp → its New York clock hour, "YYYY-MM-DDTHH"."""
+    return _dt.datetime.fromisoformat(iso).astimezone(ny_tz()).strftime("%Y-%m-%dT%H")
+
+
+def _merge_tiers_sold(conn, table, key_col, event_id, key, tier_sold):
+    """Add {tier: n} into a row's tiers_sold JSON (read-modify-write; the
+    pacha tick is the only writer and holds its own lock)."""
+    row = conn.execute(
+        f"SELECT tiers_sold FROM {table} WHERE event_id = ? AND {key_col} = ?",
+        (event_id, key),
+    ).fetchone()
+    cur = {}
+    if row and row["tiers_sold"]:
+        try:
+            cur = json.loads(row["tiers_sold"])
+        except ValueError:
+            cur = {}
+    for name, n in tier_sold.items():
+        cur[name] = cur.get(name, 0) + n
+    conn.execute(
+        f"UPDATE {table} SET tiers_sold = ? WHERE event_id = ? AND {key_col} = ?",
+        (json.dumps(cur, ensure_ascii=False), event_id, key),
+    )
+
+
+def pacha_daily_add(event_id, now_iso, sold_delta, available, ga_price, ga_release,
+                    tier_sold=None):
+    """Add one tick's sales to its NY day AND hour and record the latest
     availability/price. Called every pacha tick for every listed event, so
-    a day with zero sales still gets a row (a real 0, not missing data)."""
+    a day with zero sales still gets a row (a real 0, not missing data).
+    tier_sold = {tier name: sold this tick} for the hover breakdown."""
     with connect() as conn:
         conn.execute(
             """INSERT INTO pacha_daily_sales (event_id, day, sold, available,
@@ -3688,32 +3738,117 @@ def pacha_daily_add(event_id, now_iso, sold_delta, available, ga_price, ga_relea
             (event_id, ny_day(now_iso), max(0, int(sold_delta or 0)), available,
              ga_price, ga_release, now_iso),
         )
+        conn.execute(
+            """INSERT INTO pacha_hourly_sales (event_id, hour, sold, available,
+                   ga_price, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(event_id, hour) DO UPDATE SET
+                   sold = sold + excluded.sold,
+                   available = COALESCE(excluded.available, available),
+                   ga_price = COALESCE(excluded.ga_price, ga_price),
+                   updated_at = excluded.updated_at""",
+            (event_id, ny_hour(now_iso), max(0, int(sold_delta or 0)), available,
+             ga_price, now_iso),
+        )
+        if tier_sold:
+            _merge_tiers_sold(conn, "pacha_daily_sales", "day", event_id, ny_day(now_iso), tier_sold)
+            _merge_tiers_sold(conn, "pacha_hourly_sales", "hour", event_id, ny_hour(now_iso), tier_sold)
 
 
-def _pacha_daily_backfill(conn):
-    """Seed pacha_daily_sales from the pacha rows of the snapshot table
-    (source='pacha', one per event per ~10 min). Sums availability drops per
-    NY day exactly like the live tick; price/release aren't in snapshots."""
+def _pacha_snapshot_buckets(conn, bucket_fn):
+    """Sum availability drops in the pacha rows of the snapshot table
+    (source='pacha', one per event per ~10 min) into buckets, exactly like
+    the live tick. {(event_id, bucket): [sold, last_available, last_at]}.
+    Price/release aren't in snapshots."""
     rows = conn.execute(
         "SELECT event_code, captured_at, available FROM tickchak_sales_snapshots "
         "WHERE source = 'pacha' AND available IS NOT NULL "
         "ORDER BY event_code, captured_at"
     ).fetchall()
-    days = {}  # (event_id, day) -> [sold, last_available, last_at]
+    out = {}
     prev = {}
     for r in rows:
         ev, at, avail = r["event_code"], r["captured_at"], r["available"]
-        key = (ev, ny_day(at))
-        d = days.setdefault(key, [0, None, at])
+        d = out.setdefault((ev, bucket_fn(at)), [0, None, at])
         if ev in prev:
             d[0] += max(0, prev[ev] - avail)
         d[1], d[2] = avail, at
         prev[ev] = avail
+    return out
+
+
+def _pacha_daily_backfill(conn):
+    """Seed pacha_daily_sales from the ~8 days of snapshots still on disk."""
     conn.executemany(
         """INSERT OR IGNORE INTO pacha_daily_sales (event_id, day, sold,
                available, updated_at) VALUES (?, ?, ?, ?, ?)""",
-        [(ev, day, v[0], v[1], v[2]) for (ev, day), v in days.items()],
+        [(ev, day, v[0], v[1], v[2])
+         for (ev, day), v in _pacha_snapshot_buckets(conn, ny_day).items()],
     )
+
+
+def _pacha_hourly_backfill(conn):
+    """Seed pacha_hourly_sales the same way (10-min snapshots → hours)."""
+    conn.executemany(
+        """INSERT OR IGNORE INTO pacha_hourly_sales (event_id, hour, sold,
+               available, updated_at) VALUES (?, ?, ?, ?, ?)""",
+        [(ev, hour, v[0], v[1], v[2])
+         for (ev, hour), v in _pacha_snapshot_buckets(conn, ny_hour).items()],
+    )
+
+
+def pacha_hourly_range(event_id, start_utc, end_utc):
+    """Every NY clock hour from start_utc to end_utc (aware datetimes), oldest
+    first: [{hour, sold, available, ga_price}] with sold=None where nothing
+    was recorded (monitor down). event_id None = summed over all events
+    (available/ga_price None)."""
+    tz = ny_tz()
+    keys = []
+    t = start_utc.replace(minute=0, second=0, microsecond=0)
+    while t <= end_utc:
+        k = t.astimezone(tz).strftime("%Y-%m-%dT%H")
+        if not keys or keys[-1] != k:
+            keys.append(k)
+        t += _dt.timedelta(hours=1)
+    if not keys:
+        return []
+    with connect() as conn:
+        if event_id:
+            rows = conn.execute(
+                "SELECT hour, sold, available, ga_price, tiers_sold FROM pacha_hourly_sales "
+                "WHERE event_id = ? AND hour BETWEEN ? AND ?",
+                (event_id, keys[0], keys[-1]),
+            ).fetchall()
+            got = {}
+            for r in rows:
+                d = dict(r)
+                d["tiers_sold"] = _tiers_json(d.get("tiers_sold"))
+                got[r["hour"]] = d
+        else:
+            rows = conn.execute(
+                "SELECT hour, sold, tiers_sold FROM pacha_hourly_sales "
+                "WHERE hour BETWEEN ? AND ?",
+                (keys[0], keys[-1]),
+            ).fetchall()
+            got = {}
+            for r in rows:
+                g = got.setdefault(r["hour"], {"hour": r["hour"], "sold": 0, "events": 0,
+                                               "tiers_sold": None})
+                g["sold"] += r["sold"] or 0
+                g["events"] += 1
+                for name, n in (_tiers_json(r["tiers_sold"]) or {}).items():
+                    g["tiers_sold"] = g["tiers_sold"] or {}
+                    g["tiers_sold"][name] = g["tiers_sold"].get(name, 0) + n
+    return [got.get(k) or {"hour": k, "sold": None} for k in keys]
+
+
+def _tiers_json(raw):
+    if not raw:
+        return None
+    try:
+        return json.loads(raw) or None
+    except ValueError:
+        return None
 
 
 def pacha_daily_all():
@@ -3721,12 +3856,13 @@ def pacha_daily_all():
     day first."""
     with connect() as conn:
         rows = conn.execute(
-            "SELECT event_id, day, sold, available, ga_price, ga_release "
+            "SELECT event_id, day, sold, available, ga_price, ga_release, tiers_sold "
             "FROM pacha_daily_sales ORDER BY event_id, day"
         ).fetchall()
     out = {}
     for r in rows:
         d = dict(r)
+        d["tiers_sold"] = _tiers_json(d.get("tiers_sold"))
         out.setdefault(d.pop("event_id"), []).append(d)
     return out
 
