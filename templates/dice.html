@@ -130,6 +130,34 @@
   .spark .dot { fill: var(--cyan); stroke: var(--bg); stroke-width: 2; }
   .spark .hit { fill: transparent; }
   .spark .hit:hover { fill: rgba(0,163,215,.10); }
+  .pace { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 11px; }
+  .pace .up { color: var(--green); font-weight: 600; }
+  .pace .down { color: var(--red); font-weight: 600; }
+  .pace .flat, .pace .na { color: var(--muted); }
+  .pace .sub2 { display: block; font-size: 10px; color: var(--muted); }
+  .rtl { margin-top: 10px; padding-top: 6px; border-top: 1px dashed var(--line); }
+  .rtl .sum { margin: 2px 0 6px; }
+  .rtl .sum b { color: var(--text); }
+  .rtl .gantt { overflow-x: auto; max-width: 960px; }
+  .rtl svg { display: block; }
+  .rtl .lane { fill: var(--text); font-size: 10px; font-weight: 600; }
+  .rtl .ax { fill: var(--muted); font-size: 9px; }
+  .rtl .gl { stroke: var(--line); stroke-width: 1; }
+  .rtl .showln { stroke: var(--red); stroke-width: 1; stroke-dasharray: 3 3; }
+  .rtl .rb { fill: var(--cyan); }
+  .rtl .rb.open { fill: var(--cyan); fill-opacity: .4; stroke: var(--cyan); stroke-width: 1.5; stroke-dasharray: 4 2; }
+  .rtl .rb.pre { fill: var(--cyan); opacity: .25; }
+  .rtl .rb.off { fill: var(--line-2); }
+  .rtl .rl { fill: #fff; font-size: 9px; font-weight: 600; pointer-events: none; }
+  .rtl .rl.dark { fill: var(--text); }
+  .rtl g.r:hover .rb { stroke: var(--text); stroke-width: 1; }
+  .rtl table.rt { border-collapse: collapse; font-size: 11px; margin-top: 8px; }
+  .rtl table.rt td, .rtl table.rt th { padding: 3px 12px 3px 0; border: 0; text-align: left; white-space: nowrap; background: transparent; }
+  .rtl table.rt th { font-size: 9px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); cursor: default; }
+  .rtl table.rt td.num, .rtl table.rt th.num { text-align: right; }
+  .rtl table.rt .so { color: var(--red); }
+  .rtl table.rt .op { color: var(--green); }
+  .tipx { position: fixed; pointer-events: none; background: var(--text); color: var(--bg-2); font-size: 11px; padding: 6px 9px; border-radius: 6px; z-index: 60; display: none; white-space: nowrap; line-height: 1.45; }
   .climb { font-size: 10px; font-weight: 600; color: var(--orange); }
   .errdot { color: var(--red); font-size: 10px; margin-left: 4px; cursor: help; }
   .follows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px,100%), 1fr)); gap: 12px; margin-bottom: 8px; }
@@ -237,8 +265,9 @@
     <tbody id="rows"></tbody>
   </table>
   </div>
-  <p class="sub" id="footnote">Paste a dice.fm event URL above to track it here (no watcher needed). To also get restock/tier-jump pings, add it as a watcher. "Tier" = DICE's current price tier on the cheapest on-sale type; "Trend" = cheapest on-sale price since tracking began.</p>
+  <p class="sub" id="footnote">Paste a dice.fm event URL above to track it here (no watcher needed). To also get restock/tier-jump pings, add it as a watcher. "Tier" = DICE's current price tier on the cheapest on-sale type; "Trend" = cheapest on-sale price since tracking began. "Pace" = is the current release selling through faster or slower than the last one (DICE has no ticket counts, so release burn time stands in for tickets per day) — click a row for the release timeline with exact timestamps.</p>
 </main>
+<div class="tipx" id="tipx"></div>
 <script>
 const $ = id => document.getElementById(id);
 function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
@@ -326,6 +355,22 @@ function niceDate(dateIso){
   return new Date(y, m-1, d).toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
 }
 function fmtDay(iso){ return iso ? iso.slice(5,10).replace('-','/') : '?'; }
+// Full local timestamp, e.g. "Sat 10/11 2:32 PM" (the viewer's clock).
+function fmtStamp(iso){
+  if (!iso) return '?';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, {weekday:'short', month:'numeric', day:'numeric'}) + ' ' +
+         d.toLocaleTimeString(undefined, {hour:'numeric', minute:'2-digit'});
+}
+// 3d 4h / 5h 12m / 9m
+function fmtDur(ms){
+  if (ms == null || !isFinite(ms)) return '?';
+  const m = Math.max(0, Math.round(ms / 60000));
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '');
+  return Math.floor(h / 24) + 'd' + (h % 24 ? ' ' + (h % 24) + 'h' : '');
+}
 function fmtAgo(iso){
   if (!iso) return '—';
   const secs = (Date.now() - new Date(iso).getTime())/1000;
@@ -399,6 +444,178 @@ function sparkline(e){
   return `<div style="display:flex;align-items:center;gap:6px"><svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="cheapest price from ${money(first, e.currency)} to ${money(endV, e.currency)}"><path class="ln" d="${d}"/>${dot}${hits}</svg>${climb ? `<span class="climb">${climb > 0 ? '+' : ''}${climb}%</span>` : ''}</div>`;
 }
 
+// ---- releases: how long each price tier lasted ---------------------------
+// DICE publishes no counts, so the closest thing to "tickets moved per day"
+// is how fast each release sells through. The tier log has one row per
+// observed state per ticket type (stamped by every watcher check / 2-min
+// alerts tick); consecutive rows with the same tier+price are one release.
+// A release that was already open the first time we saw the type only has a
+// lower bound on its length ("pre") and never counts toward pace.
+function releasesOf(e){
+  const nowIso = DATA.now || new Date().toISOString();
+  const byType = {};
+  (e.history || []).forEach(h => (byType[h.type_name] = byType[h.type_name] || []).push(h));
+  const out = [];
+  for (const [type, rows] of Object.entries(byType)){
+    rows.sort((a, b) => a.first_seen_at < b.first_seen_at ? -1 : 1);
+    const rels = [];
+    rows.forEach((h, i) => {
+      const prev = rels[rels.length - 1];
+      if (prev && prev.tier_index === h.tier_index && prev.price === h.price){
+        prev.rows.push(h);
+      } else {
+        rels.push({ type, tier_index: h.tier_index, tier_name: h.tier_name, price: h.price,
+                    currency: h.currency, start: h.first_seen_at, rows: [h], pre: i === 0 });
+      }
+    });
+    rels.forEach((r, i) => {
+      const last = r.rows[r.rows.length - 1];
+      const next = rels[i + 1];
+      // A release stops selling at the first non-on-sale row of its trailing
+      // run (sold-out / off-sale), at the next release, or when the type
+      // vanished from DICE's list.
+      let stop = null;
+      for (let k = r.rows.length - 1; k >= 0 && r.rows[k].status !== 'on-sale'; k--) stop = r.rows[k].first_seen_at;
+      r.on_sale = r.rows.some(x => x.status === 'on-sale');
+      if (!r.on_sale) stop = null;  // never on sale (upcoming / off-sale only): span is just its log rows
+      r.end = (r.on_sale ? stop : null) || (next ? next.start : (last.ended_at || null));
+      if (!r.on_sale && !next && !last.ended_at) r.end = null;
+      r.open = !r.end;
+      r.sold_out = r.rows.some(x => x.status === 'sold-out') || (!!next && (next.price ?? 0) >= (r.price ?? 0));
+      // Time actually on sale: sum of on-sale rows (an off-sale pause doesn't count).
+      r.ms = r.rows.reduce((a, x, k) => {
+        if (x.status !== 'on-sale') return a;
+        const xe = x.ended_at || (r.rows[k + 1] && r.rows[k + 1].first_seen_at) || r.end || nowIso;
+        return a + (Date.parse(xe) - Date.parse(x.first_seen_at));
+      }, 0);
+      r.label = r.tier_name || (r.tier_index != null ? 'Tier ' + (r.tier_index + 1) : 'Release');
+    });
+    out.push({ type, rels });
+  }
+  return out;
+}
+
+// The type whose ladder matters: the one with the most releases, ties to the
+// cheapest current price (normally General Admission).
+function mainLadder(e){
+  const ls = releasesOf(e).filter(l => l.rels.some(r => r.on_sale));
+  if (!ls.length) return null;
+  const cur = l => { const r = l.rels[l.rels.length - 1]; return r.price ?? Infinity; };
+  return ls.sort((a, b) => (b.rels.length - a.rels.length) || (cur(a) - cur(b)))[0];
+}
+
+// Pace = is the current release burning faster or slower than the last one?
+function dicePace(e){
+  const l = mainLadder(e);
+  if (!l) return { cls: 'na', text: '—', why: 'no on-sale ticket types logged yet' };
+  const done = l.rels.filter(r => !r.open && !r.pre && r.sold_out && r.ms > 0);
+  const cur = l.rels[l.rels.length - 1];
+  const lastDone = done[done.length - 1];
+  if (cur.open && cur.on_sale && lastDone && cur.ms > lastDone.ms * 1.25)
+    return { cls: 'down', text: '▼ slowing', score: -cur.ms / lastDone.ms,
+             why: `${cur.label} open ${fmtDur(cur.ms)} — ${lastDone.label} sold through in ${fmtDur(lastDone.ms)}` };
+  if (done.length >= 2){
+    const a = done[done.length - 2], b = lastDone, ratio = b.ms / a.ms;
+    const base = `${b.label} sold in ${fmtDur(b.ms)} vs ${a.label} in ${fmtDur(a.ms)}`;
+    if (ratio < 0.8) return { cls: 'up', text: '▲ faster', score: 1 / ratio, why: base };
+    if (ratio > 1.25) return { cls: 'down', text: '▼ slower', score: -ratio, why: base };
+    return { cls: 'flat', text: '• steady', score: 0, why: base };
+  }
+  if (lastDone) return { cls: 'flat', text: `last: ${fmtDur(lastDone.ms)}`, score: 0,
+                         why: `${lastDone.label} sold through in ${fmtDur(lastDone.ms)} — need one more full release to compare` };
+  return { cls: 'na', text: '—', why: 'no release has sold through since tracking began' };
+}
+function paceCell(e){
+  const p = dicePace(e);
+  const l = mainLadder(e);
+  const cur = l && l.rels[l.rels.length - 1];
+  const sub = cur && cur.open && cur.on_sale ? `<span class="sub2">${escape(cur.label)} open ${fmtDur(cur.ms)}</span>` : '';
+  return `<td class="pace" title="${escape(p.why)}"><span class="${p.cls}">${escape(p.text)}</span>${sub}</td>`;
+}
+
+const GANTT_TIPS = {};
+function releaseTimeline(e){
+  const ladders = releasesOf(e).filter(l => l.rels.length);
+  if (!ladders.length) return '';
+  const nowMs = Date.parse(DATA.now || new Date().toISOString());
+  const showMs = e.first_date_ms || null;
+  const all = ladders.flatMap(l => l.rels);
+  const t0 = Math.min(...all.map(r => Date.parse(r.start)));
+  const t1 = Math.max(nowMs, showMs && showMs < nowMs + 120 * 864e5 ? showMs : 0);
+  const L = 150, R = 12, T = 6, LH = 22, W = 820, B = 30;
+  const H = T + ladders.length * LH + B;
+  const x = ms => L + (t1 > t0 ? (ms - t0) / (t1 - t0) : 0) * (W - L - R);
+  let g = '';
+  // day gridlines, labelled every few days with date + days-out
+  const day0 = new Date(t0); day0.setHours(0, 0, 0, 0);
+  const spanDays = (t1 - day0.getTime()) / 864e5;
+  const every = Math.max(1, Math.ceil(spanDays / 10));
+  for (let d = new Date(day0), i = 0; d.getTime() <= t1; d.setDate(d.getDate() + 1), i++){
+    const ms = d.getTime(); if (ms < t0) continue;
+    g += `<line class="gl" x1="${x(ms)}" x2="${x(ms)}" y1="${T}" y2="${H - B}"></line>`;
+    if (i % every === 0){
+      const out = showMs ? Math.round((showMs - ms) / 864e5) : null;
+      g += `<text class="ax" x="${x(ms) + 2}" y="${H - B + 11}">${d.getMonth() + 1}/${d.getDate()}</text>` +
+           (out != null && out >= 0 ? `<text class="ax" x="${x(ms) + 2}" y="${H - B + 22}">${out}d out</text>` : '');
+    }
+  }
+  if (showMs && showMs <= t1) g += `<line class="showln" x1="${x(showMs)}" x2="${x(showMs)}" y1="${T}" y2="${H - B}"></line><text class="ax" x="${x(showMs) - 3}" y="${T + 8}" text-anchor="end">show</text>`;
+  const id = 'g' + e.event_code;
+  const tips = [];
+  ladders.forEach((l, li) => {
+    const y = T + li * LH;
+    const nm = l.type.length > 24 ? l.type.slice(0, 23) + '…' : l.type;
+    g += `<text class="lane" x="0" y="${y + LH / 2 + 3}">${escape(nm)}</text>`;
+    l.rels.forEach(r => {
+      const xs = x(Date.parse(r.start)), xe = x(r.end ? Date.parse(r.end) : nowMs);
+      const w = Math.max(2, xe - xs - 2);
+      const cls = !r.on_sale ? 'off' : r.pre ? 'pre' : r.open ? 'open' : '';
+      const ti = tips.length;
+      tips.push(`<b>${escape(l.type)} · ${escape(r.label)}</b> ${money(r.price, r.currency)}<br>` +
+        `${r.pre ? 'already on sale when tracking began' : 'opened ' + fmtStamp(r.start)}<br>` +
+        (r.open ? `still open · ${fmtDur(r.ms)} so far` : `${r.sold_out ? 'sold out' : 'ended'} ${fmtStamp(r.end)} · on sale ${r.pre ? '≥ ' : ''}${fmtDur(r.ms)}`) +
+        (!r.on_sale ? `<br>status: ${escape(r.rows[0].status || '?')}` : ''));
+      const lbl = w > 34 ? `<text class="rl${cls === 'pre' || cls === 'off' || cls === 'open' ? ' dark' : ''}" x="${xs + 4}" y="${y + LH / 2 + 3}">${money(r.price, r.currency).replace(/\.00$/, '')}</text>` : '';
+      g += `<g class="r" data-t="${ti}"><rect class="rb ${cls}" x="${xs}" y="${y + 3}" width="${w}" height="${LH - 6}" rx="3"></rect>${lbl}</g>`;
+    });
+  });
+  GANTT_TIPS[id] = tips;
+
+  // Release table with exact timestamps (main ladder first)
+  const main = mainLadder(e);
+  const rows = ladders.slice().sort((a, b) => (a === main ? -1 : b === main ? 1 : 0))
+    .flatMap(l => l.rels.map(r => ({ l, r })));
+  const tbl = `<table class="rt"><thead><tr><th>Type</th><th>Release</th><th class="num">Price</th><th>Opened</th><th>Ended</th><th class="num">On sale for</th></tr></thead><tbody>` +
+    rows.map(({ l, r }) => `<tr><td>${escape(l.type)}</td><td>${escape(r.label)}</td><td class="num">${money(r.price, r.currency)}</td>` +
+      `<td>${r.pre ? '≤ ' : ''}${fmtStamp(r.start)}</td>` +
+      `<td>${r.open ? '<span class="op">open</span>' : `<span class="${r.sold_out ? 'so' : ''}">${r.sold_out ? 'sold out ' : ''}${fmtStamp(r.end)}</span>`}</td>` +
+      `<td class="num">${r.pre ? '≥ ' : ''}${fmtDur(r.ms)}${r.open ? ' so far' : ''}</td></tr>`).join('') +
+    `</tbody></table>`;
+  const p = dicePace(e);
+  return `<div class="rtl"><div class="hh" style="border:0;margin-top:0;padding-top:0">Release timeline — how long each price tier stayed on sale</div>` +
+    `<div class="sum">Pace: <b class="${p.cls}">${escape(p.text)}</b> · ${escape(p.why)}</div>` +
+    `<div class="gantt"><svg id="${id}" width="${W}" height="${H}" role="img" aria-label="release timeline">${g}</svg></div>` +
+    `<div class="sum">Solid = sold through · dashed = still open · pale = already open when tracking began (true length unknown) · gray = off sale. Shorter bars on later releases = selling faster. Times are your local time, accurate to the ~2-min check.</div>` +
+    tbl + `</div>`;
+}
+function wireGantt(){
+  const tip = $('tipx');
+  for (const k in GANTT_TIPS) if (!document.getElementById(k)) delete GANTT_TIPS[k];
+  document.querySelectorAll('.rtl svg').forEach(svg => {
+    const tips = GANTT_TIPS[svg.id]; if (!tips) return;
+    svg.addEventListener('click', ev => ev.stopPropagation());
+    svg.querySelectorAll('g.r').forEach(gr => {
+      gr.addEventListener('mousemove', ev => {
+        tip.innerHTML = tips[+gr.dataset.t]; tip.style.display = 'block';
+        const r = tip.getBoundingClientRect();
+        tip.style.left = Math.min(window.innerWidth - r.width - 8, ev.clientX + 12) + 'px';
+        tip.style.top = (ev.clientY - r.height - 10) + 'px';
+      });
+      gr.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    });
+  });
+}
+
 // ---- tracked events table ------------------------------------------------
 const COLS = [
   { key:'art',    label:'' },
@@ -409,6 +626,7 @@ const COLS = [
   { key:'tier',   label:'Tier' },
   { key:'price',  label:'From', num:true },
   { key:'trend',  label:'Trend' },
+  { key:'pace',   label:'Pace' },
   { key:'chg',    label:'Changes', num:true },
   { key:'last',   label:'Last change' },
   { key:'held',   label:'Held', num:true },
@@ -425,6 +643,7 @@ function sortVal(e, key, held){
     case 'price': return e.min_price == null ? Infinity : e.min_price;
     case 'chg': return e.changes || 0;
     case 'last': return e.last_change_at || '';
+    case 'pace': { const p = dicePace(e); return p.score == null ? -Infinity : p.score; }
     case 'held': return held[e.event_code] || 0;
     default: return 0;
   }
@@ -454,12 +673,13 @@ function detailRows(e){
     : e.status === 'upcoming' ? 'Not on sale yet — ticket types appear when the sale opens.'
     : 'No ticket types returned.'}</div>`;
   const hist = e.history || [];
+  html += releaseTimeline(e);
   if (hist.length){
     html += `<div class="hh">Change log — ${hist.length} state${hist.length>1?'s':''} recorded</div>`;
     html += hist.slice().reverse().map(h => {
       const tier = h.tier_name || (h.tier_index != null && h.tier_index > 0 ? 'tier ' + (h.tier_index+1) : '');
-      const end = h.ended_at ? `<span class="ended">→ ended ${fmtDay(h.ended_at)}</span>` : '<span class="cur">current</span>';
-      return `<div class="h-row">${fmtDay(h.first_seen_at)} · ${escape(h.type_name)}${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} @ ${money(h.price, h.currency)} · ${escape(h.status||'?')} ${end}</div>`
+      const end = h.ended_at ? `<span class="ended">→ ended ${fmtStamp(h.ended_at)}</span>` : '<span class="cur">current</span>';
+      return `<div class="h-row">${fmtStamp(h.first_seen_at)} · ${escape(h.type_name)}${tier ? ` <span class="tier">[${escape(tier)}]</span>` : ''} @ ${money(h.price, h.currency)} · ${escape(h.status||'?')} ${end}</div>`
     }).join('');
   } else {
     html += `<div class="hh">Change log</div><div class="h-row">Empty — fills in as watcher checks, sweeps and refreshes observe changes.</div>`;
@@ -481,8 +701,9 @@ function trackerRow(e, held){
     <td>${tier ? `<span class="tier">${escape(tier)}</span>` : '—'}</td>
     <td class="num"><b>${money(e.min_price, e.currency)}</b></td>
     <td>${sparkline(e)}</td>
+    ${paceCell(e)}
     <td class="num chg${(e.changes||0) > 0 ? ' hot' : ''}">${fmt(e.changes||0)}</td>
-    <td class="when">${e.last_change_at ? fmtAgo(e.last_change_at) : '—'}</td>
+    <td class="when" title="${e.last_change_at ? escape(fmtStamp(e.last_change_at)) : ''}">${e.last_change_at ? fmtAgo(e.last_change_at) : '—'}</td>
     <td class="num">${h ? `<span class="held">${h}</span>` : ''}</td>
     <td><div class="links"><a class="buy${e.status === 'selling' ? '' : ' off'}" href="${escape(e.url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a>${cvLink(e.event_code, e.cv_url, e.name, e.cv_source)}</div></td>
   </tr>` + (open.has(e.event_code) ? `<tr class="detail"><td colspan="${COLS.length}">${detailRows(e)}</td></tr>` : '');
@@ -513,6 +734,7 @@ function render(){
     render();
   });
   const sep = $('pastT'); if (sep) sep.onclick = () => { showPastT = !showPastT; render(); };
+  wireGantt();
 }
 function renderTotals(){
   const evs = tEvents().filter(e => !e.past);
