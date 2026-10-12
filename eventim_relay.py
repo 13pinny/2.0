@@ -18,8 +18,12 @@ here solves or skips a challenge; a page that doesn't show its tickets within
 the wait is logged and skipped.
 
 Chrome: its own profile (%LOCALAPPDATA%\\eventim-relay-chrome) on CDP :9333,
-launched minimized when it isn't already running. It is NOT the :9222 scraper
-Chrome, so it can't disturb a Lysted/viagogo session.
+launched when it isn't already running. It is NOT the :9222 scraper Chrome, so
+it can't disturb a Lysted/viagogo session. On the desktop it must never be
+seen: it is launched parked off-screen (headless would get the Cloudflare
+check, same as zappa_events), every pass re-parks the window in case it was
+restored, and all events load in ONE reused tab -- opening a new tab per event
+is what kept popping the window to the front.
 
 Auth is the same pair cv_link_client uses: Caddy basic auth
 (KARTIS_WEB_USER / KARTIS_WEB_PASS) + KARTIS_CVAUTH_SECRET, all from .env.
@@ -74,6 +78,9 @@ SERVER_MODE = sys.platform != "win32"
 # whatever KARTIS_RELAY_SOURCES names, or every source the server lists.
 SOURCES = {x.strip() for x in (os.environ.get("KARTIS_RELAY_SOURCES") or "").split(",") if x.strip()} \
     or (set() if SERVER_MODE else {"eventim"})
+# Desktop only: where the relay Chrome's window lives -- off every monitor.
+OFFSCREEN = (-2400, -2400)    # same parking spot zappa_events uses on this PC
+WINDOW_SIZE = (1100, 800)
 # Remembers whether we already pinged Discord about a Cloudflare hold.
 BLOCK_STATE = ROOT / "logs" / "relay_block.json"
 BLOCK_REPING_SECONDS = 6 * 3600
@@ -97,8 +104,9 @@ def ensure_chrome():
                            "sudo systemctl restart kartis-chrome-relay")
     subprocess.Popen([CHROME, f"--remote-debugging-port={CDP_PORT}",
                       f"--user-data-dir={PROFILE}", "--no-first-run",
-                      "--no-default-browser-check", "--start-minimized",
-                      "--window-size=1100,800", "about:blank"])
+                      "--no-default-browser-check",
+                      f"--window-position={OFFSCREEN[0]},{OFFSCREEN[1]}",
+                      f"--window-size={WINDOW_SIZE[0]},{WINDOW_SIZE[1]}", "about:blank"])
     for _ in range(20):
         time.sleep(1)
         if up():
@@ -144,23 +152,51 @@ async (label) => {
 """
 
 
-def render(ctx, url, source="eventim", expand=None):
-    pg = ctx.new_page()
+def hide_window(ctx, pg):
+    """Desktop: park the relay Chrome's window off-screen (un-minimizing it
+    first -- Chrome ignores bounds on a minimized window). Covers a Chrome
+    that was started by an older version of this script, or restored by
+    hand. Best effort: a failure here never stops the pass."""
+    if SERVER_MODE:
+        return  # the box's Chrome has to stay visible in noVNC
     try:
-        pg.goto(url, timeout=60000, wait_until="domcontentloaded")
-        # A Cloudflare check on a home IP usually clears itself in a few
-        # seconds; give it that long before calling the page tierless.
+        cdp = ctx.new_cdp_session(pg)
+        wid = cdp.send("Browser.getWindowForTarget")["windowId"]
+        cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
+        cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {
+            "left": OFFSCREEN[0], "top": OFFSCREEN[1],
+            "width": WINDOW_SIZE[0], "height": WINDOW_SIZE[1]}})
+        cdp.detach()
+    except Exception as e:
+        log(f"couldn't park the relay window off-screen: {type(e).__name__}: {e}")
+
+
+def relay_tab(ctx):
+    """The one tab every pass loads its pages in (reused, never closed), so
+    no new tab ever opens. Extra tabs left by older versions are closed."""
+    pages = [p for p in ctx.pages if not p.is_closed()]
+    pg = pages[0] if pages else ctx.new_page()
+    for extra in pages[1:]:
         try:
-            pg.wait_for_selector(READY_SELECTOR[source], timeout=25000)
+            extra.close()
         except Exception:
-            return None, pg.title()
-        if expand:
-            clicks = pg.evaluate(_EXPAND_JS, expand)
-            if clicks < 0:
-                log(f"{url}: '{expand}' still showing after 40 clicks")
-        return pg.content(), pg.title()
-    finally:
-        pg.close()
+            pass
+    return pg
+
+
+def render(pg, url, source="eventim", expand=None):
+    pg.goto(url, timeout=60000, wait_until="domcontentloaded")
+    # A Cloudflare check on a home IP usually clears itself in a few
+    # seconds; give it that long before calling the page tierless.
+    try:
+        pg.wait_for_selector(READY_SELECTOR[source], timeout=25000)
+    except Exception:
+        return None, pg.title()
+    if expand:
+        clicks = pg.evaluate(_EXPAND_JS, expand)
+        if clicks < 0:
+            log(f"{url}: '{expand}' still showing after 40 clicks")
+    return pg.content(), pg.title()
 
 
 def _is_challenge(title):
@@ -220,12 +256,16 @@ def main():
     with sync_playwright() as p:
         # Never browser.close() — on a CDP connection that closes the user's Chrome.
         ctx = p.chromium.connect_over_cdp(CDP).contexts[0]
+        pg = relay_tab(ctx)
+        hide_window(ctx, pg)
         for t in targets:
             source = t.get("source") or "eventim"
             try:
-                html, title = render(ctx, t["url"], source, t.get("expand"))
+                html, title = render(pg, t["url"], source, t.get("expand"))
             except Exception as e:
                 log(f"{t['event_key']}: load failed {type(e).__name__}: {e}")
+                if pg.is_closed():  # tab crashed -- carry on in a fresh one
+                    pg = relay_tab(ctx)
                 continue
             if html is None:
                 log(f"{t['event_key']}: no ticket list (page title {title!r})")
@@ -240,6 +280,11 @@ def main():
                                               {"source": source, "event_key": t["event_key"],
                                                "html": html})
             log(f"{t['event_key']}: HTTP {status} {raw[:160]}")
+        # Park the tab on a blank page so nothing keeps running between passes.
+        try:
+            pg.goto("about:blank")
+        except Exception:
+            pass
     report_block(blocked, loaded)
     return 0
 
