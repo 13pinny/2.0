@@ -115,33 +115,41 @@ function kartisPullCvSales(TOKEN, ENDPOINT) {
       var access = (await r.json()).access_token;
       if (!access) return done("No access_token came back.", "#ff7b72");
 
-      var rows = [], seen = {}, offset = 0;
-      for (;;) {
-        var q = await fetch("https://api.crowdvolt.com/api/buy_sell_history/"
-          + "sell_delivered?limit=25&offset=" + offset,
-          { headers: { "Authorization": "Bearer " + access, "x-pokedex": "0376" } });
-        if (!q.ok) return done("sell_delivered → " + q.status, "#ff7b72");
-        var page = await q.json();
-        if (!Array.isArray(page) || !page.length) break;
-        for (var i = 0; i < page.length; i++) {
-          var id = String((page[i] || {}).order_number || "").trim();
-          // Dedupe on the order number: a sale landing mid-read shifts the
-          // window and would otherwise repeat a row across two pages.
-          if (id && !seen[id]) { seen[id] = 1; rows.push(page[i]); }
+      // Both /selling tabs: delivered + incomplete (sold, transfer still
+      // open). Incomplete rows are tagged _cv_list so kartis labels them.
+      var rows = [], seen = {}, lists = ["sell_delivered", "sell_incomplete"];
+      for (var li = 0; li < lists.length; li++) {
+        var lst = lists[li], offset = 0;
+        for (;;) {
+          var q = await fetch("https://api.crowdvolt.com/api/buy_sell_history/"
+            + lst + "?limit=25&offset=" + offset + "&sort_key=date&sort_desc=true",
+            { headers: { "Authorization": "Bearer " + access, "x-pokedex": "0376" } });
+          if (!q.ok) return done(lst + " → " + q.status, "#ff7b72");
+          var page = await q.json();
+          if (!Array.isArray(page) || !page.length) break;
+          for (var i = 0; i < page.length; i++) {
+            var row = page[i] || {};
+            // A canceled order left on the incomplete tab never sold.
+            if (lst === "sell_incomplete" && row.is_canceled) continue;
+            var id = String(row.order_number || "").trim();
+            // Dedupe on the order number: a sale landing mid-read shifts the
+            // window and would otherwise repeat a row across two pages.
+            if (id && !seen[id]) { seen[id] = 1; row._cv_list = lst; rows.push(row); }
+          }
+          say("Read " + rows.length + " sales…");
+          if (page.length < 25) break;
+          offset += 25;
+          if (offset > 2000) break;
         }
-        say("Read " + rows.length + " sales…");
-        if (page.length < 25) break;
-        offset += 25;
-        if (offset > 2000) break;
       }
-      if (!rows.length) return done("No delivered sales found.", "#ff7b72");
+      if (!rows.length) return done("No sales found.", "#ff7b72");
 
       say("Sending " + rows.length + " to kartis…");
       // text/plain keeps this a "simple" CORS request, so the browser sends it
       // straight through with no preflight for Caddy to reject.
       var p = await fetch(ENDPOINT, {
         method: "POST", headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ token: TOKEN, rows: rows })
+        body: JSON.stringify({ token: TOKEN, rows: rows, full_ids: Object.keys(seen) })
       });
       var out = await p.json();
       if (!p.ok) return done("kartis: " + (out.error || p.status), "#ff7b72");
