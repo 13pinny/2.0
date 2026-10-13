@@ -1787,7 +1787,9 @@ def _imap_fetch_new_from(M, sender_substr, since, seen_fn, subject=None, want_fn
     Returns (uid, raw_bytes, message_id) tuples."""
     crit = ["FROM", sender_substr, "SINCE", since]
     if subject:
-        crit += ["SUBJECT", subject]
+        # imaplib sends arguments as-is: an unquoted phrase with a space is
+        # a syntax error to the server (BAD), which used to abort the sweep.
+        crit += ["SUBJECT", '"%s"' % subject.replace('"', "")]
     typ, data = M.search(None, *crit)
     if typ != "OK" or not data or not data[0]:
         return []
@@ -1951,8 +1953,12 @@ def sweep_b2b(lookback_days=None):
         for _platform, needle in b2b_email.SWEEP_SENDERS:
             batches += _imap_fetch_new_from(M, needle, since, db.b2b_message_seen,
                                             want_fn=_want)
-        batches += _imap_fetch_new_from(M, "dice.fm", since, db.b2b_message_seen,
-                                        subject="sent you", want_fn=_want)
+        try:
+            batches += _imap_fetch_new_from(M, "dice.fm", since, db.b2b_message_seen,
+                                            subject="sent you", want_fn=_want)
+        except Exception:
+            # The DICE transfers are an extra; never lose the orders over them.
+            out["errors"] += 1
     finally:
         try:
             M.close()
