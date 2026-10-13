@@ -1,6 +1,7 @@
 import datetime as _dt
 import json
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -1148,6 +1149,67 @@ CREATE TABLE IF NOT EXISTS cv_market_snapshots (
     fetched_at TEXT NOT NULL,
     rows_json  TEXT NOT NULL
 );
+-- /b2b: resale buys (Automatiq, TickPick, CrowdVolt) scraped from their
+-- order emails by b2b_email.py. One row per order; the "placed" mail fills
+-- the details, the follow-up "confirmed"/"delivered" mail flips status.
+CREATE TABLE IF NOT EXISTS b2b_orders (
+    id                  TEXT PRIMARY KEY,      -- b2b-<hex>
+    platform            TEXT NOT NULL,         -- automatiq | tickpick | crowdvolt
+    order_ref           TEXT NOT NULL,         -- platform order number, or a synthetic key
+    event_name          TEXT,
+    event_date_iso      TEXT,
+    event_date_text     TEXT,
+    venue               TEXT,
+    section             TEXT,
+    row_label           TEXT,
+    seats               TEXT,
+    qty                 INTEGER,
+    price_each          REAL,
+    total               REAL,
+    currency            TEXT,
+    buyer_email         TEXT,
+    status              TEXT NOT NULL DEFAULT 'placed',  -- placed | confirmed
+    placed_at           TEXT,
+    placed_message_id   TEXT,
+    confirmed_at        TEXT,
+    confirmed_message_id TEXT,
+    dice_transfer_id    TEXT,                  -- pinned b2b_dice_incoming.message_id ('' = pinned none)
+    hidden              INTEGER NOT NULL DEFAULT 0,
+    notes               TEXT,
+    raw_text            TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT,
+    UNIQUE (platform, order_ref)
+);
+-- Every b2b email we've handled (Message-ID dedup). A confirmation that
+-- arrives with no matching order is kept here with order_id NULL and its
+-- parse in fields_json, and is re-tried on every sweep.
+CREATE TABLE IF NOT EXISTS b2b_messages (
+    message_id   TEXT PRIMARY KEY,
+    platform     TEXT,
+    kind         TEXT,                         -- placed | confirmed | other
+    order_id     TEXT,
+    received_at  TEXT,
+    subject      TEXT,
+    fields_json  TEXT,
+    processed_at TEXT NOT NULL
+);
+-- Incoming DICE transfers ("<Name> sent you tickets"): which of our DICE
+-- accounts a b2b order's tickets landed in.
+CREATE TABLE IF NOT EXISTS b2b_dice_incoming (
+    message_id     TEXT PRIMARY KEY,
+    account_email  TEXT,
+    sender_name    TEXT,
+    event_name     TEXT,
+    event_slug     TEXT,
+    event_date_iso TEXT,
+    venue          TEXT,
+    ticket_type    TEXT,
+    qty            INTEGER,
+    email_date     TEXT,
+    subject        TEXT,
+    created_at     TEXT NOT NULL
+);
 """
 
 
@@ -1402,6 +1464,10 @@ def init():
         dp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dice_purchases)").fetchall()}
         if "listed_json" not in dp_cols:
             conn.execute("ALTER TABLE dice_purchases ADD COLUMN listed_json TEXT")
+        # Set on rows mirrored from a /b2b order whose tickets arrived in a
+        # DICE account (b2b.sync_dice); NULL on email-recorded purchases.
+        if "b2b_order_id" not in dp_cols:
+            conn.execute("ALTER TABLE dice_purchases ADD COLUMN b2b_order_id TEXT")
         # Sale links made by dice_autolink (vs. the /dice picker), plus the
         # sales the user unlinked from an auto match so it never re-links them.
         dsl_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dice_sale_links)").fetchall()}
@@ -5277,3 +5343,181 @@ PURCHASES_START_DEFAULT = "2026-10-06"
 def purchases_start_date():
     v = (setting_get("purchases_start_date") or "").strip()
     return v[:10] if v else PURCHASES_START_DEFAULT
+
+
+# --- /b2b orders (b2b_email.py) --------------------------------------------
+
+_B2B_ORDER_COLS = (
+    "event_name", "event_date_iso", "event_date_text", "venue", "section",
+    "row_label", "seats", "qty", "price_each", "total", "currency",
+    "buyer_email", "raw_text",
+)
+
+
+def b2b_message_seen(message_id):
+    if not message_id:
+        return False
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM b2b_messages WHERE message_id = ? "
+            "UNION SELECT 1 FROM b2b_dice_incoming WHERE message_id = ? LIMIT 1",
+            (message_id, message_id)).fetchone()
+    return bool(row)
+
+
+def b2b_message_record(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO b2b_messages (message_id, platform, kind, "
+            "order_id, received_at, subject, fields_json, processed_at) "
+            "VALUES (:message_id, :platform, :kind, :order_id, :received_at, "
+            ":subject, :fields_json, :processed_at)",
+            {**row, "processed_at": now_iso})
+
+
+def b2b_orphan_confirmations():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM b2b_messages WHERE kind = 'confirmed' AND order_id IS NULL "
+            "ORDER BY received_at").fetchall()
+    return [dict(r) for r in rows]
+
+
+def b2b_order_get(platform, order_ref):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM b2b_orders WHERE platform = ? AND order_ref = ?",
+            (platform, order_ref)).fetchone()
+    return dict(row) if row else None
+
+
+def b2b_order_by_id(order_id):
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM b2b_orders WHERE id = ?", (order_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def b2b_order_upsert_placed(platform, order_ref, fields, placed_at, message_id, now_iso):
+    """Insert the order from its 'placed' email, or fill in the details of a
+    row a confirmation created first. Returns the order id. Non-empty parsed
+    values win; empty ones never wipe what is stored."""
+    existing = b2b_order_get(platform, order_ref)
+    vals = {c: fields.get(c) for c in _B2B_ORDER_COLS if fields.get(c) not in (None, "")}
+    with connect() as conn:
+        if existing:
+            sets = ", ".join(f"{c} = :{c}" for c in vals)
+            conn.execute(
+                f"UPDATE b2b_orders SET {sets + ', ' if sets else ''}"
+                "placed_at = COALESCE(placed_at, :placed_at), "
+                "placed_message_id = COALESCE(placed_message_id, :mid), "
+                "updated_at = :now WHERE id = :id",
+                {**vals, "placed_at": placed_at, "mid": message_id, "now": now_iso,
+                 "id": existing["id"]})
+            return existing["id"]
+        oid = "b2b-" + uuid.uuid4().hex[:12]
+        cols = ["id", "platform", "order_ref", "status", "placed_at",
+                "placed_message_id", "created_at", "updated_at"] + list(vals)
+        conn.execute(
+            f"INSERT INTO b2b_orders ({', '.join(cols)}) VALUES "
+            f"({', '.join(':' + c for c in cols)})",
+            {**vals, "id": oid, "platform": platform, "order_ref": order_ref,
+             "status": "placed", "placed_at": placed_at,
+             "placed_message_id": message_id, "created_at": now_iso,
+             "updated_at": now_iso})
+        return oid
+
+
+def b2b_order_mark_confirmed(order_id, confirmed_at, message_id, fields, now_iso):
+    """Flip an order to confirmed; also back-fills any detail the placed mail
+    lacked (a delivery mail can carry the seats)."""
+    vals = {c: fields.get(c) for c in _B2B_ORDER_COLS
+            if c != "raw_text" and fields.get(c) not in (None, "")}
+    sets = "".join(f"{c} = COALESCE(NULLIF({c}, ''), :{c}), " for c in vals)
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE b2b_orders SET {sets}status = 'confirmed', "
+            "confirmed_at = COALESCE(confirmed_at, :at), "
+            "confirmed_message_id = COALESCE(confirmed_message_id, :mid), "
+            "updated_at = :now WHERE id = :id",
+            {**vals, "at": confirmed_at, "mid": message_id, "now": now_iso, "id": order_id})
+
+
+def b2b_orders_all():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM b2b_orders ORDER BY event_date_iso IS NULL, "
+            "event_date_iso, event_name, placed_at").fetchall()
+    return [dict(r) for r in rows]
+
+
+def b2b_order_update(order_id, fields, now_iso):
+    allowed = set(_B2B_ORDER_COLS) | {"status", "hidden", "notes", "dice_transfer_id"}
+    vals = {k: v for k, v in fields.items() if k in allowed}
+    if not vals:
+        return
+    sets = ", ".join(f"{c} = :{c}" for c in vals)
+    with connect() as conn:
+        conn.execute(f"UPDATE b2b_orders SET {sets}, updated_at = :now WHERE id = :id",
+                     {**vals, "now": now_iso, "id": order_id})
+
+
+def b2b_dice_incoming_insert(row, now_iso):
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO b2b_dice_incoming (message_id, account_email, "
+            "sender_name, event_name, event_slug, event_date_iso, venue, ticket_type, qty, "
+            "email_date, subject, created_at) VALUES (:message_id, :account_email, "
+            ":sender_name, :event_name, :event_slug, :event_date_iso, :venue, "
+            ":ticket_type, :qty, :email_date, :subject, "
+            ":created_at)", {**row, "created_at": now_iso})
+
+
+def b2b_dice_incoming_all():
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM b2b_dice_incoming ORDER BY email_date").fetchall()
+    return [dict(r) for r in rows]
+
+
+def dice_purchase_upsert_b2b(row, now_iso):
+    """Mirror a b2b order into dice_purchases under a stable id, keeping
+    qty_transferred / listed_json (and so the sale links) across rewrites."""
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO dice_purchases (id, message_id, account_email, event_name,
+                event_slug, event_date_iso, venue, ticket_type, qty, price_total,
+                price_per_unit, currency, email_date, subject, raw_text, warnings,
+                b2b_order_id, created_at)
+            VALUES (:id, :message_id, :account_email, :event_name, :event_slug,
+                    :event_date_iso, :venue, :ticket_type, :qty, :price_total,
+                    :price_per_unit, :currency, :email_date, :subject, '', '',
+                    :b2b_order_id, :created_at)
+            ON CONFLICT(id) DO UPDATE SET
+                account_email = excluded.account_email,
+                event_name = excluded.event_name,
+                event_slug = excluded.event_slug,
+                event_date_iso = excluded.event_date_iso,
+                venue = excluded.venue,
+                ticket_type = excluded.ticket_type,
+                qty = excluded.qty,
+                price_total = excluded.price_total,
+                price_per_unit = excluded.price_per_unit,
+                currency = excluded.currency,
+                email_date = excluded.email_date,
+                subject = excluded.subject
+            """,
+            {**row, "created_at": now_iso},
+        )
+
+
+def dice_purchases_b2b_ids():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, b2b_order_id FROM dice_purchases WHERE b2b_order_id IS NOT NULL").fetchall()
+    return {r["id"]: r["b2b_order_id"] for r in rows}
+
+
+def dice_purchase_delete(purchase_id):
+    with connect() as conn:
+        conn.execute("DELETE FROM dice_sale_links WHERE purchase_id = ?", (purchase_id,))
+        conn.execute("DELETE FROM dice_purchases WHERE id = ?", (purchase_id,))

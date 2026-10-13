@@ -18,6 +18,7 @@ from flask import Flask, jsonify, render_template, send_file, send_from_director
 from openpyxl import Workbook
 
 import attachments as attachments_mod
+import b2b
 import barby
 import barby_events
 import db
@@ -339,6 +340,7 @@ def run_mail_intake():
     _last_intake["running"] = True
     try:
         summary = mail_intake.run_intake()
+        _b2b_sync_safe()
         _dice_autolink_safe()
         _dice_autotrack_held()
         _last_intake.update(
@@ -4904,6 +4906,93 @@ def api_purchases_start_date():
     return jsonify({"ok": True, "start_date": v})
 
 
+# --- /b2b: resale buys from Automatiq / TickPick / CrowdVolt emails ---------
+
+def _b2b_sync_safe():
+    """Mirror DICE-delivered b2b orders onto /dice. Never breaks the caller."""
+    try:
+        return b2b.sync_dice()
+    except Exception:
+        traceback.print_exc()
+        return 0
+
+
+_b2b_lock = threading.Lock()
+
+
+@app.route("/b2b")
+def b2b_page():
+    return render_template("b2b.html")
+
+
+@app.route("/api/b2b")
+def api_b2b():
+    data = b2b.build()
+    data["last_intake"] = _last_intake.get("at")
+    return jsonify(data)
+
+
+@app.route("/api/b2b/run-now", methods=["POST"])
+def api_b2b_run_now():
+    """Sweep the inbox for b2b mail now. Body {"days": N} widens the look-back
+    (default KARTIS_B2B_LOOKBACK_DAYS) to backfill older orders."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    try:
+        days = max(1, min(int(body.get("days") or 0), 365)) or None
+    except (TypeError, ValueError):
+        days = None
+    if not _b2b_lock.acquire(blocking=False):
+        return jsonify({"error": "a sweep is already running"}), 409
+    try:
+        summary = mail_intake.sweep_b2b(lookback_days=days)
+        summary["dice_mirrored"] = _b2b_sync_safe()
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+    finally:
+        _b2b_lock.release()
+    return jsonify({"ok": True, **summary})
+
+
+@app.route("/api/b2b/<order_id>", methods=["POST"])
+def api_b2b_edit(order_id):
+    """Hand edits: any order field, hidden, notes, status ('placed' /
+    'confirmed'), and dice_transfer_id (a DICE mail's message id to pin it,
+    '' to pin "no DICE account", null to hand back to the auto-matcher)."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    if not db.b2b_order_by_id(order_id):
+        return jsonify({"error": "not found"}), 404
+    fields = {}
+    for k in ("event_name", "event_date_iso", "venue", "section", "row_label",
+              "seats", "notes", "currency"):
+        if k in body:
+            fields[k] = (body.get(k) or "").strip()
+    for k in ("qty",):
+        if k in body:
+            try:
+                fields[k] = int(body[k]) if body[k] not in (None, "") else None
+            except (TypeError, ValueError):
+                return jsonify({"error": f"{k} must be a number"}), 400
+    for k in ("price_each", "total"):
+        if k in body:
+            try:
+                fields[k] = float(body[k]) if body[k] not in (None, "") else None
+            except (TypeError, ValueError):
+                return jsonify({"error": f"{k} must be a number"}), 400
+    if "status" in body:
+        if body["status"] not in ("placed", "confirmed"):
+            return jsonify({"error": "status must be placed or confirmed"}), 400
+        fields["status"] = body["status"]
+    if "hidden" in body:
+        fields["hidden"] = 1 if body["hidden"] else 0
+    if "dice_transfer_id" in body:
+        fields["dice_transfer_id"] = body["dice_transfer_id"]
+    db.b2b_order_update(order_id, fields, datetime.now(timezone.utc).isoformat())
+    _b2b_sync_safe()
+    return jsonify({"ok": True})
+
+
 @app.route("/purchases")
 def purchases_page():
     return render_template("purchases.html")
@@ -7431,6 +7520,7 @@ def api_dice_purchases():
     with per-account bought/transferred/held rows, plus the transfer log.
     Rows are written by mail_intake's dice branch. Opening the page also
     runs the sale auto-matcher, so a freshly scraped sale shows up linked."""
+    _b2b_sync_safe()
     autolink = _dice_autolink_safe()
     _dice_autotrack_held()
     purchases = db.dice_purchases_all()

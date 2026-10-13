@@ -1067,6 +1067,8 @@ function purchaseRow(g, tmap){
     // numbers in fixed columns, then the listed / sale controls.
     const rows = g.purchases.map(p => {
       const warn = (p.warnings||'') ? ` <span style="color:var(--amber)" title="${escape(p.warnings)}">⚠</span>` : '';
+      // Mirrored from /b2b: bought on a resale site, delivered into this account.
+      const b2bSrc = p.b2b_order_id ? ` <a href="/b2b" class="when" title="${escape(p.subject||'')}" style="text-decoration:none">via ${escape(((p.subject||'').match(/Bought on (\w+)/)||[])[1]||'resale')}</a>` : '';
       const ppu = p.price_per_unit != null ? p.price_per_unit : (p.qty ? (p.price_total||0)/p.qty : p.price_total);
       const r = roiOf(p.profit, p.cost_sold);
       const prof = p.profit != null
@@ -1075,7 +1077,7 @@ function purchaseRow(g, tmap){
       const z = n => n ? fmt(n) : '<span class="when">0</span>';
       const av = p.avail != null ? p.avail : p.qty;
       return `<tr>
-        <td><span class="tt">${escape(p.ticket_type||'?')}</span>${warn}</td>
+        <td><span class="tt">${escape(p.ticket_type||'?')}</span>${warn}${b2bSrc}</td>
         <td>${acctShort(p.account_email)}</td>
         <td class="num">${money(ppu, p.currency||'USD')}</td>
         <td class="num">${fmt(p.qty)}</td>
