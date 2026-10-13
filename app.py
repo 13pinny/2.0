@@ -4981,8 +4981,8 @@ def api_b2b_edit(order_id):
             except (TypeError, ValueError):
                 return jsonify({"error": f"{k} must be a number"}), 400
     if "status" in body:
-        if body["status"] not in ("placed", "confirmed"):
-            return jsonify({"error": "status must be placed or confirmed"}), 400
+        if body["status"] not in ("placed", "confirmed", "cancelled"):
+            return jsonify({"error": "status must be placed, confirmed or cancelled"}), 400
         fields["status"] = body["status"]
     if "hidden" in body:
         fields["hidden"] = 1 if body["hidden"] else 0

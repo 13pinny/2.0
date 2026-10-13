@@ -42,6 +42,11 @@
   tr.order:hover td { background: var(--bg-3); }
   tr.order.confirmed td { background: var(--green-bg); }
   tr.order.confirmed:hover td { background: #d5ecdc; }
+  tr.order.cancelled td { color: var(--muted); }
+  tr.order.cancelled td.strike { text-decoration: line-through; }
+  .st.bad { color: var(--red); }
+  .st.bad .dot { border: 2px solid var(--red); font-size: 11px; }
+  .seats { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   tr.event-hdr td { background: var(--bg-3); font-weight: 600; font-size: 12px; padding: 9px 10px; }
   tr.event-hdr .sub { color: var(--muted); font-weight: 400; margin-left: 10px; }
   .st { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; white-space: nowrap; }
@@ -90,6 +95,7 @@
       <option value="crowdvolt">CrowdVolt</option>
     </select>
     <label class="small muted"><input type="checkbox" id="f-past" /> Past events</label>
+    <label class="small muted"><input type="checkbox" id="f-cancelled" checked /> Cancelled</label>
     <label class="small muted"><input type="checkbox" id="f-hidden" /> Hidden</label>
     <button id="btn-check" class="primary">Check email</button>
     <button id="btn-backfill" title="Look back 120 days instead of the usual few weeks">Backfill</button>
@@ -135,7 +141,7 @@
       <label>Qty</label><input id="m-qty" type="number" min="0" />
       <label>Price each</label><input id="m-price_each" type="number" step="0.01" />
       <label>Total</label><input id="m-total" type="number" step="0.01" />
-      <label>Status</label><select id="m-status"><option value="placed">Waiting for confirmation</option><option value="confirmed">Confirmed</option></select>
+      <label>Status</label><select id="m-status"><option value="placed">Waiting for confirmation</option><option value="confirmed">Confirmed</option><option value="cancelled">Cancelled</option></select>
       <label>DICE account</label><select id="m-dice"></select>
       <label>Notes</label><input id="m-notes" />
     </div>
@@ -187,14 +193,17 @@ async function load() {
 }
 
 function render() {
-  const plat = $("f-platform").value, showPast = $("f-past").checked, showHidden = $("f-hidden").checked;
+  const plat = $("f-platform").value, showPast = $("f-past").checked, showHidden = $("f-hidden").checked,
+        showCancelled = $("f-cancelled").checked;
   const today = new Date().toISOString().slice(0, 10);
   const rows = DATA.orders.filter(o =>
     (!plat || o.platform === plat) &&
     (showHidden || !o.hidden) &&
+    (showCancelled || o.status !== "cancelled") &&
     (showPast || !o.event_date_iso || o.event_date_iso >= today));
   let wait = 0, ok = 0, qty = 0, spend = 0;
   rows.forEach(o => {
+    if (o.status === "cancelled") return;
     if (o.status === "confirmed") ok++; else wait++;
     qty += o.qty || 0;
     if (o.total && (o.currency || "USD") === "USD") spend += o.total;
@@ -217,28 +226,43 @@ function render() {
   let html = "";
   for (const k of keys) {
     const g = groups.get(k), f = g[0];
-    const gq = g.reduce((a, o) => a + (o.qty || 0), 0);
+    const gq = g.reduce((a, o) => a + (o.status === "cancelled" ? 0 : (o.qty || 0)), 0);
     html += `<tr class="event-hdr"><td colspan="11">${esc(f.event_name || "Unknown event")}` +
             `<span class="sub">${esc(evDate(f.event_date_iso) || f.event_date_text || "")}${f.venue ? " · " + esc(f.venue) : ""} · ${gq} ticket${gq === 1 ? "" : "s"}</span></td></tr>`;
     for (const o of g) {
-      const st = o.status === "confirmed"
-        ? `<span class="st ok" title="Confirmed ${esc(when(o.confirmed_at))}"><span class="dot">✓</span>${o.platform === "crowdvolt" ? "Delivered" : "Confirmed"}</span>`
-        : `<span class="st wait"><span class="dot"></span>Placed</span>`;
+      let st;
+      if (o.status === "cancelled") {
+        st = `<span class="st bad" title="Cancelled ${esc(when(o.cancelled_at))}"><span class="dot">✕</span>Cancelled</span>`;
+      } else if (o.status === "confirmed") {
+        // CrowdVolt's green check is the delivery; elsewhere delivery is a
+        // second step after the seller confirms.
+        const label = o.platform === "crowdvolt" ? "Delivered" : "Confirmed";
+        st = `<span class="st ok" title="Confirmed ${esc(when(o.confirmed_at))}"><span class="dot">✓</span>${label}</span>`;
+        if (o.delivered_at && o.platform !== "crowdvolt")
+          st += `<div class="st ok small" style="margin-top:4px" title="Delivered ${esc(when(o.delivered_at))}"><span class="dot" style="width:14px;height:14px;font-size:10px">✓</span>Delivered</div>`;
+      } else {
+        st = `<span class="st wait"><span class="dot"></span>Placed</span>`;
+      }
       let dice = '<span class="muted">—</span>';
       if (o.dice) {
         dice = `<div class="dice"><b>${esc(o.dice.account || "?")}</b>` +
                `<div class="muted">from ${esc(o.dice.sender || "?")}${o.dice.qty ? " · " + o.dice.qty + " tix" : ""}${o.dice.pinned ? " · set by hand" : ""}</div></div>`;
       } else if (o.dice_pinned_none) {
         dice = '<span class="muted">none (set by hand)</span>';
+      } else if (o.dice_wallet) {
+        dice = `<div class="dice">wallet: <b>${esc(o.dice_wallet)}</b><div class="muted">no DICE email found</div></div>`;
       }
-      html += `<tr class="order ${o.status === "confirmed" ? "confirmed" : ""}" data-id="${esc(o.id)}">` +
+      if (o.dice && o.dice.holder) dice = dice.replace("</b>", `</b> <span class="muted">(${esc(o.dice.holder)})</span>`);
+      const extra = [o.delivery, o.source_notes].filter(Boolean).map(esc).join(" · ");
+      html += `<tr class="order ${o.status}" data-id="${esc(o.id)}">` +
         `<td>${st}</td>` +
         `<td><span class="chip ${esc(o.platform)}">${esc(PLATFORM_LABEL[o.platform] || o.platform)}</span></td>` +
-        `<td class="small">${esc(o.order_ref || "—")}${o.hidden ? ' <span class="muted">(hidden)</span>' : ""}${o.notes ? `<div class="muted">${esc(o.notes)}</div>` : ""}</td>` +
-        `<td>${esc(o.section || "—")}</td><td>${esc(o.row_label || "—")}</td><td>${esc(o.seats || "—")}</td>` +
+        `<td class="small">${esc(o.order_ref || "—")}${o.hidden ? ' <span class="muted">(hidden)</span>' : ""}` +
+          `${extra ? `<div class="muted">${extra}</div>` : ""}${o.notes ? `<div><i>${esc(o.notes)}</i></div>` : ""}</td>` +
+        `<td>${esc(o.section || "—")}</td><td>${esc(o.row_label || "—")}</td><td><div class="seats" title="${esc(o.seats || "")}">${esc(o.seats || "—")}</div></td>` +
         `<td class="num">${o.qty ?? "—"}</td>` +
         `<td class="num">${money(o.price_each, o.currency)}</td>` +
-        `<td class="num"><b>${money(o.total, o.currency)}</b></td>` +
+        `<td class="num strike"><b>${money(o.total, o.currency)}</b></td>` +
         `<td>${dice}</td>` +
         `<td class="small muted">${when(o.placed_at)}</td></tr>`;
     }
@@ -261,7 +285,7 @@ function openEdit(id) {
   $("m-title").textContent = (PLATFORM_LABEL[o.platform] || o.platform) + (o.order_ref ? " · " + o.order_ref : "");
   ["event_name", "event_date_iso", "venue", "section", "row_label", "seats", "qty", "price_each", "total", "notes"]
     .forEach(k => $("m-" + k).value = o[k] ?? "");
-  $("m-status").value = o.status === "confirmed" ? "confirmed" : "placed";
+  $("m-status").value = o.status || "placed";
   const opts = ['<option value="__auto">Automatic</option>', '<option value="">None</option>'];
   (DATA.dice_all || []).forEach(d => {
     opts.push(`<option value="${esc(d.message_id)}">${esc((d.account || "?") + " · from " + (d.sender || "?") + " · " + when(d.at) + (d.event_name ? " · " + d.event_name : ""))}</option>`);
@@ -295,7 +319,11 @@ async function runNow(days) {
     const r = await fetch("/api/b2b/run-now", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(days ? {days} : {})});
     const j = await r.json();
     if (!r.ok) toast(j.error || "Check failed");
-    else toast(`${j.placed} new order${j.placed === 1 ? "" : "s"}, ${j.confirmed} confirmation${j.confirmed === 1 ? "" : "s"}, ${j.dice_incoming} DICE transfer${j.dice_incoming === 1 ? "" : "s"}` + (j.errors ? `, ${j.errors} error(s)` : ""));
+    else {
+      const n = j.placed + j.confirmed + j.delivered + j.cancelled + j.dice_incoming;
+      toast(n ? `Read ${n} new email${n === 1 ? "" : "s"}: ${j.placed} placed, ${j.confirmed} confirmed, ${j.delivered} delivered, ${j.cancelled} cancelled, ${j.dice_incoming} DICE` + (j.errors ? `, ${j.errors} error(s)` : "")
+              : "No new order emails" + (j.errors ? ` (${j.errors} error(s))` : ""));
+    }
   } catch (e) { toast("Check failed: " + e); }
   btns.forEach(b => b.disabled = false);
   load();
@@ -307,7 +335,7 @@ $("m-cancel").onclick = () => $("modal").classList.remove("open");
 $("m-save").onclick = () => save();
 $("m-hide").onclick = () => save({hidden: !EDITING.hidden});
 $("modal").addEventListener("click", e => { if (e.target.id === "modal") $("modal").classList.remove("open"); });
-["f-platform", "f-past", "f-hidden"].forEach(id => $(id).addEventListener("change", () => { savePrefs(); render(); }));
+["f-platform", "f-past", "f-hidden", "f-cancelled"].forEach(id => $(id).addEventListener("change", () => { savePrefs(); render(); }));
 const p = prefs();
 if (p.platform) $("f-platform").value = p.platform;
 if (p.past) $("f-past").checked = true;

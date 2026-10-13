@@ -1168,11 +1168,16 @@ CREATE TABLE IF NOT EXISTS b2b_orders (
     total               REAL,
     currency            TEXT,
     buyer_email         TEXT,
-    status              TEXT NOT NULL DEFAULT 'placed',  -- placed | confirmed
+    delivery            TEXT,                  -- stock type (PDF, Mobile Transfer, ...)
+    source_notes        TEXT,                  -- the platform's own listing notes
+    dice_wallet         TEXT,                  -- CrowdVolt's "sent to your DICE wallet: <name>"
+    status              TEXT NOT NULL DEFAULT 'placed',  -- placed | confirmed | cancelled
     placed_at           TEXT,
     placed_message_id   TEXT,
     confirmed_at        TEXT,
     confirmed_message_id TEXT,
+    delivered_at        TEXT,
+    cancelled_at        TEXT,
     dice_transfer_id    TEXT,                  -- pinned b2b_dice_incoming.message_id ('' = pinned none)
     hidden              INTEGER NOT NULL DEFAULT 0,
     notes               TEXT,
@@ -1182,12 +1187,13 @@ CREATE TABLE IF NOT EXISTS b2b_orders (
     UNIQUE (platform, order_ref)
 );
 -- Every b2b email we've handled (Message-ID dedup). A confirmation that
--- arrives with no matching order is kept here with order_id NULL and its
--- parse in fields_json, and is re-tried on every sweep.
+-- follow-up (confirmed / delivered / cancelled) that matches no order yet is
+-- kept here with order_id NULL and its parse in fields_json, and re-tried on
+-- every sweep.
 CREATE TABLE IF NOT EXISTS b2b_messages (
     message_id   TEXT PRIMARY KEY,
     platform     TEXT,
-    kind         TEXT,                         -- placed | confirmed | other
+    kind         TEXT,                         -- placed | confirmed | delivered | cancelled | other
     order_id     TEXT,
     received_at  TEXT,
     subject      TEXT,
@@ -1200,6 +1206,7 @@ CREATE TABLE IF NOT EXISTS b2b_dice_incoming (
     message_id     TEXT PRIMARY KEY,
     account_email  TEXT,
     sender_name    TEXT,
+    holder_name    TEXT,                       -- the account's "Name" on the ticket
     event_name     TEXT,
     event_slug     TEXT,
     event_date_iso TEXT,
@@ -5350,7 +5357,7 @@ def purchases_start_date():
 _B2B_ORDER_COLS = (
     "event_name", "event_date_iso", "event_date_text", "venue", "section",
     "row_label", "seats", "qty", "price_each", "total", "currency",
-    "buyer_email", "raw_text",
+    "buyer_email", "delivery", "source_notes", "dice_wallet", "raw_text",
 )
 
 
@@ -5378,7 +5385,8 @@ def b2b_message_record(row, now_iso):
 def b2b_orphan_confirmations():
     with connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM b2b_messages WHERE kind = 'confirmed' AND order_id IS NULL "
+            "SELECT * FROM b2b_messages WHERE kind IN ('confirmed', 'delivered', 'cancelled') "
+            "AND order_id IS NULL "
             "ORDER BY received_at").fetchall()
     return [dict(r) for r in rows]
 
@@ -5397,10 +5405,11 @@ def b2b_order_by_id(order_id):
     return dict(row) if row else None
 
 
-def b2b_order_upsert_placed(platform, order_ref, fields, placed_at, message_id, now_iso):
-    """Insert the order from its 'placed' email, or fill in the details of a
-    row a confirmation created first. Returns the order id. Non-empty parsed
-    values win; empty ones never wipe what is stored."""
+def b2b_order_upsert(platform, order_ref, fields, at, message_id, now_iso):
+    """Insert the order, or fill in details on the existing row. Any order
+    mail can create it (Automatiq's Placed and Confirmed race, and both carry
+    the whole order). Non-empty parsed values win; empty ones never wipe
+    what is stored. placed_at is the earliest mail seen. Returns the id."""
     existing = b2b_order_get(platform, order_ref)
     vals = {c: fields.get(c) for c in _B2B_ORDER_COLS if fields.get(c) not in (None, "")}
     with connect() as conn:
@@ -5408,38 +5417,42 @@ def b2b_order_upsert_placed(platform, order_ref, fields, placed_at, message_id, 
             sets = ", ".join(f"{c} = :{c}" for c in vals)
             conn.execute(
                 f"UPDATE b2b_orders SET {sets + ', ' if sets else ''}"
-                "placed_at = COALESCE(placed_at, :placed_at), "
-                "placed_message_id = COALESCE(placed_message_id, :mid), "
+                "placed_at = CASE WHEN placed_at IS NULL OR :at < placed_at THEN :at ELSE placed_at END, "
                 "updated_at = :now WHERE id = :id",
-                {**vals, "placed_at": placed_at, "mid": message_id, "now": now_iso,
-                 "id": existing["id"]})
+                {**vals, "at": at, "now": now_iso, "id": existing["id"]})
             return existing["id"]
         oid = "b2b-" + uuid.uuid4().hex[:12]
         cols = ["id", "platform", "order_ref", "status", "placed_at",
-                "placed_message_id", "created_at", "updated_at"] + list(vals)
+                "created_at", "updated_at"] + list(vals)
         conn.execute(
             f"INSERT INTO b2b_orders ({', '.join(cols)}) VALUES "
             f"({', '.join(':' + c for c in cols)})",
             {**vals, "id": oid, "platform": platform, "order_ref": order_ref,
-             "status": "placed", "placed_at": placed_at,
-             "placed_message_id": message_id, "created_at": now_iso,
+             "status": "placed", "placed_at": at, "created_at": now_iso,
              "updated_at": now_iso})
         return oid
 
 
-def b2b_order_mark_confirmed(order_id, confirmed_at, message_id, fields, now_iso):
-    """Flip an order to confirmed; also back-fills any detail the placed mail
-    lacked (a delivery mail can carry the seats)."""
-    vals = {c: fields.get(c) for c in _B2B_ORDER_COLS
-            if c != "raw_text" and fields.get(c) not in (None, "")}
-    sets = "".join(f"{c} = COALESCE(NULLIF({c}, ''), :{c}), " for c in vals)
+def b2b_order_apply(order_id, kind, at, message_id, now_iso):
+    """Record a lifecycle mail on an order. 'placed' only stamps its message;
+    'confirmed' and 'delivered' turn the order green (delivered also stamps
+    delivered_at — a delivery implies the confirmation); 'cancelled' wins
+    over everything."""
+    sql = {
+        "placed": "placed_message_id = COALESCE(placed_message_id, :mid)",
+        "confirmed": "status = CASE WHEN status = 'cancelled' THEN status ELSE 'confirmed' END, "
+                     "confirmed_at = COALESCE(confirmed_at, :at), "
+                     "confirmed_message_id = COALESCE(confirmed_message_id, :mid)",
+        "delivered": "status = CASE WHEN status = 'cancelled' THEN status ELSE 'confirmed' END, "
+                     "confirmed_at = COALESCE(confirmed_at, :at), "
+                     "delivered_at = COALESCE(delivered_at, :at)",
+        "cancelled": "status = 'cancelled', cancelled_at = COALESCE(cancelled_at, :at)",
+    }.get(kind)
+    if not sql:
+        return
     with connect() as conn:
-        conn.execute(
-            f"UPDATE b2b_orders SET {sets}status = 'confirmed', "
-            "confirmed_at = COALESCE(confirmed_at, :at), "
-            "confirmed_message_id = COALESCE(confirmed_message_id, :mid), "
-            "updated_at = :now WHERE id = :id",
-            {**vals, "at": confirmed_at, "mid": message_id, "now": now_iso, "id": order_id})
+        conn.execute(f"UPDATE b2b_orders SET {sql}, updated_at = :now WHERE id = :id",
+                     {"at": at, "mid": message_id, "now": now_iso, "id": order_id})
 
 
 def b2b_orders_all():
@@ -5465,9 +5478,9 @@ def b2b_dice_incoming_insert(row, now_iso):
     with connect() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO b2b_dice_incoming (message_id, account_email, "
-            "sender_name, event_name, event_slug, event_date_iso, venue, ticket_type, qty, "
-            "email_date, subject, created_at) VALUES (:message_id, :account_email, "
-            ":sender_name, :event_name, :event_slug, :event_date_iso, :venue, "
+            "sender_name, holder_name, event_name, event_slug, event_date_iso, venue, "
+            "ticket_type, qty, email_date, subject, created_at) VALUES (:message_id, "
+            ":account_email, :sender_name, :holder_name, :event_name, :event_slug, :event_date_iso, :venue, "
             ":ticket_type, :qty, :email_date, :subject, "
             ":created_at)", {**row, "created_at": now_iso})
 

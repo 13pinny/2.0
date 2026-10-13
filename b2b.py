@@ -36,17 +36,25 @@ def _ts(s):
         return None
 
 
+def _venue_match(a, b):
+    ta, tb = b2b_email.name_tokens(a), b2b_email.name_tokens(b)
+    if not ta or not tb:
+        return False
+    small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    return len(small & big) / len(small) >= 0.6
+
+
 def _same_show(order, inc):
     """Does a DICE incoming transfer plausibly carry this order's tickets?
-    Event date (when both have one) must agree; the names must overlap when
-    both have one. With neither signal we only have timing to go on."""
+    Event date (when both have one) must agree, and the event names or the
+    venues must overlap — DICE dresses names up ("unKommon Events &
+    Framework present: ANOTR" for CrowdVolt's "ANOTR")."""
     od, idt = order.get("event_date_iso"), inc.get("event_date_iso")
     if od and idt and od != idt:
         return False
-    on, inn = order.get("event_name"), inc.get("event_name")
-    if on and inn:
-        return b2b_email.names_match(on, inn) or bool(od and idt and od == idt)
-    return True
+    if b2b_email.names_match(order.get("event_name"), inc.get("event_name")):
+        return True
+    return _venue_match(order.get("venue"), inc.get("venue"))
 
 
 def match_dice(orders=None, incoming=None):
@@ -64,9 +72,11 @@ def match_dice(orders=None, incoming=None):
     window = mail_intake.B2B_DICE_WINDOW_HOURS * 3600
     pairs = []
     for o in orders:
-        if o["id"] in out or o.get("dice_transfer_id") is not None or o.get("hidden"):
+        if (o["id"] in out or o.get("dice_transfer_id") is not None or o.get("hidden")
+                or o.get("status") == "cancelled"):
             continue
-        anchors = [t for t in (_ts(o.get("placed_at")), _ts(o.get("confirmed_at"))) if t]
+        anchors = [t for t in (_ts(o.get("placed_at")), _ts(o.get("confirmed_at")),
+                               _ts(o.get("delivered_at"))) if t]
         if not anchors:
             continue
         for inc in incoming:
@@ -77,9 +87,11 @@ def match_dice(orders=None, incoming=None):
                 continue
             gap = min(abs((t - a).total_seconds()) for a in anchors)
             if gap <= window and _same_show(o, inc):
-                pairs.append((gap, o["id"], inc))
-    pairs.sort(key=lambda p: p[0])
-    for _gap, oid, inc in pairs:
+                qty_off = bool(o.get("qty") and inc.get("qty") and o["qty"] != inc["qty"])
+                pairs.append((qty_off, gap, o["id"], inc))
+    # Same quantity first, then closest in time.
+    pairs.sort(key=lambda p: (p[0], p[1]))
+    for _q, _gap, oid, inc in pairs:
         if oid in out or inc["message_id"] in used:
             continue
         out[oid] = inc
@@ -109,7 +121,7 @@ def sync_dice():
     keep = set()
     for o in orders:
         inc = matches.get(o["id"])
-        if not inc or o.get("hidden"):
+        if not inc or o.get("hidden") or o.get("status") == "cancelled":
             continue
         try:
             qty = o.get("qty") or inc.get("qty") or None
@@ -126,7 +138,10 @@ def sync_dice():
                 "event_slug": inc.get("event_slug") or "",
                 "event_date_iso": inc.get("event_date_iso") or o.get("event_date_iso") or "",
                 "venue": inc.get("venue") or o.get("venue") or "",
-                "ticket_type": inc.get("ticket_type") or "",
+                # DICE's transfer mail names no type; CrowdVolt's "6 × General
+                # Admission" is stored as the section.
+                "ticket_type": inc.get("ticket_type")
+                               or (o.get("section") if o["platform"] == "crowdvolt" else "") or "",
                 "qty": qty,
                 "price_total": total,
                 "price_per_unit": ppu,
@@ -158,12 +173,14 @@ def build():
             "id", "platform", "order_ref", "event_name", "event_date_iso",
             "event_date_text", "venue", "section", "row_label", "seats", "qty",
             "price_each", "total", "currency", "buyer_email", "status",
-            "placed_at", "confirmed_at", "hidden", "notes")}
+            "placed_at", "confirmed_at", "delivered_at", "cancelled_at",
+            "delivery", "source_notes", "dice_wallet", "hidden", "notes")}
         r["order_ref"] = "" if (o.get("order_ref") or "").startswith("x-") else o.get("order_ref")
         r["dice"] = None if not inc else {
             "message_id": inc["message_id"],
             "account": inc.get("account_email"),
             "sender": inc.get("sender_name"),
+            "holder": inc.get("holder_name"),
             "qty": inc.get("qty"),
             "event_name": inc.get("event_name"),
             "at": inc.get("email_date"),

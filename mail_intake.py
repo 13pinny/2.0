@@ -1772,10 +1772,13 @@ B2B_LOOKBACK_DAYS = int(os.getenv("KARTIS_B2B_LOOKBACK_DAYS") or 21)
 B2B_DICE_WINDOW_HOURS = float(os.getenv("KARTIS_B2B_DICE_WINDOW_HOURS") or 72)
 
 
-def _imap_fetch_new_from(M, sender_substr, since, seen_fn, subject=None):
+def _imap_fetch_new_from(M, sender_substr, since, seen_fn, subject=None, want_fn=None):
     """On an open connection: messages FROM `sender_substr` since `since`
     whose Message-ID `seen_fn` hasn't recorded. Headers are fetched first so
-    a re-poll of a long window downloads only the bodies it needs."""
+    a re-poll of a long window downloads only the bodies it needs; with
+    `want_fn(from, subject, message_id)` a message it rejects is skipped
+    without downloading its body (CrowdVolt's domain is mostly seller mail).
+    Returns (uid, raw_bytes, message_id) tuples."""
     crit = ["FROM", sender_substr, "SINCE", since]
     if subject:
         crit += ["SUBJECT", subject]
@@ -1784,11 +1787,15 @@ def _imap_fetch_new_from(M, sender_substr, since, seen_fn, subject=None):
         return []
     out = []
     for uid in data[0].split():
-        typ, hdr = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
-        mid = ""
+        typ, hdr = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT)])")
+        mid, h = "", None
         if typ == "OK" and hdr and hdr[0] and isinstance(hdr[0], tuple):
-            mid = (message_from_bytes(hdr[0][1]).get("Message-ID") or "").strip()
+            h = message_from_bytes(hdr[0][1])
+            mid = (h.get("Message-ID") or "").strip()
         if mid and seen_fn(mid):
+            continue
+        if want_fn and h is not None and not want_fn(
+                _decode(h.get("From") or ""), _decode(h.get("Subject") or ""), mid):
             continue
         typ, msg_data = M.fetch(uid, "(BODY.PEEK[])")
         if typ != "OK" or not msg_data or not msg_data[0]:
@@ -1806,7 +1813,8 @@ def _b2b_text(raw, parsed):
     is often a stub)."""
     html = _email_html(message_from_bytes(raw))
     txt = b2b_email.html_to_text(html) if html else ""
-    txt = txt if len(txt) >= len(parsed.get("body") or "") // 2 else (parsed.get("body") or "")
+    if len(txt) < 200:
+        txt = parsed.get("body") or txt
     # Links survive only in the HTML attributes (the DICE event slug lives in one).
     links = re.findall(r'href=["\']([^"\']+)["\']', html or "", re.I)
     if links:
@@ -1814,26 +1822,24 @@ def _b2b_text(raw, parsed):
     return txt
 
 
-def _b2b_find_order_for_confirmation(platform, fields, received_at):
-    """The order a confirmation belongs to: by order number when it carries
-    one, else the oldest still-unconfirmed order of that platform for the
-    same event placed before the confirmation."""
+def _b2b_find_order(platform, fields, received_at):
+    """The order a follow-up mail belongs to: by order number when it carries
+    one we know, else the oldest still-open order of that platform for the
+    same show placed before the mail (CrowdVolt's cancellation mail names
+    only the event)."""
     ref = fields.get("order_ref")
     if ref:
         o = db.b2b_order_get(platform, ref)
         if o:
             return o
+        return None
     ev = fields.get("event_name") or ""
     cands = [o for o in db.b2b_orders_all()
-             if o["platform"] == platform and o["status"] != "confirmed"
+             if o["platform"] == platform and o["status"] == "placed"
              and (o.get("placed_at") or "") <= (received_at or "9999")
              and (not ev or b2b_email.names_match(ev, o.get("event_name")))
              and (not fields.get("event_date_iso") or not o.get("event_date_iso")
                   or fields["event_date_iso"] == o["event_date_iso"])]
-    if ref:
-        # Carries a number we don't know — only pair it with an order that
-        # has no number of its own.
-        cands = [o for o in cands if o["order_ref"].startswith("x-")]
     cands.sort(key=lambda o: o.get("placed_at") or "")
     return cands[0] if cands else None
 
@@ -1853,6 +1859,7 @@ def _b2b_handle(platform, kind, parsed, raw, now):
             "message_id": mid or ("nomid-" + uuid.uuid4().hex[:12]),
             "account_email": account,
             "sender_name": f.get("sender_name") or "",
+            "holder_name": f.get("holder_name") or "",
             "event_name": f.get("event_name") or "",
             "event_slug": f.get("event_slug") or "",
             "event_date_iso": f.get("event_date_iso") or "",
@@ -1865,17 +1872,22 @@ def _b2b_handle(platform, kind, parsed, raw, now):
         return kind
 
     f = b2b_email.parse_order(platform, kind, parsed["subject"], text, email_date)
+    # CrowdVolt can send the delivered template under an "Order Confirmed"
+    # subject — the body decides.
+    if f.pop("_delivered", False) and kind == "placed":
+        kind = "delivered"
     f["buyer_email"] = account
     f["raw_text"] = text[:8000]
     order_id = None
-    if kind == "placed":
+    if kind != "cancelled" and (f.get("order_ref") or kind == "placed"):
         ref = f.get("order_ref") or ("x-" + (mid or uuid.uuid4().hex)[:40])
-        order_id = db.b2b_order_upsert_placed(platform, ref, f, received, mid or None, now)
+        order_id = db.b2b_order_upsert(platform, ref, f, received, mid or None, now)
     else:
-        o = _b2b_find_order_for_confirmation(platform, f, received)
+        o = _b2b_find_order(platform, f, received)
         if o:
             order_id = o["id"]
-            db.b2b_order_mark_confirmed(order_id, received, mid or None, f, now)
+    if order_id:
+        db.b2b_order_apply(order_id, kind, received, mid or None, now)
     if mid:
         db.b2b_message_record({
             "message_id": mid, "platform": platform, "kind": kind,
@@ -1887,17 +1899,17 @@ def _b2b_handle(platform, kind, parsed, raw, now):
 
 
 def _b2b_retry_orphans(now):
-    """Confirmations that arrived before (or without) their placed mail."""
+    """Follow-ups that arrived before (or without) their order mail."""
     n = 0
     for m in db.b2b_orphan_confirmations():
         try:
             f = json.loads(m.get("fields_json") or "{}")
         except ValueError:
             continue
-        o = _b2b_find_order_for_confirmation(m["platform"], f, m.get("received_at"))
+        o = _b2b_find_order(m["platform"], f, m.get("received_at"))
         if not o:
             continue
-        db.b2b_order_mark_confirmed(o["id"], m.get("received_at"), m["message_id"], f, now)
+        db.b2b_order_apply(o["id"], m["kind"], m.get("received_at"), m["message_id"], now)
         db.b2b_message_record({**m, "order_id": o["id"]}, now)
         n += 1
     return n
@@ -1910,25 +1922,49 @@ def sweep_b2b(lookback_days=None):
     from datetime import date as _date, timedelta as _timedelta
     days = lookback_days or B2B_LOOKBACK_DAYS
     since = (_date.today() - _timedelta(days=days)).strftime("%d-%b-%Y")
-    out = {"placed": 0, "confirmed": 0, "dice_incoming": 0, "orphans_matched": 0,
-           "errors": 0}
+    out = {"placed": 0, "confirmed": 0, "delivered": 0, "cancelled": 0,
+           "dice_incoming": 0, "orphans_matched": 0, "errors": 0}
     now = datetime.now(timezone.utc).isoformat()
     M = _connect()
     try:
         M.select(INTAKE_FOLDER)
+        def _want(frm, subj, mid):
+            # Not a b2b mail: remember it so the next poll doesn't even
+            # fetch its headers' verdict again, and skip the body.
+            if b2b_email.classify(frm, subj)[0]:
+                return True
+            if mid:
+                db.b2b_message_record({
+                    "message_id": mid, "platform": None, "kind": "other",
+                    "order_id": None, "received_at": "", "subject": (subj or "")[:500],
+                    "fields_json": None}, now)
+            return False
+
         batches = []
         for _platform, needle in b2b_email.SWEEP_SENDERS:
-            batches += _imap_fetch_new_from(M, needle, since, db.b2b_message_seen)
+            batches += _imap_fetch_new_from(M, needle, since, db.b2b_message_seen,
+                                            want_fn=_want)
         batches += _imap_fetch_new_from(M, "dice.fm", since, db.b2b_message_seen,
-                                        subject="sent you")
+                                        subject="sent you", want_fn=_want)
     finally:
         try:
             M.close()
         except Exception:
             pass
         M.logout()
+    return process_b2b([raw for _uid, raw, _mid in batches], out, now)
+
+
+def process_b2b(raws, out=None, now=None):
+    """Classify + record a batch of raw b2b emails (oldest first), then
+    re-try orphaned follow-ups. Split from the IMAP fetch so it can be fed
+    saved .eml samples."""
+    out = out if out is not None else {"placed": 0, "confirmed": 0, "delivered": 0,
+                                       "cancelled": 0, "dice_incoming": 0,
+                                       "orphans_matched": 0, "errors": 0}
+    now = now or datetime.now(timezone.utc).isoformat()
     parsed_all = []
-    for _uid, raw, _mid in batches:
+    for raw in raws:
         try:
             parsed = parse_email(raw)
             eff_from, eff_subject, eff_body = _unwrap_forwarded(parsed)
@@ -1950,8 +1986,9 @@ def sweep_b2b(lookback_days=None):
                         "subject": (parsed["subject"] or "")[:500], "fields_json": None,
                     }, now)
                 continue
-            if _b2b_handle(platform, kind, parsed, raw, now):
-                out[kind] += 1
+            done = _b2b_handle(platform, kind, parsed, raw, now)
+            if done:
+                out[done] += 1
         except Exception:
             out["errors"] += 1
     try:
