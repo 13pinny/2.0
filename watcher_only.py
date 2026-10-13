@@ -54,6 +54,7 @@ INTERVAL = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
 SEAT_COOLDOWN_SECONDS = int(os.getenv("KARTIS_SEAT_COOLDOWN_MINUTES") or 30) * 60
 
 _lock = threading.Lock()
+_tm_sniper_lock = threading.Lock()  # tm_sniper; it alone checks TM watchers
 _state = {"at": None, "checked": 0, "drops": 0, "errors": 0}
 
 
@@ -273,6 +274,11 @@ def tick():
             print(f"[{now_iso}] master_paused — skipping tick", flush=True)
             return
         watchers = db.tm_active_watchers()
+        if TM_SNIPER_ENABLED:
+            # tm_sniper owns TM watchers under its own lock, so a long kupat
+            # tick can't starve it. (Keep in sync with app.py.run_tm_check.)
+            watchers = [w for w in watchers
+                        if (w.get("source") or "") not in TM_SNIPER_SOURCES]
         now_iso = datetime.now(timezone.utc).isoformat()
         drops = errors = 0
         # One Chromium for every kupat watcher in this tick instead of one
@@ -330,13 +336,13 @@ def dice_sniper():
 
 def tm_sniper():
     """Fast poll for ticketmaster / tmdiscover watchers (mirror of
-    app.run_tm_sniper). Shares `_lock` with the main tick so the same watcher
-    is never fetched twice at once."""
+    app.run_tm_sniper). Owns TM watchers (tick() skips them) under its own
+    lock, so a long kupat tick holding `_lock` can't starve it."""
     if not TM_SNIPER_ENABLED:
         return
     if db.setting_get_bool("master_paused", default=False):
         return
-    if not _lock.acquire(blocking=False):
+    if not _tm_sniper_lock.acquire(blocking=False):
         return
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -348,7 +354,7 @@ def tm_sniper():
             except Exception:
                 traceback.print_exc()
     finally:
-        _lock.release()
+        _tm_sniper_lock.release()
 
 
 def main():
