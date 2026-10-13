@@ -2825,6 +2825,22 @@ def crowdvolt_fee_rows():
     return out
 
 
+def prune_crowdvolt_incomplete(seen_ids):
+    """Delete Incomplete CrowdVolt orders missing from a full API pull.
+
+    An incomplete order either moves to delivered (same order number, so the
+    upsert already rewrote its status) or gets canceled and vanishes from
+    both lists. Only call this after BOTH lists were read in full."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id FROM crowdvolt_sales WHERE status = 'Incomplete'"
+        ).fetchall()
+        gone = [r[0] for r in rows if r[0] not in seen_ids]
+        for oid in gone:
+            conn.execute("DELETE FROM crowdvolt_sales WHERE id = ?", (oid,))
+    return len(gone)
+
+
 def all_crowdvolt_sales():
     with connect() as conn:
         rows = conn.execute(

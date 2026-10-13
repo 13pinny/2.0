@@ -34,6 +34,10 @@ DEFAULT_CDP = os.environ.get("KARTIS_CV_CDP_URL") or "http://localhost:9222"
 DEFAULT_BASE_URL = os.environ.get("KARTIS_BASE_URL") or "https://kartis.homes"
 
 SALES_URL = "https://api.crowdvolt.com/api/buy_sell_history/sell_delivered"
+# Both /selling tabs: delivered + incomplete (sold, transfer still open).
+# Incomplete rows are tagged _cv_list so the server mapper can label them.
+SALES_LISTS = ("sell_delivered", "sell_incomplete")
+SALES_API = "https://api.crowdvolt.com/api/buy_sell_history/"
 SALES_PAGE = 25             # CrowdVolt's own page size on this endpoint
 SALES_MAX = 2000            # runaway guard, and /api/cvsales/import's cap
 # Rows go up in batches: a full history is a couple of MB of JSON, and one
@@ -148,7 +152,7 @@ def push(cookies, base_url=None, verify=True):
 
 
 def fetch_sales(cdp_url=None, max_rows=SALES_MAX):
-    """Every delivered sale CrowdVolt will hand this machine, RAW.
+    """Every delivered + incomplete sale CrowdVolt will hand this machine, RAW.
 
     Unmapped on purpose: scraper._map_crowdvolt_api_sale stays the one parser
     for CrowdVolt's shape, so a row pulled here lands byte-identical to one
@@ -162,47 +166,60 @@ def fetch_sales(cdp_url=None, max_rows=SALES_MAX):
     """
     from patchright.sync_api import sync_playwright
     cdp_url = cdp_url or DEFAULT_CDP
-    rows, seen, offset = [], set(), 0
+    rows, seen = [], set()
     with sync_playwright() as pw:
         auth = cv_auth.CvAuth(playwright=pw, cdp_url=cdp_url)
-        while len(rows) < max_rows:
-            try:
-                status, raw = auth.call(
-                    f"{SALES_URL}?limit={SALES_PAGE}&offset={offset}")
-            except cv_auth.CvAuthError:
-                raise
-            except Exception as e:
-                if "ECONNREFUSED" in str(e) or "connect" in str(e).lower():
-                    raise RelinkError(
-                        f"could not reach Chrome over CDP at {cdp_url}.\n"
-                        "Start it with start_chrome.bat (or python login.py), "
-                        "sign in at crowdvolt.com in THAT window, then retry.")
-                raise
-            if status != 200:
-                raise RelinkError(
-                    f"sell_delivered -> {status}: {(raw or '')[:200]}")
-            try:
-                page = json.loads(raw)
-            except ValueError as e:
-                raise RelinkError(f"bad JSON from sell_delivered: {e}")
-            if not isinstance(page, list) or not page:
-                break
-            for row in page:
-                oid = str((row or {}).get("order_number") or "").strip()
-                # Dedupe on the order number, the id both paths key on: a
-                # sale landing mid-pull shifts the window and would otherwise
-                # repeat a row across two pages.
-                if oid and oid not in seen:
-                    seen.add(oid)
-                    rows.append(row)
-            if len(page) < SALES_PAGE:
-                break
-            offset += SALES_PAGE
+        for lst in SALES_LISTS:
+            offset = 0
+            while len(rows) < max_rows:
+                try:
+                    status, raw = auth.call(
+                        f"{SALES_API}{lst}?limit={SALES_PAGE}&offset={offset}"
+                        "&sort_key=date&sort_desc=true")
+                except cv_auth.CvAuthError:
+                    raise
+                except Exception as e:
+                    if "ECONNREFUSED" in str(e) or "connect" in str(e).lower():
+                        raise RelinkError(
+                            f"could not reach Chrome over CDP at {cdp_url}.\n"
+                            "Start it with start_chrome.bat (or python login.py), "
+                            "sign in at crowdvolt.com in THAT window, then retry.")
+                    raise
+                if status != 200:
+                    raise RelinkError(f"{lst} -> {status}: {(raw or '')[:200]}")
+                try:
+                    page = json.loads(raw)
+                except ValueError as e:
+                    raise RelinkError(f"bad JSON from {lst}: {e}")
+                if not isinstance(page, list) or not page:
+                    break
+                for row in page:
+                    if not isinstance(row, dict):
+                        continue
+                    # A canceled order left on the incomplete tab never sold.
+                    if lst == "sell_incomplete" and row.get("is_canceled"):
+                        continue
+                    oid = str(row.get("order_number") or "").strip()
+                    # Dedupe on the order number, the id both paths key on: a
+                    # sale landing mid-pull shifts the window and would
+                    # otherwise repeat a row across two pages.
+                    if oid and oid not in seen:
+                        seen.add(oid)
+                        row["_cv_list"] = lst
+                        rows.append(row)
+                if len(page) < SALES_PAGE:
+                    break
+                offset += SALES_PAGE
     return rows
 
 
-def push_sales(rows, base_url=None, chunk=SALES_PUSH_CHUNK):
-    """Send raw sell_delivered rows to the server. Returns a merged summary.
+def push_sales(rows, base_url=None, chunk=SALES_PUSH_CHUNK, max_rows=SALES_MAX):
+    """Send raw sell_delivered / sell_incomplete rows to the server. Returns a
+    merged summary.
+
+    The last chunk carries full_ids (every order number pulled) when the pull
+    wasn't cut off at max_rows, so the server can drop an Incomplete order
+    CrowdVolt has canceled since.
 
     Chunked because a full history is megabytes of JSON and one oversized
     POST rejected at the edge would lose the whole pull. Every row is
@@ -211,14 +228,18 @@ def push_sales(rows, base_url=None, chunk=SALES_PUSH_CHUNK):
     """
     if not rows:
         raise RelinkError(
-            "no delivered sales came back from CrowdVolt - is the CV Chrome "
+            "no sales came back from CrowdVolt - is the CV Chrome "
             "signed in at crowdvolt.com?")
     total = {"received": 0, "mapped": 0, "unmappable": 0,
              "inserted": 0, "updated": 0}
     new_ids, running_total = [], None
+    complete = len(rows) < max_rows
     for i in range(0, len(rows), chunk):
-        status, raw = call("/api/cvsales/import", {"rows": rows[i:i + chunk]},
-                           base_url=base_url)
+        body = {"rows": rows[i:i + chunk]}
+        if complete and i + chunk >= len(rows):
+            body["full_ids"] = [str(r.get("order_number") or "").strip()
+                                for r in rows]
+        status, raw = call("/api/cvsales/import", body, base_url=base_url)
         if status == 401:
             raise RelinkError(
                 "401 from the edge - check KARTIS_WEB_USER / KARTIS_WEB_PASS "

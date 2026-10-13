@@ -9288,7 +9288,13 @@ def api_cvsales_import():
     crowdvolt_sales: 0 with no error anywhere. Meanwhile a browser that IS
     signed in can read the same endpoint perfectly.
 
-    Body: {"rows": [ <raw /api/buy_sell_history/sell_delivered rows> ]}
+    Body: {"rows": [ <raw sell_delivered / sell_incomplete rows> ],
+           "full_ids": [ <optional: every order number of a COMPLETE pull> ]}
+
+    Incomplete orders (sold, transfer still open) count as sales; their rows
+    carry _cv_list = "sell_incomplete" so the mapper labels them. full_ids
+    is sent only by a pull that read both lists to the end, and lets an
+    Incomplete order CrowdVolt has since canceled be dropped again.
 
     The sender is cv_agent.py answering a "sales" job (the Pull CV Sales
     button on /inventory), or cv_link_client.fetch_sales run by hand. A
@@ -9348,15 +9354,23 @@ def api_cvsales_import():
 
     before = {x["id"] for x in db.all_crowdvolt_sales()}
     db.upsert_crowdvolt_sales(mapped, datetime.now(timezone.utc).isoformat())
+    pruned = 0
+    full_ids = body.get("full_ids")
+    if isinstance(full_ids, list) and full_ids:
+        pruned = db.prune_crowdvolt_incomplete(
+            {str(x).strip() for x in full_ids} | {m["id"] for m in mapped})
     after = {x["id"] for x in db.all_crowdvolt_sales()}
     inserted = sorted(after - before)
     print(f"[kartis] cvsales: imported {len(mapped)} row(s), "
-          f"{len(inserted)} new, {bad} unmappable")
+          f"{len(inserted)} new, {bad} unmappable, "
+          f"{sum(m['status'] == 'Incomplete' for m in mapped)} incomplete, "
+          f"{pruned} canceled incomplete dropped")
     summary = {
         "received": len(rows), "mapped": len(mapped), "unmappable": bad,
         "inserted": len(inserted), "updated": len(mapped) - len(inserted),
         "new_order_ids": inserted[:50],
         "crowdvolt_sales_total": len(after),
+        "incomplete_dropped": pruned,
     }
     # Close the job the agent is answering, so the button reports the count
     # without a second call. Only a live SALES job: a hand-run push must not

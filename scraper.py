@@ -1013,6 +1013,13 @@ def _crowdvolt_sale_status(row):
         return "Completed"
     if row.get("is_pending"):
         return "Pending"
+    # A sell_incomplete row: sold, but the transfer isn't done yet. It is
+    # still a sale (the buyer has paid), so it is stored like any other; the
+    # status is what lets db.prune_crowdvolt_incomplete drop it again if
+    # CrowdVolt cancels it before delivery. Every puller tags these rows with
+    # _cv_list, since the row itself doesn't say which tab it came from.
+    if row.get("_cv_list") == "sell_incomplete":
+        return "Incomplete"
     return None
 
 
@@ -1063,12 +1070,27 @@ def _map_crowdvolt_api_sale(row):
     }
 
 
+CV_SALES_LISTS = ("sell_delivered", "sell_incomplete")
+# Set when the last crowdvolt pull read BOTH lists in full through the API -
+# only then is "an Incomplete row we hold is on neither list" proof that
+# CrowdVolt dropped it (canceled before delivery). The UI fallback can't say.
+_cv_api_complete = False
+
+
 def _fetch_crowdvolt_sales_api():
-    """Delivered sales straight from the API - no browser, no UI.
+    """Sales straight from the API - no browser, no UI.
+
+    Two lists, the two tabs on CrowdVolt's /selling page: sell_delivered
+    (Completed) and sell_incomplete (sold, ticket transfer still open). An
+    incomplete order is a real sale - the buyer has paid - so it counts the
+    moment it appears rather than only once the transfer lands. Both share
+    one contract (bare JSON array, limit/offset, keyed on order_number), and
+    a row that moves from incomplete to delivered keeps its order number, so
+    it upserts onto the same crowdvolt_sales row.
 
     CrowdVolt's own /selling page stopped rendering the Completed table
     (confirmed 2026-08-23 on an account with 25+ delivered sales), so the
-    scrape below finds nothing no matter how long it waits. The API still
+    UI scrape below finds nothing no matter how long it waits. The API still
     returns everything.
 
     Uses whatever cv_refresh_token cv_auth has cached; it does not harvest
@@ -1077,26 +1099,32 @@ def _fetch_crowdvolt_sales_api():
     """
     import cv_auth
     auth = cv_auth.CvAuth()          # no playwright: cache-only
-    out, seen, offset = [], set(), 0
-    while True:
-        status, raw = auth.call(
-            "https://api.crowdvolt.com/api/buy_sell_history/sell_delivered"
-            f"?limit=25&offset={offset}")
-        if status != 200:
-            raise RuntimeError(f"sell_delivered -> {status}: {(raw or '')[:120]}")
-        rows = json.loads(raw)
-        if not isinstance(rows, list) or not rows:
-            break
-        for r in rows:
-            parsed = _map_crowdvolt_api_sale(r)
-            if parsed and parsed["id"] not in seen:
-                seen.add(parsed["id"])
-                out.append(parsed)
-        if len(rows) < 25:
-            break
-        offset += 25
-        if offset > 2000:            # runaway guard
-            break
+    out, seen = [], set()
+    for lst in CV_SALES_LISTS:
+        offset = 0
+        while True:
+            status, raw = auth.call(
+                f"https://api.crowdvolt.com/api/buy_sell_history/{lst}"
+                f"?limit=25&offset={offset}&sort_key=date&sort_desc=true")
+            if status != 200:
+                raise RuntimeError(f"{lst} -> {status}: {(raw or '')[:120]}")
+            rows = json.loads(raw)
+            if not isinstance(rows, list) or not rows:
+                break
+            for r in rows:
+                # A canceled order left on the incomplete tab never sold.
+                if lst == "sell_incomplete" and r.get("is_canceled"):
+                    continue
+                r["_cv_list"] = lst
+                parsed = _map_crowdvolt_api_sale(r)
+                if parsed and parsed["id"] not in seen:
+                    seen.add(parsed["id"])
+                    out.append(parsed)
+            if len(rows) < 25:
+                break
+            offset += 25
+            if offset > 2000:            # runaway guard
+                break
     return out
 
 
@@ -1104,7 +1132,10 @@ def _scrape_crowdvolt_sales(context):
     """API first, UI scrape as fallback."""
     try:
         rows = _fetch_crowdvolt_sales_api()
-        print(f"[kartis] crowdvolt sales via API: {len(rows)}")
+        print(f"[kartis] crowdvolt sales via API: {len(rows)} "
+              f"({sum(r['status'] == 'Incomplete' for r in rows)} incomplete)")
+        global _cv_api_complete
+        _cv_api_complete = True
         return rows
     except Exception as e:
         print(f"[kartis] crowdvolt sales API unavailable "
@@ -1406,6 +1437,8 @@ def scrape_all():
 
 
 def run_and_save():
+    global _cv_api_complete
+    _cv_api_complete = False
     data = scrape_all()
     now_iso = datetime.now(timezone.utc).isoformat()
     db.upsert_inventory(data["lysted"], now_iso)
@@ -1414,6 +1447,12 @@ def run_and_save():
     db.upsert_viagogo(data["viagogo"], now_iso)
     db.upsert_viagogo_sales(data["viagogo_sales"], now_iso)
     db.upsert_crowdvolt_sales(data["crowdvolt_sales"], now_iso)
+    if _cv_api_complete:
+        dropped = db.prune_crowdvolt_incomplete(
+            {r["id"] for r in data["crowdvolt_sales"]})
+        if dropped:
+            print(f"[kartis] crowdvolt: dropped {dropped} incomplete order(s) "
+                  "no longer on CrowdVolt")
     matched = 0
     pending_listed = 0
     try:
