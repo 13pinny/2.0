@@ -4939,7 +4939,7 @@ def api_b2b_run_now():
     from flask import request
     body = request.get_json(silent=True) or {}
     try:
-        days = max(1, min(int(body.get("days") or 0), 365)) or None
+        days = max(1, min(int(body["days"]), 365)) if body.get("days") else None
     except (TypeError, ValueError):
         days = None
     if not _b2b_lock.acquire(blocking=False):
