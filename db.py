@@ -5382,6 +5382,17 @@ def b2b_message_record(row, now_iso):
             {**row, "processed_at": now_iso})
 
 
+def b2b_forget_other(version, now_iso):
+    """Drop the 'not a b2b mail' verdicts recorded under an older classifier,
+    so mail it wrongly rejected is looked at again. Runs once per version."""
+    if setting_get("b2b_classify_version") == str(version):
+        return 0
+    with connect() as conn:
+        n = conn.execute("DELETE FROM b2b_messages WHERE kind = 'other'").rowcount
+    setting_set("b2b_classify_version", str(version), now_iso)
+    return n
+
+
 def b2b_orphan_confirmations():
     with connect() as conn:
         rows = conn.execute(

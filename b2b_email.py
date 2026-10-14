@@ -75,7 +75,9 @@ def classify(sender, subject):
     'placed' | 'confirmed' | 'delivered' | 'cancelled' | 'dice_incoming'.
     CrowdVolt's placed-vs-delivered is refined from the body by parse_order."""
     s = (sender or "").lower()
-    subj = subject or ""
+    # Long subjects arrive folded over several header lines; the regexes
+    # below want one line.
+    subj = " ".join((subject or "").split())
     if "dice.fm" in s:
         return ("dice", "dice_incoming") if _DICE_INCOMING_RX.match(subj) else (None, None)
     if "automatiq" in s:

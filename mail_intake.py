@@ -18,6 +18,7 @@ import imaplib
 import json
 import os
 import re
+import traceback
 import uuid
 from datetime import datetime, timezone
 from email import message_from_bytes
@@ -120,9 +121,11 @@ def _decode(s):
     if not s:
         return ""
     try:
-        return str(make_header(decode_header(s)))
+        out = str(make_header(decode_header(s)))
     except Exception:
-        return s
+        out = s
+    # Unfold a header that was wrapped over several lines.
+    return re.sub(r"\r?\n[ \t]*", " ", out)
 
 
 # Markers that indicate a forwarded email body. Order doesn't matter — we
@@ -1770,6 +1773,9 @@ B2B_LOOKBACK_DAYS = int(os.getenv("KARTIS_B2B_LOOKBACK_DAYS") or 21)
 # A DICE "sent you tickets" mail is credited to a b2b order only when it
 # arrived within this many hours of that order's placed/confirmed mail.
 B2B_DICE_WINDOW_HOURS = float(os.getenv("KARTIS_B2B_DICE_WINDOW_HOURS") or 72)
+# Bump when classify() changes so mail an older version rejected as "not a
+# b2b order" (b2b_messages kind 'other') is re-read on the next sweep.
+B2B_CLASSIFY_VERSION = 2
 
 
 def _imap_fetch_new_from(M, sender_substr, since, seen_fn, subject=None, want_fn=None):
@@ -1925,6 +1931,7 @@ def sweep_b2b(lookback_days=None):
     out = {"placed": 0, "confirmed": 0, "delivered": 0, "cancelled": 0,
            "dice_incoming": 0, "orphans_matched": 0, "errors": 0}
     now = datetime.now(timezone.utc).isoformat()
+    db.b2b_forget_other(B2B_CLASSIFY_VERSION, now)
     M = _connect()
     try:
         M.select(INTAKE_FOLDER)
@@ -1991,6 +1998,7 @@ def process_b2b(raws, out=None, now=None):
                 out[done] += 1
         except Exception:
             out["errors"] += 1
+            print(f"[b2b] failed on {parsed.get('subject')!r}: {traceback.format_exc()}")
     try:
         out["orphans_matched"] = _b2b_retry_orphans(now)
     except Exception:
