@@ -20,6 +20,7 @@ from openpyxl import Workbook
 import attachments as attachments_mod
 import b2b
 import barby
+import checkin
 import barby_events
 import db
 import discord_bot
@@ -276,6 +277,14 @@ DICE_ALERTS_ENABLED = (os.getenv("KARTIS_DICE_ALERTS_ENABLED")
 DICE_ALERTS_INTERVAL_SECONDS = int(os.getenv("KARTIS_DICE_ALERTS_SECONDS") or 120)
 _dice_alerts_lock = threading.Lock()
 _last_dice_alerts = {"at": None, "summary": None, "error": None}
+# /checkin twice-weekly reminder. The check-ins live in the VPS's DB, so it
+# runs where the EDM monitor does (single-machine rule: one ping, not two).
+CHECKIN_REMIND_ENABLED = (os.getenv("KARTIS_CHECKIN_REMIND_ENABLED")
+                          or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
+CHECKIN_REMIND_DAYS = (os.getenv("KARTIS_CHECKIN_REMIND_DAYS") or "mon,wed").strip()
+CHECKIN_REMIND_HOUR = int(os.getenv("KARTIS_CHECKIN_REMIND_HOUR") or 7)
+_checkin_remind_lock = threading.Lock()
+_last_checkin_remind = {"at": None, "events": 0, "due": 0, "result": None, "error": None}
 # Low-stock alert: ping once when the current release's remaining count
 # crosses at/below this. Re-armed when the lead tier changes.
 EDM_LOW_STOCK_THRESHOLD = int(os.getenv("KARTIS_EDM_LOW_STOCK_THRESHOLD") or 20)
@@ -1155,6 +1164,35 @@ def run_todo_remind():
     finally:
         _last_todo_remind["running"] = False
         _todo_remind_lock.release()
+
+
+def run_checkin_remind(force=False):
+    """Mon/Thu nudge listing every upcoming /checkin event. master_paused
+    skips, master_muted records without sending (same gating as to-dos)."""
+    if not _checkin_remind_lock.acquire(blocking=False):
+        return _last_checkin_remind
+    try:
+        events = checkin.reminder_events()
+        due = [e for e in events if e["due"]]
+        result = None
+        if not events:
+            result = {"discord": "skipped (no upcoming events)"}
+        elif db.setting_get_bool("master_paused", default=False) and not force:
+            result = {"discord": "skipped (master_paused)"}
+        elif db.setting_get_bool("master_muted", default=False) and not force:
+            result = {"discord": "skipped (master_muted)"}
+        else:
+            result = notify.send_checkin_reminder(events)
+        _last_checkin_remind.update(at=datetime.now(timezone.utc).isoformat(),
+                                    events=len(events), due=len(due),
+                                    result=result, error=None)
+    except Exception as e:
+        _last_checkin_remind.update(at=datetime.now(timezone.utc).isoformat(),
+                                    error=f"{type(e).__name__}: {e}")
+        traceback.print_exc()
+    finally:
+        _checkin_remind_lock.release()
+    return _last_checkin_remind
 
 
 def run_jerujam_import():
@@ -4616,6 +4654,81 @@ def _unmapped_payload(body, existing_qty=None):
         # NULL, not "", so the "undated last" ordering actually catches it.
         out["event_date_iso"] = iso or None
     return out
+
+
+@app.route("/checkin")
+def checkin_page():
+    return render_template("checkin.html")
+
+
+@app.route("/api/checkin")
+def api_checkin():
+    return jsonify({
+        "events": checkin.all_events(),
+        "today": checkin.today(),
+        "due_after_days": checkin.DUE_AFTER_DAYS,
+        "currencies": list(checkin.CURRENCIES),
+        "remind": {"enabled": CHECKIN_REMIND_ENABLED, "days": CHECKIN_REMIND_DAYS,
+                   "hour": CHECKIN_REMIND_HOUR, "last": _last_checkin_remind},
+    })
+
+
+@app.route("/api/checkin/event", methods=["POST"])
+def api_checkin_event():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    try:
+        event_id = checkin.save_event(body)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True, "id": event_id})
+
+
+@app.route("/api/checkin/event/delete", methods=["POST"])
+def api_checkin_event_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    if not body.get("id"):
+        return jsonify({"error": "id required"}), 400
+    checkin.delete_event(body["id"])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/checkin/image", methods=["POST"])
+def api_checkin_image():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    try:
+        img = checkin.refresh_image(body.get("id"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True, "image_url": img})
+
+
+@app.route("/api/checkin/entry", methods=["POST"])
+def api_checkin_entry():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    try:
+        n = checkin.save_checkin(body.get("event_id"), body.get("rows") or [], body.get("day"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True, "saved": n})
+
+
+@app.route("/api/checkin/entry/delete", methods=["POST"])
+def api_checkin_entry_delete():
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    if not body.get("event_id") or not body.get("day"):
+        return jsonify({"error": "event_id and day required"}), 400
+    checkin.delete_checkin_day(body["event_id"], body["day"])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/checkin/remind-now", methods=["POST"])
+def api_checkin_remind_now():
+    return jsonify(run_checkin_remind(force=True))
 
 
 @app.route("/unmapped")
@@ -9744,6 +9857,10 @@ if DICE_ALERTS_ENABLED:
     scheduler.add_job(run_dice_alerts, "interval", seconds=DICE_ALERTS_INTERVAL_SECONDS,
                       id="dice_alerts", start_date=datetime.now() + timedelta(minutes=2))
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
+if CHECKIN_REMIND_ENABLED:
+    scheduler.add_job(run_checkin_remind, "cron", day_of_week=CHECKIN_REMIND_DAYS,
+                      hour=CHECKIN_REMIND_HOUR, minute=0, timezone="America/New_York",
+                      id="checkin_remind")
 # Delete DICE event channels 30 days after their show (notify.dice_event_
 # channel_webhook stamps the expiry). Daily, off the hour; a no-op without
 # the Discord bot.

@@ -1217,6 +1217,47 @@ CREATE TABLE IF NOT EXISTS b2b_dice_incoming (
     subject        TEXT,
     created_at     TEXT NOT NULL
 );
+-- /checkin: hand-run stock check-ins. An event carries its own tiers
+-- (free-text names: "GA", "Section 104", "VIP table"); each check-in stores,
+-- per tier, how many are left and at what price on that New York day. One
+-- row per (tier, day): re-saving the same day overwrites it.
+CREATE TABLE IF NOT EXISTS checkin_events (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    event_date_iso TEXT,
+    venue TEXT,
+    link TEXT,
+    links_json TEXT,
+    image_url TEXT,
+    image_manual INTEGER NOT NULL DEFAULT 0,
+    image_checked_at TEXT,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    notes TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS checkin_tiers (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    cost REAL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_checkin_tiers_event ON checkin_tiers(event_id, sort);
+CREATE TABLE IF NOT EXISTS checkin_entries (
+    tier_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    remaining INTEGER,
+    price REAL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (tier_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_checkin_entries_event ON checkin_entries(event_id, day);
 """
 
 
