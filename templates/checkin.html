@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Check-In</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df;
+    --cyan: #00a3d7;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--cyan); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .right { display: flex; gap: 8px; flex-wrap: wrap; }
+  main { padding: 18px 24px 60px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; display: flex; align-items: baseline; gap: 10px; }
+  h2 .n { color: var(--muted); font-weight: 400; letter-spacing: 1px; }
+  h2:first-of-type { margin-top: 14px; }
+  button.act { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 6px 14px; border-radius: 6px; cursor: pointer; }
+  button.act:hover { border-color: var(--accent); color: var(--accent); }
+  button.act.primary { background: var(--cyan); border-color: var(--cyan); color: #fff; }
+  button.act.primary:hover { filter: brightness(1.06); color: #fff; }
+  button.act.danger:hover { border-color: var(--red); color: var(--red); }
+  button.act:disabled { opacity: .5; cursor: default; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .stat { background: var(--bg); padding: 14px 16px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; }
+  .stat .value { font-size: 26px; color: var(--cyan); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.warn { color: var(--orange); }
+  .stat .value.green { color: var(--green); }
+  .stat .value.zero { color: var(--muted); }
+  .stat .hint { font-size: 10px; color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; border-radius: 6px; }
+  .empty { color: var(--muted); padding: 50px 20px; text-align: center; font-size: 13px; border: 1px dashed var(--line-2); border-radius: 14px; background: var(--bg-2); }
+  .empty b { display: block; color: var(--text); font-size: 15px; margin-bottom: 6px; }
+
+  /* ---- event cards (DICE-style artwork) ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+  .card { border-radius: 14px; overflow: hidden; background: var(--bg-2); border: 1px solid var(--line); display: flex; flex-direction: column; transition: transform .12s ease, box-shadow .12s ease; }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,.09); }
+  .card.due { border-color: #fdba74; box-shadow: 0 0 0 1px #fdba74; }
+  .card.past .cover { filter: grayscale(.85); opacity: .65; }
+  .cover { height: 150px; background-size: cover; background-position: center; position: relative; cursor: pointer; }
+  .cover::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0) 45%, rgba(0,0,0,.62) 100%); }
+  .cover .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,.92); font-size: 44px; font-weight: 800; letter-spacing: 2px; }
+  .cover .cd { position: absolute; top: 10px; left: 10px; z-index: 1; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .cover .flag { position: absolute; top: 10px; right: 10px; z-index: 1; }
+  .cover .title { position: absolute; left: 14px; right: 14px; bottom: 10px; z-index: 1; color: #fff; }
+  .cover .title .t { font-size: 16px; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,.4); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+  .cover .title .s { font-size: 11px; opacity: .9; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cd { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 9px; background: rgba(255,255,255,.92); color: #374151; }
+  .cd.today { background: #fde68a; color: #92400e; }
+  .cd.soon { background: #dbeafe; color: #1e40af; }
+  .pill { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 9px; color: #fff; white-space: nowrap; }
+  .pill.due { background: var(--orange); }
+  .pill.ok { background: #16a34a; }
+  .pill.never { background: #7c3aed; }
+  .cbody { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .links { display: flex; gap: 6px; flex-wrap: wrap; }
+  .links a { font-size: 10px; font-weight: 600; letter-spacing: .5px; text-decoration: none; color: var(--accent); background: #eef6ff; border: 1px solid #cfe3fb; padding: 2px 9px; border-radius: 10px; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+  .links a.main { background: var(--cyan); border-color: var(--cyan); color: #fff; }
+  table.tiers { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.tiers th { text-align: left; font-size: 9px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; padding: 0 6px 4px; border-bottom: 1px solid var(--line); }
+  table.tiers td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.tiers tr:last-child td { border-bottom: 0; }
+  table.tiers .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  table.tiers .tn { font-weight: 600; overflow-wrap: anywhere; }
+  .d { font-size: 10px; font-weight: 600; margin-left: 4px; }
+  .d.dn { color: var(--green); }   /* stock going down = selling */
+  .d.up { color: var(--red); }
+  .d.pup { color: var(--orange); }
+  .d.pdn { color: var(--accent); }
+  .zero { color: var(--red); font-weight: 700; }
+  .muted { color: var(--muted); }
+  .total { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--muted); }
+  .total b { color: var(--text); font-size: 13px; }
+  .spark { display: block; }
+  .spark .ln { fill: none; stroke: var(--cyan); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .spark .ar { fill: rgba(0,163,215,.10); }
+  .spark .dot { fill: var(--cyan); }
+  .cfoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 4px; }
+  .cfoot .last { font-size: 11px; color: var(--muted); }
+  .cfoot .btns { display: flex; gap: 6px; }
+  .pastsep { margin-top: 30px; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); cursor: pointer; user-select: none; }
+  .pastsep:hover { color: var(--accent); }
+
+  /* ---- modals ---- */
+  .modal-bg { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: none; align-items: flex-start; justify-content: center; z-index: 100; overflow-y: auto; padding: 40px 16px; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border-radius: 14px; width: 100%; max-width: 640px; box-shadow: 0 20px 60px rgba(0,0,0,.25); overflow: hidden; }
+  .modal .mcover { height: 120px; background-size: cover; background-position: center; position: relative; }
+  .modal .mcover::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,.65) 100%); }
+  .modal .mcover .title { position: absolute; left: 18px; right: 18px; bottom: 12px; color: #fff; z-index: 1; }
+  .modal .mcover .title .t { font-size: 18px; font-weight: 700; }
+  .modal .mcover .title .s { font-size: 12px; opacity: .9; }
+  .modal .mhead { padding: 16px 18px 0; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; font-weight: 700; color: var(--cyan); }
+  .modal .mbody { padding: 14px 18px; }
+  .modal .mfoot { padding: 12px 18px 16px; display: flex; gap: 8px; justify-content: space-between; flex-wrap: wrap; border-top: 1px solid var(--line); }
+  .modal .mfoot .r { display: flex; gap: 8px; margin-left: auto; }
+  .frow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .frow .full { grid-column: 1 / -1; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  input.in, select.in, textarea.in { background: var(--bg); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 7px; width: 100%; text-transform: none; letter-spacing: 0; font-weight: 400; }
+  input.in:focus, select.in:focus, textarea.in:focus { outline: 2px solid color-mix(in srgb, var(--cyan) 40%, transparent); border-color: var(--cyan); }
+  textarea.in { min-height: 54px; resize: vertical; }
+  .sect { margin-top: 16px; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+  .sect button { font-size: 10px; }
+  .lrow { display: grid; gap: 8px; align-items: center; margin-top: 6px; }
+  .lrow.link { grid-template-columns: 140px 1fr 30px; }
+  .lrow.tier { grid-template-columns: 1fr 100px 100px 30px; }
+  .lrow.tier.edit { grid-template-columns: 1fr 30px; }
+  .lrow .x { border: 0; background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; }
+  .lrow .x:hover { color: var(--red); }
+  .colhead { display: grid; gap: 8px; font-size: 9px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-top: 6px; }
+  .hint2 { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  /* check-in form */
+  .ci-row { display: grid; grid-template-columns: 1fr 110px 110px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .ci-row .tn { font-weight: 600; overflow-wrap: anywhere; }
+  .ci-row .prev { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .ci-head { display: grid; grid-template-columns: 1fr 110px 110px; gap: 10px; font-size: 9px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .dayrow { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
+  .dayrow input { width: auto; }
+  .hist { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 8px; }
+  .hist th, .hist td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .hist th:first-child, .hist td:first-child { text-align: left; }
+  .hist th { font-size: 9px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; font-weight: 600; }
+  .hist .p { color: var(--muted); font-size: 10px; display: block; }
+  .hist td.del { width: 24px; }
+  .hist td.del button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
+  .hist td.del button:hover { color: var(--red); }
+  .histwrap { overflow-x: auto; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #111827; color: #fff; padding: 9px 16px; border-radius: 9px; font-size: 12px; z-index: 200; display: none; }
+  @media (max-width: 640px) {
+    header { padding: 12px 14px; }
+    main { padding: 14px 14px 60px; }
+    .grid { grid-template-columns: 1fr; }
+    .frow { grid-template-columns: 1fr; }
+    .lrow.link { grid-template-columns: 90px 1fr 26px; }
+    .lrow.tier { grid-template-columns: 1fr 70px 70px 26px; }
+    .ci-row, .ci-head { grid-template-columns: 1fr 80px 80px; }
+    .modal-bg { padding: 0; }
+    .modal { border-radius: 0; min-height: 100%; }
+  }
+</style>
+</head>
+<body>
+{% include "_sidebar.html" %}
+<header>
+  <div class="left">
+    <h1>Check-In</h1>
+    <span class="meta" id="meta">loading…</span>
+  </div>
+  <div class="right">
+    <button class="act" id="remindBtn" title="Send the Discord reminder now">Send reminder</button>
+    <button class="act primary" id="addBtn">+ Add event</button>
+  </div>
+</header>
+<main>
+  <div class="err" id="err"></div>
+  <div class="stats" id="stats"></div>
+  <div id="sections"></div>
+</main>
+
+<!-- add / edit event -->
+<div class="modal-bg" id="evModal">
+  <div class="modal">
+    <div class="mhead" id="evTitle">Add event</div>
+    <div class="mbody">
+      <div class="frow">
+        <label class="f full">Event name<input class="in" id="fName" placeholder="Fred again.. at Brooklyn Mirage"></label>
+        <label class="f">Date<input class="in" id="fDate" type="date"></label>
+        <label class="f">Venue<input class="in" id="fVenue" placeholder="optional"></label>
+        <label class="f full">Event link<input class="in" id="fLink" placeholder="https://… (the artwork is read from this page)"></label>
+      </div>
+      <div class="sect">Secondary links <button class="act" type="button" id="addLink">+ Link</button></div>
+      <div id="linkRows"></div>
+      <div class="hint2" id="linkHint">Resale listings, StubHub, viagogo, a group chat… anything you open when you check in.</div>
+
+      <div class="sect">Tiers / sections <button class="act" type="button" id="addTier">+ Tier</button></div>
+      <div class="colhead" id="tierHead"></div>
+      <div id="tierRows"></div>
+
+      <div class="frow" style="margin-top:16px">
+        <label class="f">Currency<select class="in" id="fCur"></select></label>
+        <label class="f">Image URL<input class="in" id="fImg" placeholder="auto from event link"></label>
+        <label class="f full">Notes<textarea class="in" id="fNotes" placeholder="optional"></textarea></label>
+      </div>
+    </div>
+    <div class="mfoot">
+      <div id="evDanger" style="display:flex;gap:8px">
+        <button class="act danger" id="evArchive">Archive</button>
+        <button class="act danger" id="evDelete">Delete</button>
+      </div>
+      <div class="r">
+        <button class="act" data-close>Cancel</button>
+        <button class="act primary" id="evSave">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- check-in -->
+<div class="modal-bg" id="ciModal">
+  <div class="modal">
+    <div class="mcover" id="ciCover"><div class="title"><div class="t" id="ciName"></div><div class="s" id="ciSub"></div></div></div>
+    <div class="mbody">
+      <div class="dayrow">Check-in for <input class="in" type="date" id="ciDay"> <span id="ciDayNote"></span></div>
+      <div class="links" id="ciLinks" style="margin-bottom:12px"></div>
+      <div class="ci-head"><span>Tier</span><span>Left</span><span id="ciPriceHead">Price</span></div>
+      <div id="ciRows"></div>
+      <div class="sect" style="margin-top:20px">History</div>
+      <div class="histwrap" id="ciHist"></div>
+    </div>
+    <div class="mfoot">
+      <button class="act" id="ciEdit">Edit event</button>
+      <div class="r">
+        <button class="act" data-close>Close</button>
+        <button class="act primary" id="ciSave">Save check-in</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let DATA = null;
+let showPast = false;
+let editing = null;   // event being edited (null = new)
+let checking = null;  // event open in the check-in modal
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const SYM = {USD: '$', ILS: '₪', EUR: '€', GBP: '£'};
+function money(v, cur){ if (v == null) return '—'; const n = Number(v); return (SYM[cur] || '') + (Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})); }
+function toast(msg){ const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 2400); }
+function showErr(msg){ const e = $('err'); e.textContent = msg || ''; e.style.display = msg ? 'block' : 'none'; }
+
+// ---- artwork (same look as /dice) -------------------------------------
+function imgx(url, w, h){
+  if (!url) return '';
+  return /imgix\.net/.test(url) ? `${url}?w=${w}&h=${h}&fit=crop&auto=format,compress` : url;
+}
+function hueOf(s){ let h = 0; for (const c of String(s||'')) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function initials(s){ return String(s||'?').replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0,2).map(w => w[0]).join('').toUpperCase() || '?'; }
+function coverStyle(ev, w, h){
+  // the gradient sits under the artwork, so a dead image still has a face
+  const hu = hueOf(ev.name);
+  const grad = `linear-gradient(135deg,hsl(${hu},70%,55%),hsl(${(hu+50)%360},70%,40%))`;
+  if (ev.image_url) return `background:url('${escape(imgx(ev.image_url, w, h))}') center/cover no-repeat, ${grad}`;
+  return `background:${grad}`;
+}
+
+// ---- dates ------------------------------------------------------------
+function dayDiff(a, b){ return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000); }
+function fmtDate(iso){
+  if (!iso) return 'No date';
+  const d = new Date(iso.slice(0,10) + 'T12:00:00');
+  return d.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
+}
+function countdown(iso){
+  if (!iso) return '';
+  const n = dayDiff(DATA.today, iso.slice(0,10));
+  if (n < 0) return `<span class="cd">${-n}d ago</span>`;
+  if (n === 0) return '<span class="cd today">TONIGHT</span>';
+  if (n === 1) return '<span class="cd today">TOMORROW</span>';
+  return `<span class="cd${n <= 7 ? ' soon' : ''}">IN ${n}D</span>`;
+}
+function lastText(ev){
+  if (ev.days_since == null) return 'Never checked in';
+  if (ev.days_since <= 0) return 'Checked in today';
+  if (ev.days_since === 1) return 'Last check-in yesterday';
+  return `Last check-in ${ev.days_since}d ago`;
+}
+
+// ---- tier math ----------------------------------------------------------
+function lastTwo(t){
+  // latest entry with a count, and the one before it (for the delta)
+  const h = t.history || [];
+  return [h[h.length - 1] || null, h[h.length - 2] || null];
+}
+function totalSeries(ev){
+  // total left per check-in day, only counting days where every tier that
+  // had history then had a number (a partial day would read as a crash)
+  const out = [];
+  for (const day of ev.checkin_days){
+    let sum = 0, any = false, ok = true;
+    for (const t of ev.tiers){
+      const e = (t.history || []).find(x => x.day === day);
+      const started = (t.history || []).some(x => x.day <= day && x.remaining != null);
+      if (e && e.remaining != null){ sum += e.remaining; any = true; }
+      else if (started) ok = false;
+    }
+    if (any && ok) out.push({day, v: sum});
+  }
+  return out;
+}
+function spark(series, w = 120, h = 30){
+  if (series.length < 2) return '';
+  const vs = series.map(p => p.v), lo = Math.min(...vs), hi = Math.max(...vs), span = hi - lo || 1;
+  const t0 = Date.parse(series[0].day), t1 = Date.parse(series[series.length - 1].day), ts = t1 - t0 || 1;
+  const pts = series.map(p => [2 + (Date.parse(p.day) - t0) / ts * (w - 4), 3 + (1 - (p.v - lo) / span) * (h - 6)]);
+  const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const last = pts[pts.length - 1];
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path class="ar" d="${d} L${last[0].toFixed(1)} ${h} L${pts[0][0].toFixed(1)} ${h} Z"/><path class="ln" d="${d}"/><circle class="dot" cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.5"/></svg>`;
+}
+function delta(cur, prev, cls){
+  if (cur == null || prev == null || cur === prev) return '';
+  const d = cur - prev;
+  const [up, dn] = cls;
+  const txt = Number.isInteger(d) ? Math.abs(d).toLocaleString() : Math.abs(d).toFixed(2);
+  return `<span class="d ${d > 0 ? up : dn}">${d > 0 ? '▲' : '▼'}${txt}</span>`;
+}
+
+// ---- render ---------------------------------------------------------------
+function linkChips(ev){
+  const out = [];
+  if (ev.link) out.push(`<a class="main" href="${escape(ev.link)}" target="_blank" rel="noopener">Event ↗</a>`);
+  for (const l of ev.links || []){
+    let label = l.label;
+    if (!label){ try { label = new URL(l.url).hostname.replace(/^www\./, ''); } catch (e) { label = 'Link'; } }
+    out.push(`<a href="${escape(l.url)}" target="_blank" rel="noopener" title="${escape(l.url)}">${escape(label)} ↗</a>`);
+  }
+  return out.join('');
+}
+function card(ev){
+  const cur = ev.currency;
+  const rows = ev.tiers.map(t => {
+    const [a, b] = lastTwo(t);
+    const left = a && a.remaining != null
+      ? `<span class="${a.remaining === 0 ? 'zero' : ''}">${a.remaining === 0 ? 'SOLD OUT' : a.remaining.toLocaleString()}</span>${delta(a.remaining, b && b.remaining, ['up', 'dn'])}`
+      : '<span class="muted">—</span>';
+    const price = a && a.price != null ? money(a.price, cur) + delta(a.price, b && b.price, ['pup', 'pdn']) : '<span class="muted">—</span>';
+    return `<tr><td class="tn">${escape(t.name)}</td><td class="num">${left}</td><td class="num">${price}</td></tr>`;
+  }).join('');
+  const series = totalSeries(ev);
+  const tot = series.length ? series[series.length - 1].v : null;
+  const flag = ev.archived ? '<span class="pill never">ARCHIVED</span>'
+    : ev.past ? '' : ev.due ? `<span class="pill ${ev.days_since == null ? 'never' : 'due'}">CHECK IN</span>`
+    : ev.checked_today ? '<span class="pill ok">✓ TODAY</span>' : '';
+  const sub = [fmtDate(ev.event_date_iso), ev.venue].filter(Boolean).join(' · ');
+  return `<div class="card${ev.due ? ' due' : ''}${ev.past || ev.archived ? ' past' : ''}">
+    <div class="cover" style="${coverStyle(ev, 640, 300)}" data-ci="${ev.id}">
+      ${ev.image_url ? '' : `<div class="ph">${escape(initials(ev.name))}</div>`}
+      ${countdown(ev.event_date_iso)}
+      <span class="flag">${flag}</span>
+      <div class="title"><div class="t">${escape(ev.name)}</div><div class="s">${escape(sub)}</div></div>
+    </div>
+    <div class="cbody">
+      ${(ev.link || (ev.links || []).length) ? `<div class="links">${linkChips(ev)}</div>` : ''}
+      ${ev.tiers.length ? `<table class="tiers"><thead><tr><th>Tier</th><th class="num">Left</th><th class="num">Price</th></tr></thead><tbody>${rows}</tbody></table>`
+        : '<div class="muted" style="font-size:12px">No tiers yet. Edit the event to add some.</div>'}
+      ${tot != null ? `<div class="total"><span>Total left <b>${tot.toLocaleString()}</b>${series.length > 1 ? ` <span class="muted">over ${series.length} check-ins</span>` : ''}</span>${spark(series)}</div>` : ''}
+      <div class="cfoot">
+        <span class="last">${lastText(ev)}</span>
+        <span class="btns"><button class="act" data-edit="${ev.id}">Edit</button><button class="act primary" data-ci="${ev.id}">Check in</button></span>
+      </div>
+    </div>
+  </div>`;
+}
+function render(){
+  const evs = DATA.events;
+  const live = evs.filter(e => !e.archived && !e.past);
+  const due = live.filter(e => e.due);
+  const rest = live.filter(e => !e.due);
+  const old = evs.filter(e => e.archived || e.past);
+  const today = live.filter(e => e.checked_today).length;
+  const next = live.find(e => e.event_date_iso);
+  const r = DATA.remind;
+  const last = r.last && r.last.at ? new Date(r.last.at).toLocaleString(undefined, {weekday: 'short', hour: 'numeric', minute: '2-digit'}) : null;
+  $('meta').textContent = r.enabled
+    ? `Reminders ${r.days.split(',').map(d => d.trim().slice(0,1).toUpperCase() + d.trim().slice(1,3)).join(' + ')} at ${r.hour > 12 ? r.hour - 12 + 'pm' : r.hour + 'am'} ET in Discord #check-in${last ? ' · last sent ' + last : ''}`
+    : 'Reminders are off on this machine';
+  $('stats').innerHTML = [
+    ['Upcoming', live.length, live.length ? '' : 'zero', 'events on the list'],
+    ['Due', due.length, due.length ? 'warn' : 'zero', `no check-in for ${DATA.due_after_days}+ days`],
+    ['Checked today', today, today ? 'green' : 'zero', DATA.today],
+    ['Next event', next ? (dayDiff(DATA.today, next.event_date_iso.slice(0,10)) + 'd') : '—', next ? '' : 'zero', next ? next.name : ''],
+  ].map(([l, v, c, h]) => `<div class="stat"><div class="label">${l}</div><div class="value ${c}">${v}</div><div class="hint" title="${escape(h)}">${escape(h)}</div></div>`).join('');
+
+  let html = '';
+  if (!evs.length){
+    html = `<h2>Events</h2><div class="empty"><b>No events yet</b>Add an event with its tiers, then check in on it a couple of times a week.<br><br><button class="act primary" onclick="openEvent(null)">+ Add event</button></div>`;
+  } else {
+    if (due.length) html += `<h2>Due for a check-in <span class="n">${due.length}</span></h2><div class="grid">${due.map(card).join('')}</div>`;
+    if (rest.length) html += `<h2>${due.length ? 'Up to date' : 'Upcoming'} <span class="n">${rest.length}</span></h2><div class="grid">${rest.map(card).join('')}</div>`;
+    if (!live.length) html += `<h2>Upcoming</h2><div class="empty">Nothing upcoming. <button class="act primary" onclick="openEvent(null)">+ Add event</button></div>`;
+    if (old.length){
+      html += `<div class="pastsep" id="pastToggle">${showPast ? '▾' : '▸'} Past &amp; archived (${old.length})</div>`;
+      if (showPast) html += `<div class="grid" style="margin-top:12px">${old.map(card).join('')}</div>`;
+    }
+  }
+  $('sections').innerHTML = html;
+}
+
+async function load(){
+  try {
+    const r = await fetch('/api/checkin');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    DATA = await r.json();
+    showErr('');
+    render();
+    if (checking){ checking = DATA.events.find(e => e.id === checking.id) || null; }
+  } catch (e) { showErr('Could not load check-ins: ' + e.message); }
+}
+async function post(url, body){
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+// ---- event modal ------------------------------------------------------------
+function linkRow(l = {}){
+  const d = document.createElement('div');
+  d.className = 'lrow link';
+  d.innerHTML = `<input class="in lb" placeholder="Label" value="${escape(l.label || '')}"><input class="in lu" placeholder="https://…" value="${escape(l.url || '')}"><button class="x" type="button" title="Remove">×</button>`;
+  d.querySelector('.x').onclick = () => d.remove();
+  $('linkRows').appendChild(d);
+}
+function tierRow(t = {}){
+  const d = document.createElement('div');
+  d.className = 'lrow tier' + (editing ? ' edit' : '');
+  d.dataset.id = t.id || '';
+  d.innerHTML = `<input class="in tn" placeholder="GA, Section 104, VIP…" value="${escape(t.name || '')}">`
+    + (editing ? '' : `<input class="in tr" inputmode="numeric" placeholder="Left"><input class="in tp" inputmode="decimal" placeholder="Price">`)
+    + `<button class="x" type="button" title="Remove">×</button>`;
+  d.querySelector('.x').onclick = () => d.remove();
+  $('tierRows').appendChild(d);
+}
+function openEvent(id){
+  editing = id ? DATA.events.find(e => e.id === id) : null;
+  const ev = editing || {};
+  $('evTitle').textContent = editing ? 'Edit event' : 'Add event';
+  $('fName').value = ev.name || '';
+  $('fDate').value = (ev.event_date_iso || '').slice(0,10);
+  $('fVenue').value = ev.venue || '';
+  $('fLink').value = ev.link || '';
+  $('fImg').value = ev.image_manual ? (ev.image_url || '') : '';
+  $('fImg').placeholder = ev.image_url && !ev.image_manual ? 'auto: found on the event page' : 'auto from event link';
+  $('fNotes').value = ev.notes || '';
+  $('fCur').innerHTML = DATA.currencies.map(c => `<option${c === (ev.currency || 'USD') ? ' selected' : ''}>${c}</option>`).join('');
+  $('linkRows').innerHTML = '';
+  (ev.links || []).forEach(linkRow);
+  if (!editing) linkRow();
+  $('tierRows').innerHTML = '';
+  $('tierHead').style.gridTemplateColumns = editing ? '1fr 30px' : '1fr 100px 100px 30px';
+  $('tierHead').innerHTML = editing ? '<span>Name</span>' : '<span>Name</span><span>Left now</span><span>Price now</span>';
+  (editing ? ev.tiers : [{name: 'GA'}]).forEach(tierRow);
+  $('evDanger').style.display = editing ? 'flex' : 'none';
+  $('evArchive').textContent = ev.archived ? 'Unarchive' : 'Archive';
+  $('ciModal').classList.remove('open');
+  $('evModal').classList.add('open');
+  setTimeout(() => $('fName').focus(), 30);
+}
+async function saveEvent(){
+  const body = {
+    name: $('fName').value.trim(), event_date_iso: $('fDate').value, venue: $('fVenue').value.trim(),
+    link: $('fLink').value.trim(), image_url: $('fImg').value.trim(), notes: $('fNotes').value.trim(),
+    currency: $('fCur').value,
+    links: [...$('linkRows').children].map(r => ({label: r.querySelector('.lb').value, url: r.querySelector('.lu').value})).filter(l => l.url.trim()),
+    tiers: [...$('tierRows').children].map(r => ({
+      id: r.dataset.id || null, name: r.querySelector('.tn').value,
+      remaining: r.querySelector('.tr') ? r.querySelector('.tr').value : null,
+      price: r.querySelector('.tp') ? r.querySelector('.tp').value : null,
+    })).filter(t => t.name.trim()),
+  };
+  if (!body.name){ $('fName').focus(); return; }
+  if (editing) body.id = editing.id;
+  $('evSave').disabled = true; $('evSave').textContent = 'Saving…';
+  try {
+    await post('/api/checkin/event', body);
+    $('evModal').classList.remove('open');
+    toast(editing ? 'Event updated' : 'Event added');
+    await load();
+  } catch (e) { alert('Save failed: ' + e.message); }
+  finally { $('evSave').disabled = false; $('evSave').textContent = 'Save'; }
+}
+
+// ---- check-in modal -------------------------------------------------------
+function openCheckin(id){
+  checking = DATA.events.find(e => e.id === id);
+  if (!checking) return;
+  const ev = checking;
+  $('ciCover').setAttribute('style', coverStyle(ev, 1280, 240));
+  $('ciName').textContent = ev.name;
+  $('ciSub').textContent = [fmtDate(ev.event_date_iso), ev.venue, lastText(ev)].filter(Boolean).join(' · ');
+  $('ciLinks').innerHTML = linkChips(ev);
+  $('ciPriceHead').textContent = 'Price (' + (SYM[ev.currency] || ev.currency) + ')';
+  $('ciDay').value = DATA.today;
+  fillCheckin();
+  renderHistory();
+  $('ciModal').classList.add('open');
+}
+function fillCheckin(){
+  const ev = checking, day = $('ciDay').value;
+  $('ciDayNote').textContent = day === DATA.today ? '' : (ev.checkin_days.includes(day) ? '(editing that day)' : '(backdated)');
+  if (!ev.tiers.length){ $('ciRows').innerHTML = '<div class="hint2">This event has no tiers yet. Use Edit event to add them.</div>'; return; }
+  $('ciRows').innerHTML = ev.tiers.map(t => {
+    const h = t.history || [];
+    const same = h.find(x => x.day === day);
+    const before = [...h].reverse().find(x => x.day < day);
+    const prev = before ? `${fmtDate(before.day)}: ${before.remaining == null ? '—' : before.remaining.toLocaleString()} left @ ${money(before.price, ev.currency)}` : 'first check-in';
+    const left = same ? (same.remaining ?? '') : '';
+    const price = same ? (same.price ?? '') : (before && before.price != null ? before.price : '');
+    return `<div class="ci-row" data-tier="${t.id}"><div><div class="tn">${escape(t.name)}</div><div class="prev">${escape(prev)}</div></div>
+      <input class="in r" inputmode="numeric" placeholder="${before && before.remaining != null ? before.remaining : 'Left'}" value="${escape(left)}">
+      <input class="in p" inputmode="decimal" placeholder="Price" value="${escape(price)}"></div>`;
+  }).join('');
+  const first = $('ciRows').querySelector('input.r');
+  if (first) setTimeout(() => first.focus(), 30);
+}
+function renderHistory(){
+  const ev = checking;
+  const days = [...ev.checkin_days].reverse();
+  if (!days.length){ $('ciHist').innerHTML = '<div class="hint2">No check-ins yet.</div>'; return; }
+  const head = `<tr><th>Day</th>${ev.tiers.map(t => `<th>${escape(t.name)}</th>`).join('')}<th></th></tr>`;
+  const body = days.map(d => `<tr><td>${fmtDate(d)}</td>${ev.tiers.map(t => {
+    const e = (t.history || []).find(x => x.day === d);
+    if (!e) return '<td class="muted">—</td>';
+    return `<td>${e.remaining == null ? '—' : (e.remaining === 0 ? '<span class="zero">0</span>' : e.remaining.toLocaleString())}<span class="p">${money(e.price, ev.currency)}</span></td>`;
+  }).join('')}<td class="del"><button title="Delete this check-in" data-delday="${d}">×</button></td></tr>`).join('');
+  $('ciHist').innerHTML = `<table class="hist"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+async function saveCheckin(){
+  const rows = [...$('ciRows').querySelectorAll('.ci-row')].map(r => ({
+    tier_id: r.dataset.tier, remaining: r.querySelector('.r').value, price: r.querySelector('.p').value,
+  }));
+  if (!rows.some(r => String(r.remaining).trim() !== '')){
+    if (!confirm('No "left" counts entered. Save prices only?')) return;
+  }
+  $('ciSave').disabled = true; $('ciSave').textContent = 'Saving…';
+  try {
+    await post('/api/checkin/entry', {event_id: checking.id, day: $('ciDay').value, rows});
+    $('ciModal').classList.remove('open');
+    toast('Check-in saved');
+    await load();
+  } catch (e) { alert('Save failed: ' + e.message); }
+  finally { $('ciSave').disabled = false; $('ciSave').textContent = 'Save check-in'; }
+}
+
+// ---- wiring ---------------------------------------------------------------
+document.addEventListener('click', async e => {
+  const t = e.target;
+  const ci = t.closest('[data-ci]');
+  if (ci){ openCheckin(ci.dataset.ci); return; }
+  const ed = t.closest('[data-edit]');
+  if (ed){ openEvent(ed.dataset.edit); return; }
+  if (t.id === 'pastToggle'){ showPast = !showPast; render(); return; }
+  if (t.matches('[data-close]')){ t.closest('.modal-bg').classList.remove('open'); return; }
+  if (t.classList.contains('modal-bg')){ t.classList.remove('open'); return; }
+  if (t.dataset.delday){
+    if (!confirm('Delete the check-in from ' + fmtDate(t.dataset.delday) + '?')) return;
+    try { await post('/api/checkin/entry/delete', {event_id: checking.id, day: t.dataset.delday}); await load(); renderHistory(); fillCheckin(); }
+    catch (err) { alert(err.message); }
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.querySelectorAll('.modal-bg.open').forEach(m => m.classList.remove('open'));
+  if (e.key === 'Enter' && !e.shiftKey && e.target.matches('#ciRows input')){ e.preventDefault(); saveCheckin(); }
+});
+$('addBtn').onclick = () => openEvent(null);
+$('addLink').onclick = () => linkRow();
+$('addTier').onclick = () => tierRow();
+$('evSave').onclick = saveEvent;
+$('ciSave').onclick = saveCheckin;
+$('ciDay').onchange = fillCheckin;
+$('ciEdit').onclick = () => openEvent(checking.id);
+$('evArchive').onclick = async () => {
+  try { await post('/api/checkin/event', {id: editing.id, archived: !editing.archived}); $('evModal').classList.remove('open'); await load(); }
+  catch (e) { alert(e.message); }
+};
+$('evDelete').onclick = async () => {
+  if (!confirm(`Delete "${editing.name}" and all its check-ins? This can't be undone.`)) return;
+  try { await post('/api/checkin/event/delete', {id: editing.id}); $('evModal').classList.remove('open'); await load(); }
+  catch (e) { alert(e.message); }
+};
+$('remindBtn').onclick = async () => {
+  $('remindBtn').disabled = true;
+  try {
+    const j = await post('/api/checkin/remind-now');
+    const res = j.result && j.result.discord;
+    toast(j.error ? 'Failed: ' + j.error : (String(res).startsWith('ok') ? 'Reminder sent to Discord' : (res || 'Nothing sent')));
+    await load();
+  } catch (e) { alert(e.message); }
+  finally { $('remindBtn').disabled = false; }
+};
+load();
+</script>
+</body>
+</html>

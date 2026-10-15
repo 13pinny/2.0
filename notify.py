@@ -722,6 +722,57 @@ def send_todo_digest(due_today, overdue):
     return {"discord": discord_result, "email": email_result}
 
 
+def send_checkin_reminder(events):
+    """Twice-weekly /checkin nudge: ONE message listing every upcoming
+    event with how long since its last stock check-in. Goes to its own
+    #check-in channel (DISCORD_WEBHOOK_CHECK_IN → bot-created channel →
+    the todos category → DISCORD_WEBHOOK_URL)."""
+    from datetime import date
+    url = _bot_channel_webhook("check-in", "todos")
+    if not url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+    today = date.today()
+
+    def _when(iso):
+        try:
+            d = date.fromisoformat((iso or "")[:10])
+        except ValueError:
+            return "no date"
+        n = (d - today).days
+        rel = "today" if n == 0 else ("tomorrow" if n == 1 else f"in {n}d")
+        return f"{d.strftime('%a %b')} {d.day} ({rel})"
+
+    def _last(e):
+        n = e.get("days_since")
+        if n is None:
+            return "never checked"
+        return "checked today" if n == 0 else f"last check-in {n}d ago"
+
+    due = [e for e in events if e.get("due")]
+    lines = []
+    for e in events[:25]:
+        mark = "🔴" if e.get("due") else "🟢"
+        name = (e.get("name") or "?")[:80]
+        lines.append(f"{mark} **{name}** · {_when(e.get('event_date_iso'))} · {_last(e)}")
+    if len(events) > 25:
+        lines.append(f"... +{len(events) - 25} more")
+    head = f"📝 Check-in time: {len(events)} event{'s' if len(events) != 1 else ''}"
+    if due:
+        head += f", {len(due)} due"
+    embed = {
+        "title": head,
+        "description": "\n".join(lines)[:4000] or "No upcoming events on the check-in list.",
+        "url": BASE_URL + "/checkin",
+        "color": 0xF97316 if due else 0x00A3D7,
+    }
+    img = next((e.get("image_url") for e in (due or events) if e.get("image_url")), None)
+    if img:
+        if "imgix.net" in img:
+            img += "?w=300&h=300&fit=crop"
+        embed["thumbnail"] = {"url": img}
+    return {"discord": _post_discord(url, {"content": head, "embeds": [embed]})}
+
+
 def notify_viagogo_match(push_row):
     """Notify that a Kupat purchase email has been matched (or not) to a
     viagogo event and priced, and is waiting on /listings for the user to
