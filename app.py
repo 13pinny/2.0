@@ -281,8 +281,8 @@ _last_dice_alerts = {"at": None, "summary": None, "error": None}
 # runs where the EDM monitor does (single-machine rule: one ping, not two).
 CHECKIN_REMIND_ENABLED = (os.getenv("KARTIS_CHECKIN_REMIND_ENABLED")
                           or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
-CHECKIN_REMIND_DAYS = (os.getenv("KARTIS_CHECKIN_REMIND_DAYS") or "mon,thu").strip()
-CHECKIN_REMIND_HOUR = int(os.getenv("KARTIS_CHECKIN_REMIND_HOUR") or 10)
+CHECKIN_REMIND_DAYS = (os.getenv("KARTIS_CHECKIN_REMIND_DAYS") or "mon,wed").strip()
+CHECKIN_REMIND_HOUR = int(os.getenv("KARTIS_CHECKIN_REMIND_HOUR") or 7)
 _checkin_remind_lock = threading.Lock()
 _last_checkin_remind = {"at": None, "events": 0, "due": 0, "result": None, "error": None}
 # Low-stock alert: ping once when the current release's remaining count

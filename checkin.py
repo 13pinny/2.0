@@ -4,7 +4,7 @@ Some events publish nothing a fetcher can read (or sell through platforms we
 don't scrape), so the only way to see how fast they move is to look and write
 it down. Each event here carries its own free-text tiers ("GA", "Section 104",
 "VIP table"); a check-in stores, per tier, how many are left and the price on
-that New York day. Twice a week (Mon + Thu by default) a Discord reminder
+that New York day. Twice a week (Mon + Wed 7am ET by default) a Discord reminder
 lists every upcoming event with how long it has been since the last check-in.
 
 State: checkin_events / checkin_tiers / checkin_entries (schema in db.py).
@@ -168,14 +168,15 @@ def _sync_tiers(conn, event_id, tiers, now):
         if not name:
             continue
         tid = t.get("id")
+        cost = _num(t.get("cost"))
         if tid and conn.execute("SELECT 1 FROM checkin_tiers WHERE id = ? AND event_id = ?",
                                 (tid, event_id)).fetchone():
-            conn.execute("UPDATE checkin_tiers SET name = ?, sort = ?, archived = 0 WHERE id = ?",
-                         (name[:80], i, tid))
+            conn.execute("UPDATE checkin_tiers SET name = ?, cost = ?, sort = ?, archived = 0 "
+                         "WHERE id = ?", (name[:80], cost, i, tid))
         else:
             tid = "cit-" + uuid.uuid4().hex[:12]
-            conn.execute("INSERT INTO checkin_tiers (id, event_id, name, sort, created_at) "
-                         "VALUES (?, ?, ?, ?, ?)", (tid, event_id, name[:80], i, now))
+            conn.execute("INSERT INTO checkin_tiers (id, event_id, name, cost, sort, created_at) "
+                         "VALUES (?, ?, ?, ?, ?, ?)", (tid, event_id, name[:80], cost, i, now))
         t["id"] = tid
         keep.add(tid)
     for r in conn.execute("SELECT id FROM checkin_tiers WHERE event_id = ? AND archived = 0",
