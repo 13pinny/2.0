@@ -146,6 +146,7 @@ _pacha_lock = threading.Lock()
 
 _last_tm = {"at": None, "checked": 0, "drops": 0, "errors": 0, "running": False}
 _tm_lock = threading.Lock()
+_tm_sniper_lock = threading.Lock()  # run_tm_sniper; it alone checks TM watchers
 
 # Viagogo auto-pricer — full-dashboard mode only (needs the CDP Chrome).
 # watcher_only.py must never grow this job.
@@ -187,8 +188,9 @@ DICE_SNIPER_ENABLED = (os.getenv("KARTIS_DICE_SNIPER_ENABLED") or "1").strip().l
 # check is ~1.5-3.5s of small JSON) and the thing being raced is a return
 # landing on a sold-out date, which can be gone inside a minute. The 60s tick
 # was the latency floor for the one source that could afford to beat it.
-# Shares `_tm_lock` with run_tm_check, so a watcher is never fetched twice at
-# once and the loser of a race is a no-op against stored seat state.
+# While enabled it OWNS ticketmaster/tmdiscover watchers (run_tm_check skips
+# them) under its own `_tm_sniper_lock`, so a long kupat tick holding
+# `_tm_lock` can't starve it and no watcher is fetched by both at once.
 TM_SNIPER_SECONDS = int(os.getenv("KARTIS_TM_SNIPER_SECONDS") or 20)
 TM_SNIPER_ENABLED = (os.getenv("KARTIS_TM_SNIPER_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
 TM_SNIPER_SOURCES = {"ticketmaster", "tmdiscover"}
@@ -6222,9 +6224,11 @@ def _check_one_watcher(w, now_iso):
 def _purge_past_watchers():
     """Auto-delete watchers whose event date has already passed.
 
-    For each watcher we read the cached label payload (no network call) and
-    check meta.firstPerfMs / firstPerfText. Once today's local date is past
-    the event's date, the watcher has nothing left to watch, so we drop it.
+    Ticketmaster watchers are dated off the perf list (their own perf, or the
+    event's last perf); every other source reads the cached label payload's
+    meta.firstPerfMs / firstPerfText, which those sources fill per perf. Once
+    today's local date is past that date, the watcher has nothing left to
+    watch, so we drop it.
 
     Returns the number of watchers deleted. Soft-fails on any per-watcher
     error so a single broken cache file can't block the cleanup pass.
@@ -6235,35 +6239,53 @@ def _purge_past_watchers():
         try:
             src_name = w.get("source") or "ticketmaster"
             src = WATCHER_SOURCES.get(src_name, ticketmaster)
-            # Event-level watchers don't have a single perf — use the last
-            # performance under the event as the date probe (so we only
-            # purge after the LAST date of a multi-date show has passed).
-            if src is ticketmaster and ticketmaster.is_event_level(w):
+            event_date = None
+            if src is ticketmaster:
+                # TM labels carry EVENT-level dates (getEventDetail's
+                # firstPerformanceDate), not the watched perf's: reading
+                # firstPerfMs reaped every watcher on MRG15/002 (13.10) the
+                # day after MRG15/001 (11.10) played. Date the watcher off
+                # its own perf in the perf list — or the event's last perf
+                # for an event-level watcher — and, when the perf isn't
+                # listed, off the event's LAST date, never its first.
+                ms = None
                 try:
                     perfs = ticketmaster.list_performances(w["event_code"])
-                    perfs_sorted = sorted(perfs, key=lambda p: p.get("performanceDate") or 0)
-                    probe_perf = str(perfs_sorted[-1].get("performanceCode") or "") if perfs_sorted else None
                 except Exception:
-                    probe_perf = None
-                if not probe_perf:
+                    perfs = []
+                dates = [p.get("performanceDate") for p in perfs
+                         if p.get("performanceDate")
+                         and (ticketmaster.is_event_level(w)
+                              or str(p.get("performanceCode") or "") == str(w["perf_code"]))]
+                if dates:
+                    ms = max(float(d) for d in dates)
+                else:
+                    try:
+                        lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
+                    except Exception:
+                        lbls = None
+                    ms = ((lbls or {}).get("meta") or {}).get("lastPerfMs")
+                if not ms:
                     continue
-                lbls = src.get_labels(w["event_code"], probe_perf, lang="iw")
+                try:
+                    event_date = datetime.fromtimestamp(float(ms) / 1000).date()
+                except (TypeError, ValueError, OSError):
+                    continue
             else:
                 lbls = src.get_labels(w["event_code"], w["perf_code"], lang="iw")
-            meta = (lbls or {}).get("meta") or {}
-            event_date = None
-            ms = meta.get("firstPerfMs")
-            if ms:
-                try:
-                    event_date = datetime.fromtimestamp(int(ms) / 1000).date()
-                except (TypeError, ValueError, OSError):
-                    event_date = None
-            if event_date is None:
-                txt = (meta.get("firstPerfText") or "")[:10]
-                try:
-                    event_date = datetime.strptime(txt, "%Y-%m-%d").date()
-                except ValueError:
-                    event_date = None
+                meta = (lbls or {}).get("meta") or {}
+                ms = meta.get("firstPerfMs")
+                if ms:
+                    try:
+                        event_date = datetime.fromtimestamp(int(ms) / 1000).date()
+                    except (TypeError, ValueError, OSError):
+                        event_date = None
+                if event_date is None:
+                    txt = (meta.get("firstPerfText") or "")[:10]
+                    try:
+                        event_date = datetime.strptime(txt, "%Y-%m-%d").date()
+                    except ValueError:
+                        event_date = None
             if event_date and event_date < today:
                 db.tm_delete_watcher(w["id"])
                 deleted += 1
@@ -6299,6 +6321,13 @@ def run_tm_check():
         # network calls on them.
         _purge_past_watchers()
         watchers = db.tm_active_watchers()
+        if TM_SNIPER_ENABLED:
+            # The TM sniper owns ticketmaster/tmdiscover watchers outright,
+            # under its own lock: when they shared this tick's lock, a tick
+            # held for minutes by kupat's browser starved the 20s sniper, and
+            # TM ran at the 1-2 min cadence of whichever tick got through.
+            watchers = [w for w in watchers
+                        if (w.get("source") or "") not in TM_SNIPER_SOURCES]
         now_iso = datetime.now(timezone.utc).isoformat()
         drops = 0
         errors = 0
@@ -6358,7 +6387,9 @@ def run_dice_sniper():
 def run_tm_sniper():
     """Fast poll for ticketmaster / tmdiscover watchers (TM_SNIPER_SECONDS).
 
-    Same lock discipline as run_dice_sniper. No last_seat_count gate: a TM
+    Owns those watchers: run_tm_check skips them while this is enabled, so
+    it takes its own lock rather than _tm_lock (which kupat's browser can
+    hold for minutes). No last_seat_count gate: a TM
     event-level watcher always holds per-perf status pseudo-seats so its
     count is never 0, and the drop worth racing is a seat appearing in a
     sold-out perf's feed while the rest of the event stays on sale."""
@@ -6366,8 +6397,8 @@ def run_tm_sniper():
         return
     if db.setting_get_bool("master_paused", default=False):
         return
-    if not _tm_lock.acquire(blocking=False):
-        return  # main tick (or a prior sniper run) still holding the lock
+    if not _tm_sniper_lock.acquire(blocking=False):
+        return  # a prior sniper run is still going
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
         targets = [
@@ -6381,7 +6412,7 @@ def run_tm_sniper():
             except Exception:
                 traceback.print_exc()
     finally:
-        _tm_lock.release()
+        _tm_sniper_lock.release()
 
 
 @app.route("/watchers")
