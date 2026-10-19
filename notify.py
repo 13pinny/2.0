@@ -1062,6 +1062,8 @@ _EDM_SOURCE_LABEL = {
     # embed's first line — so the label names the operator, not the room.
     "tao": "Tao Group",
     "frontgate": "Frontgate",
+    "universe": "Universe",
+    "urvenue": "UrVenue tables",
 }
 
 

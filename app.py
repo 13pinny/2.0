@@ -42,6 +42,8 @@ import notify
 import edm_events
 import eventim_events
 import frontgate_events
+import universe_events
+import urvenue_events
 from edm_common import EdmEventsError
 import pacha_events
 import pacha_tickets
@@ -742,6 +744,48 @@ def _frontgate_alert_kinds(ev, old):
     return []
 
 
+# Sources whose per-tier counts get a history row in frontgate_snapshots
+# (the /frontgate and /liv charts and sold-per-window figures).
+_STOCK_SNAPSHOT_SOURCES = {frontgate_events.SOURCE_NAME, universe_events.SOURCE_NAME,
+                           urvenue_events.SOURCE_NAME}
+
+# /liv pairs a club night's UrVenue tables with its Universe GA listing:
+# {urvenue event_id: universe event_id}, kept as a setting.
+LIV_PAIRS_SETTING = "liv_pairs"
+
+
+def _liv_pairs():
+    try:
+        pairs = json.loads(db.setting_get(LIV_PAIRS_SETTING) or "{}")
+    except (TypeError, ValueError):
+        pairs = {}
+    return pairs if isinstance(pairs, dict) else {}
+
+
+def _liv_autopair(events, now_iso):
+    """An UrVenue night names its GA ticket link (eventdata.ticketsurl). When
+    that's a Universe listing we haven't paired yet, track it too and pair
+    it, so pasting the club's event link is enough to get both halves.
+    Only ever adds: removing the GA half by hand is respected because the
+    pair stays recorded."""
+    pairs = _liv_pairs()
+    changed = False
+    for ev in events:
+        if ev.get("source") != urvenue_events.SOURCE_NAME or ev["event_id"] in pairs:
+            continue
+        try:
+            code = universe_events.parse_url(ev.get("tickets_url") or "")
+        except ValueError:
+            continue
+        uid = db.edm_tracked_add(universe_events.SOURCE_NAME, code, ev["tickets_url"],
+                                 now_iso, label=ev.get("name"), unpause=False)
+        pairs[ev["event_id"]] = uid
+        changed = True
+        print(f"[edm] liv: paired {ev['event_id']} with {uid}")
+    if changed:
+        db.setting_set(LIV_PAIRS_SETTING, json.dumps(pairs), now_iso)
+
+
 # Perishable first, so a burst of routine pings can't push a price drop or
 # a restock past the per-tick cap.
 _EDM_KIND_PRIORITY = {"price_down": 0, "restock": 1, "below": 2, "low_stock": 2,
@@ -828,8 +872,9 @@ def run_edm_events():
         for ev in events:
             db.edm_upsert_seen(ev, now_iso)
             db.edm_release_sync(ev["event_id"], ev.get("tiers"), now_iso)
-            if ev["source"] == frontgate_events.SOURCE_NAME:
+            if ev["source"] in _STOCK_SNAPSHOT_SOURCES:
                 db.frontgate_snapshot(ev, now_iso)
+        _liv_autopair(events, now_iso)
 
         global _edm_last_market_at
         now_dt = datetime.now(timezone.utc)
@@ -7253,6 +7298,158 @@ def api_frontgate_alert():
     return jsonify({"event_id": event_id, "alert_below": n})
 
 
+@app.route("/liv")
+def liv_page():
+    return render_template("liv.html")
+
+
+def _liv_left_at(snaps, t_iso):
+    """{section_id: left} as of t_iso from each section's last snapshot at
+    or before it."""
+    last = {}
+    for r in snaps:
+        if r["at"] > t_iso:
+            break
+        last[r["section_id"]] = r["available"]
+    return last
+
+
+def _liv_half(t, seen, snaps, now):
+    """One tracked Universe or UrVenue event as /liv shows it."""
+    r = seen.get(t["event_id"]) or {}
+    try:
+        tiers = json.loads(r.get("tiers_json") or "[]")
+    except ValueError:
+        tiers = []
+    rows = []
+    for x in tiers:
+        total, left, sold = x.get("quantity"), x.get("available"), x.get("used")
+        rows.append({
+            "id": x.get("section_id"), "name": x.get("name"), "group": x.get("group"),
+            "price": x.get("price"), "released": total, "left": left, "sold": sold,
+            "pct_sold": (round(sold / total * 100, 1) if sold is not None and total else None),
+            "sold_out": bool(x.get("sold_out")), "closed": bool(x.get("closed")),
+            "after": x.get("after"), "note": x.get("note"),
+            "guests": x.get("guests"), "locations": x.get("locations"),
+            "sort": x.get("sort"),
+        })
+    if t["source"] == universe_events.SOURCE_NAME:
+        rows.sort(key=lambda x: (x["sort"] is None, x["sort"] or 0))
+
+    def _sum(key):
+        vals = [x[key] for x in rows if x[key] is not None]
+        return sum(vals) if vals else None
+    # Gone per window = drop in seats left, per tier, clamped at 0 so a tier
+    # being released (or carts expiring) never reads as negative sales.
+    now_iso = now.isoformat()
+    left_now = _liv_left_at(snaps, now_iso)
+    windows = {}
+    for label, hours in _FRONTGATE_WINDOWS:
+        then = _liv_left_at(snaps, (now - timedelta(hours=hours)).isoformat())
+        if not then:
+            windows[label] = None
+            continue
+        windows[label] = sum(max(0, (then[k] or 0) - (left_now.get(k) or 0))
+                             for k in then if then[k] is not None
+                             and left_now.get(k) is not None)
+    history = {}
+    for x in snaps:
+        h = history.setdefault(x["section_id"], {"name": x["name"], "points": []})
+        h["name"] = x["name"] or h["name"]
+        h["points"].append({"at": x["at"], "left": x["available"]})
+    return {
+        "event_id": t["event_id"], "source": t["source"], "event_key": t["event_key"],
+        "url": t.get("url"), "paused": bool(t.get("paused")),
+        "name": r.get("name") or t.get("label"), "venue": r.get("venue"),
+        "date_text": r.get("date_text"), "start_date": r.get("start_date"),
+        "page_url": r.get("page_url") or t.get("url"),
+        "on_sale": bool(r.get("on_sale")), "sold_out": bool(r.get("sold_out")),
+        "min_price": r.get("min_price"), "lead_tier": r.get("lead_tier"),
+        "rows": rows, "released": _sum("released"), "left": _sum("left"),
+        "sold": _sum("sold"), "windows": windows,
+        "tracking_since": snaps[0]["at"] if snaps else None,
+        "history": [{"id": k, **v} for k, v in history.items()],
+        "last_seen_at": r.get("last_seen_at"), "last_error": r.get("last_error"),
+        "tracked_only": not r,
+    }
+
+
+@app.route("/api/liv")
+def api_liv():
+    """Everything /liv needs: each club night as its UrVenue tables plus its
+    paired Universe GA tiers, with seats/tables left, sold per window and
+    the history behind the chart. Polled by the EDM tick like every other
+    EDM source; this is only their view."""
+    now = datetime.now(timezone.utc)
+    seen = db.edm_all_seen()
+    snaps_all = db.frontgate_snapshots_all()
+    halves = {}
+    for t in db.edm_tracked_all():
+        if t.get("source") in (universe_events.SOURCE_NAME, urvenue_events.SOURCE_NAME):
+            halves[t["event_id"]] = _liv_half(t, seen, snaps_all.get(t["event_id"], []), now)
+    pairs = _liv_pairs()
+    nights, used = [], set()
+    for tid, gid in pairs.items():
+        if tid in halves or gid in halves:
+            nights.append({"tables": halves.get(tid), "ga": halves.get(gid)})
+            used.update((tid, gid))
+    for eid, h in halves.items():
+        if eid in used:
+            continue
+        nights.append({"tables": h if h["source"] == urvenue_events.SOURCE_NAME else None,
+                       "ga": h if h["source"] == universe_events.SOURCE_NAME else None})
+    for n in nights:
+        a, b = n["tables"] or {}, n["ga"] or {}
+        n["name"] = a.get("name") or b.get("name")
+        n["venue"] = a.get("venue") or b.get("venue")
+        n["date_text"] = a.get("date_text") or b.get("date_text")
+        n["start_date"] = a.get("start_date") or b.get("start_date")
+        n["page_url"] = a.get("page_url") or b.get("page_url")
+    nights.sort(key=lambda n: (n["start_date"] or "9999", n["name"] or ""))
+    return jsonify({
+        "nights": nights,
+        "windows": [k for k, _ in _FRONTGATE_WINDOWS],
+        "status": {**_last_edm_events,
+                   "enabled": EDM_MONITOR_ENABLED,
+                   "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES},
+        "now": now.isoformat(),
+    })
+
+
+@app.route("/api/liv/add", methods=["POST"])
+def api_liv_add():
+    """{url}: a club event link (livnightclub.com/…/event/EVE…/…) tracks its
+    tables, and its Universe GA listing gets paired on the first successful
+    check; a universe.com link tracks just the GA tiers. Unlike /api/edm/add
+    a club link is taken even when it can't be fetched right now (the club
+    site blocks the server's address unless the proxy is set), so its
+    error shows on the page instead of the add failing."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
+    try:
+        source, key = edm_events.parse_target(url)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if source not in (universe_events.SOURCE_NAME, urvenue_events.SOURCE_NAME):
+        return jsonify({"error": "paste a LIV event link or a universe.com event link"}), 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    ev, err = None, None
+    try:
+        ev = edm_events.fetch_one(source, key)
+    except Exception as e:
+        if source == universe_events.SOURCE_NAME:
+            return jsonify({"error": f"could not fetch that event: {e}"}), 502
+        err = str(e)
+    event_id = db.edm_tracked_add(source, key, url, now_iso,
+                                  label=(ev or {}).get("name"))
+    if ev:
+        _liv_autopair([ev], now_iso)
+    return jsonify({"event_id": event_id, "source": source,
+                    "name": (ev or {}).get("name"), "error": err,
+                    "paired": _liv_pairs().get(event_id)})
+
+
 @app.route("/edm")
 def edm_page():
     return render_template("edm.html")
@@ -7276,7 +7473,7 @@ def api_edm():
         # where the tier-ladder view its count-less data actually supports
         # replaces the velocity columns here. The monitor still polls it --
         # this is a view filter, not a tracking change.
-        if t.get("source") in ("tao", frontgate_events.SOURCE_NAME):
+        if t.get("source") in ("tao", *_STOCK_SNAPSHOT_SOURCES):
             continue
         r = seen.get(t["event_id"]) or {}
         windows, _earliest = _sales_windows(
@@ -7326,7 +7523,7 @@ def api_edm():
         "events": events,
         "low_stock_threshold": EDM_LOW_STOCK_THRESHOLD,
         "sources": sorted(set(edm_events.SOURCES) - set(edm_events.CATALOG_SOURCES)
-                          - {frontgate_events.SOURCE_NAME}),
+                          - _STOCK_SNAPSHOT_SOURCES),
         # Catalog sources (tao) are surfaced on /marquee, not here.
         "catalog_sources": [],
         "catalogs": {},
