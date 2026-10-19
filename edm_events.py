@@ -2,7 +2,7 @@
 and the CLI for managing it.
 
 The per-platform fetchers (posh_events / leap_events / eventim_events /
-shotgun_events) each watch ONE event and return the same normalized dict
+shotgun_events / tao_events / frontgate_events) each watch ONE event and return the same normalized dict
 (the contract is in edm_common.py); this module decides which
 fetcher a URL belongs to, keeps the list of events being polled in
 edm_tracked_events, and fetches them all for one tick of app.py's
@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 import db
 import edm_common
 import eventim_events
+import frontgate_events
 import leap_events
 import posh_events
 import shotgun_events
@@ -46,6 +47,7 @@ SOURCES = {
     shotgun_events.SOURCE_NAME: shotgun_events,
     tixr_events.SOURCE_NAME: tixr_events,
     tao_events.SOURCE_NAME: tao_events,
+    frontgate_events.SOURCE_NAME: frontgate_events,
 }
 
 # Host fragment → source. Checked before the parse_url fallback so a URL is
@@ -57,6 +59,7 @@ _HOST_HINTS = (
     ("shotgun.live", "shotgun"),
     ("tixr.com", "tixr"),
     ("tickets.taogroup.com", "tao"),
+    ("frontgatetickets.com", "frontgate"),
 )
 
 # The events this tracker was built for. Seeded once, on a
@@ -107,8 +110,8 @@ def parse_target(url):
     if not source:
         raise ValueError(
             f"unsupported EDM event URL: {url!r} — expected posh.vip, "
-            "events.leapevents.com, wl.eventim.us, shotgun.live, tixr.com "
-            "or tickets.taogroup.com")
+            "events.leapevents.com, wl.eventim.us, shotgun.live, tixr.com, "
+            "tickets.taogroup.com or <name>.frontgatetickets.com")
     return source, SOURCES[source].parse_url(s)
 
 
