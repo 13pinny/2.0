@@ -1,0 +1,13 @@
+# Add the two handle blocks inside your existing kartis.homes site block,
+# after the basicauth line, so the watcher sits behind the same login.
+
+kartis.homes {
+	# basicauth { ... }   <- your existing login stays as it is
+
+	redir /frontgate /frontgate/
+	handle_path /frontgate/* {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	# ... the rest of your existing site config
+}

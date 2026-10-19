@@ -2,3 +2,5 @@ browser-profile/
 debug/
 __pycache__/
 .venv/
+frontgate/*.db*
+frontgate/.env

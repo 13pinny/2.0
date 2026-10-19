@@ -58,3 +58,39 @@ To test notifications, go to **Actions → Shotgun watch → Run workflow** and 
 **The 24-event limit:** The page shows only the first 24 upcoming events, about a month out, behind a "See more" button. Add a free `JINA_API_KEY` secret from jina.ai and the scraper clicks "See more" until it has the full list. Without the key, an event announced further out triggers a ping once it moves into that window.
 
 To run it locally: `python3 shotgun_watch.py --dry-run`. To watch another venue, use `--url https://shotgun.live/en/venues/<venue> --state other.json`.
+
+---
+
+# Frontgate stock watcher
+
+A small web app for **kartis.homes/frontgate**. Paste a `*.frontgatetickets.com/event/...` link and it shows how many tickets were released and how many are left in each tier. It checks every 2 minutes, keeps a history chart, and pings Discord/ntfy when:
+
+- a tier sells out (or every remaining ticket is sitting in carts)
+- a sold-out tier comes back (expired carts or a new drop)
+- a new tier is released, or a tier's capacity is raised
+- the total left drops below the number you set for that event
+
+**How it reads stock:** Frontgate's event pages don't show counts, but their seating-chart code calls a public endpoint, `/section/<eventHubId>/info`, that returns `totalSeats` and `availableSeats` per section. The watcher reads the event page once to find the `eventHubId`, then polls that endpoint. It never adds to a cart. "Left" excludes tickets in other people's carts, so it can tick back up when a 10-minute cart expires.
+
+Everything is in `frontgate/`. It uses only the Python standard library and stores data in SQLite.
+
+## Run it on the kartis.homes server
+
+1. Copy this repo to the server, e.g. `git clone https://github.com/13pinny/2.0 /opt/2.0`.
+2. Create `/opt/2.0/frontgate/.env` with your alert settings:
+   ```
+   DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+   NTFY_TOPIC=your-topic
+   ```
+3. Install the service: copy `frontgate/frontgate-watch.service` to `/etc/systemd/system/`, then run `sudo systemctl daemon-reload && sudo systemctl enable --now frontgate-watch`.
+4. Add the `/frontgate` block from `frontgate/Caddyfile.example` to your kartis.homes site block, then run `sudo systemctl reload caddy`. Your existing Caddy login covers it. The app itself only listens on 127.0.0.1:8787.
+
+Open https://kartis.homes/frontgate/ and use **Send test ping** to check your alerts.
+
+| setting | default | meaning |
+| --- | --- | --- |
+| `FRONTGATE_INTERVAL` | `120` | seconds between checks (minimum 30) |
+| `FRONTGATE_PORT` / `FRONTGATE_HOST` | `8787` / `127.0.0.1` | where the app listens |
+| `FRONTGATE_DB` | `frontgate/frontgate.db` | SQLite file |
+
+To check one event quickly from a terminal: `python3 frontgate/frontgate_watch.py --check <link>`.
