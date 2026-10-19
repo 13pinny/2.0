@@ -1061,6 +1061,7 @@ _EDM_SOURCE_LABEL = {
     # tao covers both Marquee rooms, and the venue name is already on the
     # embed's first line — so the label names the operator, not the room.
     "tao": "Tao Group",
+    "frontgate": "Frontgate",
 }
 
 
@@ -1077,7 +1078,10 @@ def _edm_tier_lines(ev, limit=6):
         elif t.get("closed"):
             state = " · not on sale"
         elif t.get("available") is not None:
-            state = f" · **{t['available']}** left"
+            state = f" · **{t['available']:,}** left"
+            # Frontgate publishes the released count too — "472 of 2,550".
+            if ev.get("source") == "frontgate" and t.get("quantity"):
+                state += f" of {t['quantity']:,}"
         else:
             state = ""
         out.append(f"• {t.get('name') or 'Tickets'}{price}{state}")
@@ -1101,6 +1105,8 @@ def notify_edm_event(kind, ev, old=None):
                    cheaper wave re-opening; the buy-now shock
       'low_stock'  the current release's remaining count crossed the alert
                    threshold (posh only — the others publish no counts)
+      'below'      Frontgate only: the event's total seats left crossed
+                   below the per-event threshold set on /frontgate
 
     `ev` is a normalized dict from one of the *_events fetchers; `old` is
     the previously stored edm_seen_events row.
@@ -1113,7 +1119,7 @@ def notify_edm_event(kind, ev, old=None):
     venue's own new-events channel."""
     if kind in ("price_down", "restock"):
         discord_url = _shocks_webhook(ev.get("venue_key") or ev.get("source"))
-    elif kind in ("price_up", "low_stock"):
+    elif kind in ("price_up", "low_stock", "below"):
         discord_url = _discord_webhook("jumps")
     elif kind == "soldout":
         discord_url = _discord_webhook("status")
@@ -1179,6 +1185,13 @@ def notify_edm_event(kind, ev, old=None):
             lines.append(f"Was {was} earlier — the next release usually costs more.")
         else:
             lines.append("The next release usually costs more.")
+    elif kind == "below":
+        left = ev.get("_left")
+        title = (f"⏳ {site}: {name} — {left:,} left (under your "
+                 f"{ev.get('_alert_threshold'):,} alert)")
+        color = 0xED4245
+        if ev.get("total_released"):
+            lines.append(f"{left:,} of {ev['total_released']:,} released are left.")
     else:  # 'new'
         # A catalog source discovers its own events, so 'new' there means
         # the venue just put a show on the calendar — the headline should
@@ -1209,7 +1222,7 @@ def notify_edm_event(kind, ev, old=None):
     if ev.get("page_url"):
         embed["url"] = ev["page_url"]
     payload = {"embeds": [embed]}
-    if kind in ("price_down", "restock", "low_stock"):
+    if kind in ("price_down", "restock", "low_stock", "below"):
         # Discord's phone push previews only `content`, not the embed — put
         # the headline on the lock screen for the time-critical kinds.
         payload["content"] = title[:1990]

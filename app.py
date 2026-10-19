@@ -41,6 +41,7 @@ import matcher
 import notify
 import edm_events
 import eventim_events
+import frontgate_events
 from edm_common import EdmEventsError
 import pacha_events
 import pacha_tickets
@@ -711,9 +712,39 @@ def _edm_diff(ev, old):
     return kinds
 
 
+def _frontgate_left(tiers):
+    """Seats left across every Frontgate section (sold-out ones count 0),
+    or None when no section publishes a count."""
+    vals = [t.get("available") for t in (tiers or []) if t.get("available") is not None]
+    return sum(vals) if vals else None
+
+
+def _frontgate_alert_kinds(ev, old):
+    """Frontgate's own alert: the event's total seats left crossed below the
+    per-event threshold set on /frontgate. Fires once per crossing; going
+    back above (carts expiring, a new section) re-arms it."""
+    if ev.get("source") != frontgate_events.SOURCE_NAME:
+        return []
+    n = db.frontgate_alert_get(ev["event_id"])
+    if n is None:
+        return []
+    try:
+        old_tiers = json.loads(old.get("tiers_json") or "[]")
+    except (ValueError, TypeError):
+        return []
+    was, now_left = _frontgate_left(old_tiers), _frontgate_left(ev.get("tiers"))
+    if was is None or now_left is None:
+        return []
+    if was > n >= now_left:
+        ev["_alert_threshold"] = n
+        ev["_left"] = now_left
+        return ["below"]
+    return []
+
+
 # Perishable first, so a burst of routine pings can't push a price drop or
 # a restock past the per-tick cap.
-_EDM_KIND_PRIORITY = {"price_down": 0, "restock": 1, "low_stock": 2,
+_EDM_KIND_PRIORITY = {"price_down": 0, "restock": 1, "below": 2, "low_stock": 2,
                       "new_tier": 3, "onsale": 4, "soldout": 5,
                       "price_up": 6, "new": 7}
 
@@ -767,7 +798,7 @@ def run_edm_events():
                 if ev["source"] not in baseline_sources:
                     pings.append(("new", ev, None))
                 continue
-            for kind in _edm_diff(ev, old):
+            for kind in _edm_diff(ev, old) + _frontgate_alert_kinds(ev, old):
                 pings.append((kind, ev, old))
 
         pings.sort(key=lambda p: _EDM_KIND_PRIORITY.get(p[0], 9))
@@ -797,6 +828,8 @@ def run_edm_events():
         for ev in events:
             db.edm_upsert_seen(ev, now_iso)
             db.edm_release_sync(ev["event_id"], ev.get("tiers"), now_iso)
+            if ev["source"] == frontgate_events.SOURCE_NAME:
+                db.frontgate_snapshot(ev, now_iso)
 
         global _edm_last_market_at
         now_dt = datetime.now(timezone.utc)
@@ -808,7 +841,7 @@ def run_edm_events():
 
         counts = {k: sum(1 for kk, _, _ in pings if kk == k)
                   for k in ("new", "onsale", "restock", "soldout", "new_tier",
-                            "price_up", "price_down", "low_stock")}
+                            "price_up", "price_down", "low_stock", "below")}
         _last_edm_events.update(
             at=now_iso, error=None, tracked=len(tracked), events=len(events),
             # A catalog source's first tick stores state without a single
@@ -7047,6 +7080,130 @@ def api_marquee():
     })
 
 
+@app.route("/frontgate")
+def frontgate_page():
+    return render_template("frontgate.html")
+
+
+# Sold-per-window figures on /frontgate, label -> hours.
+_FRONTGATE_WINDOWS = [("1h", 1), ("6h", 6), ("24h", 24), ("7d", 24 * 7)]
+
+
+def _frontgate_sold_at(snaps, t_iso):
+    """Total sold (released - left) across sections as of t_iso, from each
+    section's last snapshot at or before it. None if no section had been
+    seen yet. Sold, not left, so a newly released section adds nothing."""
+    last = {}
+    for r in snaps:
+        if r["at"] > t_iso:
+            break
+        last[r["section_id"]] = r
+    if not last:
+        return None
+    return sum((r["total"] or 0) - (r["available"] or 0) for r in last.values())
+
+
+@app.route("/api/frontgate")
+def api_frontgate():
+    """Everything /frontgate needs: every tracked Frontgate event with its
+    per-section released / left / sold, sold-per-window, the per-section
+    history behind the chart, and its alert threshold. Frontgate events are
+    polled by the EDM tick (same pings), this is just their own view."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    seen = db.edm_all_seen()
+    snaps_all = db.frontgate_snapshots_all()
+    events = []
+    for t in db.edm_tracked_all():
+        if t.get("source") != frontgate_events.SOURCE_NAME:
+            continue
+        r = seen.get(t["event_id"]) or {}
+        try:
+            tiers = json.loads(r.get("tiers_json") or "[]")
+        except ValueError:
+            tiers = []
+        sections = []
+        for x in tiers:
+            total, left = x.get("quantity"), x.get("available")
+            sold = (total - left) if total is not None and left is not None else None
+            sections.append({
+                "section_id": x.get("section_id"), "name": x.get("name"),
+                "price": x.get("price"), "released": total, "left": left,
+                "sold": sold,
+                "pct_sold": round(sold / total * 100, 1) if sold is not None and total else None,
+                "sold_out": bool(x.get("sold_out")),
+            })
+        released = sum(x["released"] or 0 for x in sections) if sections else None
+        left = sum(x["left"] or 0 for x in sections) if sections else None
+        sold = (released - left) if released is not None else None
+        snaps = snaps_all.get(t["event_id"], [])
+        sold_now = _frontgate_sold_at(snaps, now_iso)
+        windows = {}
+        for label, hours in _FRONTGATE_WINDOWS:
+            then = _frontgate_sold_at(snaps, (now - timedelta(hours=hours)).isoformat())
+            windows[label] = (max(0, sold_now - then)
+                              if then is not None and sold_now is not None else None)
+        history = {}
+        for x in snaps:
+            history.setdefault(x["section_id"], {"name": x["name"], "points": []})
+            history[x["section_id"]]["name"] = x["name"] or history[x["section_id"]]["name"]
+            history[x["section_id"]]["points"].append(
+                {"at": x["at"], "released": x["total"], "left": x["available"]})
+        events.append({
+            "event_id": t["event_id"], "event_key": t["event_key"],
+            "url": t.get("url"), "label": t.get("label"),
+            "paused": bool(t.get("paused")), "added_at": t.get("added_at"),
+            "name": r.get("name") or t.get("label"), "venue": r.get("venue"),
+            "date_text": r.get("date_text"), "start_date": r.get("start_date"),
+            "page_url": r.get("page_url") or t.get("url"),
+            "on_sale": bool(r.get("on_sale")), "sold_out": bool(r.get("sold_out")),
+            "min_price": r.get("min_price"),
+            "sections": sections,
+            "released": released, "left": left, "sold": sold,
+            "pct_sold": round(sold / released * 100, 1) if sold is not None and released else None,
+            "windows": windows,
+            "tracking_since": snaps[0]["at"] if snaps else None,
+            "history": [{"section_id": k, **v} for k, v in history.items()],
+            "alert_below": db.frontgate_alert_get(t["event_id"]),
+            "first_seen_at": r.get("first_seen_at"),
+            "last_seen_at": r.get("last_seen_at"),
+            "last_error": r.get("last_error"),
+            "tracked_only": not r,
+        })
+    events.sort(key=lambda e: (e.get("start_date") or "9999", e.get("name") or ""))
+    return jsonify({
+        "events": events,
+        "windows": [k for k, _ in _FRONTGATE_WINDOWS],
+        "low_stock_threshold": EDM_LOW_STOCK_THRESHOLD,
+        "status": {**_last_edm_events,
+                   "enabled": EDM_MONITOR_ENABLED,
+                   "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES},
+        "now": now_iso,
+    })
+
+
+@app.route("/api/frontgate/alert", methods=["POST"])
+def api_frontgate_alert():
+    """{event_id, below}: ping when the event's seats left drop to `below`
+    or fewer. A blank/null `below` clears it."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    event_id = (body.get("event_id") or "").strip()
+    if not event_id.startswith(frontgate_events.SOURCE_NAME + ":"):
+        return jsonify({"error": "frontgate event_id required"}), 400
+    raw = body.get("below")
+    n = None
+    if raw not in (None, ""):
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "below must be a whole number"}), 400
+        if n < 0:
+            return jsonify({"error": "below must be 0 or more"}), 400
+    db.frontgate_alert_set(event_id, n, datetime.now(timezone.utc).isoformat())
+    return jsonify({"event_id": event_id, "alert_below": n})
+
+
 @app.route("/edm")
 def edm_page():
     return render_template("edm.html")
@@ -7070,7 +7227,7 @@ def api_edm():
         # where the tier-ladder view its count-less data actually supports
         # replaces the velocity columns here. The monitor still polls it --
         # this is a view filter, not a tracking change.
-        if t.get("source") == "tao":
+        if t.get("source") in ("tao", frontgate_events.SOURCE_NAME):
             continue
         r = seen.get(t["event_id"]) or {}
         windows, _earliest = _sales_windows(
@@ -7119,7 +7276,8 @@ def api_edm():
     return jsonify({
         "events": events,
         "low_stock_threshold": EDM_LOW_STOCK_THRESHOLD,
-        "sources": sorted(set(edm_events.SOURCES) - set(edm_events.CATALOG_SOURCES)),
+        "sources": sorted(set(edm_events.SOURCES) - set(edm_events.CATALOG_SOURCES)
+                          - {frontgate_events.SOURCE_NAME}),
         # Catalog sources (tao) are surfaced on /marquee, not here.
         "catalog_sources": [],
         "catalogs": {},

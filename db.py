@@ -1258,6 +1258,20 @@ CREATE TABLE IF NOT EXISTS checkin_entries (
     PRIMARY KEY (tier_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_checkin_entries_event ON checkin_entries(event_id, day);
+-- Frontgate per-section stock history (frontgate_events.py, /frontgate).
+-- Written by the EDM tick only when a section's released/left count moved
+-- (or an hour passed), so a flat stretch costs one row an hour.
+CREATE TABLE IF NOT EXISTS frontgate_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id   TEXT NOT NULL,
+    section_id TEXT NOT NULL,
+    name       TEXT,
+    price      REAL,
+    total      INTEGER,
+    available  INTEGER,
+    at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_frontgate_snap ON frontgate_snapshots(event_id, at);
 """
 
 
@@ -5586,3 +5600,68 @@ def dice_purchase_delete(purchase_id):
     with connect() as conn:
         conn.execute("DELETE FROM dice_sale_links WHERE purchase_id = ?", (purchase_id,))
         conn.execute("DELETE FROM dice_purchases WHERE id = ?", (purchase_id,))
+
+
+FRONTGATE_SNAPSHOT_HEARTBEAT_MINUTES = 60
+
+
+def frontgate_snapshot(ev, now_iso):
+    """Record one Frontgate event's per-section counts for /frontgate's
+    history. A section only gets a new row when its total or left changed
+    since its last row, or that row is over an hour old. Returns rows written."""
+    tiers = [t for t in (ev.get("tiers") or []) if t.get("section_id")]
+    if not tiers:
+        return 0
+    now = _dt.datetime.fromisoformat(now_iso)
+    written = 0
+    with connect() as conn:
+        last = {r["section_id"]: dict(r) for r in conn.execute(
+            """SELECT s.* FROM frontgate_snapshots s
+               JOIN (SELECT section_id, MAX(id) AS id FROM frontgate_snapshots
+                     WHERE event_id = ? GROUP BY section_id) m ON m.id = s.id""",
+            (ev["event_id"],)).fetchall()}
+        for t in tiers:
+            prev = last.get(t["section_id"])
+            if prev and prev["total"] == t.get("quantity") \
+                    and prev["available"] == t.get("available"):
+                try:
+                    age = now - _dt.datetime.fromisoformat(prev["at"])
+                except ValueError:
+                    age = _dt.timedelta(days=1)
+                if age < _dt.timedelta(minutes=FRONTGATE_SNAPSHOT_HEARTBEAT_MINUTES):
+                    continue
+            conn.execute(
+                """INSERT INTO frontgate_snapshots (event_id, section_id, name,
+                       price, total, available, at) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (ev["event_id"], t["section_id"], t.get("name"), t.get("price"),
+                 t.get("quantity"), t.get("available"), now_iso))
+            written += 1
+    return written
+
+
+def frontgate_snapshots_all(since_iso=None):
+    """Every snapshot row grouped by event_id, oldest first."""
+    q = "SELECT * FROM frontgate_snapshots"
+    args = ()
+    if since_iso:
+        q += " WHERE at >= ?"
+        args = (since_iso,)
+    with connect() as conn:
+        rows = conn.execute(q + " ORDER BY at, id", args).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["event_id"], []).append(dict(r))
+    return out
+
+
+def frontgate_alert_get(event_id):
+    """Per-event 'ping me when fewer than N are left' threshold, or None."""
+    raw = setting_get(f"frontgate_alert:{event_id}")
+    try:
+        return int(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def frontgate_alert_set(event_id, n, now_iso):
+    setting_set(f"frontgate_alert:{event_id}", "" if n is None else str(int(n)), now_iso)
