@@ -171,6 +171,7 @@ def _now():
 CATALOG_SOURCES = {
     tao_events.SOURCE_NAME: tao_events,
     shotgun_events.SOURCE_NAME: shotgun_events,
+    frontgate_events.SOURCE_NAME: frontgate_events,
 }
 
 # Event keys an announce-only venue has ever listed, per venue, so a show is
@@ -293,8 +294,11 @@ def sync_catalogs(source_names=None, now_iso=None, prune=True):
                 unpause=False)
             if event_id not in existing:
                 added.append(event_id)
+        # A source can opt out (frontgate storefronts: a sold-out event
+        # dropping off the page must stay watched for restocks).
         pruned = (db.edm_tracked_auto_prune(f"{name}:", keep)
-                  if prune and not errors else [])
+                  if prune and not errors and getattr(mod, "PRUNE", True)
+                  else [])
         out[name] = {"added": added, "known": len(keep), "pruned": pruned,
                      "skipped": skipped, "baseline": not existing,
                      "errors": errors, "announce": announce,

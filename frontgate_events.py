@@ -36,7 +36,19 @@ Notes / traps
   regexes ever stop finding it, paste the /section/<id>/info URL instead —
   parse_url accepts it, and so does the "<sub>/<hubId>" shorthand.
 
+Storefronts
+- A promoter's bare storefront (https://givethanks.frontgatetickets.com/)
+  lists several event pages (Give Thanks: 3-day / single-day GA and VIP).
+  Paste one on /frontgate and every /event/<slug> it links is tracked, and
+  events it adds later get picked up: this module is also an EDM catalog
+  source (discover(), see edm_events.CATALOG_SOURCES). The storefront list
+  is data, kept in the `frontgate_storefronts` setting, not in code.
+- PRUNE = False: an event that drops off its storefront (sold out, or the
+  promoter tidied up) stays tracked — a restock is exactly what we'd miss.
+  Remove it by hand on /frontgate.
+
     python frontgate_events.py "<event URL | section info URL | sub/hubId>"  [--json]
+    python frontgate_events.py --storefront <storefront URL>   (list its events)
 """
 import html as _html
 import json
@@ -46,6 +58,7 @@ import sys
 import time
 from datetime import datetime
 
+import db
 import edm_common
 from edm_common import EdmEventsError, make_tier, rollup
 
@@ -78,6 +91,16 @@ _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 _DATE_RE = re.compile(
     r"(Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day,\s+([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})")
 _SHOWTIME_RE = re.compile(r"(?:Show|Doors)\s+at\s+(\d{1,2}(?::\d{2})?\s*[AP]M)", re.I)
+
+
+def parse_storefront(url):
+    """Bare storefront URL ("https://<sub>.frontgatetickets.com/") → sub,
+    else None. Anything with an /event/ or /section/ path is an event."""
+    m = _HOST_RE.search((url or "").strip())
+    if not m or m.group(1).lower() == "www":
+        return None
+    path = (m.group(2) or "").rstrip("/")
+    return m.group(1).lower() if path == "" else None
 
 
 def parse_url(url):
@@ -284,9 +307,87 @@ def fetch_event(event_key):
     return ev
 
 
+# --- storefronts (catalog source) -------------------------------------------
+
+PRUNE = False
+STOREFRONTS_SETTING = "frontgate_storefronts"
+_EVENT_LINK_RE = re.compile(r"/event/([A-Za-z0-9_-]{6,})")
+
+
+def storefronts():
+    """[{sub, name, added_at}] — the storefronts being watched."""
+    try:
+        rows = json.loads(db.setting_get(STOREFRONTS_SETTING) or "[]")
+    except (TypeError, ValueError):
+        rows = []
+    return [r for r in rows if isinstance(r, dict) and r.get("sub")]
+
+
+def _storefronts_save(rows, now_iso):
+    db.setting_set(STOREFRONTS_SETTING, json.dumps(rows), now_iso)
+
+
+def storefront_add(sub, name, now_iso):
+    rows = [r for r in storefronts() if r["sub"] != sub]
+    rows.append({"sub": sub, "name": name, "added_at": now_iso})
+    _storefronts_save(rows, now_iso)
+
+
+def storefront_remove(sub, now_iso):
+    rows = storefronts()
+    _storefronts_save([r for r in rows if r["sub"] != sub], now_iso)
+    return len(rows) != len(storefronts())
+
+
+def fetch_storefront(sub):
+    """(storefront name, [event slugs in page order]) for one storefront.
+    Raises EdmEventsError when the page lists no events at all — a blocked
+    or redesigned page must not read as 'the promoter has nothing on'."""
+    page = edm_common.fetch_text(site_base(sub) + "/")
+    slugs = []
+    for slug in _EVENT_LINK_RE.findall(page):
+        if slug not in slugs:
+            slugs.append(slug)
+    if not slugs:
+        raise EdmEventsError(f"frontgate: no /event/ links on {site_base(sub)}/")
+    meta = parse_meta(page)
+    # og:title reads "GIVE THANKS 2026 | SAN JOSE CONVENTION CENTER | Nov. 25th…"
+    name = (meta.get("name") or "").split(" | ")[0].strip()
+    return (name or sub), slugs
+
+
+def discover():
+    """Every event on every watched storefront, in the catalog-entry shape
+    edm_events.sync_catalogs expects. venue_key is the storefront's sub."""
+    entries, errors = [], {}
+    for sf in storefronts():
+        sub = sf["sub"]
+        try:
+            _name, slugs = fetch_storefront(sub)
+        except EdmEventsError as e:
+            errors[sub] = str(e)
+            continue
+        for slug in slugs:
+            entries.append({
+                "event_key": f"{sub}/{slug}",
+                "ticket_url": f"{site_base(sub)}/event/{slug}",
+                "venue_key": sub,
+                "name": None,
+                "venue": sf.get("name"),
+            })
+    return entries, errors
+
+
 def main(argv):
     as_json = "--json" in argv
     args = [a for a in argv if not a.startswith("--")]
+    if "--storefront" in argv and args:
+        sub = parse_storefront(args[0]) or args[0]
+        name, slugs = fetch_storefront(sub)
+        print(f"{name}: {len(slugs)} event(s)")
+        for slug in slugs:
+            print(f"  {site_base(sub)}/event/{slug}")
+        return 0
     if not args:
         print(__doc__.strip().splitlines()[-1].strip())
         return 2

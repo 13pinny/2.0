@@ -7165,14 +7165,21 @@ def api_frontgate():
             "tracking_since": snaps[0]["at"] if snaps else None,
             "history": [{"section_id": k, **v} for k, v in history.items()],
             "alert_below": db.frontgate_alert_get(t["event_id"]),
+            # Storefront sub this event was discovered on, or None if pasted.
+            "storefront": ((t.get("auto_source") or "").split(":", 1)[-1]
+                           if t.get("auto_source") else None),
             "first_seen_at": r.get("first_seen_at"),
             "last_seen_at": r.get("last_seen_at"),
             "last_error": r.get("last_error"),
             "tracked_only": not r,
         })
-    events.sort(key=lambda e: (e.get("start_date") or "9999", e.get("name") or ""))
+    events.sort(key=lambda e: (e.get("storefront") or "", e.get("start_date") or "9999",
+                               e.get("name") or ""))
     return jsonify({
         "events": events,
+        "storefronts": frontgate_events.storefronts(),
+        "storefront_errors": (_last_edm_catalogs.get(frontgate_events.SOURCE_NAME)
+                              or {}).get("errors") or {},
         "windows": [k for k, _ in _FRONTGATE_WINDOWS],
         "low_stock_threshold": EDM_LOW_STOCK_THRESHOLD,
         "status": {**_last_edm_events,
@@ -7180,6 +7187,48 @@ def api_frontgate():
                    "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES},
         "now": now_iso,
     })
+
+
+@app.route("/api/frontgate/add", methods=["POST"])
+def api_frontgate_add():
+    """{url}: an event link is tracked like /api/edm/add does; a bare
+    storefront link (https://<sub>.frontgatetickets.com/) is watched as a
+    whole — every event it lists is tracked now, and new ones as they
+    appear (the EDM tick's catalog sync)."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
+    sub = frontgate_events.parse_storefront(url)
+    if not sub:
+        return api_edm_add()
+    try:
+        name, slugs = frontgate_events.fetch_storefront(sub)
+    except Exception as e:
+        return jsonify({"error": f"could not read that storefront: {e}"}), 502
+    now_iso = datetime.now(timezone.utc).isoformat()
+    frontgate_events.storefront_add(sub, name, now_iso)
+    res = edm_events.sync_catalogs([frontgate_events.SOURCE_NAME], now_iso=now_iso)
+    r = res.get(frontgate_events.SOURCE_NAME) or {}
+    return jsonify({"storefront": sub, "name": name, "events": len(slugs),
+                    "added": len(r.get("added") or [])})
+
+
+@app.route("/api/frontgate/storefront/remove", methods=["POST"])
+def api_frontgate_storefront_remove():
+    """{sub}: stop watching a storefront and untrack the events it added.
+    Events pasted by hand stay; history stays either way."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    sub = (body.get("sub") or "").strip().lower()
+    if not sub:
+        return jsonify({"error": "sub required"}), 400
+    frontgate_events.storefront_remove(sub, datetime.now(timezone.utc).isoformat())
+    prefix = f"{frontgate_events.SOURCE_NAME}:{sub}/"
+    gone = [eid for eid in db.edm_tracked_auto_ids(f"{frontgate_events.SOURCE_NAME}:{sub}")
+            if eid.startswith(prefix)]
+    for eid in gone:
+        db.edm_tracked_remove(eid)
+    return jsonify({"storefront": sub, "removed_events": len(gone)})
 
 
 @app.route("/api/frontgate/alert", methods=["POST"])
