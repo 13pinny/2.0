@@ -51,6 +51,8 @@
   tr.event-hdr .sub { color: var(--muted); font-weight: 400; margin-left: 10px; }
   tr.event-hdr .avg { float: right; color: var(--green); font-variant-numeric: tabular-nums; }
   tr.event-hdr .avg .muted { font-weight: 400; }
+  tr.event-hdr .copy { float: right; margin: -3px 0 -3px 12px; padding: 3px 8px; font-size: 10px; font-weight: 400; }
+  .copy-all { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 8px; }
   .st { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .st .dot { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
   .st.ok { color: var(--green); }
@@ -121,6 +123,7 @@
       <tbody id="rows"><tr><td colspan="11" class="empty">Loading…</td></tr></tbody>
     </table>
   </div>
+  <div class="copy-all"><span class="small muted" id="copy-all-n"></span><button id="btn-copy-all">Copy all order numbers</button></div>
   <h2 id="dice-h" style="display:none">DICE transfers not matched to an order <span class="count" id="dice-count"></span></h2>
   <div class="table-wrap" id="dice-wrap" style="display:none">
     <table>
@@ -195,6 +198,23 @@ function confirmedAvg(g) {
   const n = Object.values(by).reduce((a, v) => a + v.qty, 0);
   return `Avg ${parts.join(" + ")} <span class="muted">(${n} confirmed)</span>`;
 }
+// Order numbers for pasting into internal notes: non-cancelled orders that
+// have a real platform order number, de-duplicated, joined by ", ".
+let ALL_REFS = [];
+function orderRefs(g) {
+  return [...new Set(g.filter(o => o.status !== "cancelled" && o.order_ref).map(o => o.order_ref))];
+}
+async function copyRefs(refs) {
+  const text = refs.join(", ");
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+  }
+  toast(`Copied ${refs.length} order number${refs.length === 1 ? "" : "s"}: ${text}`);
+}
 function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.style.display = "block";
   clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = "none", 6000);
@@ -248,7 +268,10 @@ function render() {
     const g = groups.get(k), f = g[0];
     const gq = g.reduce((a, o) => a + (o.status === "cancelled" ? 0 : (o.qty || 0)), 0);
     const avg = confirmedAvg(g);
-    html += `<tr class="event-hdr"><td colspan="11">${esc(f.event_name || "Unknown event")}` +
+    const refs = orderRefs(g);
+    html += `<tr class="event-hdr"><td colspan="11">` +
+            (refs.length ? `<button class="copy" data-refs="${esc(refs.join(", "))}" title="Copy this event's order numbers">Copy order #s (${refs.length})</button>` : "") +
+            `${esc(f.event_name || "Unknown event")}` +
             `<span class="sub">${esc(evDate(f.event_date_iso) || f.event_date_text || "")}${f.venue ? " · " + esc(f.venue) : ""} · ${gq} ticket${gq === 1 ? "" : "s"}</span>` +
             `${avg ? `<span class="avg" title="Total paid ÷ tickets, confirmed orders only">${avg}</span>` : ""}</td></tr>`;
     for (const o of g) {
@@ -290,6 +313,10 @@ function render() {
     }
   }
   $("rows").innerHTML = html || `<tr><td colspan="11" class="empty">No orders yet. Click "Check email" (or "Backfill" for older ones).</td></tr>`;
+  document.querySelectorAll("tr.event-hdr .copy").forEach(b => b.addEventListener("click", () => copyRefs(b.dataset.refs.split(", "))));
+  ALL_REFS = orderRefs(keys.flatMap(k => groups.get(k)));
+  $("copy-all-n").textContent = ALL_REFS.length ? `${ALL_REFS.length} order number${ALL_REFS.length === 1 ? "" : "s"} shown` : "";
+  $("btn-copy-all").disabled = !ALL_REFS.length;
   document.querySelectorAll("tr.order").forEach(tr => tr.addEventListener("click", () => openEdit(tr.dataset.id)));
 
   const spare = DATA.dice_unmatched || [];
@@ -353,6 +380,7 @@ async function runNow(days) {
 
 $("btn-check").onclick = () => runNow(0);
 $("btn-backfill").onclick = () => runNow(120);
+$("btn-copy-all").onclick = () => copyRefs(ALL_REFS);
 $("m-cancel").onclick = () => $("modal").classList.remove("open");
 $("m-save").onclick = () => save();
 $("m-hide").onclick = () => save({hidden: !EDITING.hidden});
