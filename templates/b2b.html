@@ -49,6 +49,8 @@
   .seats { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   tr.event-hdr td { background: var(--bg-3); font-weight: 600; font-size: 12px; padding: 9px 10px; }
   tr.event-hdr .sub { color: var(--muted); font-weight: 400; margin-left: 10px; }
+  tr.event-hdr .avg { float: right; color: var(--green); font-variant-numeric: tabular-nums; }
+  tr.event-hdr .avg .muted { font-weight: 400; }
   .st { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .st .dot { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
   .st.ok { color: var(--green); }
@@ -175,6 +177,24 @@ function evDate(iso) {
   const d = new Date(iso + "T12:00:00");
   return d.toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric", year: "numeric"});
 }
+// Average paid per ticket over the group's CONFIRMED orders (total ÷ qty,
+// qty-weighted). Orders in different currencies are averaged separately
+// rather than mixed; an order with no qty or no cost is left out.
+function confirmedAvg(g) {
+  const by = {};
+  g.forEach(o => {
+    if (o.status !== "confirmed" || !o.qty) return;
+    const total = o.total ?? (o.price_each != null ? o.price_each * o.qty : null);
+    if (total == null || total === "") return;
+    const cur = o.currency || "USD";
+    by[cur] = by[cur] || {paid: 0, qty: 0};
+    by[cur].paid += Number(total); by[cur].qty += o.qty;
+  });
+  const parts = Object.entries(by).map(([cur, v]) => `${money(v.paid / v.qty, cur)}/ticket`);
+  if (!parts.length) return "";
+  const n = Object.values(by).reduce((a, v) => a + v.qty, 0);
+  return `Avg ${parts.join(" + ")} <span class="muted">(${n} confirmed)</span>`;
+}
 function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.style.display = "block";
   clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = "none", 6000);
@@ -227,8 +247,10 @@ function render() {
   for (const k of keys) {
     const g = groups.get(k), f = g[0];
     const gq = g.reduce((a, o) => a + (o.status === "cancelled" ? 0 : (o.qty || 0)), 0);
+    const avg = confirmedAvg(g);
     html += `<tr class="event-hdr"><td colspan="11">${esc(f.event_name || "Unknown event")}` +
-            `<span class="sub">${esc(evDate(f.event_date_iso) || f.event_date_text || "")}${f.venue ? " · " + esc(f.venue) : ""} · ${gq} ticket${gq === 1 ? "" : "s"}</span></td></tr>`;
+            `<span class="sub">${esc(evDate(f.event_date_iso) || f.event_date_text || "")}${f.venue ? " · " + esc(f.venue) : ""} · ${gq} ticket${gq === 1 ? "" : "s"}</span>` +
+            `${avg ? `<span class="avg" title="Total paid ÷ tickets, confirmed orders only">${avg}</span>` : ""}</td></tr>`;
     for (const o of g) {
       let st;
       if (o.status === "cancelled") {
