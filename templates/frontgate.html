@@ -58,6 +58,11 @@
   .foot input[type=number] { width: 90px; }
   .foot .spacer { flex: 1; }
   .errline { font-size: 11px; color: var(--red); margin-top: 8px; word-break: break-word; }
+  .sf { display: flex; gap: 8px; flex-wrap: wrap; margin: -4px 0 14px; }
+  .sf .chip { font-size: 12px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 14px; padding: 3px 4px 3px 12px; display: inline-flex; align-items: center; gap: 6px; }
+  .sf .chip .x { border: none; background: none; color: var(--muted); font-size: 14px; padding: 0 6px; cursor: pointer; }
+  .sf .chip.bad { border-color: var(--red); }
+  h3.group { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin: 22px 0 10px; }
   .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 13px; }
   @media (max-width: 640px) { header, main { padding-left: 16px; padding-right: 16px; } .card { padding: 14px; } }
 </style>
@@ -74,10 +79,11 @@
   <div class="msg err" id="errbox"></div>
   <div class="msg ok" id="okbox"></div>
   <div class="addrow">
-    <input type="text" id="addurl" placeholder="Paste a Frontgate event link (…frontgatetickets.com/event/…)" />
+    <input type="text" id="addurl" placeholder="Paste a Frontgate event link, or a whole storefront (…frontgatetickets.com/)" />
     <button class="primary" id="addbtn">Track</button>
   </div>
   <p class="sub" id="statusline">—</p>
+  <div id="storefronts"></div>
   <div id="events"></div>
   <p class="sub">"Left" excludes seats sitting in other buyers' carts (10-minute hold), so it can tick back up when carts expire.
     Pings: restock and price drops go to #frontgate-shocks, sell-outs to #status, low stock and your "under N left" alert to #jumps.</p>
@@ -216,8 +222,24 @@ function card(ev, windows){
 let DATA = null;
 function render(){
   const evs = DATA.events;
-  $('events').innerHTML = evs.length ? evs.map(e => card(e, DATA.windows)).join('')
-    : '<div class="empty">No Frontgate events tracked yet. Paste an event link above.</div>';
+  const sfs = DATA.storefronts || [];
+  const sfName = Object.fromEntries(sfs.map(x => [x.sub, x.name || x.sub]));
+  const sfErr = DATA.storefront_errors || {};
+  $('storefronts').innerHTML = sfs.length ? '<div class="sf">' + sfs.map(x =>
+      `<span class="chip ${sfErr[x.sub] ? 'bad' : ''}" title="${escape(sfErr[x.sub] || 'Watching for new events')}">Storefront: ${escape(x.name || x.sub)}
+        <button class="x" data-sfremove="${escape(x.sub)}" title="Stop watching this storefront">×</button></span>`).join('') + '</div>' : '';
+  // Events from a storefront sit under its name; pasted events first.
+  let html = '', group;
+  for (const e of evs) {
+    const g = e.storefront || '';
+    if (g !== group) {
+      if (g) html += `<h3 class="group">${escape(sfName[g] || g)}</h3>`;
+      group = g;
+    }
+    html += card(e, DATA.windows);
+  }
+  $('events').innerHTML = evs.length ? html
+    : '<div class="empty">No Frontgate events tracked yet. Paste an event or storefront link above.</div>';
   const st = DATA.status || {};
   $('meta').textContent = `${evs.length} event${evs.length === 1 ? '' : 's'}`;
   $('statusline').textContent = st.enabled === false
@@ -238,14 +260,26 @@ $('addbtn').onclick = async () => {
   if (!url) return;
   $('addbtn').disabled = true;
   try {
-    const j = await post('/api/edm/add', {url});
-    flash($('okbox'), `Tracking ${j.name || j.event_id}`);
+    const j = await post('/api/frontgate/add', {url});
+    flash($('okbox'), j.storefront
+      ? `Watching ${j.name}: ${j.events} event${j.events === 1 ? '' : 's'} tracked`
+      : `Tracking ${j.name || j.event_id}`);
     $('addurl').value = '';
     // Run a tick now so the counts show without waiting for the next poll.
     try { await post('/api/edm-events/run-now', {}); } catch (e) {}
     load();
   } catch (e) { flash($('errbox'), e.message); }
   finally { $('addbtn').disabled = false; }
+};
+$('storefronts').onclick = async e => {
+  const b = e.target.closest('button[data-sfremove]');
+  if (!b) return;
+  if (!confirm('Stop watching this storefront and untrack its events? Their history stays in the database.')) return;
+  try {
+    const j = await post('/api/frontgate/storefront/remove', {sub: b.dataset.sfremove});
+    flash($('okbox'), `Stopped watching; ${j.removed_events} event(s) untracked`);
+    load();
+  } catch (err) { flash($('errbox'), err.message); }
 };
 $('addurl').onkeydown = e => { if (e.key === 'Enter') $('addbtn').click(); };
 
