@@ -1,7 +1,7 @@
 name: Shotgun watch
 
 on:
-  # Schedule off: this repo\'s default branch is the Kartis deploy branch, and
+  # Schedule off: the repo default branch is the Kartis deploy branch, and
   # each run commits state back, which would redeploy the server every 30 min.
   # The VPS already watches Tao and Shotgun. Run by hand, or restore the cron.
   # schedule:
