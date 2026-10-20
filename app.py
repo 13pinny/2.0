@@ -786,9 +786,45 @@ def _liv_autopair(events, now_iso):
         db.setting_set(LIV_PAIRS_SETTING, json.dumps(pairs), now_iso)
 
 
+# A count-publishing source pings when one section/tier goes from 0 left
+# back to buyable, even while the rest of the event is still on sale (the
+# event-level 'restock' only fires when EVERYTHING was sold out). Frontgate
+# frees cart holds after 10 minutes, so a section can bounce 0 -> 2 -> 0;
+# one ping per section per TIER_RESTOCK_COOLDOWN_MINUTES keeps that quiet.
+TIER_RESTOCK_COOLDOWN_MINUTES = int(os.getenv("KARTIS_TIER_RESTOCK_COOLDOWN_MINUTES") or 30)
+_tier_restock_last = {}   # (event_id, tier key) -> datetime of last ping
+
+
+def _tier_restock_kinds(ev, old, kinds):
+    if ev.get("source") not in _STOCK_SNAPSHOT_SOURCES or "restock" in kinds:
+        return []
+    try:
+        old_tiers = json.loads(old.get("tiers_json") or "[]")
+    except (ValueError, TypeError):
+        return []
+    key = lambda t: t.get("section_id") or (t.get("name") or "").strip()
+    was = {key(t): t.get("available") for t in old_tiers}
+    now = datetime.now(timezone.utc)
+    back = []
+    for t in ev.get("tiers") or []:
+        k = key(t)
+        left = t.get("available")
+        if (was.get(k) == 0 and left is not None and left > 0
+                and not t.get("closed")):
+            last = _tier_restock_last.get((ev["event_id"], k))
+            if last and now - last < timedelta(minutes=TIER_RESTOCK_COOLDOWN_MINUTES):
+                continue
+            _tier_restock_last[(ev["event_id"], k)] = now
+            back.append(t)
+    if not back:
+        return []
+    ev["_restocked"] = back
+    return ["tier_restock"]
+
+
 # Perishable first, so a burst of routine pings can't push a price drop or
 # a restock past the per-tick cap.
-_EDM_KIND_PRIORITY = {"price_down": 0, "restock": 1, "below": 2, "low_stock": 2,
+_EDM_KIND_PRIORITY = {"price_down": 0, "restock": 1, "tier_restock": 1, "below": 2, "low_stock": 2,
                       "new_tier": 3, "onsale": 4, "soldout": 5,
                       "price_up": 6, "new": 7}
 
@@ -842,7 +878,9 @@ def run_edm_events():
                 if ev["source"] not in baseline_sources:
                     pings.append(("new", ev, None))
                 continue
-            for kind in _edm_diff(ev, old) + _frontgate_alert_kinds(ev, old):
+            kinds = _edm_diff(ev, old) + _frontgate_alert_kinds(ev, old)
+            kinds += _tier_restock_kinds(ev, old, kinds)
+            for kind in kinds:
                 pings.append((kind, ev, old))
 
         pings.sort(key=lambda p: _EDM_KIND_PRIORITY.get(p[0], 9))
@@ -886,7 +924,8 @@ def run_edm_events():
 
         counts = {k: sum(1 for kk, _, _ in pings if kk == k)
                   for k in ("new", "onsale", "restock", "soldout", "new_tier",
-                            "price_up", "price_down", "low_stock", "below")}
+                            "price_up", "price_down", "low_stock", "below",
+                            "tier_restock")}
         _last_edm_events.update(
             at=now_iso, error=None, tracked=len(tracked), events=len(events),
             # A catalog source's first tick stores state without a single

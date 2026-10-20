@@ -1107,6 +1107,9 @@ def notify_edm_event(kind, ev, old=None):
                    cheaper wave re-opening; the buy-now shock
       'low_stock'  the current release's remaining count crossed the alert
                    threshold (posh only — the others publish no counts)
+      'tier_restock' a count-publishing source (Frontgate, Universe,
+                   UrVenue): one section/tier went from 0 left back to
+                   buyable while the event was still on sale — perishable
       'below'      Frontgate only: the event's total seats left crossed
                    below the per-event threshold set on /frontgate
 
@@ -1119,7 +1122,7 @@ def notify_edm_event(kind, ev, old=None):
     'jumps', a full sell-out to 'status', the rest to 'new_events' — or,
     for a source that names its venue (tao's two Marquee rooms), that
     venue's own new-events channel."""
-    if kind in ("price_down", "restock"):
+    if kind in ("price_down", "restock", "tier_restock"):
         discord_url = _shocks_webhook(ev.get("venue_key") or ev.get("source"))
     elif kind in ("price_up", "low_stock", "below"):
         discord_url = _discord_webhook("jumps")
@@ -1151,6 +1154,19 @@ def notify_edm_event(kind, ev, old=None):
             lines.append(f"From **${price:,.2f}**"
                          + (f" ({ev['lead_tier']})" if ev.get("lead_tier") else ""))
         lines.append("It was sold out — returns usually go fast.")
+    elif kind == "tier_restock":
+        back = ev.get("_restocked") or []
+        first = back[0] if back else {}
+        label = ", ".join(t.get("name") or "Tickets" for t in back[:3]) or "a section"
+        title = (f"⚡ {site}: {name} — {label} back in stock"
+                 + (f" ({first['available']:,} left)" if len(back) == 1
+                    and first.get("available") is not None else ""))
+        color = 0x00B0F4
+        for t in back[:6]:
+            p = f" @ ${t['price']:,.2f}" if t.get("price") is not None else ""
+            lines.append(f"**{t.get('name') or 'Tickets'}**{p}: was 0, now "
+                         f"**{t.get('available'):,}** left")
+        lines.append("Usually returns or expired carts, so they go fast.")
     elif kind == "soldout":
         title = f"🚫 {site}: {name} is SOLD OUT"
         color = 0x99AAB5
@@ -1224,7 +1240,7 @@ def notify_edm_event(kind, ev, old=None):
     if ev.get("page_url"):
         embed["url"] = ev["page_url"]
     payload = {"embeds": [embed]}
-    if kind in ("price_down", "restock", "low_stock", "below"):
+    if kind in ("price_down", "restock", "tier_restock", "low_stock", "below"):
         # Discord's phone push previews only `content`, not the embed — put
         # the headline on the lock screen for the time-critical kinds.
         payload["content"] = title[:1990]
