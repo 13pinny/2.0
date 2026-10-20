@@ -1,0 +1,58 @@
+name: Tao price watch
+
+on:
+  # Schedule off: this repo\'s default branch is the Kartis deploy branch, and
+  # each run commits state back, which would redeploy the server every 30 min.
+  # The VPS already watches Tao and Shotgun. Run by hand, or restore the cron.
+  # schedule:
+  #   - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "Save page text/HTML as a downloadable artifact"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tao-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          pip install "playwright>=1.45"
+          python -m playwright install --with-deps chromium
+
+      - name: Check prices
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python tao_watch.py --once ${{ inputs.debug && '--debug' || '' }}
+
+      - name: Upload debug pages
+        if: ${{ inputs.debug }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-pages
+          path: debug/
+          if-no-files-found: ignore
+
+      - name: Save price history
+        run: |
+          git config user.name "tao-watch-bot"
+          git config user.email "tao-watch-bot@users.noreply.github.com"
+          git add prices.json 2>/dev/null || true
+          git diff --cached --quiet || (git commit -m "Update prices" && git push)

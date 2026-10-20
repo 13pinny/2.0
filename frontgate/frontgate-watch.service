@@ -1,0 +1,17 @@
+# systemd unit: copy to /etc/systemd/system/, adjust the paths, then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now frontgate-watch
+[Unit]
+Description=Frontgate ticket stock watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/2.0/frontgate
+ExecStart=/usr/bin/python3 /opt/2.0/frontgate/frontgate_watch.py
+# put DISCORD_WEBHOOK_URL=..., NTFY_TOPIC=..., FRONTGATE_INTERVAL=... in this file
+EnvironmentFile=-/opt/2.0/frontgate/.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
