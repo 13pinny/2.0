@@ -4207,7 +4207,11 @@ def edm_release_sync(event_id, tiers, now_iso):
         current = set()
         for t in tiers or []:
             name = (t.get("name") or "").strip()
-            if not name:
+            # A page can list two tiers under one name (e.g. two tables or
+            # sections with the same label). The first one wins; inserting the
+            # second would break the (event_id, tier_name) UNIQUE key and abort
+            # the whole EDM tick.
+            if not name or name in current:
                 continue
             current.add(name)
             sold_out_now = bool(t.get("sold_out")) or t.get("available") == 0
