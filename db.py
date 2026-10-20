@@ -1258,7 +1258,9 @@ CREATE TABLE IF NOT EXISTS checkin_entries (
     PRIMARY KEY (tier_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_checkin_entries_event ON checkin_entries(event_id, day);
--- Frontgate per-section stock history (frontgate_events.py, /frontgate).
+-- Per-section stock history for the count-publishing EDM sources: Frontgate
+-- (/frontgate), Universe GA tiers and UrVenue tables (/liv). section_id is
+-- the source's own tier id (section / rate / item code).
 -- Written by the EDM tick only when a section's released/left count moved
 -- (or an hour passed), so a flat stretch costs one row an hour.
 CREATE TABLE IF NOT EXISTS frontgate_snapshots (

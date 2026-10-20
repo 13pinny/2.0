@@ -2,7 +2,8 @@
 and the CLI for managing it.
 
 The per-platform fetchers (posh_events / leap_events / eventim_events /
-shotgun_events / tao_events / frontgate_events) each watch ONE event and return the same normalized dict
+shotgun_events / tao_events / frontgate_events / universe_events /
+urvenue_events) each watch ONE event and return the same normalized dict
 (the contract is in edm_common.py); this module decides which
 fetcher a URL belongs to, keeps the list of events being polled in
 edm_tracked_events, and fetches them all for one tick of app.py's
@@ -38,6 +39,8 @@ import posh_events
 import shotgun_events
 import tao_events
 import tixr_events
+import universe_events
+import urvenue_events
 from edm_common import EdmEventsError
 
 SOURCES = {
@@ -48,6 +51,8 @@ SOURCES = {
     tixr_events.SOURCE_NAME: tixr_events,
     tao_events.SOURCE_NAME: tao_events,
     frontgate_events.SOURCE_NAME: frontgate_events,
+    universe_events.SOURCE_NAME: universe_events,
+    urvenue_events.SOURCE_NAME: urvenue_events,
 }
 
 # Host fragment → source. Checked before the parse_url fallback so a URL is
@@ -60,6 +65,8 @@ _HOST_HINTS = (
     ("tixr.com", "tixr"),
     ("tickets.taogroup.com", "tao"),
     ("frontgatetickets.com", "frontgate"),
+    ("universe.com", "universe"),
+    ("livnightclub.com", "urvenue"),
 )
 
 # The events this tracker was built for. Seeded once, on a
@@ -111,7 +118,8 @@ def parse_target(url):
         raise ValueError(
             f"unsupported EDM event URL: {url!r} — expected posh.vip, "
             "events.leapevents.com, wl.eventim.us, shotgun.live, tixr.com, "
-            "tickets.taogroup.com or <name>.frontgatetickets.com")
+            "tickets.taogroup.com, <name>.frontgatetickets.com, universe.com "
+            "or a livnightclub.com event")
     return source, SOURCES[source].parse_url(s)
 
 
