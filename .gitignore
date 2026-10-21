@@ -45,3 +45,8 @@ cv_session.json
 # .env backups carry live credentials
 .env.bak*
 .env.save
+
+# standalone GitHub Actions watchers (from main)
+browser-profile/
+frontgate/*.db*
+frontgate/.env

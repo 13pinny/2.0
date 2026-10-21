@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frontgate Watcher</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --ink: #1b1b1f; --muted: #6b6b76; --line: #e4e4e0;
+    --accent: #2f5bea; --accent-ink: #ffffff; --good: #1f8a4c; --warn: #b7791f; --bad: #c53030;
+    --bar: #e9e9e5; --sold: #1b1b1f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121214; --card: #1c1c20; --ink: #ececf0; --muted: #9a9aa6; --line: #2c2c33;
+      --accent: #7092ff; --accent-ink: #0d0d10; --good: #48c27a; --warn: #e0a84a; --bad: #f06a6a;
+      --bar: #2a2a31; --sold: #ececf0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  form.add { display: flex; gap: 8px; margin: 18px 0 8px; flex-wrap: wrap; }
+  input { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line);
+          border-radius: 8px; padding: 9px 11px; min-width: 0; }
+  input.url { flex: 1 1 320px; }
+  input.num { width: 130px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+           border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button:disabled { opacity: .6; cursor: progress; }
+  .msg { min-height: 20px; font-size: 13px; color: var(--bad); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-top: 14px; }
+  .card.paused { opacity: .65; }
+  .top { display: flex; gap: 14px; align-items: flex-start; }
+  .top img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; flex: none; background: var(--bar); }
+  .top .info { flex: 1; min-width: 0; }
+  .title { font-weight: 650; font-size: 16px; overflow-wrap: anywhere; }
+  .title a { color: inherit; text-decoration: none; }
+  .title a:hover { text-decoration: underline; }
+  .big { text-align: right; flex: none; }
+  .big .n { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .big .of { color: var(--muted); font-size: 13px; }
+  .low .n { color: var(--warn); } .out .n { color: var(--bad); }
+  .bar { height: 8px; background: var(--bar); border-radius: 4px; overflow: hidden; margin: 14px 0 4px; }
+  .bar > div { height: 100%; background: var(--sold); }
+  .barlabel { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; }
+  th, td { padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+  .chart { margin-top: 12px; }
+  .chart svg { width: 100%; height: 90px; display: block; }
+  .chart .axis { color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; font-size: 13px; }
+  .controls label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  .controls input { width: 100px; padding: 6px 8px; }
+  .controls button { padding: 6px 10px; font-size: 13px; }
+  .spacer { flex: 1; }
+  .err { color: var(--bad); font-size: 13px; margin-top: 8px; }
+  .alerts { margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
+  .alerts li { padding: 2px 0; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  @media (max-width: 560px) {
+    .top { flex-wrap: wrap; }
+    .top img { width: 48px; height: 48px; }
+    .big { text-align: left; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Frontgate watcher</h1>
+    <span class="sub" id="status"></span>
+  </header>
+  <form class="add" id="add">
+    <input class="url" name="url" placeholder="https://something.frontgatetickets.com/event/…" required>
+    <input class="num" name="alert_below" type="number" min="0" placeholder="Alert below…">
+    <button class="primary" type="submit">Watch</button>
+  </form>
+  <div class="msg" id="msg"></div>
+  <div id="list"></div>
+  <p class="sub" style="margin-top:28px">
+    Alerts go to Discord and ntfy when a tier sells out, comes back, a new tier is released,
+    or the total drops below your number. <button type="button" id="test">Send test ping</button>
+  </p>
+</main>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const fmt = n => Number(n).toLocaleString();
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ago = iso => {
+  if (!iso) return "never";
+  const s = Math.round((Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return new Date(iso).toLocaleDateString();
+};
+const histories = {};
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// total available over time, stepping each section's latest value forward
+function totals(history) {
+  const latest = {}, points = [];
+  for (const h of history) {
+    latest[h.section_id] = h.available;
+    const v = Object.values(latest).reduce((a, b) => a + b, 0);
+    const t = new Date(h.ts).getTime();
+    if (points.length && points[points.length - 1].t === t) points[points.length - 1].v = v;
+    else points.push({ t, v });
+  }
+  return points;
+}
+
+function chart(history, total) {
+  const pts = totals(history);
+  if (pts.length < 2) return `<div class="sub">History will build up as stock changes.</div>`;
+  pts.push({ t: Date.now(), v: pts[pts.length - 1].v });
+  const W = 600, H = 90, t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1;
+  const max = Math.max(total || 0, ...pts.map(p => p.v), 1);
+  const x = t => ((t - t0) / Math.max(t1 - t0, 1)) * W;
+  const y = v => H - 4 - (v / max) * (H - 8);
+  let d = `M${x(pts[0].t)},${y(pts[0].v)}`;
+  for (let i = 1; i < pts.length; i++) d += ` H${x(pts[i].t)} V${y(pts[i].v)}`;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Tickets left over time">
+      <path d="${d} V${H} H0 Z" fill="var(--accent)" opacity=".12"/>
+      <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    </svg>
+    <div class="axis"><span>${new Date(t0).toLocaleString([], {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"})}</span>
+    <span>scale 0–${fmt(max)}</span><span>now</span></div>`;
+}
+
+function card(w) {
+  const pct = w.total ? Math.round(w.sold / w.total * 100) : 0;
+  const cls = w.available === 0 ? "out" : (w.alert_below != null && w.available < w.alert_below) ? "low" : "";
+  const rows = w.sections.map(s => `<tr>
+      <td>${esc(s.name || "Section " + s.section_id)}${s.available === 0 ? " · <b>sold out</b>" : ""}</td>
+      <td class="r">${s.price != null ? "$" + Number(s.price).toFixed(2) : ""}</td>
+      <td class="r">${fmt(s.available)}</td><td class="r">${fmt(s.total)}</td></tr>`).join("");
+  const alerts = (w.recent_alerts || []).map(a => `<li>${ago(a.ts)} · ${esc(a.message)}</li>`).join("");
+  return `<div class="card ${w.active ? "" : "paused"}" data-id="${w.id}">
+    <div class="top">
+      ${w.image ? `<img src="${esc(w.image)}" alt="" loading="lazy">` : ""}
+      <div class="info">
+        <div class="title"><a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(w.title)}</a></div>
+        <div class="sub">${esc([w.venue, w.starts].filter(Boolean).join(" · "))}</div>
+        <div class="sub">Checked ${ago(w.last_checked)}${w.active ? "" : " · paused"}</div>
+      </div>
+      <div class="big ${cls}"><div class="n">${fmt(w.available)}</div><div class="of">left of ${fmt(w.total)}</div></div>
+    </div>
+    <div class="bar"><div style="width:${pct}%"></div></div>
+    <div class="barlabel"><span>${fmt(w.sold)} sold or in carts</span><span>${pct}% gone</span></div>
+    <table><thead><tr><th>Tier</th><th class="r">Price</th><th class="r">Left</th><th class="r">Released</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <div class="chart">${histories[w.id] ? chart(histories[w.id], w.total) : ""}</div>
+    ${w.last_error ? `<div class="err">Last check failed: ${esc(w.last_error)}</div>` : ""}
+    <div class="controls">
+      <label>Alert below <input type="number" min="0" class="thr" value="${w.alert_below ?? ""}" placeholder="off"></label>
+      <button data-act="save">Save</button>
+      <span class="spacer"></span>
+      <button data-act="check">Check now</button>
+      <button data-act="toggle">${w.active ? "Pause" : "Resume"}</button>
+      <button data-act="delete">Remove</button>
+    </div>
+    ${alerts ? `<ul class="alerts">${alerts}</ul>` : ""}
+  </div>`;
+}
+
+async function load() {
+  try {
+    const { watches, interval } = await api("api/watches");
+    await Promise.all(watches.map(async w => {
+      histories[w.id] = (await api(`api/watches/${w.id}/history`)).history;
+    }));
+    // don't clobber a threshold someone is typing
+    const typing = document.activeElement?.classList.contains("thr");
+    if (!typing) $("#list").innerHTML = watches.length ? watches.map(card).join("")
+      : `<div class="empty">Paste a Frontgate event link above to start watching.</div>`;
+    $("#status").textContent = `${watches.filter(w => w.active).length} watching · checks every ${Math.round(interval / 60 * 10) / 10} min`;
+  } catch (e) {
+    $("#status").textContent = "Can't reach the watcher: " + e.message;
+  }
+}
+
+$("#add").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target, btn = $("button", f);
+  btn.disabled = true; $("#msg").textContent = "";
+  try {
+    await api("api/watches", { method: "POST", body: JSON.stringify({ url: f.url.value, alert_below: f.alert_below.value }) });
+    f.reset();
+    await load();
+  } catch (err) { $("#msg").textContent = err.message; }
+  btn.disabled = false;
+});
+
+$("#list").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const el = btn.closest(".card"), id = el.dataset.id, act = btn.dataset.act;
+  if (act === "delete" && !confirm("Stop watching this event and delete its history?")) return;
+  btn.disabled = true;
+  try {
+    if (act === "save") await api(`api/watches/${id}`, { method: "PATCH", body: JSON.stringify({ alert_below: $(".thr", el).value }) });
+    if (act === "check") await api(`api/watches/${id}/check`, { method: "POST" });
+    if (act === "toggle") await api(`api/watches/${id}`, { method: "PATCH", body: JSON.stringify({ active: el.classList.contains("paused") }) });
+    if (act === "delete") await api(`api/watches/${id}`, { method: "DELETE" });
+    btn.blur();
+    await load();
+  } catch (err) { alert(err.message); btn.disabled = false; }
+});
+
+$("#test").addEventListener("click", async e => {
+  e.target.disabled = true;
+  try { await api("api/test-notify", { method: "POST" }); e.target.textContent = "Sent"; }
+  catch (err) { alert(err.message); }
+  setTimeout(() => { e.target.disabled = false; e.target.textContent = "Send test ping"; }, 3000);
+});
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
