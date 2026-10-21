@@ -40,14 +40,30 @@ TRAPS
   because its `text` ("Buy tickets from $28.49" / "Sales closed for this
   event") is the site's own summary of buyability.
 
-CLI probe:  python posh_events.py [<url-or-slug>] [--json]
+- PASSWORD-GATED events (presales): the page serves only an
+  EventPagePasswordProtectedForm and no eventId. The site unlocks it with
+  POST /next-bff/events.unlockEvent {eventUrl: <slug>, password}, which
+  answers {"success": true} and sets the cookie `event_<slug>_password=<pw>`;
+  the page fetched with that cookie carries eventId as usual, and from then
+  on getEventTickets needs no cookie at all. So the password only matters
+  when the id is (re)scraped. It rides in the event key, "<slug>@<code>",
+  like eventim's affiliate key — paste "<posh url> <code>" (or
+  ...?password=<code>) on /edm. Such an event can legitimately list ZERO
+  waves before its sale opens (Palm Tree 2027: ticketGroups [] behind
+  PALM2027 on 2026-10-21), so 0 tiers is a quiet "not released yet" there
+  instead of an error; the first wave then arrives as a new_tier ping.
+
+CLI probe:  python posh_events.py [<url-or-slug>[@code]] [--json]
 """
+import gzip
 import json
 import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
 import edm_common
 from edm_common import EdmEventsError, make_tier, rollup
@@ -70,15 +86,41 @@ _URL_RE = re.compile(r"posh\.vip/(?:e|events?)/([A-Za-z0-9._~-]+)", re.I)
 _SLUG_RE = re.compile(r"^[A-Za-z0-9._~-]+$")
 
 
+_PW_QUERY_RE = re.compile(r"[?&#](?:password|code|pw)=([^&#\s]+)", re.I)
+
+
 def parse_url(url):
-    """posh.vip event URL (or bare slug) → slug. Raises ValueError."""
+    """posh.vip event URL (or bare slug) → event key: the slug, or
+    "<slug>@<code>" for a password-gated event. The code comes from a
+    trailing "@code", a ?password=/?code= param, or a second word after the
+    URL ("https://posh.vip/e/x PALM2027"). Raises ValueError."""
     s = (url or "").strip()
+    pw = None
+    head, _, rest = s.partition(" ")
+    if rest.strip() and " " not in rest.strip():
+        s, pw = head, rest.strip()
+    m = _PW_QUERY_RE.search(s)
+    if m:
+        pw = pw or urllib.parse.unquote(m.group(1))
     m = _URL_RE.search(s)
     if m:
-        return m.group(1)
-    if "/" not in s and "." not in s and _SLUG_RE.match(s):
-        return s
-    raise ValueError(f"not a posh.vip event URL: {url!r}")
+        slug = m.group(1)
+    elif "/" not in s and "." not in s and _SLUG_RE.match(s.split("@")[0]):
+        slug = s
+    else:
+        raise ValueError(f"not a posh.vip event URL: {url!r}")
+    if "@" in slug:
+        slug, _, at_pw = slug.partition("@")
+        pw = pw or at_pw
+    if not slug:
+        raise ValueError(f"not a posh.vip event URL: {url!r}")
+    return f"{slug}@{pw}" if pw else slug
+
+
+def split_key(key):
+    """event key → (slug, password or None)."""
+    slug, _, pw = (key or "").partition("@")
+    return slug, (pw or None)
 
 
 def event_page_url(slug):
@@ -115,9 +157,49 @@ def _save_cache(cache):
         pass  # a cache we can't write just means we re-read the page
 
 
-def _scrape_meta(slug):
+def _unlock(slug, password):
+    """Unlock a password-gated event page → the Cookie header value the
+    page then needs. Raises EdmEventsError on a wrong code."""
+    body = json.dumps({"eventUrl": slug, "password": password}).encode()
+    req = urllib.request.Request(f"{BFF_BASE}/events.unlockEvent", data=body,
+                                 method="POST", headers={
+        **edm_common.BROWSER_HEADERS,
+        "Accept": "*/*",
+        "content-type": "application/json",
+        "Origin": SITE_BASE,
+        "Referer": event_page_url(slug),
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=edm_common.REQUEST_TIMEOUT) as resp:
+            raw = resp.read()
+            if resp.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+            cookies = resp.headers.get_all("Set-Cookie") or []
+    except urllib.error.HTTPError as e:
+        raise EdmEventsError(f"posh: unlock {slug} returned HTTP {e.code} "
+                             "— wrong code?") from e
+    except (urllib.error.URLError, OSError) as e:
+        raise EdmEventsError(f"posh: unlock {slug} failed: {e}") from e
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError:
+        data = {}
+    res = ((data.get("result") or {}).get("data") if isinstance(data, dict) else None) or data
+    if isinstance(res, dict) and res.get("json") is not None:
+        res = res["json"]
+    if not (isinstance(res, dict) and res.get("success")):
+        raise EdmEventsError(f"posh: code rejected for {slug}")
+    jar = [c.split(";", 1)[0] for c in cookies if "=" in c]
+    jar.append(f"event_{slug}_password={urllib.parse.quote(password)}")
+    return "; ".join(dict.fromkeys(jar))
+
+
+def _scrape_meta(slug, password=None):
     """eventId + display metadata from the event page's flight payload."""
-    html = edm_common.fetch_text(event_page_url(slug))
+    headers = None
+    if password:
+        headers = {**edm_common.BROWSER_HEADERS, "Cookie": _unlock(slug, password)}
+    html = edm_common.fetch_text(event_page_url(slug), headers=headers)
     payload = _flight_payload(html)
     data = {}
     i = payload.find('"eventResponse"')
@@ -134,6 +216,10 @@ def _scrape_meta(slug):
         m = _EVENT_ID_RE.search(payload) or _EVENT_ID_RE.search(html)
         event_id = m.group(1) if m else None
     if not event_id:
+        if "PasswordProtected" in html or "PasswordProtected" in payload:
+            raise EdmEventsError(f"posh: {event_page_url(slug)} is password-gated "
+                                 + ("and the code didn't unlock it" if password else
+                                    "— add it as \"<url> <code>\""))
         raise EdmEventsError(f"posh: no eventId found on {event_page_url(slug)} "
                              "— layout change or event removed?")
     return {
@@ -151,13 +237,13 @@ def _scrape_meta(slug):
     }
 
 
-def _meta(slug, force=False):
+def _meta(slug, force=False, password=None):
     cache = _load_cache()
     hit = cache.get(slug)
     if (not force and hit and hit.get("event_id")
             and (time.time() - (hit.get("fetched_at") or 0)) < META_TTL_SECONDS):
         return hit
-    meta = _scrape_meta(slug)
+    meta = _scrape_meta(slug, password)
     cache[slug] = meta
     _save_cache(cache)
     return meta
@@ -229,24 +315,28 @@ def _tiers(data):
 
 def fetch_event(slug):
     """One posh event, normalized (see edm_common's module docstring)."""
-    slug = parse_url(slug)
-    meta = _meta(slug)
+    key = parse_url(slug)
+    slug, password = split_key(key)
+    meta = _meta(slug, password=password)
     try:
         data = fetch_tickets(meta["event_id"])
     except EdmEventsError:
         # A cached id can go stale if the organizer re-creates the event on
         # the same slug. Re-scrape once before giving up.
-        meta = _meta(slug, force=True)
+        meta = _meta(slug, force=True, password=password)
         data = fetch_tickets(meta["event_id"])
 
     tiers = _tiers(data)
-    if not tiers:
+    unreleased = (password and not tiers
+                  and isinstance(data.get("ticketGroups"), list)
+                  and not data["ticketGroups"])
+    if not tiers and not unreleased:
         raise EdmEventsError(f"posh: {slug} parsed to 0 ticket tiers "
                              "— API shape change or event unpublished?")
     button = data.get("eventPageButtonInfo") or {}
     ev = {
         "source": SOURCE_NAME,
-        "event_key": slug,
+        "event_key": key,
         "name": meta.get("name") or slug,
         "venue": meta.get("venue"),
         "date_text": _date_text(meta),
@@ -257,7 +347,8 @@ def fetch_event(slug):
         "currency": "USD",
         "tiers": tiers,
         "total_sold": data.get("totalTicketsSold"),
-        "status_text": (button.get("text") or "").strip() or None,
+        "status_text": ((button.get("text") or "").strip()
+                        or ("No tickets released yet" if unreleased else None)),
     }
     return rollup(ev)
 
