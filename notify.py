@@ -1110,8 +1110,8 @@ def notify_edm_event(kind, ev, old=None):
       'tier_restock' a count-publishing source (Frontgate, Universe,
                    UrVenue): one section/tier went from 0 left back to
                    buyable while the event was still on sale — perishable
-      'below'      Frontgate only: the event's total seats left crossed
-                   below the per-event threshold set on /frontgate
+      'below'      Frontgate / Universe: the event's total left crossed
+                   below the per-event threshold set on /frontgate or /universe
 
     `ev` is a normalized dict from one of the *_events fetchers; `old` is
     the previously stored edm_seen_events row.

@@ -715,17 +715,23 @@ def _edm_diff(ev, old):
 
 
 def _frontgate_left(tiers):
-    """Seats left across every Frontgate section (sold-out ones count 0),
-    or None when no section publishes a count."""
-    vals = [t.get("available") for t in (tiers or []) if t.get("available") is not None]
+    """Seats left across every released section/tier (sold-out ones count
+    0), or None when none publishes a count. A Universe tier that isn't
+    released yet ('closed') is left out: its count isn't buyable."""
+    vals = [t.get("available") for t in (tiers or [])
+            if t.get("available") is not None and not t.get("closed")]
     return sum(vals) if vals else None
 
 
+# Sources with a per-event "ping me under N left" box (/frontgate, /universe).
+_LEFT_ALERT_SOURCES = {frontgate_events.SOURCE_NAME, universe_events.SOURCE_NAME}
+
+
 def _frontgate_alert_kinds(ev, old):
-    """Frontgate's own alert: the event's total seats left crossed below the
-    per-event threshold set on /frontgate. Fires once per crossing; going
-    back above (carts expiring, a new section) re-arms it."""
-    if ev.get("source") != frontgate_events.SOURCE_NAME:
+    """The per-event 'under N left' alert set on /frontgate or /universe:
+    the event's total left crossed below the threshold. Fires once per
+    crossing; going back above (carts expiring, a new tier) re-arms it."""
+    if ev.get("source") not in _LEFT_ALERT_SOURCES:
         return []
     n = db.frontgate_alert_get(ev["event_id"])
     if n is None:
@@ -7322,8 +7328,8 @@ def api_frontgate_alert():
     from flask import request
     body = request.get_json(silent=True) or {}
     event_id = (body.get("event_id") or "").strip()
-    if not event_id.startswith(frontgate_events.SOURCE_NAME + ":"):
-        return jsonify({"error": "frontgate event_id required"}), 400
+    if not any(event_id.startswith(src + ":") for src in _LEFT_ALERT_SOURCES):
+        return jsonify({"error": "frontgate or universe event_id required"}), 400
     raw = body.get("below")
     n = None
     if raw not in (None, ""):
@@ -7487,6 +7493,101 @@ def api_liv_add():
     return jsonify({"event_id": event_id, "source": source,
                     "name": (ev or {}).get("name"), "error": err,
                     "paired": _liv_pairs().get(event_id)})
+
+
+@app.route("/universe")
+def universe_page():
+    return render_template("universe.html")
+
+
+def _universe_ladder(rows, log):
+    """Price ladder from the release log: each tier's price, when we first
+    saw it and when it sold out, in the order Universe sorts them. Burn time
+    is UNKNOWN (None) for a tier that was already gone at first sight or is
+    still selling, never a flattering 0h."""
+    by_name = {r["tier_name"]: r for r in log or []}
+    # Tiers already listed on our first look were open (or queued) for an
+    # unknown time before it, so their burn time is only a lower bound.
+    start = min((r["first_seen_at"] for r in log or []), default=None)
+    out = []
+    for x in rows:
+        r = by_name.get((x.get("name") or "").strip()) or {}
+        first, gone = r.get("first_seen_at"), r.get("sold_out_at")
+        burn = None
+        if first and gone and first != gone:
+            try:
+                burn = round((datetime.fromisoformat(gone)
+                              - datetime.fromisoformat(first)).total_seconds() / 3600, 1)
+            except ValueError:
+                burn = None
+        out.append({"name": x.get("name"), "price": x.get("price"),
+                    "first_seen_at": first, "sold_out_at": gone,
+                    "gone_at_first_sight": bool(first and gone and first == gone),
+                    "burn_hours": burn,
+                    "burn_lower_bound": bool(burn is not None and first == start)})
+    return out
+
+
+@app.route("/api/universe")
+def api_universe():
+    """Everything /universe needs: every tracked Universe listing (pasted
+    here, on /liv, or paired from a LIV night) with per-tier released / left
+    / sold, sold per window, the history behind the chart, the price ladder
+    and its alert threshold. Polled by the EDM tick (same pings as /edm);
+    this is only its view."""
+    now = datetime.now(timezone.utc)
+    seen = db.edm_all_seen()
+    snaps_all = db.frontgate_snapshots_all()
+    logs = db.edm_release_log_all()
+    liv_ga = set(_liv_pairs().values())
+    events = []
+    for t in db.edm_tracked_all():
+        if t.get("source") != universe_events.SOURCE_NAME:
+            continue
+        h = _liv_half(t, seen, snaps_all.get(t["event_id"], []), now)
+        r = seen.get(t["event_id"]) or {}
+        h["ladder"] = _universe_ladder(h["rows"], logs.get(t["event_id"]))
+        h["alert_below"] = db.frontgate_alert_get(t["event_id"])
+        h["liv"] = t["event_id"] in liv_ga
+        h["lead_available"] = r.get("lead_available")
+        # Released / left over the tiers actually on sale or sold out; a
+        # tier that hasn't opened yet isn't stock anyone can buy.
+        live = [x for x in h["rows"] if not x["closed"]]
+        h["left_open"] = (sum(x["left"] for x in live if x["left"] is not None)
+                          if any(x["left"] is not None for x in live) else None)
+        h["next_count"] = sum(1 for x in h["rows"] if x["closed"])
+        events.append(h)
+    events.sort(key=lambda e: (e.get("start_date") or "9999", e.get("name") or ""))
+    return jsonify({
+        "events": events,
+        "windows": [k for k, _ in _FRONTGATE_WINDOWS],
+        "status": {**_last_edm_events,
+                   "enabled": EDM_MONITOR_ENABLED,
+                   "interval_minutes": EDM_MONITOR_INTERVAL_MINUTES},
+        "now": now.isoformat(),
+    })
+
+
+@app.route("/api/universe/add", methods=["POST"])
+def api_universe_add():
+    """{url}: track a universe.com event link (…/events/<slug>-<CODE>) or a
+    bare listing code. Fetched once first, so a bad link fails here."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
+    try:
+        key = universe_events.parse_url(url)
+    except ValueError:
+        return jsonify({"error": "paste a universe.com event link "
+                                 "(universe.com/events/…-CODE)"}), 400
+    try:
+        ev = edm_events.fetch_one(universe_events.SOURCE_NAME, key)
+    except Exception as e:
+        return jsonify({"error": f"could not fetch that event: {e}"}), 502
+    now_iso = datetime.now(timezone.utc).isoformat()
+    event_id = db.edm_tracked_add(universe_events.SOURCE_NAME, key, url, now_iso,
+                                  label=ev.get("name"))
+    return jsonify({"event_id": event_id, "name": ev.get("name")})
 
 
 @app.route("/edm")
