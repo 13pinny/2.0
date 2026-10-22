@@ -41,6 +41,7 @@ import json
 import re
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import edm_common
 from edm_common import EdmEventsError, make_tier, rollup
@@ -130,6 +131,12 @@ def parse_listing(data):
     if start:
         try:
             dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            # start_time is UTC; show the venue's wall clock (a Thu 10pm
+            # Miami night otherwise reads as Fri 3am).
+            try:
+                dt = dt.astimezone(ZoneInfo(listing.get("tz") or event.get("tz") or ""))
+            except (ValueError, KeyError, ZoneInfoNotFoundError):
+                pass
             start_date = dt.date().isoformat()
             date_text = dt.strftime("%a %b %-d, %Y · %-I:%M%p")
         except ValueError:
