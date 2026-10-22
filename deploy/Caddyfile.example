@@ -1,0 +1,22 @@
+# Drop in at /etc/caddy/Caddyfile, then `systemctl reload caddy`.
+# Caddy provisions Let's Encrypt automatically once DNS points at this box.
+#
+# Generate the basic_auth hash with:
+#   caddy hash-password
+# It prints a bcrypt hash; paste it after your username below.
+
+kartis.example.com {
+    # One-user gate. Swap "you" for your username, and the hash for the
+    # bcrypt string `caddy hash-password` printed.
+    basicauth {
+        you JDJhJDEyJEVYQU1QTEVfSEFTSF9SRVBMQUNFX01F
+    }
+
+    reverse_proxy 127.0.0.1:8000
+
+    encode gzip
+    # 200 MB cap protects against runaway uploads via the attachments routes.
+    request_body {
+        max_size 200MB
+    }
+}

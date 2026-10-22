@@ -1,8 +1,11 @@
 name: Tao price watch
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"   # every 30 minutes (GitHub may delay runs a bit)
+  # Schedule off: the repo default branch is the Kartis deploy branch, and
+  # each run commits state back, which would redeploy the server every 30 min.
+  # The VPS already watches Tao and Shotgun. Run by hand, or restore the cron.
+  # schedule:
+  #   - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
       debug:
@@ -30,7 +33,7 @@ jobs:
 
       - name: Install
         run: |
-          pip install -r requirements.txt
+          pip install "playwright>=1.45"
           python -m playwright install --with-deps chromium
 
       - name: Check prices

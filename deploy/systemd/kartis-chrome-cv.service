@@ -1,0 +1,34 @@
+[Unit]
+Description=Kartis Chrome (dedicated CrowdVolt session behind the residential proxy)
+Requires=kartis-xvfb.service
+After=kartis-xvfb.service kartis-cvproxy.service
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+WorkingDirectory=/opt/kartis
+Environment=DISPLAY=:99
+# Separate profile + CDP port so only CrowdVolt rides the residential IP
+# (viagogo 403s residential — the main :9222 Chrome must stay on the
+# datacenter IP). ALL of this instance's traffic goes through the local
+# cvproxy.py forwarder, which injects the upstream credentials — Chrome
+# itself silently drops user:pass given in --proxy-server.
+# Offset + sized under the main window so both stay reachable in noVNC
+# (openbox from kartis-wm.service provides the titlebars).
+ExecStart=/usr/bin/google-chrome-stable \
+    --remote-debugging-port=9223 \
+    --remote-allow-origins=* \
+    --user-data-dir=/opt/kartis/user_data_cv \
+    --proxy-server=http://127.0.0.1:3128 \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-features=Translate \
+    --disable-background-networking \
+    --window-position=60,60 \
+    --window-size=1150,680
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

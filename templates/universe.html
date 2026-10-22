@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kartis — Universe</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --cyan: #0f766e;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--cyan); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  main { padding: 18px 24px 60px; max-width: 1200px; }
+  .addrow { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  input[type=text], input[type=number] { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 6px; }
+  #addurl { flex: 1 1 360px; min-width: 0; }
+  button { font: inherit; font-size: 12px; padding: 6px 14px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); border-radius: 6px; cursor: pointer; }
+  button.primary { background: var(--cyan); border-color: var(--cyan); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.small { font-size: 11px; padding: 3px 9px; }
+  .sub { font-size: 11px; color: var(--muted); letter-spacing: .5px; margin: 0 0 14px; }
+  .msg { padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; border-radius: 6px; }
+  .msg.err { background: #fdecea; border: 1px solid var(--red); color: var(--red); }
+  .msg.ok { background: #e9f7ee; border: 1px solid var(--green); color: var(--green); }
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; margin-bottom: 18px; }
+  .card.paused { opacity: .6; }
+  .card h2 { margin: 0 0 2px; font-size: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .card .where { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .badge.available { background: #16a34a; } .badge.soldout { background: #dc2626; }
+  .badge.paused { background: #6e7681; } .badge.pending { background: #9a6700; }
+  a.buy { color: #fff; background: var(--cyan); text-decoration: none; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
+  .stat { background: var(--bg-2); padding: 10px 12px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; color: var(--cyan); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.red { color: var(--red); } .stat .value.muted { color: var(--muted); }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 6px 8px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
+  tr.total td { font-weight: 600; border-bottom: none; }
+  td .so { color: var(--red); font-weight: 600; }
+  .bar { height: 6px; background: var(--bg-3); border-radius: 3px; min-width: 60px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--cyan); }
+  .chart { margin-top: 14px; }
+  .chart svg { width: 100%; height: auto; display: block; }
+  .chart .legend { font-size: 11px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
+  .chart .legend i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  .foot { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; font-size: 12px; }
+  .foot input[type=number] { width: 90px; }
+  .foot .spacer { flex: 1; }
+  .errline { font-size: 11px; color: var(--red); margin-top: 8px; word-break: break-word; }
+  .sf { display: flex; gap: 8px; flex-wrap: wrap; margin: -4px 0 14px; }
+  .sf .chip { font-size: 12px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 14px; padding: 3px 4px 3px 12px; display: inline-flex; align-items: center; gap: 6px; }
+  .sf .chip .x { border: none; background: none; color: var(--muted); font-size: 14px; padding: 0 6px; cursor: pointer; }
+  .sf .chip.bad { border-color: var(--red); }
+  h3.group { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin: 22px 0 10px; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 13px; }
+  @media (max-width: 640px) { header, main { padding-left: 16px; padding-right: 16px; } .card { padding: 14px; } }
+  .half { margin-top: 16px; }
+  .half h4 { margin: 0 0 8px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .half h4 a { color: var(--accent); text-decoration: none; letter-spacing: .5px; text-transform: none; font-size: 11px; }
+  .half h4 .spacer { flex: 1; }
+  tr.closed td { color: var(--muted); }
+  td.nm { min-width: 150px; }
+  @media (max-width: 640px) { td .note { display: none; } }
+  .tag { font-size: 10px; padding: 1px 6px; border-radius: 6px; background: var(--bg-3); color: var(--muted); white-space: nowrap; }
+  .tag.open { background: #e9f7ee; color: var(--green); } .tag.so { background: #fdecea; color: var(--red); }
+  .ladder { margin-top: 14px; }
+  .ladder h4 { margin: 0 0 6px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+  .card .top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .card .top .spacer { flex: 1; }
+  a.ext { color: var(--accent); text-decoration: none; font-size: 12px; }
+</style>
+</head>
+<body>
+{% include "_sidebar.html" %}
+<header>
+  <div class="left">
+    <h1>Universe</h1>
+    <span class="meta" id="meta">—</span>
+  </div>
+</header>
+<main>
+  <div class="msg err" id="errbox"></div>
+  <div class="msg ok" id="okbox"></div>
+  <div class="addrow">
+    <input type="text" id="addurl" placeholder="Paste a universe.com event link (universe.com/events/…-R3CY8M)" />
+    <button class="primary" id="addbtn">Track</button>
+  </div>
+  <p class="sub" id="statusline">—</p>
+  <div id="events"></div>
+  <p class="sub">Counts come straight from Universe (Ticketmaster): released, left and sold per tier, prices all-in. Tiers open one after another; a "Next" tier opens when the one before it sells out, and its count isn't in "Left now".
+    Pings: a tier coming back in stock and price drops go to #universe-shocks, the price stepping up to the next tier and your "under N left" alert to #jumps, sell-outs to #status, new tiers to new events.</p>
+</main>
+
+<script>
+
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const fmt = n => (n == null) ? '—' : n.toLocaleString();
+const money = n => (n == null) ? '—' : '$' + n.toLocaleString(undefined, {minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2});
+const COLORS = ['#0f766e', '#ea580c', '#8250df', '#0969da', '#d1242f', '#9a6700'];
+
+function ago(iso){
+  if (!iso) return '—';
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 90) return Math.round(s) + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 172800) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function flash(el, text){ el.textContent = text; el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 8000); }
+async function post(url, body){
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  let j = {}; try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+// Left over time: one step line per tier that has actually moved, plus a
+// dashed total. Flat tiers stay out so 13 GA tiers don't bury the signal.
+function chart(h, unit){
+  const series = (h.history || []).filter(s => s.points.length);
+  if (!series.length) return '';
+  const allT = series.flatMap(s => s.points.map(p => new Date(p.at).getTime()));
+  const t0 = Math.min(...allT), t1 = Math.max(Date.now(), t0 + 60000);
+  const times = [...new Set(allT)].sort((a, b) => a - b);
+  const valAt = (s, t) => { let v = null; for (const p of s.points) { if (new Date(p.at).getTime() <= t) v = p.left; else break; } return v; };
+  const total = times.map(t => {
+    let sum = 0, any = false;
+    for (const s of series) { const v = valAt(s, t); if (v != null) { sum += v; any = true; } }
+    return {t, v: any ? sum : null};
+  });
+  const moving = series.filter(s => new Set(s.points.map(p => p.left)).size > 1).slice(0, COLORS.length);
+  const maxV = Math.max(1, ...total.map(x => x.v || 0));
+  const W = Math.max(280, ($('events').clientWidth || 1000) - 40), H = 170, L = 44, R = 8, T = 10, B = 22;
+  const x = t => L + (t - t0) / (t1 - t0) * (W - L - R);
+  const y = v => T + (1 - v / maxV) * (H - T - B);
+  const step = pts => {
+    let d = '', last = null;
+    for (const p of pts) {
+      if (p.v == null) continue;
+      d += last == null ? `M${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}` : `H${x(p.t).toFixed(1)}V${y(p.v).toFixed(1)}`;
+      last = p.v;
+    }
+    return last == null ? '' : d + `H${x(t1).toFixed(1)}`;
+  };
+  let grid = '';
+  for (let i = 0; i <= 4; i++) {
+    const v = Math.round(maxV * i / 4), yy = y(v).toFixed(1);
+    grid += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e3e7ec"/>`
+          + `<text x="${L - 6}" y="${(+yy + 3)}" font-size="10" text-anchor="end" fill="#6e7681">${v.toLocaleString()}</text>`;
+  }
+  const dfmt = t => new Date(t).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric'});
+  grid += `<text x="${L}" y="${H - 6}" font-size="10" fill="#6e7681">${dfmt(t0)}</text>`
+        + `<text x="${W - R}" y="${H - 6}" font-size="10" text-anchor="end" fill="#6e7681">now</text>`;
+  let lines = `<path d="${step(total)}" fill="none" stroke="#24292f" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  let legend = `<span><i style="background:#24292f"></i>Total ${unit} left</span>`;
+  moving.forEach((s, i) => {
+    const c = COLORS[i];
+    lines += `<path d="${step(s.points.map(p => ({t: new Date(p.at).getTime(), v: p.left})))}" fill="none" stroke="${c}" stroke-width="2"/>`;
+    legend += `<span><i style="background:${c}"></i>${escape(s.name)}</span>`;
+  });
+  return `<div class="chart"><svg viewBox="0 0 ${W} ${H}">${grid}${lines}</svg>
+    <div class="legend">${legend}<span>· since ${escape(dfmt(t0))}</span></div></div>`;
+}
+
+function stats(list){
+  return '<div class="stats">' + list.map(([l, v, c]) =>
+    `<div class="stat"><div class="label">${l}</div><div class="value ${c || ''}">${v}</div></div>`).join('') + '</div>';
+}
+const when = iso => iso ? new Date(iso).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}) : '—';
+
+function ladder(ev){
+  const rows = (ev.ladder || []).filter(l => l.first_seen_at);
+  if (rows.length < 2 && !rows.some(l => l.sold_out_at)) return '';
+  const body = rows.map(l => {
+    const burn = l.gone_at_first_sight ? '<span class="sub" style="margin:0">gone before tracking</span>'
+      : l.burn_hours != null ? (l.burn_lower_bound ? '≥ ' : '') + (l.burn_hours < 48 ? l.burn_hours + 'h' : (l.burn_hours / 24).toFixed(1) + 'd')
+      : l.sold_out_at ? '—' : '<span class="sub" style="margin:0">selling</span>';
+    return `<tr><td class="nm">${escape(l.name)}</td><td class="num">${money(l.price)}</td>
+      <td>${when(l.first_seen_at)}</td><td>${l.sold_out_at ? when(l.sold_out_at) : '—'}</td><td class="num">${burn}</td></tr>`;
+  }).join('');
+  return `<div class="ladder"><h4>Price ladder</h4><div class="tablewrap"><table>
+    <thead><tr><th>Tier</th><th class="num">Price</th><th>First seen</th><th>Sold out</th><th class="num">Lasted</th></tr></thead>
+    <tbody>${body}</tbody></table></div></div>`;
+}
+
+function card(ev, windows){
+  const id = escape(ev.event_id);
+  const state = r => r.sold_out ? '<span class="tag so">Sold out</span>'
+    : r.closed ? `<span class="tag" title="${r.after ? 'Opens after ' + escape(r.after) : ''}">Next</span>`
+    : '<span class="tag open">On sale</span>';
+  const rows = ev.rows.map(r => `<tr class="${r.closed ? 'closed' : ''}">
+      <td class="nm">${escape(r.name)}${r.note ? `<div class="sub note" style="margin:0">${escape(r.note)}</div>` : ''}</td>
+      <td>${state(r)}</td>
+      <td class="num">${money(r.price)}</td>
+      <td class="num">${fmt(r.released)}</td>
+      <td class="num">${r.sold_out ? '<span class="so">0</span>' : fmt(r.left)}</td>
+      <td class="num">${fmt(r.sold)}</td>
+      <td><div class="bar"><span style="width:${r.pct_sold || 0}%"></span></div></td>
+    </tr>`).join('');
+  const pct = ev.released ? Math.round(ev.sold / ev.released * 1000) / 10 : null;
+  const badge = ev.paused ? '<span class="badge paused">PAUSED</span>'
+    : ev.tracked_only ? '<span class="badge pending">PENDING</span>'
+    : ev.sold_out ? '<span class="badge soldout">SOLD OUT</span>'
+    : ev.on_sale ? '<span class="badge available">ON SALE</span>' : '';
+  return `<div class="card ${ev.paused ? 'paused' : ''}">
+    <div class="top"><h2>${escape(ev.name || ev.event_key)} ${badge}</h2>
+      ${ev.liv ? '<span class="tag">LIV</span>' : ''}
+      <span class="spacer"></span>
+      ${ev.page_url ? `<a class="buy" href="${escape(ev.page_url)}" target="_blank" rel="noopener">BUY PAGE ↗</a>` : ''}</div>
+    <div class="where">${escape([ev.venue, ev.date_text].filter(Boolean).join(' · ')) || '&nbsp;'}</div>
+    ${stats([
+      ['From', money(ev.min_price)],
+      ['Left now', fmt(ev.left_open), ev.left_open === 0 ? 'red' : ''],
+      ['Sold', fmt(ev.sold)], ['Released', fmt(ev.released)],
+      ['% sold', pct == null ? '—' : pct + '%'],
+      ...windows.map(w => ['Sold ' + w, fmt(ev.windows[w]), ev.windows[w] == null ? 'muted' : '']),
+    ])}
+    ${ev.lead_tier ? `<div class="sub" style="margin:-6px 0 10px">Selling now: <b>${escape(ev.lead_tier)}</b>${ev.lead_available != null ? ` · ${fmt(ev.lead_available)} left` : ''}${ev.next_count ? ` · ${ev.next_count} tier${ev.next_count === 1 ? '' : 's'} still to open` : ''}</div>` : ''}
+    ${ev.rows.length ? `<div class="tablewrap"><table>
+      <thead><tr><th>Tier</th><th></th><th class="num">Price</th><th class="num">Released</th><th class="num">Left</th><th class="num">Sold</th><th></th></tr></thead>
+      <tbody>${rows}
+        <tr class="total"><td>Total</td><td></td><td></td><td class="num">${fmt(ev.released)}</td><td class="num">${fmt(ev.left)}</td><td class="num">${fmt(ev.sold)}</td><td></td></tr>
+      </tbody></table></div>` : ''}
+    ${ladder(ev)}
+    ${chart(ev, 'tickets')}
+    ${ev.tracked_only && !ev.last_error ? '<div class="sub" style="margin:6px 0 0">Waiting for the first check.</div>' : ''}
+    ${ev.last_error ? `<div class="errline">Last check failed: ${escape(ev.last_error)}</div>` : ''}
+    <div class="foot">
+      <span>Ping me when under</span>
+      <input type="number" min="0" step="1" data-alert="${id}" value="${ev.alert_below ?? ''}" placeholder="—" />
+      <span>left</span>
+      <button class="small" data-save="${id}">Save</button>
+      <span class="spacer"></span>
+      <span class="sub" style="margin:0">checked ${ago(ev.last_seen_at)}</span>
+      <button class="small" data-pause="${id}" data-paused="${ev.paused ? 1 : 0}">${ev.paused ? 'Resume' : 'Pause'}</button>
+      <button class="small" data-remove="${id}">Remove</button>
+    </div>
+  </div>`;
+}
+
+let DATA = null;
+function render(){
+  const evs = DATA.events;
+  $('events').innerHTML = evs.length ? evs.map(ev => card(ev, DATA.windows)).join('')
+    : '<div class="empty">No Universe events tracked yet. Paste a universe.com event link above.</div>';
+  const st = DATA.status || {};
+  $('meta').textContent = `${evs.length} event${evs.length === 1 ? '' : 's'}`;
+  $('statusline').textContent = st.enabled === false
+    ? 'The monitor is off on this machine (it runs on the server).'
+    : `Checked every ${st.interval_minutes || 2} min · last tick ${ago(st.at)}` + (st.error ? ` · error: ${st.error}` : '');
+}
+
+async function load(){
+  try {
+    const r = await fetch('/api/universe');
+    DATA = await r.json();
+    render();
+  } catch (e) { flash($('errbox'), 'Could not load: ' + e.message); }
+}
+
+$('addbtn').onclick = async () => {
+  const url = $('addurl').value.trim();
+  if (!url) return;
+  $('addbtn').disabled = true;
+  try {
+    const j = await post('/api/universe/add', {url});
+    flash($('okbox'), `Tracking ${j.name || j.event_id}`);
+    $('addurl').value = '';
+    try { await post('/api/edm-events/run-now', {}); } catch (e) {}
+    load();
+  } catch (e) { flash($('errbox'), e.message); }
+  finally { $('addbtn').disabled = false; }
+};
+$('addurl').onkeydown = e => { if (e.key === 'Enter') $('addbtn').click(); };
+
+$('events').onclick = async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  try {
+    if (b.dataset.save) {
+      const input = document.querySelector(`input[data-alert="${CSS.escape(b.dataset.save)}"]`);
+      const j = await post('/api/frontgate/alert', {event_id: b.dataset.save, below: input.value.trim()});
+      flash($('okbox'), j.alert_below == null ? 'Alert cleared' : `You'll get a ping when ${j.alert_below.toLocaleString()} or fewer are left`);
+      return;
+    } else if (b.dataset.pause) {
+      await post('/api/edm/pause', {event_id: b.dataset.pause, paused: b.dataset.paused !== '1'});
+    } else if (b.dataset.remove) {
+      if (!confirm('Stop tracking this? Its history stays in the database.')) return;
+      await post('/api/edm/remove', {event_id: b.dataset.remove});
+    }
+    load();
+  } catch (err) { flash($('errbox'), err.message); }
+};
+
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

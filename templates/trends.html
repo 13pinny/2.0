@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+{% include "_pwa.html" %}
+<title>Kartis — Trends</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --bg-2: #ffffff;
+    --bg-3: #eef1f5;
+    --line: #e3e7ec;
+    --line-2: #d3dae1;
+    --text: #24292f;
+    --muted: #6e7681;
+    --accent: #0969da;
+    --accent-soft: #b6d3f5;
+    --green: #1a7f37;
+    --red: #d1242f;
+    --amber: #9a6700;
+    --grid: #eceff3;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  main { padding: 18px 24px 60px; max-width: 1500px; }
+  h2 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin: 28px 0 10px; }
+  h2 .hint { font-size: 11px; letter-spacing: 0; text-transform: none; color: var(--muted); font-weight: 400; margin-left: 10px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+  .picker { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  .picker .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line-2); border-radius: 0; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #q { min-width: 320px; flex: 1 1 320px; max-width: 520px; }
+  .sel-title { font-size: 20px; font-weight: 600; margin: 4px 0 14px; }
+  .sel-title .sub { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 8px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 14px; }
+  .stat { background: var(--bg-2); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .insights { background: var(--bg-2); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 10px 16px; margin-bottom: 8px; font-size: 13px; line-height: 1.7; }
+  .insights ul { margin: 0; padding-left: 18px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 22px; }
+  .card { background: var(--bg-2); border: 1px solid var(--line); padding: 12px 14px; position: relative; }
+  .card h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  svg text { font-family: inherit; font-size: 10px; fill: var(--muted); }
+  svg .val { fill: var(--text); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  table { border-collapse: collapse; width: 100%; background: var(--bg-2); border: 1px solid var(--line); font-size: 12px; }
+  th, td { padding: 7px 9px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { background: var(--bg-3); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); font-weight: 600; position: sticky; top: 0; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--accent); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: var(--bg-3); }
+  tr.click { cursor: pointer; }
+  tfoot td { font-weight: 600; background: var(--bg-3); }
+  .scroll { max-height: 560px; overflow: auto; border: 1px solid var(--line); }
+  .scroll table { border: 0; }
+  .muted { color: var(--muted); }
+  .est { color: var(--amber); }
+  .tip { position: fixed; pointer-events: none; background: #1f2328; color: #f6f8fa; font-size: 11.5px; line-height: 1.5; padding: 7px 10px; z-index: 100; display: none; max-width: 320px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
+  .tip b { color: #fff; }
+  .empty { padding: 30px; text-align: center; color: var(--muted); background: var(--bg-2); border: 1px solid var(--line); }
+  @media (max-width: 720px) {
+    main { padding: 14px 16px 50px; }
+    header { padding: 12px 16px; }
+    .cols { grid-template-columns: 1fr; }
+    #q { min-width: 0; }
+  }
+</style>
+</head>
+<body>
+{% include "_sidebar.html" %}
+<header>
+  <div class="left">
+    <h1>Kartis · Trends</h1>
+    <span class="meta" id="meta">loading…</span>
+  </div>
+</header>
+
+<main>
+  <div id="err" class="err" style="display:none"></div>
+
+  <div class="picker">
+    <div class="presets" id="presets"></div>
+    <input id="q" list="events" placeholder="event name (comma = several), or pick a show…" autocomplete="off" />
+    <datalist id="events"></datalist>
+    <button id="go">Show</button>
+  </div>
+
+  <div class="sel-title" id="selTitle"></div>
+  <div class="stats" id="stats"></div>
+  <div class="insights" id="insights" style="display:none"></div>
+
+  <div id="body">
+    <h2>When tickets sell <span class="hint">days between the sale and the show</span></h2>
+    <div class="cols">
+      <div class="card">
+        <h3>Tickets sold by days out</h3>
+        <div id="chBuckets"></div>
+      </div>
+      <div class="card">
+        <h3>ROI by days out <span class="muted" style="text-transform:none;letter-spacing:0">· costed tickets only</span></h3>
+        <div id="chRoi"></div>
+      </div>
+      <div class="card">
+        <h3>Cumulative sell-through <span class="muted" style="text-transform:none;letter-spacing:0">· % of tickets sold by N days out</span></h3>
+        <div id="chCurve"></div>
+      </div>
+      <div class="card">
+        <h3>Price per ticket vs days out</h3>
+        <div class="legend"><span><i style="background:var(--accent)"></i>payout / ticket</span><span><i style="background:transparent;border:2px solid #8c959f;width:9px;height:9px"></i>cost / ticket</span></div>
+        <div id="chScatter"></div>
+      </div>
+    </div>
+
+    <h2>Days-out breakdown</h2>
+    <div class="scroll"><table id="tBuckets"></table></div>
+
+    <h2>By show <span class="hint">click a row to drill into that show</span></h2>
+    <div class="scroll"><table id="tEvents"></table></div>
+
+    <h2>Sales over time <span class="hint">tickets sold per calendar day</span></h2>
+    <div class="card"><div id="chTimeline"></div></div>
+
+    <h2>By platform</h2>
+    <div class="scroll"><table id="tPlatform"></table></div>
+
+    <h2>By section <span class="hint">top 25 by tickets</span></h2>
+    <div class="scroll" style="max-height:420px"><table id="tSection"></table></div>
+
+    <div class="cols">
+      <div>
+        <h2>By day sold <span class="hint">weekday of the sale</span></h2>
+        <table id="tWeekday"></table>
+      </div>
+      <div>
+        <h2>By show night <span class="hint">weekday of the event</span></h2>
+        <table id="tEvWeekday"></table>
+      </div>
+    </div>
+
+    <div id="holdWrap">
+      <h2>Still holding <span class="hint">unsold tickets for upcoming shows</span></h2>
+      <table id="tHold"></table>
+    </div>
+    <div id="unsoldWrap">
+      <h2>Didn't sell <span class="hint">realised loss</span></h2>
+      <table id="tUnsold"></table>
+    </div>
+
+    <h2>Every sale <span class="hint">click a column to sort</span></h2>
+    <div class="picker"><button id="csv">Download CSV</button></div>
+    <div class="scroll"><table id="tSales"></table></div>
+  </div>
+</main>
+<div class="tip" id="tip"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = (x, dp) => x == null ? "—" : (x < 0 ? "-" : "") + "$" + Math.abs(x).toLocaleString(undefined, {minimumFractionDigits: dp ?? 0, maximumFractionDigits: dp ?? 0});
+const money2 = (x) => money(x, 2);
+const pct = (x) => x == null ? "—" : (x > 0 ? "+" : "") + x.toFixed(1) + "%";
+const signCls = (x) => x == null ? "muted" : (x >= 0 ? "pos" : "neg");
+const days = (n) => n == null ? "—" : (n === 0 ? "day of" : n + "d");
+let DATA = null;
+
+// ---------------------------------------------------------------- tooltip ---
+const tip = $("tip");
+function showTip(e, html) {
+  tip.innerHTML = html; tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + w > innerWidth - 8) x = e.clientX - w - 14;
+  if (y + h > innerHeight - 8) y = e.clientY - h - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+function bindTips(root, getter) {
+  root.querySelectorAll("[data-tip]").forEach(el => {
+    el.addEventListener("mousemove", e => showTip(e, getter(+el.dataset.tip)));
+    el.addEventListener("mouseleave", hideTip);
+  });
+}
+
+// ------------------------------------------------------------------ axes ---
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+function yTicks(min, max, n) {
+  // 5 steps when 4 would land on fractional values (50 -> 12.5).
+  if (!n) n = ((max - min) % 4 === 0 || (max - min) % 5 !== 0) ? 4 : 5;
+  const out = [];
+  for (let i = 0; i <= n; i++) out.push(min + (max - min) * i / n);
+  return out;
+}
+
+// Vertical bar chart: items [{label, value, tip}], fmt for the label above.
+function barChart(el, items, fmt, opts = {}) {
+  const W = opts.W || 560, H = opts.H || 230, L = 40, R = 8, T = 18, B = 34;
+  if (!items.length) { el.innerHTML = '<div class="muted" style="padding:20px">no data</div>'; return; }
+  const vals = items.map(i => i.value ?? 0);
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  hi = hi > 0 ? niceMax(hi) : 0; lo = lo < 0 ? -niceMax(-lo) : 0;
+  if (hi === lo) hi = 1;
+  const y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  const bw = (W - L - R) / items.length;
+  const gap = Math.max(2, Math.min(10, bw * 0.25));
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+  for (const t of yTicks(lo, hi)) {
+    s += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="${t === 0 ? "#c4cbd3" : "var(--grid)"}"/>`;
+    s += `<text x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${esc((opts.axis || fmt)(t))}</text>`;
+  }
+  items.forEach((it, i) => {
+    const v = it.value;
+    const x = L + i * bw + gap / 2, w = bw - gap;
+    if (v != null) {
+      const y0 = y(0), y1 = y(v);
+      const top = Math.min(y0, y1), h = Math.max(Math.abs(y1 - y0), v === 0 ? 0 : 1);
+      const color = opts.color ? opts.color(v, it) : "var(--accent)";
+      const r = Math.min(4, w / 2, h);
+      // rounded data-end only, square at the baseline
+      const path = v >= 0
+        ? `M${x},${y0} V${top + r} Q${x},${top} ${x + r},${top} H${x + w - r} Q${x + w},${top} ${x + w},${top + r} V${y0} Z`
+        : `M${x},${y0} V${top + h - r} Q${x},${top + h} ${x + r},${top + h} H${x + w - r} Q${x + w},${top + h} ${x + w},${top + h - r} V${y0} Z`;
+      s += `<path d="${path}" fill="${color}"/>`;
+      if (opts.labels !== false && bw > 22) {
+        const ly = v >= 0 ? top - 4 : top + h + 11;
+        s += `<text class="val" x="${x + w / 2}" y="${ly}" text-anchor="middle">${esc(fmt(v))}</text>`;
+      }
+    } else if (bw > 22) {
+      s += `<text x="${x + w / 2}" y="${y(0) - 4}" text-anchor="middle">—</text>`;
+    }
+    // hit target: whole column
+    s += `<rect x="${L + i * bw}" y="${T}" width="${bw}" height="${H - T - B}" fill="transparent" data-tip="${i}"/>`;
+    const every = Math.ceil(items.length / (opts.maxLabels || 12));
+    if (i % every === 0) {
+      s += `<text x="${x + w / 2}" y="${H - B + 14}" text-anchor="middle">${esc(it.label)}</text>`;
+    }
+  });
+  s += "</svg>";
+  el.innerHTML = s;
+  bindTips(el, i => items[i].tip);
+}
+
+// x scale for days-out: sqrt spreads the short end, where decisions happen.
+function daysScale(maxDays, L, R, W, reversed) {
+  const m = Math.sqrt(Math.max(maxDays, 1));
+  return reversed
+    ? d => L + (1 - Math.sqrt(d) / m) * (W - L - R)
+    : d => L + Math.sqrt(d) / m * (W - L - R);
+}
+function dayTicks(maxDays) {
+  return [0, 1, 3, 7, 14, 30, 60, 90, 180, 365].filter(d => d <= maxDays);
+}
+
+function curveChart(el, curve) {
+  const W = 560, H = 230, L = 40, R = 12, T = 12, B = 34;
+  if (!curve.length) { el.innerHTML = '<div class="muted" style="padding:20px">no dated sales</div>'; return; }
+  const maxD = curve[curve.length - 1].days_out;
+  const x = daysScale(maxD, L, R, W, true);
+  const y = v => T + (100 - v) / 100 * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}">`;
+  for (const t of [0, 25, 50, 75, 100]) {
+    s += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="${t === 0 ? "#c4cbd3" : "var(--grid)"}"/>`;
+    s += `<text x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${t}%</text>`;
+  }
+  for (const d of dayTicks(maxD)) s += `<text x="${x(d)}" y="${H - B + 14}" text-anchor="middle">${d === 0 ? "show" : d + "d"}</text>`;
+  s += `<text x="${W - R}" y="${H - 4}" text-anchor="end">days before the show →  ← further out</text>`;
+  // curve[i] = % sold by the time we were i days out (sorted by days_out asc)
+  const pts = [...curve].sort((a, b) => b.days_out - a.days_out);
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${x(p.days_out).toFixed(1)},${y(p.pct).toFixed(1)}`).join(" ");
+  s += `<path d="${d} L${x(0)},${y(0)} L${x(maxD)},${y(0)} Z" fill="var(--accent)" opacity="0.08"/>`;
+  s += `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>`;
+  s += `<line id="cx" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="#8c959f" stroke-dasharray="3 3" style="display:none"/>`;
+  s += `<circle id="cdot" r="4" fill="var(--accent)" stroke="#fff" stroke-width="2" style="display:none"/>`;
+  s += `<rect id="chit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/>`;
+  s += "</svg>";
+  el.innerHTML = s;
+  const svg = el.querySelector("svg"), hit = el.querySelector("#chit");
+  const cx = el.querySelector("#cx"), dot = el.querySelector("#cdot");
+  hit.addEventListener("mousemove", e => {
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    let best = pts[0], bd = 1e9;
+    for (const q of pts) { const dd = Math.abs(x(q.days_out) - p.x); if (dd < bd) { bd = dd; best = q; } }
+    cx.setAttribute("x1", x(best.days_out)); cx.setAttribute("x2", x(best.days_out)); cx.style.display = "";
+    dot.setAttribute("cx", x(best.days_out)); dot.setAttribute("cy", y(best.pct)); dot.style.display = "";
+    showTip(e, `<b>${best.days_out === 0 ? "Day of show" : best.days_out + " days out"}</b><br>${best.pct}% sold (${best.sold} tickets)`);
+  });
+  hit.addEventListener("mouseleave", () => { cx.style.display = "none"; dot.style.display = "none"; hideTip(); });
+}
+
+function scatterChart(el, points) {
+  const W = 560, H = 260, L = 46, R = 12, T = 12, B = 34;
+  if (!points.length) { el.innerHTML = '<div class="muted" style="padding:20px">no dated sales</div>'; return; }
+  const maxD = Math.max(...points.map(p => p.x), 1);
+  const maxY = niceMax(Math.max(...points.map(p => Math.max(p.y, p.cost || 0)), 1));
+  const x = daysScale(maxD, L, R, W, true);
+  const y = v => T + (maxY - v) / maxY * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}">`;
+  for (const t of yTicks(0, maxY)) {
+    s += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="${t === 0 ? "#c4cbd3" : "var(--grid)"}"/>`;
+    s += `<text x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${money(t)}</text>`;
+  }
+  for (const d of dayTicks(maxD)) s += `<text x="${x(d)}" y="${H - B + 14}" text-anchor="middle">${d === 0 ? "show" : d + "d"}</text>`;
+  points.forEach((p, i) => {
+    if (p.cost != null) s += `<circle cx="${x(p.x)}" cy="${y(p.cost)}" r="3.5" fill="none" stroke="#8c959f" stroke-width="1.5"/>`;
+  });
+  points.forEach((p, i) => {
+    const r = Math.min(4 + Math.sqrt(p.qty) * 1.2, 9);
+    s += `<circle cx="${x(p.x)}" cy="${y(p.y)}" r="${r}" fill="var(--accent)" fill-opacity="0.75" stroke="#fff" stroke-width="1.5"/>`;
+    s += `<circle cx="${x(p.x)}" cy="${y(p.y)}" r="${r + 5}" fill="transparent" data-tip="${i}"/>`;
+  });
+  s += "</svg>";
+  el.innerHTML = s;
+  bindTips(el, i => {
+    const p = points[i];
+    const prof = p.cost != null ? p.y - p.cost : null;
+    return `<b>${esc(p.event)}</b> · ${esc(p.event_date_iso)}<br>${esc(p.section)} · ${esc(p.platform)}<br>` +
+      `sold ${esc(p.sale_date_iso)} (${days(p.x)} out) · ${p.qty} tkt<br>` +
+      `payout ${money2(p.y)}/tkt` + (p.cost != null ? ` · cost ${money2(p.cost)} · <b>${prof >= 0 ? "+" : ""}${money2(prof)}</b>` : "");
+  });
+}
+
+// ----------------------------------------------------------------- tables ---
+function sortableTable(el, cols, rows, opts = {}) {
+  let sortK = opts.sortK, dir = opts.dir || -1;
+  function render() {
+    const rs = [...rows];
+    if (sortK) rs.sort((a, b) => {
+      const va = a[sortK], vb = b[sortK];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1; if (vb == null) return -1;
+      return (va > vb ? 1 : va < vb ? -1 : 0) * dir;
+    });
+    let h = "<thead><tr>" + cols.map(c => `<th class="sortable ${c.num ? "num" : ""}" data-k="${c.k}">${esc(c.label)}${sortK === c.k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr></thead><tbody>";
+    h += rs.map((r, i) => `<tr ${opts.onClick ? `class="click" data-i="${rows.indexOf(r)}"` : ""}>` + cols.map(c => `<td class="${c.num ? "num" : ""} ${c.cls ? c.cls(r) : ""}">${c.f ? c.f(r) : esc(r[c.k])}</td>`).join("") + "</tr>").join("");
+    h += "</tbody>";
+    if (opts.foot) h += "<tfoot><tr>" + cols.map(c => `<td class="${c.num ? "num" : ""}">${opts.foot[c.k] ?? ""}</td>`).join("") + "</tr></tfoot>";
+    el.innerHTML = h;
+    el.querySelectorAll("th.sortable").forEach(th => th.onclick = () => {
+      const k = th.dataset.k; if (sortK === k) dir = -dir; else { sortK = k; dir = -1; } render();
+    });
+    if (opts.onClick) el.querySelectorAll("tr.click").forEach(tr => tr.onclick = () => opts.onClick(rows[+tr.dataset.i]));
+  }
+  render();
+}
+
+const C = {
+  qty:     {k: "qty", label: "Tickets", num: true},
+  orders:  {k: "orders", label: "Orders", num: true},
+  payout:  {k: "payout", label: "Payout", num: true, f: r => money(r.payout)},
+  cost:    {k: "cost", label: "Cost", num: true, f: r => money(r.cost)},
+  profit:  {k: "profit", label: "Profit", num: true, f: r => money(r.profit), cls: r => signCls(r.profit)},
+  roi:     {k: "roi", label: "ROI", num: true, f: r => pct(r.roi), cls: r => signCls(r.roi)},
+  avgPay:  {k: "avg_payout", label: "$/tkt", num: true, f: r => money2(r.avg_payout)},
+  avgCost: {k: "avg_cost", label: "Cost/tkt", num: true, f: r => money2(r.avg_cost)},
+  ppt:     {k: "profit_per_ticket", label: "Profit/tkt", num: true, f: r => money2(r.profit_per_ticket), cls: r => signCls(r.profit_per_ticket)},
+};
+const METRICS = [C.qty, C.orders, C.payout, C.cost, C.profit, C.roi, C.avgPay, C.avgCost, C.ppt];
+
+// ------------------------------------------------------------------ render ---
+function stat(label, value, cls, sub) {
+  return `<div class="stat"><div class="label">${esc(label)}</div><div class="value ${cls || ""}">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+
+function render(d) {
+  DATA = d;
+  const t = d.totals, sel = d.selection;
+  $("meta").textContent = `as of ${d.today} · ${t.events} show${t.events === 1 ? "" : "s"}`;
+  $("selTitle").innerHTML = esc(d.title || "All sales") +
+    `<span class="sub">${sel.series ? "series · matched by date + venue, costs from /series blocks" : sel.group ? "one show" : sel.q ? "name match" : "every sale"}</span>`;
+  // presets
+  const pres = [`<button data-p="all" class="${!sel.series && !sel.group && !sel.q ? "on" : ""}">All sales</button>`]
+    .concat((d.catalog.series || []).map(n => `<button data-p="series:${esc(n)}" class="${sel.series === n ? "on" : ""}">${esc(n)} series</button>`));
+  $("presets").innerHTML = pres.join("");
+  $("presets").querySelectorAll("button").forEach(b => b.onclick = () => {
+    const p = b.dataset.p;
+    if (p === "all") load({});
+    else load({series: p.slice(7)});
+  });
+  $("events").innerHTML = (d.catalog.events || []).map(e =>
+    `<option value="${esc(e.event_name)} · ${esc(e.event_date_iso || "no date")}">${e.qty} sold${e.venue ? " · " + esc(e.venue) : ""}</option>`).join("");
+
+  $("stats").innerHTML = [
+    stat("Tickets sold", t.qty.toLocaleString(), "", `${t.orders} orders`),
+    stat("Payout", money(t.payout), "", `gross ${money(t.revenue)}`),
+    stat("Cost of sold", money(t.cost), ""),
+    stat("Profit", money(t.profit), signCls(t.profit), t.unsold_cost ? `net ${money(t.net_profit)} after unsold` : ""),
+    stat("ROI", pct(t.roi), signCls(t.roi), t.uncosted_qty ? `${t.uncosted_qty} tkt uncosted` : "costed tickets"),
+    stat("Profit / ticket", money2(t.profit_per_ticket), signCls(t.profit_per_ticket)),
+    stat("Median days out", t.median_days_out == null ? "—" : t.median_days_out, "", t.avg_days_out != null ? `avg ${t.avg_days_out}` : ""),
+    stat("Sell-through", t.sell_through == null ? "—" : t.sell_through + "%", "",
+      t.holding_qty ? `${t.holding_qty} still held` : (t.unsold_qty ? `${t.unsold_qty} didn't sell` : "")),
+  ].join("");
+
+  if (d.insights && d.insights.length) {
+    $("insights").style.display = "";
+    $("insights").innerHTML = "<ul>" + d.insights.map(s => `<li>${s}</li>`).join("") + "</ul>";
+  } else $("insights").style.display = "none";
+
+  if (!t.qty) {
+    $("body").style.display = "none";
+    $("err").style.display = ""; $("err").textContent = "No sales match this selection.";
+    return;
+  }
+  $("body").style.display = ""; $("err").style.display = "none";
+
+  const bk = d.buckets.filter(b => b.label !== "Unknown");
+  const bTip = b => `<b>${esc(b.label)} out</b><br>${b.qty} tickets (${b.share}%) · ${b.orders} orders<br>` +
+    `payout ${money(b.payout)} · ${money2(b.avg_payout)}/tkt<br>profit ${money(b.profit)} · ROI ${pct(b.roi)}`;
+  barChart($("chBuckets"), bk.map(b => ({label: b.label.replace(" days", "d").replace(" day", "d"), value: b.qty, tip: bTip(b)})), v => Math.round(v).toLocaleString());
+  barChart($("chRoi"), bk.map(b => ({label: b.label.replace(" days", "d").replace(" day", "d"), value: b.roi, tip: bTip(b)})),
+    v => (v > 0 ? "+" : "") + Math.round(v) + "%", {color: v => v >= 0 ? "var(--green)" : "var(--red)", axis: v => Math.round(v) + "%"});
+  curveChart($("chCurve"), d.curve);
+  scatterChart($("chScatter"), d.points);
+
+  sortableTable($("tBuckets"), [{k: "label", label: "Days out"}, {k: "share", label: "Share", num: true, f: r => r.share + "%"}, ...METRICS], d.buckets);
+
+  sortableTable($("tEvents"), [
+    {k: "event_date_iso", label: "Show date"},
+    {k: "event_name", label: "Event", f: r => esc((r.event_name || "").slice(0, 46))},
+    {k: "venue", label: "Venue", f: r => esc((r.venue || "").slice(0, 28))},
+    ...METRICS,
+    {k: "median_days_out", label: "Median out", num: true, f: r => days(r.median_days_out)},
+    {k: "first_days_out", label: "First sale", num: true, f: r => days(r.first_days_out)},
+    {k: "holding_qty", label: "Held", num: true, f: r => r.holding_qty || ""},
+    {k: "days_until", label: "Until show", num: true, f: r => r.days_until == null ? "" : (r.days_until < 0 ? "past" : r.days_until + "d")},
+  ], d.events, {sortK: "event_date_iso", dir: 1, onClick: r => {
+    if (r.key && !r.key.startsWith("|") && !r.key.startsWith("series:")) load({group: r.key});
+  }});
+
+  barChart($("chTimeline"), d.timeline.map(r => ({label: r.date.slice(5), value: r.qty,
+    tip: `<b>${esc(r.date)}</b><br>${r.qty} tickets · ${r.orders} orders<br>payout ${money(r.payout)} · profit ${money(r.profit)}`})),
+    v => Math.round(v), {labels: d.timeline.length <= 31, maxLabels: 16, W: 1200, H: 220});
+
+  sortableTable($("tPlatform"), [{k: "platform", label: "Platform"}, ...METRICS], d.by_platform, {sortK: "qty"});
+  sortableTable($("tSection"), [{k: "section", label: "Section"}, ...METRICS], d.by_section, {sortK: "qty"});
+  sortableTable($("tWeekday"), [{k: "weekday", label: "Day"}, C.qty, C.payout, C.profit, C.roi, C.avgPay], d.by_weekday);
+  sortableTable($("tEvWeekday"), [{k: "weekday", label: "Night"}, C.qty, C.payout, C.profit, C.roi, C.avgPay], d.by_event_weekday);
+
+  $("holdWrap").style.display = d.holdings.length ? "" : "none";
+  if (d.holdings.length) sortableTable($("tHold"), [
+    {k: "event_date_iso", label: "Show date"}, {k: "days_until", label: "Until show", num: true, f: r => r.days_until + "d"},
+    {k: "section", label: "Section"}, {k: "row", label: "Row"}, C.qty, C.cost,
+  ], d.holdings, {sortK: "days_until", dir: 1,
+    foot: {event_date_iso: "Total", qty: t.holding_qty, cost: money(t.holding_cost)}});
+  $("unsoldWrap").style.display = d.unsold.length ? "" : "none";
+  if (d.unsold.length) sortableTable($("tUnsold"), [
+    {k: "event_date_iso", label: "Show date"}, {k: "event_name", label: "Event"}, {k: "section", label: "Section"}, C.qty, C.cost,
+  ], d.unsold, {sortK: "event_date_iso", foot: {event_date_iso: "Total", qty: t.unsold_qty, cost: money(t.unsold_cost)}});
+
+  sortableTable($("tSales"), [
+    {k: "sale_date_iso", label: "Sold"},
+    {k: "days_out", label: "Days out", num: true, f: r => days(r.days_out)},
+    {k: "event_date_iso", label: "Show"},
+    {k: "event_name", label: "Event", f: r => esc((r.event_name || "").slice(0, 40))},
+    {k: "section", label: "Section"}, {k: "row", label: "Row"},
+    {k: "platform", label: "Platform"},
+    C.qty,
+    {k: "per_ticket", label: "$/tkt", num: true, f: r => money2(r.per_ticket)},
+    C.payout,
+    {k: "cost", label: "Cost", num: true, f: r => r.cost ? money(r.cost) + (r.cost_est ? '<span class="est" title="date-average cost">*</span>' : "") : '<span class="muted">—</span>'},
+    {k: "profit", label: "Profit", num: true, f: r => r.cost ? money(r.profit) : '<span class="muted">—</span>', cls: r => r.cost ? signCls(r.profit) : ""},
+    C.roi,
+  ], d.sales, {sortK: "sale_date_iso"});
+}
+
+// ------------------------------------------------------------------- load ---
+function load(sel, push = true) {
+  const qs = new URLSearchParams();
+  for (const k of ["series", "group", "q"]) if (sel[k]) qs.set(k, sel[k]);
+  if (push) history.replaceState(null, "", "/trends?" + (qs.toString() || "all=1"));
+  $("q").value = sel.q || "";
+  $("meta").textContent = "loading…";
+  fetch("/api/trends?" + qs).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(render)
+    .catch(e => { $("err").style.display = ""; $("err").textContent = "Failed to load: " + e.message; $("meta").textContent = ""; });
+}
+
+function submitQuery() {
+  const v = $("q").value.trim();
+  if (!v) return load({});
+  // A pick from the datalist ("Name · 2026-10-10") jumps to that one show.
+  const hit = (DATA?.catalog.events || []).find(e => `${e.event_name} · ${e.event_date_iso || "no date"}` === v);
+  if (hit) return load({group: hit.group});
+  load({q: v});
+}
+$("go").onclick = submitQuery;
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") submitQuery(); });
+$("q").addEventListener("change", () => {
+  const v = $("q").value;
+  if ((DATA?.catalog.events || []).some(e => `${e.event_name} · ${e.event_date_iso || "no date"}` === v)) submitQuery();
+});
+
+$("csv").onclick = () => {
+  if (!DATA) return;
+  const cols = ["sale_date_iso", "days_out", "event_date_iso", "event_name", "venue", "section", "row", "platform", "qty", "per_ticket", "payout", "cost", "profit", "roi", "cost_est"];
+  const lines = [cols.join(",")].concat(DATA.sales.map(r => cols.map(c => {
+    const v = r[c] ?? ""; const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(",")));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n")], {type: "text/csv"}));
+  a.download = "kartis-trends.csv"; a.click();
+};
+
+// Default to the first tracked series (NEXT) - that's what this page is for.
+const params = new URLSearchParams(location.search);
+const init = {series: params.get("series"), group: params.get("group"), q: params.get("q")};
+if (!init.series && !init.group && !init.q && !params.has("all")) init.series = "NEXT";
+load(init, false);
+</script>
+</body>
