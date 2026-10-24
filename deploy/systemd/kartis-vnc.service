@@ -1,7 +1,9 @@
 [Unit]
 Description=Kartis x11vnc (bridge Xvfb :99 to VNC on localhost:5900)
-Requires=kartis-xvfb.service kartis-chrome.service
-After=kartis-xvfb.service kartis-chrome.service
+# Xvfb only. This used to also Require kartis-chrome, so every "Restart
+# Chrome" (and every OOM-kill restart) tore down the VNC server too.
+BindsTo=kartis-xvfb.service
+After=kartis-xvfb.service
 
 [Service]
 Type=simple
@@ -19,7 +21,11 @@ Environment=DISPLAY=:99
 # -forever: keep running after a client disconnects
 # -shared: allow concurrent viewers
 # -quiet: only log warnings/errors
-ExecStart=/usr/bin/x11vnc -display :99 -rfbport 5900 -nopw -listen localhost -xkb -forever -shared -quiet
+# -noxdamage: XDAMAGE misses Chrome's repaints under Xvfb (stale/black areas)
+ExecStart=/usr/bin/x11vnc -display :99 -rfbport 5900 -nopw -listen localhost -xkb -forever -shared -quiet -noxdamage
+# Never let the OOM killer pick the display: losing Xvfb takes every window
+# with it and noVNC shows a black screen. Chrome (+500) goes first instead.
+OOMScoreAdjust=-900
 Restart=always
 # 5s (not 3s) gives the old socket time to leave TIME_WAIT before the rebind.
 RestartSec=5

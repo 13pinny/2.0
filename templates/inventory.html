@@ -160,6 +160,7 @@
   <div class="bar">
     <button id="refresh">Refresh</button>
     <button id="relogin" title="Open the box's Chrome (Lysted / Viagogo / CrowdVolt tabs) in a noVNC window so you can re-sign-in — no SSH">noVNC Login</button>
+    <button id="display-fix" title="noVNC screen black? Restarts whatever part of the display died, un-minimizes Chrome, and opens a window if none is showing">Fix Screen</button>
     <button id="chrome-restart" title="After re-signing in, bounce the scraper's Chrome so it picks up the fresh session">Restart Chrome</button>
     <button id="cv-relink" title="Ask the desktop agent to harvest a fresh CrowdVolt session from its Chrome. Needs start_cv_agent.bat running there, signed in at crowdvolt.com.">Re-link CrowdVolt</button>
     <button id="cv-sales" title="Ask the desktop agent to read CrowdVolt's delivered sales in its signed-in Chrome and push them here.">Pull CV Sales</button>
@@ -685,9 +686,32 @@ document.getElementById("relogin").addEventListener("click", (e) => {
   // they pop in within ~1s and noVNC's autoconnect renders them.
   window.open(VNC_URL, "_blank", "noopener");
   const btn = e.currentTarget; btn.disabled = true; const orig = btn.textContent; btn.textContent = "opening…";
-  fetch("/api/chrome/open-logins", { method: "POST" })
+  // Repair first (a dead/minimized Chrome is what makes noVNC black), then
+  // open the login tabs into the Chrome that's now on screen.
+  fetch("/api/display/repair", { method: "POST" })
+    .catch(() => {})
+    .then(() => fetch("/api/chrome/open-logins", { method: "POST" }))
     .catch(() => {})
     .finally(() => { btn.disabled = false; btn.textContent = orig; });
+});
+
+document.getElementById("display-fix").addEventListener("click", async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; const orig = btn.textContent; btn.textContent = "fixing…";
+  try {
+    const res = await fetch("/api/display/repair", { method: "POST" });
+    const d = await res.json().catch(() => ({}));
+    const mem = (d.status && d.status.memory) || {};
+    const lines = [];
+    if (d.error) lines.push(d.error);
+    for (const a of d.actions || []) lines.push("✓ " + a);
+    for (const er of d.errors || []) lines.push("✗ " + er);
+    if (!lines.length) lines.push("Display looks healthy — nothing to fix.");
+    if (mem.available_mb != null) lines.push(`RAM free: ${mem.available_mb} / ${mem.total_mb} MB`);
+    alert(lines.join("\n"));
+  } catch (err) {
+    alert("Fix failed: " + err);
+  }
+  btn.disabled = false; btn.textContent = orig;
 });
 
 document.getElementById("chrome-restart").addEventListener("click", async (e) => {
