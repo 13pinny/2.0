@@ -8058,7 +8058,8 @@ def api_dice_mute():
     """The /dice bell. {"event_code": id, "muted": bool} for one event, or
     {"event_codes": [...], "muted": bool} for Mute all / Unmute all. Only the
     Discord send is skipped; the event keeps being fetched and diffed."""
-    body = request.get_json(silent=True) or {}
+    from flask import request
+    body = request.get_json(force=True, silent=True) or {}
     codes = body.get("event_codes") or ([body["event_code"]] if body.get("event_code") else [])
     codes = [str(c).strip() for c in codes if str(c).strip()]
     if not codes:
