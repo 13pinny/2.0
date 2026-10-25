@@ -1051,8 +1051,7 @@ def _map_crowdvolt_api_sale(row):
         # the listing's. Prefer the order's, fall back to the listing's.
         "ticket_type": row.get("ticket_type_name") or card.get("ticket_type"),
         "price_per_ticket": card.get("price"),
-        # all_in_price is the order TOTAL, not per-ticket - same convention
-        # crowdvolt_pricer documents.
+        # all_in_price is the order TOTAL, not per-ticket.
         "sale_price": card.get("all_in_price"),
         "status": _crowdvolt_sale_status(row),
         # CrowdVolt's own fee/payout for this order. payout == all_in_price on
@@ -1095,7 +1094,7 @@ def _fetch_crowdvolt_sales_api():
 
     Uses whatever cv_refresh_token cv_auth has cached; it does not harvest
     one itself, so on a cold cache this returns None and the UI path runs.
-    crowdvolt_pricer refreshes that cache every tick.
+    The cache is filled by the desktop relink (cv_relink.py / cv_agent.py).
     """
     import cv_auth
     auth = cv_auth.CvAuth()          # no playwright: cache-only
