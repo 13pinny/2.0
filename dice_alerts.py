@@ -25,6 +25,10 @@ baseline, and a failed fetch leaves the stored state alone -- an unreadable
 event must never read as "sold out". Also feeds dice_tier_log, so the /dice
 price ladder fills in without anyone pressing Refresh.
 
+Events muted with the bell on /dice (db.dice_event_mutes) are fetched and
+diffed exactly the same -- state and tier log still move -- only the send is
+skipped, so unmuting picks up from the current state with no backlog.
+
 Probe: python dice_alerts.py   (one dry tick: prints, stores nothing, no pings)
 """
 import json
@@ -118,13 +122,16 @@ def headline_kind(changes):
     return next((k for k in KIND_ORDER if k in kinds), None)
 
 
-def run_tick(codes, notify_fn=None, dry=False, now_iso=None):
+def run_tick(codes, notify_fn=None, dry=False, now_iso=None, muted=None):
     """Check each event code once. notify_fn(kind, info) sends a ping (None
-    = muted: state is still stored). Returns a summary dict."""
+    = muted: state is still stored). `muted` = event codes whose pings are
+    skipped (default: db.dice_muted_codes()). Returns a summary dict."""
     now_iso = now_iso or datetime.now(timezone.utc).isoformat()
     now_ms = datetime.now(timezone.utc).timestamp() * 1000
     state = {} if dry else db.dice_alert_state_all()
-    checked = pinged = errors = 0
+    if muted is None:
+        muted = db.dice_muted_codes()
+    checked = pinged = errors = silenced = 0
     for code in codes:
         labels = dice.get_labels(code, "0", force=True)
         if labels.get("_error"):
@@ -137,7 +144,7 @@ def run_tick(codes, notify_fn=None, dry=False, now_iso=None):
         checked += 1
         new = summarize(labels)
         if dry:
-            print(f"{code} {meta.get('eventName')!r}: {json.dumps(new)}")
+            print(f"{code} {meta.get('eventName')!r}{' [muted]' if code in muted else ''}: {json.dumps(new)}")
             continue
         try:
             db.dice_tier_log_update(code, labels.get("blocks") or {}, now_iso)
@@ -151,6 +158,9 @@ def run_tick(codes, notify_fn=None, dry=False, now_iso=None):
         kind = headline_kind(changes)
         if not kind or notify_fn is None:
             continue
+        if code in muted:
+            silenced += 1
+            continue
         notify_fn(kind, {
             "event_code": code,
             "name": meta.get("eventName") or code,
@@ -163,11 +173,12 @@ def run_tick(codes, notify_fn=None, dry=False, now_iso=None):
             "lines": [line for _, line in changes],
         })
         pinged += 1
-    return {"checked": checked, "pinged": pinged, "errors": errors}
+    return {"checked": checked, "pinged": pinged, "muted": silenced, "errors": errors}
 
 
 if __name__ == "__main__":
     import sys
     sys.stdout.reconfigure(encoding="utf-8")
+    db.init()
     codes = sys.argv[1:] or [str(r["code"]) for r in db.market_manual_all() if r["source"] == "dice"]
     print(run_tick(codes, dry=True))

@@ -379,6 +379,10 @@ def _ping(follow, kind, ev):
     # dice_alerts' price pings use), so everything about one show is in one
     # place while the artist channel stays the follow's feed. Same name and
     # date source (event_start_date) as dice_alerts, so they land together.
+    # Muted with the /dice bell: the artist channel's feed still gets it,
+    # only the show-night copy is skipped.
+    if str(ev.get("dice_id") or "") in db.dice_muted_codes():
+        return result
     night = notify.dice_event_channel_webhook(ev.get("name"), ev.get("event_start"))
     if night and night != url:
         result = f"{result}; night: {notify._post_discord(night, payload)}"

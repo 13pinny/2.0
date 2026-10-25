@@ -7912,6 +7912,7 @@ def _dice_payload(force=False):
                      if r["source"] == "dice" and r["label"]}
     manual_labels.update({str(w["event_code"]): w.get("label") for w in db.tm_all_watchers()
                           if (w.get("source") or "") == "dice" and w.get("label")})
+    muted_codes = db.dice_muted_codes()
     events = []
     for code, tracked_by in tracked.items():
         labels = labels_by.get(code) or {}
@@ -7939,6 +7940,7 @@ def _dice_payload(force=False):
         events.append({
             "event_code": code,
             "tracked_by": tracked_by,
+            "muted": code in muted_codes,
             "name": meta.get("eventName") or manual_labels.get(code),
             "venue": " · ".join(v for v in ((meta.get("venueName") or "").strip(),
                                             (meta.get("venueCity") or "").strip()) if v),
@@ -8049,6 +8051,21 @@ def run_dice_alerts():
         return None
     finally:
         _dice_alerts_lock.release()
+
+
+@app.route("/api/dice/mute", methods=["POST"])
+def api_dice_mute():
+    """The /dice bell. {"event_code": id, "muted": bool} for one event, or
+    {"event_codes": [...], "muted": bool} for Mute all / Unmute all. Only the
+    Discord send is skipped; the event keeps being fetched and diffed."""
+    body = request.get_json(silent=True) or {}
+    codes = body.get("event_codes") or ([body["event_code"]] if body.get("event_code") else [])
+    codes = [str(c).strip() for c in codes if str(c).strip()]
+    if not codes:
+        return jsonify({"error": "event_code required"}), 400
+    muted = bool(body.get("muted", True))
+    db.dice_set_muted(codes, muted, datetime.now(timezone.utc).isoformat())
+    return jsonify({"ok": True, "muted": muted, "event_codes": codes})
 
 
 @app.route("/api/dice/alerts/status")

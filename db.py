@@ -744,6 +744,14 @@ CREATE TABLE IF NOT EXISTS dice_alert_state (
     state_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+-- Per-event Discord mute on /dice (the bell). A row = muted: dice_alerts
+-- and the follow pings' show-night mirror skip the send, but the event is
+-- still fetched and dice_alert_state / dice_tier_log still update, so
+-- unmuting never fires a backlog. No row (the default) = pings.
+CREATE TABLE IF NOT EXISTS dice_event_mutes (
+    event_code TEXT PRIMARY KEY,
+    muted_at   TEXT NOT NULL
+);
 -- Israeli-sites new-event monitor (kupat_events.py / tm_events.py +
 -- app.py run_il_events). One row per (source, event) ever seen on the
 -- site's listing feed; rows persist after the event drops off the feed
@@ -1987,6 +1995,21 @@ def dice_alert_state_put(event_code, state, now_iso):
             " ON CONFLICT(event_code) DO UPDATE SET state_json = excluded.state_json,"
             " updated_at = excluded.updated_at",
             (str(event_code), json.dumps(state), now_iso))
+
+
+def dice_muted_codes():
+    with connect() as conn:
+        return {r["event_code"] for r in conn.execute("SELECT event_code FROM dice_event_mutes")}
+
+
+def dice_set_muted(event_codes, muted, now_iso):
+    codes = [str(c) for c in event_codes if c]
+    with connect() as conn:
+        if muted:
+            conn.executemany("INSERT OR IGNORE INTO dice_event_mutes (event_code, muted_at) VALUES (?, ?)",
+                             [(c, now_iso) for c in codes])
+        else:
+            conn.executemany("DELETE FROM dice_event_mutes WHERE event_code = ?", [(c,) for c in codes])
 
 
 def sales_excluded_keys():

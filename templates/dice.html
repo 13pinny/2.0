@@ -188,6 +188,9 @@
   .cvauto { font-size: 9px; color: var(--muted); letter-spacing: .5px; text-transform: uppercase; }
   a.cvedit { color: var(--muted); text-decoration: none; font-size: 11px; }
   a.cvedit:hover { color: #0f766e; }
+  button.bell { border: 0; background: none; cursor: pointer; font-size: 14px; padding: 0 2px; line-height: 1; }
+  button.bell.off { opacity: .45; filter: grayscale(1); }
+  tr.ev.muted .evname { opacity: .7; }
   .detail .hero { float: right; width: 180px; height: 110px; border-radius: 10px; background-size: cover; background-position: center; margin: 2px 0 8px 16px; }
 </style>
 </head>
@@ -256,6 +259,8 @@
   <div class="controls">
     <input type="text" id="q" placeholder="filter by event or venue…" />
     <button class="act" id="refreshBtn">Refresh now</button>
+    <button class="act" id="muteAll" title="silence Discord pings for every upcoming event listed below (respects the filter and US only)">🔕 Mute all</button>
+    <button class="act" id="unmuteAll" title="turn Discord pings back on for every upcoming event listed below">🔔 Unmute all</button>
     <span class="sub" id="refreshNote" style="margin:0"></span>
   </div>
   <p class="sub" id="manualList" style="margin:-4px 0 12px"></p>
@@ -692,7 +697,7 @@ function trackerRow(e, held){
   const err = !e.error ? ''
     : e.page_only ? `<span class="errdot" style="color:var(--amber)" title="DICE's price API is unreachable from the server and the PC relay has nothing fresh, so status + cheapest price come from the public event page; ticket types below are the last full fetch. ${escape(e.error)}">● page only</span>`
     : `<span class="errdot" title="${escape(e.error)}">● fetch failed</span>`;
-  return `<tr class="ev${e.past ? ' isPast' : ''}" data-id="${e.event_code}">
+  return `<tr class="ev${e.past ? ' isPast' : ''}${e.muted ? ' muted' : ''}" data-id="${e.event_code}">
     <td class="artc">${art(e.image, e.name, e.past)}</td>
     <td class="evc"><div class="evname">${escape(e.name || e.event_code)}${err}</div><div class="evsub">${escape(e.venue||'')} <span class="trk">· ${escape(e.tracked_by)}</span></div>${typeChips(e)}</td>
     <td class="when">${escape(e.date_text||'')}<br>${countdown(e.first_date_ms ? dayDiff(e.date_text) : null)}</td>
@@ -705,7 +710,7 @@ function trackerRow(e, held){
     <td class="num chg${(e.changes||0) > 0 ? ' hot' : ''}">${fmt(e.changes||0)}</td>
     <td class="when" title="${e.last_change_at ? escape(fmtStamp(e.last_change_at)) : ''}">${e.last_change_at ? fmtAgo(e.last_change_at) : '—'}</td>
     <td class="num">${h ? `<span class="held">${h}</span>` : ''}</td>
-    <td><div class="links"><a class="buy${e.status === 'selling' ? '' : ' off'}" href="${escape(e.url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a>${cvLink(e.event_code, e.cv_url, e.name, e.cv_source)}</div></td>
+    <td><div class="links"><button class="bell${e.muted ? ' off' : ''}" data-code="${escape(e.event_code)}" title="${e.muted ? 'Muted — no Discord pings for this event (still tracked). Click to unmute.' : 'Discord pings on. Click to mute this event.'}">${e.muted ? '🔕' : '🔔'}</button><a class="buy${e.status === 'selling' ? '' : ' off'}" href="${escape(e.url||'#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a>${cvLink(e.event_code, e.cv_url, e.name, e.cv_source)}</div></td>
   </tr>` + (open.has(e.event_code) ? `<tr class="detail"><td colspan="${COLS.length}">${detailRows(e)}</td></tr>` : '');
 }
 function render(){
@@ -1001,6 +1006,36 @@ function cvLink(key, url, name, source){
   const q = 'https://www.google.com/search?q=' + encodeURIComponent('site:crowdvolt.com/event ' + (name || ''));
   return `<span class="pair"><a class="buy cvq" href="${escape(q)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="no CrowdVolt match yet — search for it, then paste its URL with ✎">CV?</a>${edit}</span>`;
 }
+async function setMuted(codes, muted){
+  const r = await fetch('/api/dice/mute', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({event_codes: codes, muted})});
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+  const set = new Set(codes);
+  (DATA.events || []).forEach(e => { if (set.has(e.event_code)) e.muted = muted; });
+  render();
+}
+document.addEventListener('click', async ev => {
+  const b = ev.target.closest('button.bell');
+  if (!b) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const e = (DATA.events || []).find(x => x.event_code === b.dataset.code);
+  try { await setMuted([b.dataset.code], !(e && e.muted)); }
+  catch (err) { alert('mute failed: ' + err.message); }
+}, true);
+function shownUpcoming(){
+  const q = ($('q').value || '').trim().toLowerCase();
+  return tEvents().filter(e => !e.past && (!q || ((e.name||'') + ' ' + (e.venue||'')).toLowerCase().includes(q)));
+}
+['muteAll', 'unmuteAll'].forEach(id => $(id).onclick = async () => {
+  if (!DATA) return;
+  const muted = id === 'muteAll';
+  const codes = shownUpcoming().filter(e => !!e.muted !== muted).map(e => e.event_code);
+  if (!codes.length){ $('refreshNote').textContent = `nothing to ${muted ? 'mute' : 'unmute'}`; return; }
+  if (!confirm(`${muted ? 'Mute' : 'Unmute'} Discord pings for ${codes.length} event${codes.length > 1 ? 's' : ''}?`)) return;
+  try { await setMuted(codes, muted); $('refreshNote').textContent = `${muted ? 'muted' : 'unmuted'} ${codes.length}`; }
+  catch (err) { $('refreshNote').textContent = 'Failed: ' + err.message; }
+});
 document.addEventListener('click', async ev => {
   const a = ev.target.closest('a.cvedit');
   if (!a) return;
