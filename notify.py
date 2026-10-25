@@ -1109,7 +1109,8 @@ def notify_edm_event(kind, ev, old=None):
                    threshold (posh only — the others publish no counts)
       'tier_restock' a count-publishing source (Frontgate, Universe,
                    UrVenue): one section/tier went from 0 left back to
-                   buyable while the event was still on sale — perishable
+                   buyable while the event was still on sale — perishable.
+                   tixr (no counts) fires it off a tier's sold-out flag.
       'below'      Frontgate / Universe: the event's total left crossed
                    below the per-event threshold set on /frontgate or /universe
 
@@ -1164,8 +1165,12 @@ def notify_edm_event(kind, ev, old=None):
         color = 0x00B0F4
         for t in back[:6]:
             p = f" @ ${t['price']:,.2f}" if t.get("price") is not None else ""
-            lines.append(f"**{t.get('name') or 'Tickets'}**{p}: was 0, now "
-                         f"**{t.get('available'):,}** left")
+            if t.get("available") is None:   # status-only source (tixr)
+                lines.append(f"**{t.get('name') or 'Tickets'}**{p}: was sold out, "
+                             f"now **on sale**")
+            else:
+                lines.append(f"**{t.get('name') or 'Tickets'}**{p}: was 0, now "
+                             f"**{t.get('available'):,}** left")
         lines.append("Usually returns or expired carts, so they go fast.")
     elif kind == "soldout":
         title = f"🚫 {site}: {name} is SOLD OUT"

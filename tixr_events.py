@@ -18,12 +18,25 @@ manually-logged-in Chrome that login.py opens for the Lysted / Viagogo /
 CrowdVolt scrapers, loads the event page there, and harvests the page's
 OWN `/api/events/<id>` XHR response.
 
-That makes Tixr the only EDM source pinned to the dashboard machine —
-everything else in this tracker is pure HTTP and runs happily on the VPS.
-Because `edm_events.fetch_tracked` isolates per-event failures, a box with
-no CDP Chrome simply records an error on the Tixr rows and keeps polling
-the other sources normally; pause the Tixr row there
-(`edm_events.py --pause tixr:<id>`) to stop the noise.
+WHERE IT RUNS (2026-10-25): on the VPS, inside the EDM tick, through the
+box's own headed scraper Chrome (kartis-chrome, CDP :9222 = the default
+KARTIS_CDP_URL). Verified that day: from the Hetzner IP the page's FIRST
+`/api/events/<id>` call gets a 403 (DataDome's own JSON, no `id`), its
+invisible interstitial runs by itself, and the SPA's retry returns 200 —
+the same sequence as on a home IP. So only a 200 carrying `id` + `sales`
+counts as the payload; taking the first response is what made this module
+report "no payload" on every load. ~3s per event per tick, and the page
+is always closed again so no tab lingers in the scraper Chrome. Real
+browser loads only — never wire in a captcha solver; if DataDome ever
+starts holding the box at a visible CAPTCHA, someone clicks it via noVNC.
+
+Fallback if the box stops getting through: `eventim_relay.py` can load
+Tixr events too (`KARTIS_RELAY_SOURCES=eventim,tixr` on the PC) and POST
+the JSON back; `relay_store` keeps it in `tm_cache/tixr_relay/<id>.json`
+and `fetch_event` prefers a copy younger than
+`KARTIS_TIXR_RELAY_MAX_AGE_SECONDS` (900). Off by default. (Both
+residential proxies on the box — KARTIS_DICE_PROXY and the cvproxy
+upstream — were failing that day, 503 / 407, so neither is an option.)
 
 NO REMAINING COUNTS. The event API's tier objects carry only
 `id / name / info / price / startDate / endDate / active / priceLevels /
@@ -38,7 +51,12 @@ alert never fires for it. Do not infer a count from capacity.
 
 What we DO get, and what the tracker keys on: per-sale `state`
 (OPEN / SOLD_OUT / …), per-tier `price` and `active`, and the sale window
-— enough for price-move, on-sale, sold-out and restock pings.
+— enough for price-move, on-sale, sold-out and restock pings. Each SALE
+holds one tier (Dom Dolla 194113: 18 sales, "Friday GA - Tier 1" … "Final
+Release", VIP Left/Right, 2-Day Pass), so a returned or newly released
+batch shows as one sale flipping SOLD_OUT → OPEN (`restock` when the whole
+event was out, else the status-only `tier_restock` in app.py) or a sale
+that was never listed appearing (`new_tier`).
 
 TRAPS
 - `https://tixr.com/e/<id>` is a canonical short URL that resolves from
@@ -68,6 +86,11 @@ SHORT_URL = "https://tixr.com/e/{}"
 PAGE_TIMEOUT_MS = 45000
 # How long to wait for the page's own /api/events/<id> XHR after load.
 CAPTURE_WAIT_SECONDS = 20
+
+# Desktop relay drop-off (see the DESKTOP RELAY note in the docstring).
+RELAY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "tm_cache", "tixr_relay")
+RELAY_MAX_AGE_SECONDS = int(os.getenv("KARTIS_TIXR_RELAY_MAX_AGE_SECONDS") or 900)
 
 # .../events/<slug>-<id>  or  tixr.com/e/<id>  or a bare id
 _URL_ID_RE = re.compile(r"tixr\.com/(?:.*?[/-])?(\d{4,})(?:[/?#]|$)", re.I)
@@ -133,8 +156,15 @@ def _capture_event_json(event_id):
             if "body" in captured:
                 return
             try:
-                if want in resp.url and resp.request.resource_type in ("xhr", "fetch"):
-                    captured["body"] = resp.json()
+                # Only a 200 that IS the event: DataDome 403s the page's
+                # first call with a JSON body of its own, runs its
+                # interstitial, and the SPA retries — taking that 403 body
+                # ended the wait before the real payload arrived.
+                if (want in resp.url and resp.ok
+                        and resp.request.resource_type in ("xhr", "fetch")):
+                    body = resp.json()
+                    if is_event_payload(body):
+                        captured["body"] = body
             except Exception:
                 pass  # a non-JSON / already-consumed response is not fatal
 
@@ -177,11 +207,64 @@ def _capture_event_json(event_id):
                 pass
 
     body = captured.get("body")
-    if not isinstance(body, dict) or not body.get("id"):
+    if not is_event_payload(body):
         raise EdmEventsError(
             f"tixr: no /api/events/{event_id} payload captured — DataDome "
             "challenge, or the event was removed")
     return body
+
+
+def is_event_payload(body):
+    """An /api/events/<id> body, as opposed to DataDome's 403 JSON."""
+    return (isinstance(body, dict) and bool(body.get("id"))
+            and isinstance(body.get("sales"), list))
+
+
+def _relay_path(event_id):
+    return os.path.join(RELAY_DIR, f"{event_id}.json")
+
+
+def relay_age(event_key):
+    """Seconds since the desktop relay last stored this event, or None."""
+    try:
+        return time.time() - os.path.getmtime(_relay_path(parse_url(event_key)))
+    except (OSError, ValueError):
+        return None
+
+
+def relay_store(event_key, payload):
+    """Keep an /api/events/<id> body the desktop relay captured, for
+    fetch_event. `payload` is the JSON text (or the parsed dict). Refuses
+    anything that isn't this event with sales, so a challenge response can
+    never overwrite a good copy. Returns the tier count."""
+    event_id = parse_url(event_key)
+    body = json.loads(payload) if isinstance(payload, str) else payload
+    if not is_event_payload(body) or str(body.get("id")) != event_id:
+        raise EdmEventsError(f"tixr relay: no event {event_id} payload in that body")
+    n = len(_tiers(body))
+    if not n:
+        raise EdmEventsError(f"tixr relay: event {event_id} has no ticket tiers")
+    os.makedirs(RELAY_DIR, exist_ok=True)
+    path = _relay_path(event_id)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(body, f, ensure_ascii=False)
+    os.replace(path + ".tmp", path)
+    return n
+
+
+def _load_event_json(event_id):
+    """A fresh relayed copy first; else capture it here (works only where a
+    real Chrome on a home IP is reachable — the PC)."""
+    age = relay_age(event_id)
+    if age is not None and age <= RELAY_MAX_AGE_SECONDS:
+        with open(_relay_path(event_id), encoding="utf-8") as f:
+            return json.load(f)
+    try:
+        return _capture_event_json(event_id)
+    except EdmEventsError as e:
+        when = f"{age / 60:.0f} min ago" if age is not None else "never"
+        raise EdmEventsError(f"{e} — desktop relay last sent this event {when}; "
+                             "is eventim_relay.py running?") from e
 
 
 def _tiers(data):
@@ -244,7 +327,7 @@ def _start_iso(data):
 def fetch_event(event_id):
     """One tixr.com event, normalized (see edm_common's docstring)."""
     event_id = parse_url(event_id)
-    data = _capture_event_json(event_id)
+    data = _load_event_json(event_id)
 
     tiers = _tiers(data)
     if not tiers:

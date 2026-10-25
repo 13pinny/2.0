@@ -801,8 +801,18 @@ TIER_RESTOCK_COOLDOWN_MINUTES = int(os.getenv("KARTIS_TIER_RESTOCK_COOLDOWN_MINU
 _tier_restock_last = {}   # (event_id, tier key) -> datetime of last ping
 
 
+#
+# Status-only sources (tixr: no counts, one tier per sale) get the same ping
+# off the tier's own flag instead: a tier that was SOLD OUT and is now
+# buyable is a returned or re-opened batch. Never off a count, so None can
+# still never read as zero.
+_STATUS_RESTOCK_SOURCES = {"tixr"}
+
+
 def _tier_restock_kinds(ev, old, kinds):
-    if ev.get("source") not in _STOCK_SNAPSHOT_SOURCES or "restock" in kinds:
+    status_only = ev.get("source") in _STATUS_RESTOCK_SOURCES
+    if (ev.get("source") not in _STOCK_SNAPSHOT_SOURCES and not status_only) \
+            or "restock" in kinds:
         return []
     try:
         old_tiers = json.loads(old.get("tiers_json") or "[]")
@@ -810,13 +820,19 @@ def _tier_restock_kinds(ev, old, kinds):
         return []
     key = lambda t: t.get("section_id") or (t.get("name") or "").strip()
     was = {key(t): t.get("available") for t in old_tiers}
+    was_out = {key(t) for t in old_tiers if t.get("sold_out")}
     now = datetime.now(timezone.utc)
     back = []
     for t in ev.get("tiers") or []:
         k = key(t)
         left = t.get("available")
-        if (was.get(k) == 0 and left is not None and left > 0
-                and not t.get("closed")):
+        if status_only:
+            reopened = (k in was_out and not t.get("sold_out")
+                        and not t.get("closed"))
+        else:
+            reopened = (was.get(k) == 0 and left is not None and left > 0
+                        and not t.get("closed"))
+        if reopened:
             last = _tier_restock_last.get((ev["event_id"], k))
             if last and now - last < timedelta(minutes=TIER_RESTOCK_COOLDOWN_MINUTES):
                 continue
@@ -7695,7 +7711,8 @@ def api_edm_add():
         # through the desktop relay, which only sends events that are already
         # tracked. So an eventim add can't be validated here; take it and let
         # the relay's first send (or the row's last_error) settle it.
-        if source != eventim_events.SOURCE_NAME:
+        # Same for tixr (DataDome), whose events also arrive via the relay.
+        if source not in (eventim_events.SOURCE_NAME, "tixr"):
             return jsonify({"error": f"could not fetch that event: {e}"}), 502
         ev = {"name": None}
     event_id = db.edm_tracked_add(source, key, url,
@@ -7734,6 +7751,12 @@ def api_eventim_relay_targets():
     # after two challenge pages, which the tao rows above could use up.
     import shotgun_events
     targets = shotgun_events.relay_targets() + targets
+    # tixr (DataDome) -- the relay posts the event's API JSON, not the page.
+    # First: a sold-out show's returns are the perishable thing here.
+    import tixr_events
+    targets = [{"source": "tixr", "event_key": r["event_key"],
+                "url": tixr_events.event_page_url(r["event_key"])}
+               for r in rows if r["source"] == tixr_events.SOURCE_NAME] + targets
     return jsonify({"targets": targets})
 
 
@@ -7755,6 +7778,9 @@ def api_eventim_relay():
     elif body.get("source") == "shotgun":
         import shotgun_events
         store = shotgun_events.relay_store
+    elif body.get("source") == "tixr":
+        import tixr_events
+        store = tixr_events.relay_store
     try:
         n = store(body.get("event_key") or "", body.get("html") or "")
     except (EdmEventsError, ValueError) as e:
@@ -10405,7 +10431,8 @@ else:
     print("[il-events] disabled via KARTIS_IL_EVENTS_ENABLED=0 — the monitor runs elsewhere (e.g. the VPS)")
 if EDM_MONITOR_ENABLED:
     # Offset again so pacha / il_events / edm first ticks don't collide.
-    scheduler.add_job(run_edm_events, "interval",
+    # Fresh thread: tixr drives the box's CDP Chrome from inside this tick.
+    scheduler.add_job(_fresh_thread_job(run_edm_events), "interval",
                       minutes=EDM_MONITOR_INTERVAL_MINUTES, id="edm_events",
                       start_date=datetime.now() + timedelta(minutes=3))
 else:

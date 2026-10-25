@@ -44,6 +44,12 @@ VENUE pages (source "shotgun", see the venues block in shotgun_events). For
 those the relay also clicks "See more" until the whole upcoming list is on
 the page, then posts it back; the EDM tick pings each newly listed show.
 
+Tixr: the targets list also carries every tracked Tixr event (source
+"tixr"); for those the relay posts the page's own /api/events/<id> JSON (in
+the "html" field) rather than the page. It is a FALLBACK only, off unless
+KARTIS_RELAY_SOURCES names tixr: the box's own scraper Chrome gets through
+DataDome today, so the EDM tick fetches Tixr itself -- see tixr_events.
+
 Run:  .venv\\Scripts\\python eventim_relay.py           one pass, prints results
       .venv\\Scripts\\pythonw eventim_relay.py          what the scheduled task runs
                                                        (logs to logs\\eventim_relay.log)
@@ -121,6 +127,9 @@ READY_SELECTOR = {
     # shotgun venue pages: the section headings ("Upcoming events" / "Past
     # events"); Vercel's checkpoint page has none.
     "shotgun": "h2[data-slot='heading']",
+    # tixr: no selector -- the relay captures the page's own /api/events/<id>
+    # JSON instead of posting HTML (render_tixr).
+    "tixr": None,
 }
 
 # Clicks the "See more" button that sits ABOVE the "Past events" heading
@@ -182,6 +191,42 @@ def relay_tab(ctx):
         except Exception:
             pass
     return pg
+
+
+def render_tixr(pg, url, event_key):
+    """Tixr: load the event page and return its /api/events/<id> JSON text.
+    DataDome 403s the page's first call and lets the SPA's retry through
+    once its interstitial has run, so wait for a 200 with the event in it;
+    failing that, ask from inside the page (it holds the cookie by then)."""
+    want = f"/api/events/{event_key}"
+    got = {}
+
+    def on_response(resp):
+        if "body" in got or want not in resp.url or not resp.ok:
+            return
+        try:
+            body = resp.text()
+            if f'"id":{event_key}' in body.replace(" ", "")[:40]:
+                got["body"] = body
+        except Exception:
+            pass
+
+    pg.on("response", on_response)
+    try:
+        pg.goto(url, timeout=60000, wait_until="domcontentloaded")
+        for _ in range(100):
+            if "body" in got:
+                break
+            pg.wait_for_timeout(250)
+        if "body" not in got:
+            got["body"] = pg.evaluate(
+                """async (u) => {
+                    const r = await fetch(u, {headers: {Accept: 'application/json'}});
+                    return r.ok ? await r.text() : null;
+                }""", want)
+    finally:
+        pg.remove_listener("response", on_response)
+    return got.get("body"), pg.title()
 
 
 def render(pg, url, source="eventim", expand=None):
@@ -261,7 +306,10 @@ def main():
         for t in targets:
             source = t.get("source") or "eventim"
             try:
-                html, title = render(pg, t["url"], source, t.get("expand"))
+                if source == "tixr":
+                    html, title = render_tixr(pg, t["url"], t["event_key"])
+                else:
+                    html, title = render(pg, t["url"], source, t.get("expand"))
             except Exception as e:
                 log(f"{t['event_key']}: load failed {type(e).__name__}: {e}")
                 if pg.is_closed():  # tab crashed -- carry on in a fresh one
