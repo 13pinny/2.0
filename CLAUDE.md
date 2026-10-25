@@ -44,6 +44,7 @@ All commands assume the venv at `.venv\Scripts\`. On Windows use `.venv\Scripts\
 | Probe a public viagogo event's competitor listings | `.venv\Scripts\python scripts\probe_viagogo_public.py <event_id or "artist name">` |
 | Probe/exercise the viagogo listing price edit | `.venv\Scripts\python scripts\probe_viagogo_edit_price.py <listing_id> [new_price]` |
 | Re-link the CrowdVolt session (monthly; DESKTOP only) | `.venv\Scripts\python scripts\cv_relink.py` — harvests from the :9222 Chrome; add `--cookie` to paste the value from ANY Chrome's DevTools instead (also `--dry-run`, `--local`, `--with-cf-clearance`, `--no-verify`) |
+| Set up a home "relay laptop" (eventim + shotgun relay, DICE relay, nightly git pull, no-sleep power) | `powershell -ExecutionPolicy Bypass -File scripts\setup_relay_laptop.ps1 -EnvFile <kartis-relay.env>` (re-runnable; `-Sources` overrides `eventim,shotgun`) |
 | Run the desktop agent that answers the /inventory Re-link button | `start_cv_agent.bat` — or `.venv\Scripts\python cv_agent.py` (add `--once`, `--now`, `--interval N`) |
 | Probe the intake inbox for CrowdVolt mail (fallback path, unused while the API works) | `.venv\Scripts\python scripts\probe_cv_mail.py` (add `--days N`, `--full`, `--subject-only`, `--folder`) |
 | Dry-run the market-wide tracker sweep (the /market page's fetchers) | `.venv\Scripts\python market.py --source kupat\|tm\|tickchak\|zappa\|all` (add `--json`; `--write` persists like a real tick) |
