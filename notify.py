@@ -1313,24 +1313,34 @@ def notify_dice_price(kind, info):
         return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
     name = info.get("name") or "DICE event"
     sym = {"USD": "$", "GBP": "£", "EUR": "€"}.get(info.get("currency") or "USD", "")
-    old_p, new_p = info.get("old_min_price"), info.get("min_price")
+    # Headline prices: the cheapest buyable price when it moved, else the
+    # headline change's own type price (dice_alerts._headline_prices).
+    old_p = info.get("headline_old", info.get("old_min_price"))
+    new_p = info.get("headline_new", info.get("min_price"))
+
+    def m(v):
+        return f"{sym}{v:,.0f}" if float(v).is_integer() else f"{sym}{v:,.2f}"
+    move = f"{m(old_p)} → {m(new_p)}" if old_p is not None and new_p is not None else None
+    if move and info.get("headline_type"):
+        move = f"{info['headline_type']} {move}"
     if kind == "restock":
-        title, color = f"⚡ DICE: {name} is BACK on sale", 0x00B0F4
+        title = f"⚡ DICE: {name} is BACK on sale" + (
+            f" — {move}" if move else f" from {m(new_p)}" if new_p is not None else "")
+        color = 0x00B0F4
     elif kind == "soldout":
-        title, color = f"🚫 DICE: {name} sold out — waitlist only", 0x99AAB5
+        title = f"🚫 DICE: {name} sold out — waitlist only" + (f" (was {m(old_p)})" if old_p is not None else "")
+        color = 0x99AAB5
     elif kind == "onsale":
-        title, color = f"🎟️ DICE: {name} is ON SALE", 0x56D364
+        title = f"🎟️ DICE: {name} is ON SALE" + (f" from {m(new_p)}" if new_p is not None else "")
+        color = 0x56D364
     elif kind == "type_soldout":
-        title, color = f"⏳ DICE: {name} — a ticket type sold out", 0xED4245
+        title = f"⏳ DICE: {name} — a ticket type sold out" + (f" (was {m(old_p)})" if old_p is not None else "")
+        color = 0xED4245
     elif kind == "price_down":
-        title = (f"⚡ DICE: {name} {sym}{old_p:,.0f} → {sym}{new_p:,.0f}"
-                 if old_p is not None and new_p is not None and new_p < old_p
-                 else f"⚡ DICE: {name} price DROPPED")
+        title = f"⚡ DICE: {name} {move}" if move else f"⚡ DICE: {name} price DROPPED"
         color = 0x00B0F4
     else:
-        title = (f"📈 DICE: {name} {sym}{old_p:,.0f} → {sym}{new_p:,.0f}"
-                 if old_p is not None and new_p is not None and new_p > old_p
-                 else f"📈 DICE: {name} price went up")
+        title = f"📈 DICE: {name} {move}" if move else f"📈 DICE: {name} price went up"
         color = 0xFAA61A
     where = " · ".join(x for x in (info.get("venue"), info.get("date_text")) if x)
     lines = ([f"**{where}**"] if where else []) + list(info.get("lines") or [])

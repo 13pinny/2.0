@@ -70,26 +70,32 @@ def _money(v, cur):
 
 
 def diff(old, new):
-    """[(kind, line)] for everything that moved between two summaries."""
+    """[(kind, line, old_price, new_price)] for everything that moved between
+    two summaries; the prices are what the ping's headline shows (None when
+    the change has no before/after price)."""
     out = []
     cur = new.get("currency")
     os_, ns = old.get("status"), new.get("status")
     if os_ == "soldout" and ns == "selling":
-        out.append(("restock", f"Back on sale from {_money(new['min_price'], cur)} — it was sold out / waitlist only"))
+        out.append(("restock", f"Back on sale from {_money(new['min_price'], cur)} — it was sold out / waitlist only",
+                    old.get("min_price"), new.get("min_price")))
     elif os_ == "selling" and ns == "soldout":
         out.append(("soldout", "Sold out — waitlist only now"
-                    + (f" (last price {_money(old['min_price'], cur)})" if old.get("min_price") is not None else "")))
+                    + (f" (last price {_money(old['min_price'], cur)})" if old.get("min_price") is not None else ""),
+                    old.get("min_price"), None))
     elif os_ in ("upcoming", "unknown", None) and ns == "selling":
-        out.append(("onsale", f"On sale now from {_money(new['min_price'], cur)}"))
+        out.append(("onsale", f"On sale now from {_money(new['min_price'], cur)}", None, new.get("min_price")))
     ot, nt = old.get("types") or {}, new.get("types") or {}
     for name, t in nt.items():
         o = ot.get(name)
         if not (o and o["on"] and t["on"]) or o["price"] is None or t["price"] is None:
             continue
         if t["price"] > o["price"]:
-            out.append(("price_up", f"{name}: {_money(o['price'], cur)} → **{_money(t['price'], cur)}**"))
+            out.append(("price_up", f"{name}: {_money(o['price'], cur)} → **{_money(t['price'], cur)}**",
+                        o["price"], t["price"]))
         elif t["price"] < o["price"]:
-            out.append(("price_down", f"{name}: {_money(o['price'], cur)} → **{_money(t['price'], cur)}**"))
+            out.append(("price_down", f"{name}: {_money(o['price'], cur)} → **{_money(t['price'], cur)}**",
+                        o["price"], t["price"]))
     if ns == "selling" and os_ == "selling":
         for name, t in nt.items():
             o = ot.get(name)
@@ -100,26 +106,40 @@ def diff(old, new):
                     kind = "restock"   # this type was sold out and is back
                 else:
                     kind = "info"      # a brand-new type; the price check below covers it
-                out.append((kind, f"{name} {'back ' if kind == 'restock' else ''}on sale at {_money(t['price'], cur)}"))
+                out.append((kind, f"{name} {'back ' if kind == 'restock' else ''}on sale at {_money(t['price'], cur)}",
+                            o["price"] if o else None, t["price"]))
         for name, o in ot.items():
             t = nt.get(name)
             if o["on"] and not (t and t["on"]):
                 out.append(("type_soldout", f"{name} sold out / waitlist"
-                            + (f" (was {_money(o['price'], cur)})" if o.get("price") is not None else "")))
+                            + (f" (was {_money(o['price'], cur)})" if o.get("price") is not None else ""),
+                            o.get("price"), None))
         # A release selling through usually shows up as one type going off
         # sale and a pricier one coming on, not as a price edit -- so the
         # event's cheapest buyable price is compared too.
         op, np_ = old.get("min_price"), new.get("min_price")
-        kinds = {k for k, _ in out}
+        kinds = {c[0] for c in out}
         if op is not None and np_ is not None and op != np_ and not kinds & {"price_up", "price_down"}:
             out.append(("price_up" if np_ > op else "price_down",
-                        f"Cheapest ticket {_money(op, cur)} → **{_money(np_, cur)}**"))
+                        f"Cheapest ticket {_money(op, cur)} → **{_money(np_, cur)}**", op, np_))
     return out
 
 
 def headline_kind(changes):
-    kinds = {k for k, _ in changes}
+    kinds = {c[0] for c in changes}
     return next((k for k in KIND_ORDER if k in kinds), None)
+
+
+def _headline_prices(kind, changes, old, new):
+    op, np_ = old.get("min_price"), new.get("min_price")
+    if op is not None and np_ is not None and op != np_ and kind in ("price_up", "price_down", "restock"):
+        return op, np_, None
+    c = next((c for c in changes if c[0] == kind), None)
+    if not c:
+        return op, np_, None
+    # Per-type lines read "<type>: $a → $b" / "<type> on sale at" / "<type> sold out".
+    typ = c[1].split(":")[0] if ": " in c[1] else None
+    return c[2], c[3], typ
 
 
 def run_tick(codes, notify_fn=None, dry=False, now_iso=None, muted=None):
@@ -154,7 +174,7 @@ def run_tick(codes, notify_fn=None, dry=False, now_iso=None, muted=None):
         db.dice_alert_state_put(code, new, now_iso)
         if old is None:
             continue  # silent baseline
-        changes = [c for c in diff(old, new)]
+        changes = diff(old, new)
         kind = headline_kind(changes)
         if not kind or notify_fn is None:
             continue
@@ -170,7 +190,11 @@ def run_tick(codes, notify_fn=None, dry=False, now_iso=None, muted=None):
             "min_price": new.get("min_price"),
             "old_min_price": old.get("min_price"),
             "currency": new.get("currency"),
-            "lines": [line for _, line in changes],
+            "lines": [c[1] for c in changes],
+            # Old -> new for the headline. The cheapest buyable price when it
+            # moved; else the headline change's own (e.g. one type's edit).
+            **dict(zip(("headline_old", "headline_new", "headline_type"),
+                       _headline_prices(kind, changes, old, new))),
         })
         pinged += 1
     return {"checked": checked, "pinged": pinged, "muted": silenced, "errors": errors}
