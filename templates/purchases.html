@@ -72,6 +72,17 @@
   .src-dice { color: var(--purple); }
   .src-series { color: var(--amber); }
   .src-unmapped { color: var(--muted); }
+  .src-email { color: #0f766e; }
+  .src-b2b { color: #b42318; }
+  tr.p-row.is-cancelled > td { text-decoration: line-through; text-decoration-color: var(--red); color: var(--muted); }
+  .badge-x { color: var(--red); font-size: 10px; letter-spacing: .8px; text-transform: uppercase; }
+  .sold { font-weight: 400; margin-left: 10px; font-size: 11px; }
+  .sold.all { color: var(--green); }
+  .edit { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .edit label { display: flex; flex-direction: column; gap: 3px; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); }
+  .edit input { width: 120px; }
+  .edit input.wide { width: 220px; }
+  .edit .msg { font-size: 11.5px; color: var(--muted); }
   .tag { font-size: 10px; color: var(--muted); margin-left: 4px; }
   .muted { color: var(--muted); }
   .warn { color: var(--red); }
@@ -87,7 +98,7 @@
     header, main { padding-left: 14px; padding-right: 14px; }
     .toolbar input[type=search] { min-width: 0; max-width: none; }
     .stat { min-width: 0; flex: 1 1 40%; }
-    .col-venue, .col-account, .col-status { display: none; }
+    .col-venue, .col-account, .col-status, .col-card, .col-order { display: none; }
   }
 </style>
 </head>
@@ -104,7 +115,6 @@
   </div>
 </header>
 <main>
-  <div id="pendingBanner" class="banner" style="display:none"></div>
 
   <div class="stats" id="stats"></div>
 
@@ -161,26 +171,52 @@
 </main>
 
 <script>
-const SOURCE_LABEL = { lysted: "Lysted", manual: "Manual / email", jerujam: "JeruJam", dice: "DICE", series: "Series", unmapped: "Unmapped" };
-const SOURCE_PAGE = { lysted: "/", manual: "/", jerujam: "/jerujam", dice: "/dice", series: "/series", unmapped: "/unmapped" };
-const COLS = [
+const SOURCE_LABEL = { email: "Email receipt", b2b: "B2B", lysted: "Lysted", manual: "Manual / email", jerujam: "JeruJam", dice: "DICE", series: "Series", unmapped: "Unmapped" };
+const SOURCE_PAGE = { email: "/purchases", b2b: "/b2b", lysted: "/", manual: "/", jerujam: "/jerujam", dice: "/dice", series: "/series", unmapped: "/unmapped" };
+const ALL_COLS = [
   { key: "purchased_on", label: "Bought" },
-  { key: "event_name", label: "Event" },
-  { key: "event_date_iso", label: "Event date" },
-  { key: "venue", label: "Venue", cls: "col-venue" },
+  { key: "event_name", label: "Event", ev: true },
+  { key: "event_date_iso", label: "Event date", ev: true },
+  { key: "venue", label: "Venue", cls: "col-venue", ev: true },
+  { key: "account", label: "Email", cls: "col-account" },
+  { key: "ticket_type", label: "Ticket type" },
   { key: "where", label: "Section / Row / Seats" },
   { key: "qty", label: "Qty", num: true },
   { key: "cost_per_unit", label: "$ / tkt", num: true },
   { key: "total_cost", label: "Total", num: true },
+  { key: "card", label: "Card", cls: "col-card" },
+  { key: "order_ref", label: "Order #", cls: "col-order" },
   { key: "platform", label: "Platform" },
-  { key: "account", label: "Account", cls: "col-account" },
-  { key: "source", label: "Source" },
   { key: "status", label: "Status", cls: "col-status" },
 ];
+// Grouped by event, the event name / date / venue live in the group header.
+let COLS = ALL_COLS;
 const STORE_KEY = "kartis.purchases.v1";
 const FILTER_IDS = ["q", "fSource", "fPlatform", "fAccount", "fWhen", "fFrom", "fTo", "fGroup", "fUnmapped", "fHidden"];
 
-let ITEMS = [], TODAY = "", START = "", sortKey = "purchased_on", sortDir = -1, openKey = null, lastView = [];
+let ITEMS = [], SOLD = {}, TODAY = "", START = "", sortKey = "purchased_on", sortDir = -1, openKey = null, lastView = [];
+
+// FourVenues mails one receipt per ticket; rows sharing a group_ref are one
+// order on this page (edits fan out to every member row).
+function mergeGroups(items) {
+  const out = [], byRef = new Map();
+  for (const r of items) {
+    if (!r.group_ref) { out.push(r); continue; }
+    const m = byRef.get(r.group_ref);
+    if (!m) { const c = { ...r, members: [r.source_id], codes: [r.seats].filter(Boolean) }; byRef.set(r.group_ref, c); out.push(c); continue; }
+    m.members.push(r.source_id);
+    if (r.seats) m.codes.push(r.seats);
+    m.qty = (m.qty || 0) + (r.qty || 0);
+    m.total_cost = (m.total_cost == null || r.total_cost == null) ? (m.total_cost ?? r.total_cost) : m.total_cost + r.total_cost;
+    m.attachments = (m.attachments || []).concat(r.attachments || []);
+  }
+  for (const m of byRef.values()) {
+    m.order_ref = m.codes.length > 1 ? `${m.codes.length} ticket codes` : (m.codes[0] || "");
+    m.seats = "";
+    if (m.total_cost != null && m.qty) m.cost_per_unit = m.total_cost / m.qty;
+  }
+  return out;
+}
 
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function money(v) { return v == null ? "—" : "$" + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -240,14 +276,10 @@ async function load() {
   try {
     const r = await fetch("/api/purchases");
     const data = await r.json();
-    ITEMS = data.items || [];
+    ITEMS = mergeGroups(data.items || []);
     TODAY = data.today || new Date().toISOString().slice(0, 10);
     START = data.start_date || "";
-    const pb = document.getElementById("pendingBanner");
-    if (data.pending_count) {
-      pb.innerHTML = `${data.pending_count} purchase email${data.pending_count === 1 ? "" : "s"} waiting to be confirmed. They aren't counted here until confirmed on <a href="/pending">Pending</a>.`;
-      pb.style.display = "";
-    } else pb.style.display = "none";
+    SOLD = data.sold_by_group || {};
     const uniq = k => [...new Set(ITEMS.map(i => i[k]).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
     fillSelect("fSource", Object.keys(SOURCE_LABEL).filter(s => ITEMS.some(i => i.source === s)), s => SOURCE_LABEL[s]);
     fillSelect("fPlatform", uniq("platform"));
@@ -280,7 +312,7 @@ function filtered() {
     if (from && (!r.purchased_on || r.purchased_on < from)) return false;
     if (to && (!r.purchased_on || r.purchased_on > to)) return false;
     if (terms.length) {
-      const hay = [r.event_name, r.venue, r.section, r.row, r.seats, r.account, r.platform, r.order_ref, r.status, r.note, SOURCE_LABEL[r.source]].join(" ").toLowerCase();
+      const hay = [r.event_name, r.venue, r.section, r.row, r.seats, r.account, r.platform, r.order_ref, r.status, r.note, r.ticket_type, r.card, (r.codes || []).join(" "), SOURCE_LABEL[r.source]].join(" ").toLowerCase();
       if (!terms.every(t => hay.includes(t))) return false;
     }
     return true;
@@ -311,6 +343,7 @@ function setSort(k) {
 function sum(rows) {
   let n = 0, tix = 0, cost = 0, noCost = 0;
   for (const r of rows) {
+    if (r.cancelled) continue;
     n++; tix += r.qty || 0;
     if (r.total_cost == null) noCost++; else cost += r.total_cost;
   }
@@ -326,7 +359,14 @@ function groupKey(r, g) {
   return "";
 }
 function groupLabel(r, g, k) {
-  if (g === "event") return `${esc(r.event_name || "(no name)")} <span class="gsub">${esc(fmtDate(r.event_date_iso))}${r.venue ? " · " + esc(r.venue) : ""}</span>`;
+  if (g === "event") {
+    const bought = sum(ITEMS.filter(i => !i.hidden && groupKey(i, "event") === k)).tix, sold = SOLD[r.event_group] || 0;
+    // Sales can also draw on stock bought before the tracking start date, so
+    // "N of M" only when the sales fit inside what's listed here.
+    const soldTxt = !sold ? `<span class="sold muted">none sold yet</span>`
+      : `<span class="sold ${sold >= bought ? "all" : ""}" title="Tickets sold for this event across all platforms">${sold <= bought ? `${sold} of ${bought} sold` : `${sold} sold`}</span>`;
+    return `${esc(r.event_name || "(no name)")} <span class="gsub">${esc(fmtDate(r.event_date_iso))}${r.venue ? " · " + esc(r.venue) : ""}</span>${soldTxt}`;
+  }
   if (g === "month") return k ? esc(new Date(k + "-01T00:00:00").toLocaleDateString(undefined, { month: "long", year: "numeric" })) : "No purchase date";
   if (g === "source") return esc(SOURCE_LABEL[k] || k);
   return k ? esc(k) : "(none)";
@@ -334,23 +374,26 @@ function groupLabel(r, g, k) {
 
 function rowHtml(r) {
   const k = rkey(r), open = openKey === k;
-  const cls = ["p-row", isPast(r) ? "past" : "", r.hidden ? "is-hidden" : "", open ? "open" : ""].join(" ");
+  const cls = ["p-row", isPast(r) ? "past" : "", r.hidden ? "is-hidden" : "", r.cancelled ? "is-cancelled" : "", open ? "open" : ""].join(" ");
   const edited = r.edited && r.edited.length ? `<span class="tag" title="Edited on the inventory page: ${esc(r.edited.join(", "))}">✎</span>` : "";
   const orig = r.orig ? `<span class="tag" title="Paid ${esc(r.orig.currency)} ${esc(r.orig.cost_per_unit)} / tkt">${esc(r.orig.currency)}</span>` : "";
-  let html = `<tr class="${cls}" data-k="${esc(k)}">
-    <td class="nowrap">${esc(fmtDate(r.purchased_on)) || '<span class="muted">—</span>'}</td>
-    <td>${esc(r.event_name)}${edited}</td>
-    <td class="nowrap">${esc(fmtDate(r.event_date_iso))}</td>
-    <td class="col-venue">${esc(r.venue)}</td>
-    <td>${esc(where(r))}</td>
-    <td class="num">${r.qty || 0}</td>
-    <td class="num">${money(r.cost_per_unit)}${orig}</td>
-    <td class="num">${r.total_cost == null ? '<span class="warn" title="No cost recorded">—</span>' : money(r.total_cost)}</td>
-    <td>${esc(r.platform)}</td>
-    <td class="col-account">${esc(r.account)}</td>
-    <td><span class="src src-${esc(r.source)}">${esc(SOURCE_LABEL[r.source] || r.source)}</span></td>
-    <td class="col-status">${esc(r.status)}${r.hidden ? ' <span class="tag">hidden</span>' : ""}</td>
-  </tr>`;
+  const cell = {
+    purchased_on: `<td class="nowrap">${esc(fmtDate(r.purchased_on)) || '<span class="muted">—</span>'}</td>`,
+    event_name: `<td>${esc(r.event_name)}${edited}</td>`,
+    event_date_iso: `<td class="nowrap">${esc(fmtDate(r.event_date_iso))}</td>`,
+    venue: `<td class="col-venue">${esc(r.venue)}</td>`,
+    account: `<td class="col-account">${esc(r.account)}</td>`,
+    ticket_type: `<td>${esc(r.ticket_type)}</td>`,
+    where: `<td>${esc(where(r))}</td>`,
+    qty: `<td class="num">${r.qty || 0}</td>`,
+    cost_per_unit: `<td class="num">${money(r.cost_per_unit)}${orig}</td>`,
+    total_cost: `<td class="num">${r.total_cost == null ? '<span class="warn" title="No cost recorded — click to add">—</span>' : money(r.total_cost)}</td>`,
+    card: `<td class="col-card nowrap">${r.card ? "••" + esc(r.card) : ""}</td>`,
+    order_ref: `<td class="col-order">${esc(r.order_ref)}</td>`,
+    platform: `<td>${esc(r.platform)} <span class="src src-${esc(r.source)}" title="${esc(SOURCE_LABEL[r.source] || r.source)}">${esc((SOURCE_LABEL[r.source] || r.source).split(" ")[0])}</span></td>`,
+    status: `<td class="col-status">${r.cancelled ? '<span class="badge-x">cancelled</span> ' : ""}${esc(r.cancelled && r.status === "cancelled" ? "" : r.status)}${r.hidden ? ' <span class="tag">hidden</span>' : ""}</td>`,
+  };
+  let html = `<tr class="${cls}" data-k="${esc(k)}">${COLS.map(c => cell[c.key]).join("")}</tr>`;
   if (open) html += detailHtml(r);
   return html;
 }
@@ -375,6 +418,9 @@ function detailHtml(r) {
       ${f("Platform", esc(r.platform))}
       ${f("Account", esc(r.account))}
       ${f("Order", esc(r.order_ref))}
+      ${f("Ticket type", esc(r.ticket_type))}
+      ${f("Card", r.card ? "••" + esc(r.card) : "")}
+      ${f("Ticket codes", esc((r.codes || []).join(", ")))}
       ${f("Status", esc(r.status))}
       ${f("Link", link)}
       ${f("Note", esc(r.note))}
@@ -382,7 +428,64 @@ function detailHtml(r) {
       ${r.overlap_risk ? f("Heads up", "Unmapped tickets are a hand-kept list and may repeat a purchase recorded elsewhere.") : ""}
     </div>
     ${files ? `<div class="dfiles">${files}</div>` : ""}
+    ${editHtml(r)}
   </td></tr>`;
+}
+
+function editHtml(r) {
+  const can = r.editable || [];
+  if (!can.length) return "";
+  const v = x => x == null ? "" : Number(x).toFixed(2);
+  return `<div class="edit" data-k="${esc(rkey(r))}">
+    <label>Total $<input type="number" step="0.01" min="0" data-f="total" value="${v(r.total_cost)}" oninput="syncCost(this)"></label>
+    <label>Per ticket $<input type="number" step="0.01" min="0" data-f="cost_per_unit" value="${v(r.cost_per_unit)}" oninput="syncCost(this)"></label>
+    ${can.includes("qty") && !r.members ? `<label>Qty<input type="number" step="1" min="1" data-f="qty" value="${r.qty || ""}" oninput="syncCost(this)"></label>` : ""}
+    ${can.includes("ticket_type") ? `<label>Ticket type<input class="wide" type="text" data-f="ticket_type" value="${esc(r.ticket_type)}"></label>` : ""}
+    <button onclick="saveEdit(this)">Save</button>
+    ${r.source === "email" ? `<button onclick="toggleHide(this, ${r.hidden ? "false" : "true"})">${r.hidden ? "Unhide" : "Hide"}</button>` : ""}
+    <span class="msg"></span>
+  </div>`;
+}
+// Total and per-ticket follow each other live; whichever one was typed in
+// last is what gets saved, so a $100 total over 3 tickets stays $100.00.
+function syncCost(inp) {
+  const box = inp.closest(".edit"), get = f => box.querySelector(`[data-f="${f}"]`);
+  const r = ITEMS.find(i => rkey(i) === box.dataset.k);
+  const qty = Number((get("qty") || {}).value || r.qty || 0);
+  const f = inp.dataset.f;
+  if (f === "total" || f === "cost_per_unit") box.dataset.driver = f;
+  const drv = box.dataset.driver || "total";
+  if (!qty) return;
+  if (drv === "total" && get("total").value !== "") get("cost_per_unit").value = (Number(get("total").value) / qty).toFixed(2);
+  if (drv === "cost_per_unit" && get("cost_per_unit").value !== "") get("total").value = (Number(get("cost_per_unit").value) * qty).toFixed(2);
+}
+async function postEdit(r, body) {
+  const ids = r.members || [r.source_id];
+  for (const id of ids) {
+    const res = await fetch("/api/purchases/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: r.source, source_id: id, ...body }) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || res.status);
+  }
+}
+async function saveEdit(btn) {
+  const box = btn.closest(".edit"), msg = box.querySelector(".msg");
+  const r = ITEMS.find(i => rkey(i) === box.dataset.k);
+  const get = f => box.querySelector(`[data-f="${f}"]`);
+  const body = {};
+  const drv = box.dataset.driver;
+  if (drv === "total" && get("total").value !== "") body.total = Number(get("total").value);
+  if (drv === "cost_per_unit" && get("cost_per_unit").value !== "") body.cost_per_unit = Number(get("cost_per_unit").value);
+  // A merged order (one row per ticket underneath) is edited per ticket.
+  if (r.members && body.total != null) { body.cost_per_unit = body.total / (r.qty || 1); delete body.total; }
+  if (get("qty") && get("qty").value !== "" && Number(get("qty").value) !== r.qty) body.qty = Number(get("qty").value);
+  if (get("ticket_type") && get("ticket_type").value !== (r.ticket_type || "")) body.ticket_type = get("ticket_type").value;
+  if (!Object.keys(body).length) { msg.textContent = "nothing changed"; return; }
+  msg.textContent = "saving…";
+  try { await postEdit(r, body); await load(); } catch (e) { msg.textContent = "failed: " + e.message; }
+}
+async function toggleHide(btn, hidden) {
+  const box = btn.closest(".edit"), r = ITEMS.find(i => rkey(i) === box.dataset.k);
+  try { await postEdit(r, { hidden }); await load(); } catch (e) { box.querySelector(".msg").textContent = "failed: " + e.message; }
 }
 
 function renderStats(rows) {
@@ -418,6 +521,8 @@ function breakdown(id, rows, keyFn, labelFn, order) {
 
 function render() {
   saveFilters();
+  const grp = document.getElementById("fGroup").value;
+  COLS = ALL_COLS.filter(c => !(grp === "event" && c.ev));
   document.getElementById("thead").innerHTML = COLS.map(c =>
     `<th class="${[c.num ? "num" : "", c.cls || "", sortKey === c.key ? "sorted" : ""].join(" ")}" onclick="setSort('${c.key}')">${c.label}${sortKey === c.key ? `<span class="arr">${sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("");
   const rows = sorted(filtered());
@@ -435,7 +540,8 @@ function render() {
     else ent.sort((a, b) => sum(b[1]).cost - sum(a[1]).cost);
     for (const [k, rs] of ent) {
       const s = sum(rs);
-      html += `<tr class="grp"><td colspan="5">${groupLabel(rs[0], g, k)}</td><td class="num">${s.tix}</td><td class="num">${s.tix ? money(s.cost / s.tix) : ""}</td><td class="num">${money(s.cost)}</td><td colspan="4" class="muted">${s.n} purchase${s.n === 1 ? "" : "s"}</td></tr>`;
+      const qi = COLS.findIndex(c => c.key === "qty");
+      html += `<tr class="grp"><td colspan="${qi}">${groupLabel(rs[0], g, k)}</td><td class="num">${s.tix}</td><td class="num">${s.tix && s.cost ? money(s.cost / s.tix) : "—"}</td><td class="num">${s.cost || !s.noCost ? money(s.cost) : "—"}</td><td colspan="${COLS.length - qi - 3}" class="muted">${s.n} purchase${s.n === 1 ? "" : "s"}</td></tr>`;
       html += rs.map(rowHtml).join("");
     }
   }
@@ -452,7 +558,7 @@ function render() {
 }
 
 document.getElementById("tbody").addEventListener("click", e => {
-  if (e.target.closest("a")) return;
+  if (e.target.closest("a") || e.target.closest(".edit")) return;
   const tr = e.target.closest("tr.p-row");
   if (!tr) return;
   openKey = openKey === tr.dataset.k ? null : tr.dataset.k;
@@ -460,7 +566,7 @@ document.getElementById("tbody").addEventListener("click", e => {
 });
 
 function exportCsv() {
-  const cols = ["purchased_on", "event_name", "event_date_iso", "venue", "section", "row", "seats", "qty", "cost_per_unit", "total_cost", "platform", "account", "source", "status", "order_ref", "link", "note"];
+  const cols = ["purchased_on", "event_name", "event_date_iso", "venue", "ticket_type", "section", "row", "seats", "qty", "cost_per_unit", "total_cost", "platform", "account", "card", "source", "status", "cancelled", "order_ref", "link", "note"];
   const q = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const lines = [cols.join(",")].concat(lastView.map(r => cols.map(c => q(r[c])).join(",")));
   const blob = new Blob([lines.join("\n")], { type: "text/csv" });
@@ -472,6 +578,7 @@ function exportCsv() {
 }
 
 restoreFilters();
+if (!localStorage.getItem(STORE_KEY)) document.getElementById("fGroup").value = "event";
 load();
 </script>
 </body>

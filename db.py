@@ -1151,6 +1151,49 @@ CREATE TABLE IF NOT EXISTS b2b_orders (
     updated_at          TEXT,
     UNIQUE (platform, order_ref)
 );
+-- Box-office purchase receipts read straight off the intake inbox
+-- (purchase_email.py) -> /purchases, no confirm step. One row per order;
+-- kind 'cancel' / 'refund' rows are notices: /purchases marks the purchase
+-- they match as cancelled, and they never count as spend themselves. group_ref joins rows the
+-- page shows as one order (FourVenues mails one email per ticket). `edited`
+-- lists fields changed by hand, which a re-parse never overwrites.
+CREATE TABLE IF NOT EXISTS email_purchases (
+    id              TEXT PRIMARY KEY,          -- ep-<hex>
+    message_id      TEXT UNIQUE,
+    provider        TEXT NOT NULL,
+    kind            TEXT NOT NULL DEFAULT 'purchase',
+    order_ref       TEXT,                      -- NULL when the receipt has none
+    group_ref       TEXT,
+    event_name      TEXT,
+    event_date_iso  TEXT,
+    venue           TEXT,
+    ticket_type     TEXT,
+    section         TEXT,
+    row_label       TEXT,
+    seats           TEXT,
+    qty             INTEGER,
+    total           REAL,
+    price_each      REAL,
+    currency        TEXT,
+    buyer_email     TEXT,
+    card_last4      TEXT,
+    received_at     TEXT,
+    subject         TEXT,
+    raw_text        TEXT,
+    hidden          INTEGER NOT NULL DEFAULT 0,
+    edited          TEXT,                      -- comma list of hand-edited fields
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT,
+    UNIQUE (provider, order_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_email_purchases_recv ON email_purchases(received_at);
+-- Every message the purchase sweep has looked at (Message-ID dedup).
+CREATE TABLE IF NOT EXISTS email_purchase_messages (
+    message_id   TEXT PRIMARY KEY,
+    verdict      TEXT,                         -- purchase | cancel | refund | other
+    purchase_id  TEXT,
+    processed_at TEXT NOT NULL
+);
 -- Every b2b email we've handled (Message-ID dedup). A confirmation that
 -- follow-up (confirmed / delivered / cancelled) that matches no order yet is
 -- kept here with order_id NULL and its parse in fields_json, and re-tried on
@@ -3379,6 +3422,14 @@ def all_pending_intake(status="new"):
     return [dict(r) for r in rows]
 
 
+def intake_message_ids():
+    """{pending_intake id: Message-ID} for every staged email."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, message_id FROM pending_intake WHERE message_id IS NOT NULL").fetchall()
+    return {r["id"]: r["message_id"] for r in rows}
+
+
 def has_intake_message(message_id):
     if not message_id:
         return False
@@ -5497,3 +5548,118 @@ def frontgate_alert_get(event_id):
 
 def frontgate_alert_set(event_id, n, now_iso):
     setting_set(f"frontgate_alert:{event_id}", "" if n is None else str(int(n)), now_iso)
+
+
+# --- email purchases (purchase_email.py -> /purchases) ----------------------
+
+_EP_FIELDS = (
+    "kind", "group_ref", "event_name", "event_date_iso", "venue", "ticket_type",
+    "section", "row_label", "seats", "qty", "total", "price_each", "currency",
+    "buyer_email", "card_last4", "received_at", "subject", "raw_text",
+)
+EP_EDITABLE = ("event_name", "event_date_iso", "venue", "ticket_type", "section",
+               "row_label", "seats", "qty", "total", "price_each", "buyer_email",
+               "card_last4", "currency")
+
+
+def email_purchase_message_seen(message_id):
+    if not message_id:
+        return False
+    with connect() as conn:
+        return bool(conn.execute(
+            "SELECT 1 FROM email_purchase_messages WHERE message_id = ?",
+            (message_id,)).fetchone())
+
+
+def email_purchase_message_record(message_id, verdict, purchase_id, now_iso):
+    if not message_id:
+        return
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO email_purchase_messages (message_id, verdict, "
+            "purchase_id, processed_at) VALUES (?, ?, ?, ?)",
+            (message_id, verdict, purchase_id, now_iso))
+
+
+def email_purchase_forget_other(version, now_iso):
+    """Re-read mail an older parser rejected. Runs once per version."""
+    if setting_get("email_purchase_classify_version") == str(version):
+        return 0
+    with connect() as conn:
+        n = conn.execute(
+            "DELETE FROM email_purchase_messages WHERE verdict = 'other'").rowcount
+    setting_set("email_purchase_classify_version", str(version), now_iso)
+    return n
+
+
+def email_purchase_upsert(row, now_iso):
+    """Insert a parsed receipt, or refresh the order it repeats (same provider
+    + order number). Hand-edited fields are kept. Returns the row id."""
+    import uuid as _uuid
+    order_ref = row.get("order_ref") or None
+    with connect() as conn:
+        cur = None
+        if order_ref:
+            cur = conn.execute(
+                "SELECT id, edited FROM email_purchases WHERE provider = ? AND order_ref = ?",
+                (row["provider"], order_ref)).fetchone()
+        if cur is None and row.get("message_id"):
+            cur = conn.execute(
+                "SELECT id, edited FROM email_purchases WHERE message_id = ?",
+                (row["message_id"],)).fetchone()
+        if cur is not None:
+            keep = set((cur["edited"] or "").split(","))
+            sets = {k: row.get(k) for k in _EP_FIELDS if k not in keep and row.get(k) not in (None, "")}
+            sets["updated_at"] = now_iso
+            conn.execute(
+                "UPDATE email_purchases SET " + ", ".join(f"{k} = ?" for k in sets) +
+                " WHERE id = ?", (*sets.values(), cur["id"]))
+            return cur["id"]
+        pid = "ep-" + _uuid.uuid4().hex[:12]
+        cols = ["id", "message_id", "provider", "order_ref", *_EP_FIELDS, "created_at"]
+        vals = [pid, row.get("message_id") or None, row["provider"], order_ref,
+                *[row.get(k) for k in _EP_FIELDS], now_iso]
+        conn.execute(
+            f"INSERT INTO email_purchases ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+            vals)
+        return pid
+
+
+def email_purchases_all():
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM email_purchases ORDER BY received_at").fetchall()
+    return [dict(r) for r in rows]
+
+
+def email_purchase_get(pid):
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM email_purchases WHERE id = ?", (pid,)).fetchone()
+    return dict(row) if row else None
+
+
+def email_purchase_edit(pid, fields, now_iso):
+    """Hand edit: writes the fields and marks them so a re-parse keeps them.
+    `hidden` is a plain flag, not an edit."""
+    with connect() as conn:
+        cur = conn.execute("SELECT edited FROM email_purchases WHERE id = ?", (pid,)).fetchone()
+        if cur is None:
+            return False
+        edited = [e for e in (cur["edited"] or "").split(",") if e]
+        sets = {}
+        for k, v in fields.items():
+            if k == "hidden":
+                sets["hidden"] = 1 if v else 0
+            elif k in EP_EDITABLE:
+                sets[k] = v
+                if k not in edited:
+                    edited.append(k)
+        if not sets:
+            return True
+        sets["edited"] = ",".join(edited)
+        sets["updated_at"] = now_iso
+        conn.execute(
+            "UPDATE email_purchases SET " + ", ".join(f"{k} = ?" for k in sets) +
+            " WHERE id = ?", (*sets.values(), pid))
+    return True
+

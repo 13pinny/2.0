@@ -27,6 +27,7 @@ from email.utils import parsedate_to_datetime
 
 import attachments as attachments_mod
 import b2b_email
+import purchase_email
 import cashback_email
 import db
 import series
@@ -2012,6 +2013,104 @@ def process_b2b(raws, out=None, now=None):
     return out
 
 
+PURCHASE_LOOKBACK_DAYS = int(os.getenv("KARTIS_PURCHASE_LOOKBACK_DAYS") or 7)
+
+
+def sweep_purchases(lookback_days=None):
+    """Targeted capture of box-office receipts (purchase_email.SWEEP_CRITERIA)
+    into email_purchases for /purchases. Its own search per sender because
+    the general poll is capped and the inbox carries thousands of Kartis
+    self-notifications a week. Idempotent via email_purchase_messages; a
+    header that can't be a receipt is recorded without downloading the body."""
+    from datetime import date as _date, timedelta as _timedelta
+    days = lookback_days or PURCHASE_LOOKBACK_DAYS
+    since = (_date.today() - _timedelta(days=days)).strftime("%d-%b-%Y")
+    now = datetime.now(timezone.utc).isoformat()
+    db.email_purchase_forget_other(purchase_email.CLASSIFY_VERSION, now)
+    raws, errors = [], 0
+    M = _connect()
+    try:
+        M.select(INTAKE_FOLDER)
+        seen_uids = set()
+        for field, needle in purchase_email.SWEEP_CRITERIA:
+            try:
+                typ, data = M.search(None, field, '"%s"' % needle, "SINCE", since)
+            except Exception:
+                errors += 1
+                continue
+            if typ != "OK" or not data or not data[0]:
+                continue
+            for uid in data[0].split():
+                if uid in seen_uids:
+                    continue
+                seen_uids.add(uid)
+                typ, hdr = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT)])")
+                if typ != "OK" or not hdr or not isinstance(hdr[0], tuple):
+                    continue
+                h = message_from_bytes(hdr[0][1])
+                mid = (h.get("Message-ID") or "").strip()
+                if mid and db.email_purchase_message_seen(mid):
+                    continue
+                if not purchase_email.wants(_decode(h.get("From") or ""),
+                                            _decode(h.get("Subject") or "")):
+                    db.email_purchase_message_record(mid, "other", None, now)
+                    continue
+                typ, msg_data = M.fetch(uid, "(BODY.PEEK[])")
+                if typ == "OK" and msg_data and isinstance(msg_data[0], tuple):
+                    raws.append(msg_data[0][1])
+    finally:
+        try:
+            M.close()
+        except Exception:
+            pass
+        M.logout()
+    out = process_purchases(raws, now)
+    out["errors"] += errors
+    return out
+
+
+def process_purchases(raws, now=None):
+    """Parse + record a batch of raw receipt emails. Split from the IMAP
+    fetch so saved .eml samples can be fed through it."""
+    now = now or datetime.now(timezone.utc).isoformat()
+    out = {"purchases": 0, "cancels": 0, "other": 0, "errors": 0}
+    for raw in raws:
+        mid = ""
+        try:
+            parsed = parse_email(raw)
+            mid = parsed.get("message_id") or ""
+            eff_from, eff_subject, eff_body = _unwrap_forwarded(parsed)
+            msg = message_from_bytes(raw)
+            text = _b2b_text(raw, {**parsed, "body": eff_body})
+            fields = purchase_email.parse(eff_from, eff_subject, text,
+                                          parsed.get("received_at"))
+            if not fields:
+                db.email_purchase_message_record(mid, "other", None, now)
+                out["other"] += 1
+                continue
+            fields.update({
+                "message_id": mid or None,
+                "buyer_email": _buyer_email(msg, eff_body),
+                "received_at": parsed.get("received_at") or "",
+                "subject": (eff_subject or "")[:500],
+                "raw_text": (text or "")[:8000],
+            })
+            pid = db.email_purchase_upsert(fields, now)
+            db.email_purchase_message_record(mid, fields["kind"], pid, now)
+            out["purchases" if fields["kind"] == "purchase" else "cancels"] += 1
+            for fname, ctype, payload in parsed.get("attachments") or []:
+                if ctype == "application/pdf" or fname.lower().endswith(".pdf"):
+                    try:
+                        _save_intake_attachment(pid, fname, ctype, payload,
+                                                owner_type="email_purchase")
+                    except Exception:
+                        out["errors"] += 1
+        except Exception:
+            out["errors"] += 1
+            print(f"[purchases] failed on {mid!r}: {traceback.format_exc()}")
+    return out
+
+
 def sweep_cashback():
     """Targeted Capital One cash-back capture, independent of the capped
     general poll. Returns the number of new entries added."""
@@ -2059,7 +2158,8 @@ def parse_email(raw_bytes):
     }
 
 
-def _save_intake_attachment(intake_id, filename, content_type, payload):
+def _save_intake_attachment(intake_id, filename, content_type, payload,
+                            owner_type="manual_intake"):
     """Persists one attachment using the same disk layout as the manual
     upload path. owner_type='manual_intake' keeps it visually separate from
     confirmed-row attachments until promotion."""
@@ -2073,7 +2173,7 @@ def _save_intake_attachment(intake_id, filename, content_type, payload):
     rel = dest.relative_to(attachments_mod.ATTACH_DIR).as_posix()
     db.insert_attachment({
         "id": att_id,
-        "owner_type": "manual_intake",
+        "owner_type": owner_type,
         "owner_id": intake_id,
         "filename": filename,
         "stored_path": rel,
@@ -2227,8 +2327,15 @@ def run_intake():
         b2b = sweep_b2b()
     except Exception:
         errors += 1
+    # Box-office receipts straight onto /purchases (no confirm step).
+    purchases = {}
+    try:
+        purchases = sweep_purchases()
+    except Exception:
+        errors += 1
     return {
         "b2b": b2b,
+        "purchases": purchases,
         "fetched": seen,
         "saved": saved,
         "cashback_saved": cashback_saved,

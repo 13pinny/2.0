@@ -4920,6 +4920,33 @@ def _purchase_day(text):
     return _parse_event_date(s)
 
 
+_EMAIL_PLATFORM = {
+    "leap": "Leap", "frontgate": "Frontgate", "fourvenues": "FourVenues",
+    "posh": "Posh", "eventbrite": "Eventbrite", "seetickets_us": "See Tickets",
+    "shotgun": "Shotgun", "ticketmaster_us": "Ticketmaster US", "kupat": "Kupat",
+    "ticketmaster_il": "Ticketmaster IL", "universe": "Universe", "dice": "DICE",
+}
+
+
+def _names_overlap(a, b):
+    """Loose event-name match for refund/cancel notices: one name contains
+    the other ("Locky" vs "unKommon Events present: Locky")."""
+    a, b = _norm_event_name(a), _norm_event_name(b)
+    return bool(a and b and (a in b or b in a))
+
+
+def _refund_matches(refunds, name, qty, total):
+    for r in refunds:
+        if not _names_overlap(r.get("event_name"), name):
+            continue
+        if r.get("qty") and qty and r["qty"] != qty:
+            continue
+        if r.get("total") is not None and total is not None and abs(r["total"] - total) > 0.01:
+            continue
+        return True
+    return False
+
+
 def _build_purchases():
     hidden = db.all_hidden_keys()
     overrides = db.all_inv_overrides()
@@ -4950,6 +4977,10 @@ def _build_purchases():
             "account": f.get("account") or "",
             "status": f.get("status") or "",
             "order_ref": f.get("order_ref") or "",
+            "ticket_type": f.get("ticket_type") or "",
+            "card": f.get("card") or "",
+            "cancelled": bool(f.get("cancelled")),
+            "editable": f.get("editable") or [],
             "link": f.get("link") or "",
             "note": f.get("note") or "",
             "orig": f.get("orig"),
@@ -4984,9 +5015,19 @@ def _build_purchases():
             platform=r.get("delivery_type"), account=r.get("account_email"),
             status=r.get("status"), order_ref=r.get("order_id"))
 
+    # A receipt on email_purchases IS the purchase; the /pending confirm that
+    # may also have copied it into manual_inventory / series must not count
+    # it twice.
+    email_rows = db.email_purchases_all()
+    email_mids = {e["message_id"] for e in email_rows if e.get("message_id")}
+    intake_mid = db.intake_message_ids()
+
     manual_intakes = set()
     for m in db.all_manual_inventory():
         if m.get("matched_source") == "lysted":
+            continue
+        if intake_mid.get(m.get("intake_id")) in email_mids:
+            manual_intakes.add(m["intake_id"])
             continue
         if m.get("intake_id"):
             manual_intakes.add(m["intake_id"])
@@ -5018,7 +5059,11 @@ def _build_purchases():
             status=t.get("status"), note=t.get("notes"))
 
     dice_linked = db.dice_linked_qty_by_purchase()
+    # DICE refund notices (purchase_email) void the purchase they match.
+    dice_refunds = [e for e in email_rows if e["provider"] == "dice" and e["kind"] == "refund"]
     for p in db.dice_purchases_all():
+        if p.get("b2b_order_id"):
+            continue  # a /b2b order's DICE mirror: the b2b row below represents it
         cur = (p.get("currency") or "USD").upper()
         cpu, total, orig = p.get("price_per_unit"), p.get("price_total"), None
         if cur != "USD":
@@ -5038,12 +5083,16 @@ def _build_purchases():
             venue=p.get("venue"), section=p.get("ticket_type"), qty=qty,
             cost_per_unit=cpu, total_cost=total, platform="DICE",
             account=p.get("account_email"),
+            cancelled=_refund_matches(dice_refunds, p.get("event_name"), qty,
+                                      p.get("price_total")),
+            editable=["cost"],
             status=f"{sold}/{qty} sold" if sold else "unsold",
             link=f"https://dice.fm/event/{p['event_slug']}" if p.get("event_slug") else "",
             orig=orig)
 
     for s in db.series_purchases_every():
-        if s.get("intake_id") and s["intake_id"] in manual_intakes:
+        if s.get("intake_id") and (s["intake_id"] in manual_intakes
+                                   or intake_mid.get(s["intake_id"]) in email_mids):
             continue
         add("series", s.get("id"),
             purchased_on=_purchase_day(s.get("created_at")),
@@ -5057,6 +5106,59 @@ def _build_purchases():
             status=(f"listed on {s.get('marketplace') or 'viagogo'}" if s.get("listed")
                     else "not listed"),
             note=s.get("note"))
+
+    cancels = [e for e in email_rows if e["kind"] == "cancel"]
+    for e in email_rows:
+        if e["kind"] == "refund":
+            continue  # applied to the DICE purchase it matches, above
+        cur = (e.get("currency") or "USD").upper()
+        cpu, total, orig = e.get("price_each"), e.get("total"), None
+        if cur != "USD":
+            orig = {"currency": cur, "cost_per_unit": cpu, "total": total}
+            try:
+                rate = fx.to_usd_rate(cur)
+                orig["fx_rate"] = rate
+                cpu = round(cpu * rate, 2) if cpu is not None else None
+                total = round(total * rate, 2) if total is not None else None
+            except Exception:
+                cpu = total = None  # never show a foreign amount as dollars
+        is_cancel = e["kind"] == "cancel"
+        voided = is_cancel or any(
+            c["provider"] == e["provider"]
+            and (c.get("received_at") or "") >= (e.get("received_at") or "")
+            and _names_overlap(c.get("event_name"), e.get("event_name"))
+            and (c.get("qty") or 0) == (e.get("qty") or 0) for c in cancels)
+        add("email", e["id"],
+            purchased_on=_purchase_day(e.get("received_at") or e.get("created_at")),
+            event_name=e.get("event_name"), event_date_iso=e.get("event_date_iso"),
+            venue=e.get("venue"), section=e.get("section"), row=e.get("row_label"),
+            seats=e.get("seats"), qty=e.get("qty") or 0, ticket_type=e.get("ticket_type"),
+            cost_per_unit=cpu, total_cost=total,
+            platform=_EMAIL_PLATFORM.get(e["provider"], e["provider"]),
+            account=e.get("buyer_email"), card=e.get("card_last4"),
+            order_ref=e.get("order_ref") or "", cancelled=voided,
+            editable=["cost", "qty", "ticket_type"],
+            status="refund notice" if is_cancel else ("cancelled" if voided else ""),
+            orig=orig)
+        rows[-1]["group_ref"] = e.get("group_ref") or ""
+        rows[-1]["hidden"] = rows[-1]["hidden"] or bool(e.get("hidden"))
+
+    for o in db.b2b_orders_all():
+        if o.get("hidden"):
+            continue
+        st = o.get("status") or ""
+        ref = o.get("order_ref") or ""
+        add("b2b", o.get("id"),
+            purchased_on=_purchase_day(o.get("placed_at") or o.get("confirmed_at") or o.get("created_at")),
+            event_name=o.get("event_name"), event_date_iso=o.get("event_date_iso"),
+            venue=o.get("venue"), section=o.get("section"), row=o.get("row_label"),
+            seats=o.get("seats"), qty=o.get("qty") or 0, ticket_type=o.get("section"),
+            cost_per_unit=o.get("price_each"), total_cost=o.get("total"),
+            platform=(o.get("platform") or "").capitalize(), account=o.get("buyer_email"),
+            order_ref="" if ref.startswith("x-") else ref,  # x- = synthetic key
+            cancelled=st == "cancelled", editable=["cost"],
+            status="delivered" if o.get("delivered_at") else st,
+            note=o.get("notes"), link="/b2b")
 
     for u in db.all_unmapped_tickets():
         add("unmapped", u.get("id"),
@@ -5194,6 +5296,8 @@ def api_purchases():
             "manual_inventory", [r["source_id"] for r in rows if r["source"] == "manual"]),
         "unmapped": db.list_attachments_for_owners(
             "unmapped", [r["source_id"] for r in rows if r["source"] == "unmapped"]),
+        "email": db.list_attachments_for_owners(
+            "email_purchase", [r["source_id"] for r in rows if r["source"] == "email"]),
     }
     intake_of = {str(m["id"]): m.get("intake_id") for m in db.all_manual_inventory() if m.get("intake_id")}
     intake_att = db.list_attachments_for_owners("manual_intake", list(intake_of.values()))
@@ -5202,9 +5306,99 @@ def api_purchases():
         if r["source"] == "manual" and intake_of.get(r["source_id"]):
             files += intake_att.get(intake_of[r["source_id"]], [])
         r["attachments"] = [{"id": a["id"], "filename": a["filename"]} for a in files]
-    return jsonify({"items": rows, "pending_count": len(_pending_since_start()),
+    # Tickets sold per event group (same grouping as the rows), so each event
+    # header can say how much of what we bought has gone.
+    sold = {}
+    try:
+        for sr in _build_combined_sales():
+            g = sr.get("event_group")
+            if g:
+                sold[g] = sold.get(g, 0) + (sr.get("qty") or 0)
+    except Exception:
+        traceback.print_exc()
+    return jsonify({"items": rows, "sold_by_group": sold,
                     "start_date": db.purchases_start_date(),
                     "today": date.today().isoformat()})
+
+
+@app.route("/api/purchases/edit", methods=["POST"])
+def api_purchases_edit():
+    """Hand edit of one /purchases row: {source, source_id} plus any of
+    total / cost_per_unit (USD), qty, ticket_type, hidden. Email receipts and
+    b2b orders are edited in their own tables; every other source takes a
+    cost_per_unit inventory override (unrounded, so a $100 total over 3
+    tickets still sums back to $100.00)."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    src, sid = body.get("source"), str(body.get("source_id") or "")
+    now = datetime.now(timezone.utc).isoformat()
+
+    def num(k, cast=float):
+        v = body.get(k)
+        if v in (None, ""):
+            return None
+        return cast(v)
+
+    try:
+        total, cpu, qty = num("total"), num("cost_per_unit"), num("qty", int)
+    except (TypeError, ValueError):
+        return jsonify({"error": "total, cost_per_unit and qty must be numbers"}), 400
+    if qty is not None and qty <= 0:
+        return jsonify({"error": "qty must be positive"}), 400
+
+    if src == "email":
+        row = db.email_purchase_get(sid)
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        fields = {}
+        q = qty or row.get("qty")
+        if qty is not None:
+            fields["qty"] = qty
+        if total is None and cpu is None and qty is not None and row.get("price_each") is not None:
+            cpu = row["price_each"]  # qty change keeps the per-ticket price
+        if total is not None or cpu is not None:
+            if total is None:
+                total = round(cpu * (q or 0), 2)
+            if cpu is None:
+                cpu = total / q if q else None
+            fields.update({"total": total, "price_each": cpu})
+            if (row.get("currency") or "USD").upper() != "USD":
+                # The page edits in dollars: the row becomes a USD row.
+                fields["currency"] = "USD"
+        if "ticket_type" in body:
+            fields["ticket_type"] = (body.get("ticket_type") or "").strip()
+        if "hidden" in body:
+            fields["hidden"] = bool(body["hidden"])
+        db.email_purchase_edit(sid, fields, now)
+        return jsonify({"ok": True})
+
+    if src == "b2b":
+        order = db.b2b_order_by_id(sid)
+        if not order:
+            return jsonify({"error": "not found"}), 404
+        q = order.get("qty") or 0
+        if total is None and cpu is not None:
+            total = round(cpu * q, 2)
+        if cpu is None and total is not None and q:
+            cpu = round(total / q, 2)
+        fields = {k: v for k, v in (("total", total), ("price_each", cpu)) if v is not None}
+        db.b2b_order_update(sid, fields, now)
+        _b2b_sync_safe()
+        return jsonify({"ok": True})
+
+    if not src or not sid:
+        return jsonify({"error": "source and source_id required"}), 400
+    if total is not None:
+        row = next((r for r in _build_purchases()
+                    if r["source"] == src and r["source_id"] == sid), None)
+        q = (row or {}).get("qty") or 0
+        if not q:
+            return jsonify({"error": "row has no quantity to split the total over"}), 400
+        cpu = total / q
+    if cpu is None:
+        return jsonify({"error": "nothing to change"}), 400
+    db.set_inv_override(src, sid, "cost_per_unit", repr(cpu), now)
+    return jsonify({"ok": True})
 
 
 # --- Cashback ledger -----------------------------------------------------
