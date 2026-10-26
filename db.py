@@ -5699,3 +5699,13 @@ def purchase_listed_set(source, source_id, marketplace, on, now_iso):
             conn.execute(
                 "DELETE FROM purchase_listed WHERE source = ? AND source_id = ? AND marketplace = ?",
                 (source, source_id, marketplace))
+
+
+def email_purchase_set_price(pid, price_each, total, ticket_type=None):
+    """Machine-read price (e.g. off a Pacha ticket PDF): fills the row but is
+    not a hand edit, so `edited` is left alone."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE email_purchases SET price_each = ?, total = ?, currency = 'USD', "
+            "ticket_type = COALESCE(ticket_type, ?) WHERE id = ?",
+            (price_each, total, ticket_type, pid))

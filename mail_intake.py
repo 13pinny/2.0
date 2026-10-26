@@ -2077,6 +2077,32 @@ def sweep_purchases(lookback_days=None):
 
 
 PACHA_PDFS_PER_RUN = int(os.getenv("KARTIS_PACHA_PDFS_PER_RUN") or 40)
+# FourVenues' ticket page has a text layer: "General Access / Price: $90.00 /
+# Fees and taxes included" — the all-in price the email itself never states.
+_PACHA_PRICE_RX = re.compile(r"\n([^\n]+)\nPrice:\s*\$\s*([\d,]+(?:\.\d{1,2})?)")
+
+
+def _pacha_fill_price(row, pdf_bytes):
+    """Read the price printed on a Pacha ticket PDF into its email_purchases
+    row (one ticket per row, so total = price). Never overwrites a cost
+    typed by hand. True when a price was written."""
+    if "total" in (row.get("edited") or "").split(",") or \
+            "price_each" in (row.get("edited") or "").split(","):
+        return False
+    import fitz
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            text = doc[0].get_text() if doc.page_count else ""
+    except Exception:
+        return False
+    m = _PACHA_PRICE_RX.search(text.replace("\xa0", " "))
+    if not m:
+        return False
+    price = float(m.group(2).replace(",", ""))
+    qty = row.get("qty") or 1
+    db.email_purchase_set_price(row["id"], price, round(price * qty, 2),
+                                ticket_type=m.group(1).strip() or None)
+    return True
 
 
 def attach_pacha_pdfs(lookback_days=None, limit=PACHA_PDFS_PER_RUN):
@@ -2095,7 +2121,19 @@ def attach_pacha_pdfs(lookback_days=None, limit=PACHA_PDFS_PER_RUN):
             and r.get("message_id") and (r.get("received_at") or "")[:10] >= cutoff]
     have = db.list_attachments_for_owners("email_purchase", [r["id"] for r in rows])
     want = {r["message_id"]: r for r in rows if r["id"] not in have}
-    out = {"attached": 0, "failed": 0, "missing": len(want)}
+    out = {"attached": 0, "failed": 0, "missing": len(want), "priced": 0}
+    # Tickets already on disk whose row still has no price (attached before
+    # prices were read, or a ticket that printed none at the time).
+    for r in rows:
+        if r["id"] in have and r.get("price_each") is None:
+            for att in have[r["id"]]:
+                try:
+                    data = attachments_mod.disk_path(att).read_bytes()
+                except Exception:
+                    continue
+                if _pacha_fill_price(r, data):
+                    out["priced"] += 1
+                    break
     if not want:
         return out
     since = (_date.today() - _timedelta(days=days)).strftime("%d-%b-%Y")
@@ -2128,6 +2166,8 @@ def attach_pacha_pdfs(lookback_days=None, limit=PACHA_PDFS_PER_RUN):
             _save_intake_attachment(row["id"], fname, "application/pdf", page1,
                                     owner_type="email_purchase")
             out["attached"] += 1
+            if _pacha_fill_price(row, page1):
+                out["priced"] += 1
     finally:
         try:
             M.close()

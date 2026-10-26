@@ -26,8 +26,8 @@ Run:
 Auth reuses the same GMAIL_USER / GMAIL_APP_PASSWORD env vars as the dashboard's
 mail_intake job. The IMAP fetch uses BODY.PEEK, so emails are never marked read.
 
-The event name comes from the email text, not the PDF — the ticket PDF is
-image-only with no text layer. Each ticket's order code (e.g. E0HS2YCRT, also
+The event name comes from the email text. (The ticket PDF's first page does
+have a text layer — mail_intake._pacha_fill_price reads its "Price:" line.) Each ticket's order code (e.g. E0HS2YCRT, also
 embedded in the attachment name 'entradas-<CODE>.pdf') is unique, so it's used as
 the per-ticket dedupe key.
 """
