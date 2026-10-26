@@ -78,6 +78,14 @@
   .badge-x { color: var(--red); font-size: 10px; letter-spacing: .8px; text-transform: uppercase; }
   .sold { font-weight: 400; margin-left: 10px; font-size: 11px; }
   .sold.all { color: var(--green); }
+  tr.grp.clickable { cursor: pointer; }
+  tr.grp.clickable:hover > td { background: #e4e9ef; }
+  tr.grp .caret { display: inline-block; width: 12px; color: var(--muted); font-size: 9px; }
+  tr.sales > td { background: var(--bg); padding: 10px 16px 14px; border-bottom: 1px solid var(--line-2); }
+  .sales-h { font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .sales-h b { color: var(--text); font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 12px; margin-right: 12px; }
+  table.stbl { background: var(--bg-2); border: 1px solid var(--line); }
+  table.stbl th { position: static; cursor: default; }
   .edit { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
   .edit label { display: flex; flex-direction: column; gap: 3px; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); }
   .edit input { width: 120px; }
@@ -194,7 +202,7 @@ let COLS = ALL_COLS;
 const STORE_KEY = "kartis.purchases.v1";
 const FILTER_IDS = ["q", "fSource", "fPlatform", "fAccount", "fWhen", "fFrom", "fTo", "fGroup", "fUnmapped", "fHidden"];
 
-let ITEMS = [], SOLD = {}, TODAY = "", START = "", sortKey = "purchased_on", sortDir = -1, openKey = null, lastView = [];
+let ITEMS = [], SOLD = {}, SALES = {}, openGroups = new Set(), TODAY = "", START = "", sortKey = "purchased_on", sortDir = -1, openKey = null, lastView = [];
 
 // FourVenues mails one receipt per ticket; rows sharing a group_ref are one
 // order on this page (edits fan out to every member row).
@@ -280,6 +288,7 @@ async function load() {
     TODAY = data.today || new Date().toISOString().slice(0, 10);
     START = data.start_date || "";
     SOLD = data.sold_by_group || {};
+    SALES = data.sales_by_group || {};
     const uniq = k => [...new Set(ITEMS.map(i => i[k]).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
     fillSelect("fSource", Object.keys(SOURCE_LABEL).filter(s => ITEMS.some(i => i.source === s)), s => SOURCE_LABEL[s]);
     fillSelect("fPlatform", uniq("platform"));
@@ -432,6 +441,34 @@ function detailHtml(r) {
   </td></tr>`;
 }
 
+// Sales of one event across every platform (same event_group as the rows).
+function salesHtml(group, bought) {
+  const list = (SALES[group] || []).slice().sort((a, b) => (b.sale_date_iso || "").localeCompare(a.sale_date_iso || ""));
+  if (!list.length) return `<tr class="sales"><td colspan="${COLS.length}"><div class="sales-h">Sales</div><span class="muted">No sales recorded for this event yet.</span></td></tr>`;
+  let tix = 0, pay = 0;
+  for (const x of list) { tix += x.qty || 0; pay += Number(x.payout ?? x.sale_price ?? 0); }
+  const avgBuy = bought.tix && bought.cost ? bought.cost / bought.tix : null;
+  const avgSell = tix ? pay / tix : null;
+  const byPlat = {};
+  for (const x of list) byPlat[x.platform] = (byPlat[x.platform] || 0) + (x.qty || 0);
+  const head = `<div class="sales-h">Sales <b>${tix} ticket${tix === 1 ? "" : "s"}</b><b>payout ${money(pay)}</b>` +
+    `<b>avg ${money(avgSell)} / tkt</b>${avgBuy != null ? `<b class="${avgSell >= avgBuy ? "" : "warn"}">bought at ${money(avgBuy)} / tkt</b>` : ""}` +
+    `<span>${Object.entries(byPlat).map(([p, n]) => `${esc(p)} ${n}`).join(" · ")}</span></div>`;
+  const rows = list.map(x => `<tr>
+      <td class="nowrap">${esc(fmtDate(x.sale_date_iso)) || '<span class="muted">—</span>'}</td>
+      <td>${esc(x.platform)}${x.source && x.source.toLowerCase() !== String(x.platform).toLowerCase() ? ` <span class="tag">${esc(x.source)}</span>` : ""}</td>
+      <td>${esc([x.section, x.row && "Row " + x.row].filter(Boolean).join(" · "))}</td>
+      <td class="num">${x.qty || 0}</td>
+      <td class="num">${x.qty ? money(Number(x.payout ?? x.sale_price ?? 0) / x.qty) : "—"}</td>
+      <td class="num">${money(x.payout ?? x.sale_price)}</td>
+      <td>${esc(x.order_id)}</td>
+      <td>${esc(x.buyer)}</td>
+    </tr>`).join("");
+  return `<tr class="sales"><td colspan="${COLS.length}">${head}
+    <table class="stbl"><thead><tr><th>Sold</th><th>Platform</th><th>Section / Row</th><th class="num">Qty</th><th class="num">$ / tkt</th><th class="num">Payout</th><th>Order</th><th>Buyer</th></tr></thead><tbody>${rows}</tbody></table>
+  </td></tr>`;
+}
+
 function editHtml(r) {
   const can = r.editable || [];
   if (!can.length) return "";
@@ -541,8 +578,10 @@ function render() {
     for (const [k, rs] of ent) {
       const s = sum(rs);
       const qi = COLS.findIndex(c => c.key === "qty");
-      html += `<tr class="grp"><td colspan="${qi}">${groupLabel(rs[0], g, k)}</td><td class="num">${s.tix}</td><td class="num">${s.tix && s.cost ? money(s.cost / s.tix) : "—"}</td><td class="num">${s.cost || !s.noCost ? money(s.cost) : "—"}</td><td colspan="${COLS.length - qi - 3}" class="muted">${s.n} purchase${s.n === 1 ? "" : "s"}</td></tr>`;
+      const isEv = g === "event", gOpen = isEv && openGroups.has(k);
+      html += `<tr class="grp${isEv ? " clickable" : ""}" data-g="${esc(k)}" title="${isEv ? "Click to list this event's sales" : ""}"><td colspan="${qi}">${isEv ? `<span class="caret">${gOpen ? "▼" : "▶"}</span>` : ""}${groupLabel(rs[0], g, k)}</td><td class="num">${s.tix}</td><td class="num">${s.tix && s.cost ? money(s.cost / s.tix) : "—"}</td><td class="num">${s.cost || !s.noCost ? money(s.cost) : "—"}</td><td colspan="${COLS.length - qi - 3}" class="muted">${s.n} purchase${s.n === 1 ? "" : "s"}</td></tr>`;
       html += rs.map(rowHtml).join("");
+      if (gOpen) html += salesHtml(rs[0].event_group, s);
     }
   }
   document.getElementById("tbody").innerHTML = html;
@@ -559,6 +598,8 @@ function render() {
 
 document.getElementById("tbody").addEventListener("click", e => {
   if (e.target.closest("a") || e.target.closest(".edit")) return;
+  const gr = e.target.closest("tr.grp.clickable");
+  if (gr) { const k = gr.dataset.g; openGroups.has(k) ? openGroups.delete(k) : openGroups.add(k); render(); return; }
   const tr = e.target.closest("tr.p-row");
   if (!tr) return;
   openKey = openKey === tr.dataset.k ? null : tr.dataset.k;

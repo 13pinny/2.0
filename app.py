@@ -5308,15 +5308,30 @@ def api_purchases():
         r["attachments"] = [{"id": a["id"], "filename": a["filename"]} for a in files]
     # Tickets sold per event group (same grouping as the rows), so each event
     # header can say how much of what we bought has gone.
-    sold = {}
+    # The sales themselves ride along so opening an event lists them.
+    sold, sales = {}, {}
     try:
         for sr in _build_combined_sales():
             g = sr.get("event_group")
-            if g:
-                sold[g] = sold.get(g, 0) + (sr.get("qty") or 0)
+            if not g:
+                continue
+            sold[g] = sold.get(g, 0) + (sr.get("qty") or 0)
+            sales.setdefault(g, []).append({
+                "source": sr.get("source") or "",
+                "platform": sr.get("platform") or sr.get("source") or "",
+                "sale_date_iso": sr.get("sale_date_iso") or "",
+                "qty": sr.get("qty") or 0,
+                "sale_price": sr.get("sale_price"),
+                "payout": sr.get("payout"),
+                "cost": sr.get("cost"),
+                "section": sr.get("section") or "",
+                "row": sr.get("row") or "",
+                "order_id": sr.get("order_id") or "",
+                "buyer": sr.get("buyer") or "",
+            })
     except Exception:
         traceback.print_exc()
-    return jsonify({"items": rows, "sold_by_group": sold,
+    return jsonify({"items": rows, "sold_by_group": sold, "sales_by_group": sales,
                     "start_date": db.purchases_start_date(),
                     "today": date.today().isoformat()})
 
