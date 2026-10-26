@@ -39,7 +39,9 @@ SWEEP_CRITERIA = (
     ("FROM", "2207.co.il"),
     ("FROM", "confirm@ticketmaster.co.il"),
     ("FROM", "noreply@dice.fm"),
+    # Gmail's IMAP SUBJECT search matches whole words: "ticket" misses "tickets".
     ("SUBJECT", "You got ticket"),
+    ("SUBJECT", "You got tickets"),
 )
 
 # Bump when a parser changes so messages recorded as 'other' are re-read.
