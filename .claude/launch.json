@@ -1,0 +1,33 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kartis",
+      "runtimeExecutable": ".venv\\Scripts\\python.exe",
+      "runtimeArgs": ["app.py"],
+      "port": 5000,
+      "env": {
+        "TM_CHECK_ENABLED": "0",
+        "TM_CHECK_INTERVAL_SECONDS": "999999",
+        "KARTIS_PACHA_MONITOR_ENABLED": "0",
+        "KARTIS_IL_EVENTS_ENABLED": "0",
+        "KARTIS_MARKET_ENABLED": "0",
+        "KARTIS_VGSALES_ENABLED": "0",
+        "KARTIS_INTAKE_INTERVAL_MINUTES": "99999",
+        "KARTIS_PRICER_INTERVAL_MINUTES": "99999"
+      }
+    },
+    {
+      "name": "templates-static",
+      "runtimeExecutable": ".venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "http.server", "8788", "--directory", "templates"],
+      "port": 8788
+    },
+    {
+      "name": "pricer-mock",
+      "runtimeExecutable": ".venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "http.server", "8787", "--directory", "C:\\Users\\13pin\\AppData\\Local\\Temp\\claude\\C--Users-13pin-OneDrive-Documents-GitHub-2-0\\2dba4089-c3db-406f-8596-7f70a5edbddc\\scratchpad\\pricer-mock"],
+      "port": 8787
+    }
+  ]
+}

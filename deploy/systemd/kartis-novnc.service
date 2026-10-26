@@ -1,0 +1,16 @@
+[Unit]
+Description=Kartis noVNC (websockify bridge serving /usr/share/novnc on 127.0.0.1:6080)
+Requires=kartis-vnc.service
+After=kartis-vnc.service
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+# Listen on loopback only — Caddy reverse_proxies to it from vnc.kartis.homes
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc/ --heartbeat=30 127.0.0.1:6080 localhost:5900
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
