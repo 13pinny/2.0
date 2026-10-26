@@ -1188,6 +1188,16 @@ CREATE TABLE IF NOT EXISTS email_purchases (
     UNIQUE (provider, order_ref)
 );
 CREATE INDEX IF NOT EXISTS idx_email_purchases_recv ON email_purchases(received_at);
+-- Hand-ticked "listed on <marketplace>" marks for /purchases rows of any
+-- source (DICE buys: crowdvolt + viagogo). Israeli email buys keep theirs in
+-- email_purchases.listed_at. A row here = ticked; unticking deletes it.
+CREATE TABLE IF NOT EXISTS purchase_listed (
+    source       TEXT NOT NULL,
+    source_id    TEXT NOT NULL,
+    marketplace  TEXT NOT NULL,
+    listed_at    TEXT NOT NULL,
+    PRIMARY KEY (source, source_id, marketplace)
+);
 -- Every message the purchase sweep has looked at (Message-ID dedup).
 CREATE TABLE IF NOT EXISTS email_purchase_messages (
     message_id   TEXT PRIMARY KEY,
@@ -5667,3 +5677,25 @@ def email_purchase_edit(pid, fields, now_iso):
             " WHERE id = ?", (*sets.values(), pid))
     return True
 
+
+
+def purchase_listed_all():
+    """{(source, source_id): {marketplace: listed_at}}."""
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM purchase_listed").fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault((r["source"], r["source_id"]), {})[r["marketplace"]] = r["listed_at"]
+    return out
+
+
+def purchase_listed_set(source, source_id, marketplace, on, now_iso):
+    with connect() as conn:
+        if on:
+            conn.execute(
+                "INSERT OR IGNORE INTO purchase_listed (source, source_id, marketplace, listed_at) "
+                "VALUES (?, ?, ?, ?)", (source, source_id, marketplace, now_iso))
+        else:
+            conn.execute(
+                "DELETE FROM purchase_listed WHERE source = ? AND source_id = ? AND marketplace = ?",
+                (source, source_id, marketplace))

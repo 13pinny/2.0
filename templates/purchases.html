@@ -179,7 +179,7 @@
     <span class="sep"></span>
     <label class="chk" title="Hand-entered scratch list on /unmapped. It can repeat purchases already recorded elsewhere, so it is left out by default."><input type="checkbox" id="fUnmapped" onchange="render()"> Include unmapped</label>
     <label class="chk" title="Rows deleted from the inventory page"><input type="checkbox" id="fHidden" onchange="render()"> Show hidden</label>
-    <label class="chk" title="Kupat / Ticketmaster IL buys you haven't ticked as listed on viagogo"><input type="checkbox" id="fNotListed" onchange="render()"> IL not on viagogo yet</label>
+    <label class="chk" title="Israeli buys not ticked as listed on viagogo, DICE buys missing a CrowdVolt or viagogo tick"><input type="checkbox" id="fNotListed" onchange="render()"> Not listed yet</label>
     <button onclick="resetFilters()">Reset</button>
   </div>
 
@@ -333,7 +333,7 @@ function filtered() {
   return ITEMS.filter(r => {
     if (r.hidden && !withHidden) return false;
     if (r.source === "unmapped" && !withUnmapped) return false;
-    if (notListed && (!r.vg_listable || r.vg_listed_at || r.cancelled)) return false;
+    if (notListed && (r.cancelled || !Object.values(r.list_marks || {}).some(v => !v))) return false;
     if (src && r.source !== src) return false;
     if (plat && r.platform !== plat) return false;
     if (acct && r.account !== acct) return false;
@@ -395,9 +395,17 @@ function groupLabel(r, g, k) {
     // "N of M" only when the sales fit inside what's listed here.
     const soldTxt = !sold ? `<span class="sold muted">none sold yet</span>`
       : `<span class="sold ${sold >= bought ? "all" : ""}" title="Tickets sold for this event across all platforms">${sold <= bought ? `${sold} of ${bought} sold` : `${sold} sold`}</span>`;
-    const il = ITEMS.filter(i => i.vg_listable && !i.hidden && !i.cancelled && groupKey(i, "event") === k);
-    const listed = il.filter(i => i.vg_listed_at).length;
-    const vgTxt = il.length ? `<span class="vgcount ${listed === il.length ? "all" : ""}">viagogo ${listed}/${il.length} listed</span>` : "";
+    // Per marketplace: how many of this event's rows carrying that tick are ticked.
+    const marks = {};
+    for (const i of ITEMS) {
+      if (i.hidden || i.cancelled || groupKey(i, "event") !== k) continue;
+      for (const [mk, at] of Object.entries(i.list_marks || {})) {
+        const m = marks[mk] || (marks[mk] = [0, 0]);
+        m[1]++; if (at) m[0]++;
+      }
+    }
+    const vgTxt = Object.entries(marks).map(([mk, [n, of]]) =>
+      `<span class="vgcount ${n === of ? "all" : ""}">${MK_LABEL[mk] || mk} ${n}/${of} listed</span>`).join("");
     return `${esc(r.event_name || "(no name)")} <span class="gsub">${esc(fmtDate(r.event_date_iso))}${r.venue ? " · " + esc(r.venue) : ""}</span>${soldTxt}${vgTxt}`;
   }
   if (g === "month") return k ? esc(new Date(k + "-01T00:00:00").toLocaleDateString(undefined, { month: "long", year: "numeric" })) : "No purchase date";
@@ -423,7 +431,7 @@ function rowHtml(r) {
     total_cost: `<td class="num">${r.total_cost == null ? '<span class="warn" title="No cost recorded — click to add">—</span>' : money(r.total_cost)}</td>`,
     card: `<td class="col-card nowrap">${r.card ? "••" + esc(r.card) : ""}</td>`,
     order_ref: `<td class="col-order">${esc(r.order_ref)}</td>`,
-    platform: `<td>${esc(r.platform)} <span class="src src-${esc(r.source)}" title="${esc(SOURCE_LABEL[r.source] || r.source)}">${esc((SOURCE_LABEL[r.source] || r.source).split(" ")[0])}</span>${r.vg_listable ? "<br>" + vgBox(r) : ""}</td>`,
+    platform: `<td>${esc(r.platform)} ${String(r.platform).toLowerCase() === r.source ? "" : `<span class="src src-${esc(r.source)}" title="${esc(SOURCE_LABEL[r.source] || r.source)}">${esc((SOURCE_LABEL[r.source] || r.source).split(" ")[0])}</span>`}${Object.keys(r.list_marks || {}).length ? "<br>" + listBoxes(r) : ""}</td>`,
     status: `<td class="col-status">${r.cancelled ? '<span class="badge-x">cancelled</span> ' : ""}${esc(r.cancelled && r.status === "cancelled" ? "" : r.status)}${r.hidden ? ' <span class="tag">hidden</span>' : ""}</td>`,
   };
   let html = `<tr class="${cls}" data-k="${esc(k)}">${COLS.map(c => cell[c.key]).join("")}</tr>`;
@@ -455,7 +463,7 @@ function detailHtml(r) {
       ${f("Card", r.card ? "••" + esc(r.card) : "")}
       ${f("Ticket codes", esc((r.codes || []).join(", ")))}
       ${f("Status", esc(r.status))}
-      ${r.vg_listable ? f("viagogo", r.vg_listed_at ? "Listed · ticked " + esc(new Date(r.vg_listed_at).toLocaleDateString()) : "Not listed yet") : ""}
+      ${Object.entries(r.list_marks || {}).map(([mk, at]) => f(MK_LABEL[mk] || mk, at ? "Listed · ticked " + esc(new Date(at).toLocaleDateString()) : "Not listed yet")).join("")}
       ${f("Link", link)}
       ${f("Note", esc(r.note))}
       ${f("Recorded in", `<a href="${SOURCE_PAGE[r.source] || "/"}">${esc(SOURCE_LABEL[r.source] || r.source)}</a> <span class="muted">${esc(r.source_id)}</span>`)}
@@ -543,17 +551,21 @@ function pickSuggest(i) {
   if (tr) tr.scrollIntoView({ block: "start" });
 }
 
-// Hand-kept "listed on viagogo" tick for Israeli box-office buys.
-function vgBox(r) {
-  if (!r.vg_listable) return "";
-  const on = !!r.vg_listed_at;
-  const when = on ? `Ticked ${new Date(r.vg_listed_at).toLocaleString()}` : "Tick once these are listed on viagogo";
-  return `<label class="vgchk ${on ? "on" : "off"}" title="${esc(when)}"><input type="checkbox" ${on ? "checked" : ""} onchange="toggleListed('${esc(rkey(r))}', this.checked)"> ${on ? "Listed on VG" : "Not on VG"}</label> `;
+// Hand-kept "listed on <marketplace>" ticks: viagogo for Israeli box-office
+// buys, CrowdVolt + viagogo for DICE buys.
+const MK_LABEL = { viagogo: "viagogo", crowdvolt: "CrowdVolt", lysted: "Lysted" };
+const MK_SHORT = { viagogo: "VG", crowdvolt: "CV", lysted: "Lysted" };
+function listBoxes(r) {
+  return Object.entries(r.list_marks || {}).map(([mk, at]) => {
+    const on = !!at, short = MK_SHORT[mk] || mk;
+    const when = on ? `Ticked ${new Date(at).toLocaleString()}` : `Tick once these are listed on ${MK_LABEL[mk] || mk}`;
+    return `<label class="vgchk ${on ? "on" : "off"}" title="${esc(when)}"><input type="checkbox" ${on ? "checked" : ""} onchange="toggleListed('${esc(rkey(r))}', '${mk}', this.checked)"> ${short}</label>`;
+  }).join(" ");
 }
-async function toggleListed(k, on) {
+async function toggleListed(k, mk, on) {
   const r = ITEMS.find(i => rkey(i) === k);
   if (!r) return;
-  try { await postEdit(r, { listed: on }); await load(); }
+  try { await postEdit(r, { listed: on, marketplace: mk }); await load(); }
   catch (e) { alert("Couldn't save: " + e.message); render(); }
 }
 

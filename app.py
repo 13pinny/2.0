@@ -4929,6 +4929,8 @@ _EMAIL_PLATFORM = {
 
 
 _IL_PROVIDERS = ("kupat", "ticketmaster_il", "tickchak")
+# Where DICE buys get resold; each gets its own "listed" tick per row.
+_DICE_MARKETPLACES = ("crowdvolt", "viagogo")
 
 
 def _names_overlap(a, b):
@@ -4984,6 +4986,7 @@ def _build_purchases():
             "card": f.get("card") or "",
             "cancelled": bool(f.get("cancelled")),
             "editable": f.get("editable") or [],
+            "list_marks": f.get("list_marks") or {},
             "link": f.get("link") or "",
             "note": f.get("note") or "",
             "orig": f.get("orig"),
@@ -5064,6 +5067,7 @@ def _build_purchases():
     dice_linked = db.dice_linked_qty_by_purchase()
     # DICE refund notices (purchase_email) void the purchase they match.
     dice_refunds = [e for e in email_rows if e["provider"] == "dice" and e["kind"] == "refund"]
+    listed = db.purchase_listed_all()
     for p in db.dice_purchases_all():
         if p.get("b2b_order_id"):
             continue  # a /b2b order's DICE mirror: the b2b row below represents it
@@ -5090,6 +5094,8 @@ def _build_purchases():
                                       p.get("price_total")),
             editable=["cost"],
             status=f"{sold}/{qty} sold" if sold else "unsold",
+            list_marks={mk: listed.get(("dice", str(p.get("id"))), {}).get(mk, "")
+                        for mk in _DICE_MARKETPLACES},
             link=f"https://dice.fm/event/{p['event_slug']}" if p.get("event_slug") else "",
             orig=orig)
 
@@ -5146,8 +5152,7 @@ def _build_purchases():
         rows[-1]["group_ref"] = e.get("group_ref") or ""
         # Israeli box-office buys get a hand-ticked "listed on viagogo" box.
         if e["provider"] in _IL_PROVIDERS:
-            rows[-1]["vg_listable"] = True
-            rows[-1]["vg_listed_at"] = e.get("listed_at") or ""
+            rows[-1]["list_marks"] = {"viagogo": e.get("listed_at") or ""}
         rows[-1]["hidden"] = rows[-1]["hidden"] or bool(e.get("hidden"))
 
     for o in db.b2b_orders_all():
@@ -5367,6 +5372,15 @@ def api_purchases_edit():
         return jsonify({"error": "total, cost_per_unit and qty must be numbers"}), 400
     if qty is not None and qty <= 0:
         return jsonify({"error": "qty must be positive"}), 400
+
+    # "Listed on <marketplace>" tick. Israeli email buys keep their viagogo
+    # tick on email_purchases; every other row uses purchase_listed.
+    if "listed" in body and not (src == "email" and (body.get("marketplace") or "viagogo") == "viagogo"):
+        mk = (body.get("marketplace") or "").strip().lower()
+        if mk not in ("viagogo", "crowdvolt", "lysted") or not src or not sid:
+            return jsonify({"error": "marketplace must be viagogo, crowdvolt or lysted"}), 400
+        db.purchase_listed_set(src, sid, mk, bool(body["listed"]), now)
+        return jsonify({"ok": True})
 
     if src == "email":
         row = db.email_purchase_get(sid)
