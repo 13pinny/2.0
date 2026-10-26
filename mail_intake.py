@@ -19,6 +19,7 @@ import json
 import os
 import re
 import traceback
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from email import message_from_bytes
@@ -2073,6 +2074,128 @@ def sweep_purchases(lookback_days=None):
     except Exception:
         out["errors"] += 1
         print(f"[purchases] pacha pdfs failed: {traceback.format_exc()}")
+    # Kupat / TM-IL mail links an e-ticket carousel instead: render it.
+    try:
+        out["il_pdfs"] = attach_il_ticket_pdfs(lookback_days=days)
+    except Exception:
+        out["errors"] += 1
+        print(f"[purchases] il ticket pdfs failed: {traceback.format_exc()}")
+    return out
+
+
+IL_TICKET_ORDERS_PER_RUN = int(os.getenv("KARTIS_IL_TICKET_ORDERS_PER_RUN") or 3)
+IL_TICKET_MAX_TRIES = 5
+_IL_TICKET_SENDERS = {"kupat": "2207.co.il", "ticketmaster_il": "ticketmaster.co.il"}
+
+
+def _il_ticket_url(provider, msg):
+    """The order's e-ticket link out of its confirmation email. Kupat's is a
+    SendGrid click link on 'להצגת הכרטיסים לחץ כאן' (resolved here to its
+    tickets.kupat.co.il/edocument target without following it further);
+    TM-IL's is a direct ticketmaster.co.il/t/<token>/<ref>/iw link."""
+    html = html_mod.unescape(_email_html(msg) or "")
+    if provider == "ticketmaster_il":
+        m = re.search(r"https://www\.ticketmaster\.co\.il/t/[^\s\"'<>]+", html)
+        return m.group(0) if m else None
+    m = re.search(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(?:(?!</a>).)*?להצגת הכרטיסים",
+                  html, re.S | re.I)
+    if not m:
+        return None
+    url = m.group(1)
+    if "kupat.co.il" in url:
+        return url
+
+    class _Stop(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg_, hdrs, newurl):
+            raise _Found(newurl)
+
+    class _Found(Exception):
+        pass
+    try:
+        urllib.request.build_opener(_Stop).open(
+            urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=20)
+    except _Found as f:
+        return str(f)
+    except Exception:
+        pass
+    return url  # the browser can follow the click link itself
+
+
+def attach_il_ticket_pdfs(lookback_days=None, limit=IL_TICKET_ORDERS_PER_RUN):
+    """For Kupat / Ticketmaster IL email purchases with no ticket PDFs yet,
+    render the e-ticket carousel the confirmation links to
+    (viagogo_listing.download_ticket_pdfs_for — the viagogo push's renderer,
+    which refuses blank or duplicate tickets) and attach one PDF per ticket.
+    A browser run is ~5s a ticket, so only `limit` orders a poll; an order
+    that keeps failing is given up after IL_TICKET_MAX_TRIES polls. Past
+    shows are skipped."""
+    import viagogo_listing
+    from datetime import date as _date, timedelta as _timedelta
+    days = lookback_days or PURCHASE_LOOKBACK_DAYS
+    today = _date.today().isoformat()
+    cutoff = (_date.today() - _timedelta(days=days)).isoformat()
+    rows = [r for r in db.email_purchases_all()
+            if r["provider"] in _IL_TICKET_SENDERS and r["kind"] == "purchase"
+            and r.get("message_id") and not r.get("hidden")
+            and (r.get("received_at") or "")[:10] >= cutoff
+            and (r.get("event_date_iso") or "9999") >= today]
+    have = db.list_attachments_for_owners("email_purchase", [r["id"] for r in rows])
+    want = {}
+    for r in rows:
+        if r["id"] in have:
+            continue
+        tries = int(db.setting_get(f"il_ticket_pdf_tries:{r['id']}") or 0)
+        if tries < IL_TICKET_MAX_TRIES:
+            want[r["message_id"]] = (r, tries)
+    out = {"orders": 0, "tickets": 0, "failed": 0, "missing": len(want)}
+    if not want:
+        return out
+    since = (_date.today() - _timedelta(days=days)).strftime("%d-%b-%Y")
+    now = datetime.now(timezone.utc).isoformat()
+    jobs = []  # (row, tries, url) gathered first so IMAP isn't held open during renders
+    M = _connect()
+    try:
+        M.select(INTAKE_FOLDER)
+        for provider, needle in _IL_TICKET_SENDERS.items():
+            typ, data = M.search(None, "FROM", '"%s"' % needle, "SINCE", since)
+            for uid in (data[0].split() if typ == "OK" and data and data[0] else []):
+                if len(jobs) >= limit:
+                    break
+                typ, hdr = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+                if typ != "OK" or not hdr or not isinstance(hdr[0], tuple):
+                    continue
+                mid = (message_from_bytes(hdr[0][1]).get("Message-ID") or "").strip()
+                if mid not in want or want[mid][0]["provider"] != provider:
+                    continue
+                typ, msg_data = M.fetch(uid, "(BODY.PEEK[])")
+                if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
+                    continue
+                row, tries = want[mid]
+                jobs.append((row, tries, _il_ticket_url(provider, message_from_bytes(msg_data[0][1]))))
+    finally:
+        try:
+            M.close()
+        except Exception:
+            pass
+        M.logout()
+    for row, tries, url in jobs:
+        label = "Kupat" if row["provider"] == "kupat" else "TM"
+        try:
+            if not url:
+                raise RuntimeError("no e-ticket link in the confirmation email")
+            pdfs = viagogo_listing.download_ticket_pdfs_for(url, qty=row.get("qty") or 1)
+        except Exception as e:
+            db.setting_set(f"il_ticket_pdf_tries:{row['id']}", str(tries + 1), now)
+            out["failed"] += 1
+            print(f"[purchases] {label} tickets for {row.get('order_ref')}: {type(e).__name__}: {e}")
+            continue
+        n = len(pdfs)
+        for i, pdf in enumerate(pdfs, 1):
+            fname = f"{label} ticket {i} of {n} - {row.get('event_name') or 'event'} - {row.get('order_ref')}.pdf"
+            _save_intake_attachment(row["id"], fname, "application/pdf", pdf,
+                                    owner_type="email_purchase")
+        out["orders"] += 1
+        out["tickets"] += n
     return out
 
 
