@@ -79,6 +79,14 @@
   .sold { font-weight: 400; margin-left: 10px; font-size: 11px; }
   .sold.all { color: var(--green); }
   tr.grp.clickable { cursor: pointer; }
+  .qwrap { position: relative; flex: 1 1 240px; max-width: 380px; min-width: 240px; display: flex; }
+  .qwrap input { flex: 1; min-width: 0; max-width: none !important; }
+  .suggest { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; background: var(--bg-2); border: 1px solid var(--line-2); border-top: 0; max-height: 340px; overflow-y: auto; box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+  .suggest div { padding: 7px 10px; font-size: 12px; cursor: pointer; border-bottom: 1px solid var(--line); }
+  .suggest div:hover, .suggest div.on { background: var(--bg-3); }
+  .suggest .ss { color: var(--muted); font-size: 11px; margin-top: 1px; }
+  .b2b-tag { display: inline-block; font-size: 9.5px; letter-spacing: .8px; font-weight: 600; color: #fff; background: #b42318; padding: 0 5px; margin-left: 5px; vertical-align: 1px; }
+  td.acct-b2b { color: #b42318; }
   tr.grp.clickable:hover > td { background: #e4e9ef; }
   tr.grp .caret { display: inline-block; width: 12px; color: var(--muted); font-size: 9px; }
   tr.sales > td { background: var(--bg); padding: 10px 16px 14px; border-bottom: 1px solid var(--line-2); }
@@ -127,7 +135,11 @@
   <div class="stats" id="stats"></div>
 
   <div class="toolbar">
-    <input type="search" id="q" placeholder="Search event, venue, section, account, order…" oninput="render()">
+    <div class="qwrap">
+      <input type="search" id="q" placeholder="Search event, venue, section, account, order…" autocomplete="off"
+             oninput="render(); suggest()" onfocus="suggest()" onkeydown="suggestKey(event)" onblur="setTimeout(hideSuggest, 150)">
+      <div class="suggest" id="suggest" style="display:none"></div>
+    </div>
     <select id="fSource" onchange="render()"><option value="">All sources</option></select>
     <select id="fPlatform" onchange="render()"><option value="">All platforms</option></select>
     <select id="fAccount" onchange="render()"><option value="">All accounts</option></select>
@@ -391,7 +403,7 @@ function rowHtml(r) {
     event_name: `<td>${esc(r.event_name)}${edited}</td>`,
     event_date_iso: `<td class="nowrap">${esc(fmtDate(r.event_date_iso))}</td>`,
     venue: `<td class="col-venue">${esc(r.venue)}</td>`,
-    account: `<td class="col-account">${esc(r.account)}</td>`,
+    account: `<td class="col-account${r.source === "b2b" ? " acct-b2b" : ""}">${esc(r.account)}${r.source === "b2b" ? '<span class="b2b-tag" title="Resale buy (Automatiq / TickPick / CrowdVolt)">B2B</span>' : ""}</td>`,
     ticket_type: `<td>${esc(r.ticket_type)}</td>`,
     where: `<td>${esc(where(r))}</td>`,
     qty: `<td class="num">${r.qty || 0}</td>`,
@@ -467,6 +479,55 @@ function salesHtml(group, bought) {
   return `<tr class="sales"><td colspan="${COLS.length}">${head}
     <table class="stbl"><thead><tr><th>Sold</th><th>Platform</th><th>Section / Row</th><th class="num">Qty</th><th class="num">$ / tkt</th><th class="num">Payout</th><th>Order</th><th>Buyer</th></tr></thead><tbody>${rows}</tbody></table>
   </td></tr>`;
+}
+
+// Search suggestions: every event in the list (whatever the other filters
+// say) whose name, venue or platform matches what's typed. Picking one
+// narrows the list to it and opens its sales.
+let SUGG = [], suggIdx = -1;
+function suggest() {
+  const q = document.getElementById("q").value.trim().toLowerCase(), box = document.getElementById("suggest");
+  if (!q) return hideSuggest();
+  const terms = q.split(/\s+/), seen = new Map();
+  for (const r of ITEMS) {
+    if (r.hidden || (r.source === "unmapped" && !document.getElementById("fUnmapped").checked)) continue;
+    const hay = [r.event_name, r.venue, r.platform, r.account].join(" ").toLowerCase();
+    if (!terms.every(t => hay.includes(t))) continue;
+    const k = groupKey(r, "event");
+    const e = seen.get(k) || { k, r, tix: 0, n: 0 };
+    if (!r.cancelled) { e.tix += r.qty || 0; e.n++; }
+    seen.set(k, e);
+  }
+  SUGG = [...seen.values()].sort((a, b) => (a.r.event_date_iso || "9999").localeCompare(b.r.event_date_iso || "9999")).slice(0, 15);
+  suggIdx = -1;
+  if (!SUGG.length) return hideSuggest();
+  box.innerHTML = SUGG.map((e, i) => `<div data-i="${i}" onmousedown="pickSuggest(${i})">${esc(e.r.event_name)}
+    <div class="ss">${esc(fmtDate(e.r.event_date_iso))}${e.r.venue ? " · " + esc(e.r.venue) : ""} · ${e.tix} tkt${e.tix === 1 ? "" : "s"} in ${e.n} purchase${e.n === 1 ? "" : "s"}${SOLD[e.r.event_group] ? ` · ${SOLD[e.r.event_group]} sold` : ""}</div></div>`).join("");
+  box.style.display = "";
+}
+function hideSuggest() { document.getElementById("suggest").style.display = "none"; suggIdx = -1; }
+function suggestKey(ev) {
+  const box = document.getElementById("suggest");
+  if (box.style.display === "none") return;
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    ev.preventDefault();
+    suggIdx = Math.max(0, Math.min(SUGG.length - 1, suggIdx + (ev.key === "ArrowDown" ? 1 : -1)));
+    box.querySelectorAll(":scope > div").forEach((d, i) => d.classList.toggle("on", i === suggIdx));
+  } else if (ev.key === "Enter" && suggIdx >= 0) { ev.preventDefault(); pickSuggest(suggIdx); }
+  else if (ev.key === "Escape") hideSuggest();
+}
+function pickSuggest(i) {
+  const e = SUGG[i];
+  if (!e) return;
+  document.getElementById("q").value = e.r.event_name;
+  // The pick must show even if a date filter would hide it.
+  document.getElementById("fFrom").value = ""; document.getElementById("fTo").value = ""; document.getElementById("fRange").value = "";
+  document.getElementById("fGroup").value = "event";
+  openGroups.add(e.k);
+  hideSuggest();
+  render();
+  const tr = [...document.querySelectorAll("tr.grp")].find(t => t.dataset.g === e.k);
+  if (tr) tr.scrollIntoView({ block: "start" });
 }
 
 function editHtml(r) {
@@ -590,7 +651,11 @@ function render() {
   breakdown("byMonth", rows, r => r.purchased_on ? r.purchased_on.slice(0, 7) : "",
     k => k ? esc(new Date(k + "-01T00:00:00").toLocaleDateString(undefined, { month: "short", year: "numeric" })) : '<span class="muted">No date</span>',
     (a, b) => (b[0] || "").localeCompare(a[0] || ""));
-  breakdown("byAccount", rows, r => r.account || "", k => k ? esc(k) : '<span class="muted">(none)</span>');
+  // Resale (b2b) buys sit apart from box-office buys on the same account.
+  breakdown("byAccount", rows, r => (r.account || "") + (r.source === "b2b" ? "|b2b" : ""), k => {
+    const [a, b2b] = k.split("|");
+    return (a ? esc(a) : '<span class="muted">(none)</span>') + (b2b ? '<span class="b2b-tag">B2B</span>' : "");
+  });
   const tot = ITEMS.filter(r => !r.hidden).length;
   document.getElementById("meta").textContent = `${rows.length} of ${tot} purchases` +
     (START ? ` · tracking since ${fmtDate(START)} (DICE: full history)` : "");
