@@ -5323,8 +5323,10 @@ def api_purchases():
     # The sales themselves ride along so opening an event lists them.
     sold, sales = {}, {}
     try:
-        for sr in _build_combined_sales():
-            g = sr.get("event_group")
+        all_sales = _build_combined_sales()
+        show_of = _link_purchase_shows(rows, all_sales)
+        for sr in all_sales:
+            g = show_of(sr)
             if not g:
                 continue
             sold[g] = sold.get(g, 0) + (sr.get("qty") or 0)
@@ -5346,6 +5348,126 @@ def api_purchases():
     return jsonify({"items": rows, "sold_by_group": sold, "sales_by_group": sales,
                     "start_date": db.purchases_start_date(),
                     "today": date.today().isoformat()})
+
+
+# Words that say nothing about WHICH show it is ("LED Presents X + Y + more
+# at Z" vs Lysted's "X").
+_SHOW_STOPWORDS = frozenset("""
+    presents present presented presenting by the and at more with a an of in on
+    for live tour event events night show shows plus ft feat featuring x vs
+    special guest guests friends day pass ga vip tickets ticket edition
+""".split())
+
+
+def _show_tokens(name):
+    words = re.findall(r"\w+", (name or "").lower())
+    return frozenset(w for w in words
+                     if w not in _SHOW_STOPWORDS and not w.isdigit() and len(w) > 1)
+
+
+def _same_show(a, b):
+    """Two names of one show on one date: every distinctive word of the
+    shorter is in the longer, and it has at least one real word."""
+    small, big = (a, b) if len(a) <= len(b) else (b, a)
+    return bool(small) and small <= big and any(len(w) >= 3 for w in small)
+
+
+def _link_purchase_shows(rows, sales):
+    """Purchases and sales name the same show differently (the Leap email's
+    "LED Presents CRANKDAT + ZINGARA + more at Gallagher Square" is Lysted's
+    "Crankdat"; Frontgate's "Factory 93 presents ANOTR" is viagogo's
+    "ANOTR"). Event groups are exact-name clusters, so on the SAME event date
+    this joins groups whose distinctive words nest: purchase groups are merged
+    (rows' event_group rewritten in place) and the returned function maps a
+    sale to the purchase show it belongs to, else to its own group."""
+    by_date = {}
+    for r in rows:
+        d = r.get("event_date_iso")
+        if d and r.get("event_group"):
+            by_date.setdefault(d, {}).setdefault(r["event_group"], set()).update(
+                _show_tokens(r.get("event_name")))
+    canon = {}
+    for d, groups in by_date.items():
+        keys = list(groups)
+        parent = {k: k for k in keys}
+
+        def find(k):
+            while parent[k] != k:
+                k = parent[k]
+            return k
+        for i, a in enumerate(keys):
+            for b in keys[i + 1:]:
+                if _same_show(frozenset(groups[a]), frozenset(groups[b])):
+                    parent[find(b)] = find(a)
+        for k in keys:
+            canon[k] = find(k)
+    for r in rows:
+        if r.get("event_group") in canon:
+            r["event_group"] = canon[r["event_group"]]
+
+    def show_of(sale):
+        g = sale.get("event_group")
+        if g in canon:
+            return canon[g]
+        groups = by_date.get(sale.get("event_date_iso") or "")
+        if not groups:
+            return g
+        st = _show_tokens(sale.get("event_name"))
+        best, best_score, tie = None, 0.0, False
+        for k, toks in groups.items():
+            toks = frozenset(toks)
+            if not _same_show(st, toks):
+                continue
+            score = len(st & toks) / len(st | toks)
+            if score > best_score:
+                best, best_score, tie = k, score, False
+            elif score == best_score:
+                tie = tie or canon[k] != canon.get(best)
+        return canon[best] if best and not tie else g
+    return show_of
+
+
+@app.route("/api/purchases/tickets")
+def api_purchases_tickets():
+    """Several attachments in one download, for uploading a whole order at
+    once: ?ids=att-a,att-b&format=pdf (one PDF, a page per ticket, in the
+    order given) or format=zip (the separate files)."""
+    from flask import request
+    import io
+    import zipfile
+    ids = [i for i in (request.args.get("ids") or "").split(",") if i][:200]
+    fmt = request.args.get("format") or "pdf"
+    name = re.sub(r"[^\w .-]+", "_", request.args.get("name") or "tickets").strip() or "tickets"
+    files = []
+    for att_id in ids:
+        row = db.get_attachment(att_id)
+        if not row:
+            continue
+        try:
+            path = attachments_mod.disk_path(row)
+        except ValueError:
+            continue
+        if path.exists():
+            files.append((row.get("filename") or f"{att_id}.pdf", path.read_bytes()))
+    if not files:
+        return jsonify({"error": "no files"}), 404
+    if fmt == "zip":
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for i, (fn, data) in enumerate(files, 1):
+                z.writestr(f"{i:02d} - {fn}", data)
+        buf.seek(0)
+        return send_file(buf, as_attachment=True, download_name=f"{name}.zip",
+                         mimetype="application/zip")
+    import fitz
+    out = fitz.open()
+    for _fn, data in files:
+        with fitz.open(stream=data, filetype="pdf") as src:
+            out.insert_pdf(src)
+    buf = io.BytesIO(out.tobytes(garbage=4, deflate=True))
+    out.close()
+    return send_file(buf, as_attachment=True, download_name=f"{name}.pdf",
+                     mimetype="application/pdf")
 
 
 @app.route("/api/purchases/edit", methods=["POST"])

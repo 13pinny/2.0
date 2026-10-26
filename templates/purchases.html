@@ -430,7 +430,7 @@ function rowHtml(r) {
     cost_per_unit: `<td class="num">${money(r.cost_per_unit)}${orig}</td>`,
     total_cost: `<td class="num">${r.total_cost == null ? '<span class="warn" title="No cost recorded — click to add">—</span>' : money(r.total_cost)}</td>`,
     card: `<td class="col-card nowrap">${r.card ? "••" + esc(r.card) : ""}</td>`,
-    order_ref: `<td class="col-order">${esc(r.order_ref)}</td>`,
+    order_ref: `<td class="col-order">${esc(r.order_ref)}${(r.attachments || []).length ? ` <span class="tag" title="Ticket PDFs attached — click the row">📎${r.attachments.length}</span>` : ""}</td>`,
     platform: `<td>${esc(r.platform)} ${String(r.platform).toLowerCase() === r.source ? "" : `<span class="src src-${esc(r.source)}" title="${esc(SOURCE_LABEL[r.source] || r.source)}">${esc((SOURCE_LABEL[r.source] || r.source).split(" ")[0])}</span>`}${Object.keys(r.list_marks || {}).length ? "<br>" + listBoxes(r) : ""}</td>`,
     status: `<td class="col-status">${r.cancelled ? '<span class="badge-x">cancelled</span> ' : ""}${esc(r.cancelled && r.status === "cancelled" ? "" : r.status)}${r.hidden ? ' <span class="tag">hidden</span>' : ""}</td>`,
   };
@@ -442,7 +442,18 @@ function detailHtml(r) {
   const f = (k, v) => v === "" || v == null ? "" : `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
   const link = r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.link.replace(/^https?:\/\//, "").slice(0, 60))}</a>` : "";
   const orig = r.orig ? `${esc(r.orig.currency)} ${esc(r.orig.cost_per_unit)} / tkt` + (r.orig.fx_rate ? ` @ ${Number(r.orig.fx_rate).toFixed(4)}` : "") : "";
-  const files = (r.attachments || []).map(a => `<a href="/api/attachments/${encodeURIComponent(a.id)}/download" target="_blank">📎 ${esc(a.filename)}</a>`).join("");
+  const atts = r.attachments || [];
+  const pdfs = atts.filter(a => /\.pdf$/i.test(a.filename));
+  // A multi-ticket order (Pacha mails one PDF per ticket) gets numbered links
+  // plus all-in-one downloads, ready to upload.
+  const label = (a, i) => pdfs.length > 1 && pdfs.includes(a) ? `Ticket ${pdfs.indexOf(a) + 1} of ${pdfs.length}` : a.filename;
+  let files = atts.map((a, i) => `<a href="/api/attachments/${encodeURIComponent(a.id)}/download" target="_blank" title="${esc(a.filename)}">📎 ${esc(label(a, i))}</a>`).join("");
+  if (pdfs.length > 1) {
+    const q = `ids=${pdfs.map(a => encodeURIComponent(a.id)).join(",")}&name=${encodeURIComponent(r.event_name + " - " + pdfs.length + " tickets")}`;
+    files = `<a href="/api/purchases/tickets?${q}&format=pdf"><b>⬇ All ${pdfs.length} tickets (one PDF)</b></a><a href="/api/purchases/tickets?${q}&format=zip"><b>⬇ All ${pdfs.length} (zip)</b></a>` + files;
+  }
+  const pending = r.platform === "FourVenues" && pdfs.length < (r.qty || 0)
+    ? `<div class="msg muted" style="margin-top:8px">${pdfs.length} of ${r.qty} ticket PDFs fetched — the rest download on the next inbox poll.</div>` : "";
   return `<tr class="detail"><td colspan="${COLS.length}">
     <div class="dgrid">
       ${f("Event", esc(r.event_name))}
@@ -469,7 +480,7 @@ function detailHtml(r) {
       ${f("Recorded in", `<a href="${SOURCE_PAGE[r.source] || "/"}">${esc(SOURCE_LABEL[r.source] || r.source)}</a> <span class="muted">${esc(r.source_id)}</span>`)}
       ${r.overlap_risk ? f("Heads up", "Unmapped tickets are a hand-kept list and may repeat a purchase recorded elsewhere.") : ""}
     </div>
-    ${files ? `<div class="dfiles">${files}</div>` : ""}
+    ${files ? `<div class="dfiles">${files}</div>` : ""}${pending}
     ${editHtml(r)}
   </td></tr>`;
 }

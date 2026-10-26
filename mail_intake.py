@@ -2066,6 +2066,74 @@ def sweep_purchases(lookback_days=None):
         M.logout()
     out = process_purchases(raws, now)
     out["errors"] += errors
+    # Pacha (FourVenues) mails carry no PDF, only a download link: fetch each
+    # ticket's scannable first page now and attach it to its purchase row.
+    try:
+        out["pacha_pdfs"] = attach_pacha_pdfs(lookback_days=days)
+    except Exception:
+        out["errors"] += 1
+        print(f"[purchases] pacha pdfs failed: {traceback.format_exc()}")
+    return out
+
+
+PACHA_PDFS_PER_RUN = int(os.getenv("KARTIS_PACHA_PDFS_PER_RUN") or 40)
+
+
+def attach_pacha_pdfs(lookback_days=None, limit=PACHA_PDFS_PER_RUN):
+    """For every FourVenues (Pacha) email purchase in the window that has no
+    ticket PDF yet, download the ticket via the email's link
+    (pacha_tickets.get_ticket_pdf) and attach page 1 (the scannable ticket)
+    under owner_type 'email_purchase'. The links are token URLs that can
+    expire, so this runs on every intake poll; a failed ticket is retried next
+    poll. Capped per run because FourVenues rate-limits (3s spacing each)."""
+    import pacha_tickets
+    from datetime import date as _date, timedelta as _timedelta
+    days = lookback_days or PURCHASE_LOOKBACK_DAYS
+    cutoff = (_date.today() - _timedelta(days=days)).isoformat()
+    rows = [r for r in db.email_purchases_all()
+            if r["provider"] == "fourvenues" and r["kind"] == "purchase"
+            and r.get("message_id") and (r.get("received_at") or "")[:10] >= cutoff]
+    have = db.list_attachments_for_owners("email_purchase", [r["id"] for r in rows])
+    want = {r["message_id"]: r for r in rows if r["id"] not in have}
+    out = {"attached": 0, "failed": 0, "missing": len(want)}
+    if not want:
+        return out
+    since = (_date.today() - _timedelta(days=days)).strftime("%d-%b-%Y")
+    M = _connect()
+    try:
+        M.select(INTAKE_FOLDER)
+        typ, data = M.search(None, "FROM", '"fourvenues.com"', "SINCE", since)
+        uids = data[0].split() if typ == "OK" and data and data[0] else []
+        for uid in uids:
+            if out["attached"] + out["failed"] >= limit:
+                break
+            typ, hdr = M.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+            if typ != "OK" or not hdr or not isinstance(hdr[0], tuple):
+                continue
+            mid = (message_from_bytes(hdr[0][1]).get("Message-ID") or "").strip()
+            row = want.get(mid)
+            if not row:
+                continue
+            typ, msg_data = M.fetch(uid, "(BODY.PEEK[])")
+            if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
+                continue
+            msg = message_from_bytes(msg_data[0][1])
+            pdf, _name, err = pacha_tickets.get_ticket_pdf(msg)
+            page1 = pacha_tickets.extract_first_page(pdf) if pdf else None
+            if not page1:
+                out["failed"] += 1
+                print(f"[purchases] pacha pdf for {row['order_ref']}: {err or 'empty PDF'}")
+                continue
+            fname = f"Pacha ticket - {row.get('event_name') or 'event'} - {row['order_ref']}.pdf"
+            _save_intake_attachment(row["id"], fname, "application/pdf", page1,
+                                    owner_type="email_purchase")
+            out["attached"] += 1
+    finally:
+        try:
+            M.close()
+        except Exception:
+            pass
+        M.logout()
     return out
 
 
@@ -2098,7 +2166,12 @@ def process_purchases(raws, now=None):
             pid = db.email_purchase_upsert(fields, now)
             db.email_purchase_message_record(mid, fields["kind"], pid, now)
             out["purchases" if fields["kind"] == "purchase" else "cancels"] += 1
+            # A repeat email for the same order carries the same PDF again.
+            have = {(a["filename"], a["size_bytes"]) for a in
+                    db.list_attachments_for_owners("email_purchase", [pid]).get(pid, [])}
             for fname, ctype, payload in parsed.get("attachments") or []:
+                if (fname, len(payload)) in have:
+                    continue
                 if ctype == "application/pdf" or fname.lower().endswith(".pdf"):
                     try:
                         _save_intake_attachment(pid, fname, ctype, payload,
