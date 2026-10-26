@@ -1181,6 +1181,7 @@ CREATE TABLE IF NOT EXISTS email_purchases (
     subject         TEXT,
     raw_text        TEXT,
     hidden          INTEGER NOT NULL DEFAULT 0,
+    listed_at       TEXT,                      -- ticked "listed on viagogo" by hand (IL buys); NULL = not yet
     edited          TEXT,                      -- comma list of hand-edited fields
     created_at      TEXT NOT NULL,
     updated_at      TEXT,
@@ -1364,6 +1365,7 @@ def init():
             "ALTER TABLE viagogo_push ADD COLUMN ticket_url TEXT",
             "ALTER TABLE pending_intake ADD COLUMN buyer_email TEXT",
             "ALTER TABLE viagogo_push ADD COLUMN buyer_email TEXT",
+            "ALTER TABLE email_purchases ADD COLUMN listed_at TEXT",
         ):
             try:
                 conn.executescript(_sql)
@@ -5640,7 +5642,7 @@ def email_purchase_get(pid):
 
 def email_purchase_edit(pid, fields, now_iso):
     """Hand edit: writes the fields and marks them so a re-parse keeps them.
-    `hidden` is a plain flag, not an edit."""
+    `hidden` and `listed` are plain flags, not edits."""
     with connect() as conn:
         cur = conn.execute("SELECT edited FROM email_purchases WHERE id = ?", (pid,)).fetchone()
         if cur is None:
@@ -5650,6 +5652,8 @@ def email_purchase_edit(pid, fields, now_iso):
         for k, v in fields.items():
             if k == "hidden":
                 sets["hidden"] = 1 if v else 0
+            elif k == "listed":
+                sets["listed_at"] = now_iso if v else None
             elif k in EP_EDITABLE:
                 sets[k] = v
                 if k not in edited:

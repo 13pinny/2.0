@@ -4928,6 +4928,9 @@ _EMAIL_PLATFORM = {
 }
 
 
+_IL_PROVIDERS = ("kupat", "ticketmaster_il", "tickchak")
+
+
 def _names_overlap(a, b):
     """Loose event-name match for refund/cancel notices: one name contains
     the other ("Locky" vs "unKommon Events present: Locky")."""
@@ -5141,6 +5144,10 @@ def _build_purchases():
             status="refund notice" if is_cancel else ("cancelled" if voided else ""),
             orig=orig)
         rows[-1]["group_ref"] = e.get("group_ref") or ""
+        # Israeli box-office buys get a hand-ticked "listed on viagogo" box.
+        if e["provider"] in _IL_PROVIDERS:
+            rows[-1]["vg_listable"] = True
+            rows[-1]["vg_listed_at"] = e.get("listed_at") or ""
         rows[-1]["hidden"] = rows[-1]["hidden"] or bool(e.get("hidden"))
 
     for o in db.b2b_orders_all():
@@ -5384,6 +5391,8 @@ def api_purchases_edit():
             fields["ticket_type"] = (body.get("ticket_type") or "").strip()
         if "hidden" in body:
             fields["hidden"] = bool(body["hidden"])
+        if "listed" in body:
+            fields["listed"] = bool(body["listed"])
         db.email_purchase_edit(sid, fields, now)
         return jsonify({"ok": True})
 
