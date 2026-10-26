@@ -43,7 +43,7 @@ SWEEP_CRITERIA = (
 )
 
 # Bump when a parser changes so messages recorded as 'other' are re-read.
-CLASSIFY_VERSION = 1
+CLASSIFY_VERSION = 2
 
 
 def _flat(text):
@@ -399,7 +399,9 @@ _SENDERS = (
 def wants(sender, subject):
     """Cheap header check: could this be a receipt we parse? Lets the sweep
     skip downloading the bodies of marketing mail from the same senders."""
-    s, subj = (sender or "").lower(), subject or ""
+    s = (sender or "").lower()
+    # Headers still carry the forwarder's "FW:" (the body unwrap strips it later).
+    subj = re.sub(r"^\s*(?:(?:fwd?|fw|re)\s*:\s*)+", "", subject or "", flags=re.I)
     if subj.startswith("You got ticket"):
         return True
     if not any(n in s for n, _ in _SENDERS):
