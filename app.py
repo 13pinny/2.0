@@ -40,6 +40,7 @@ import market
 import matcher
 import notify
 import edm_events
+import events_hub
 import eventim_events
 import frontgate_events
 import universe_events
@@ -7908,6 +7909,234 @@ def api_universe_add():
     event_id = db.edm_tracked_add(universe_events.SOURCE_NAME, key, url, now_iso,
                                   label=ev.get("name"))
     return jsonify({"event_id": event_id, "name": ev.get("name")})
+
+
+# --- /events: every tracked show on one page --------------------------------
+# events_hub.py turns the existing trackers' API payloads into one row shape;
+# this block only gathers them and routes actions back to the existing
+# endpoints, so each source's own logic stays the single source of truth.
+
+_EVENTS_CACHE = {"at": 0.0, "body": None}
+_EVENTS_CACHE_SECONDS = 20
+_WATCHER_META_CACHE = {}          # watcher id -> (monotonic ts, meta)
+_WATCHER_META_TTL = 1800
+_IL_WATCHER_SOURCES = {"ticketmaster", "kupat", "tickchak", "barby", "tmdiscover"}
+
+
+def _route_json(fn, body=None):
+    """Call one of this module's routes in-process; (json, http status).
+    With a body, it runs under its own request context so `request` reads it."""
+    def run():
+        resp = fn()
+        status = 200
+        if isinstance(resp, tuple):
+            resp, status = resp[0], resp[1]
+        return (resp.get_json(silent=True) or {}), status
+    if body is None:
+        return run()
+    with app.test_request_context(json=body, method="POST"):
+        return run()
+
+
+def _watcher_meta(w):
+    """{night, name, venue, when, url} for a drop watcher, from its source's
+    cached labels (memoized 30 min; a failure just leaves fields blank)."""
+    import time as _t
+    hit = _WATCHER_META_CACHE.get(w["id"])
+    if hit and _t.monotonic() - hit[0] < _WATCHER_META_TTL:
+        return hit[1]
+    src_name = w.get("source") or "ticketmaster"
+    src = WATCHER_SOURCES.get(src_name, ticketmaster)
+    meta = {}
+    try:
+        meta["url"] = src.perf_url(w["event_code"], w["perf_code"])
+    except Exception:
+        pass
+    try:
+        lm = (src.get_labels(w["event_code"], w["perf_code"], lang="iw") or {}).get("meta") or {}
+    except Exception:
+        lm = {}
+    tz = events_hub.IL if src_name in _IL_WATCHER_SOURCES else events_hub.US_CENTRAL
+    txt = (lm.get("firstPerfText") or "").strip()
+    night = events_hub.night_of(txt) if txt else None
+    if not night and lm.get("firstPerfMs"):
+        try:
+            night = datetime.fromtimestamp(int(lm["firstPerfMs"]) / 1000, tz).date().isoformat()
+        except (TypeError, ValueError, OSError):
+            night = None
+    meta.update(night=night, when=txt or night, name=lm.get("eventName"),
+                venue=lm.get("venueName") or lm.get("venue"))
+    _WATCHER_META_CACHE[w["id"]] = (_t.monotonic(), meta)
+    return meta
+
+
+def _events_rows():
+    """Every tracked show as an events_hub row (unsorted; the page groups)."""
+    now = datetime.now(timezone.utc)
+    today = datetime.now(events_hub.NY).date().isoformat()
+    rows, errors = [], {}
+
+    def grab(name, fn):
+        try:
+            return _route_json(fn)[0]
+        except Exception as e:
+            traceback.print_exc()
+            errors[name] = f"{type(e).__name__}: {e}"
+            return {}
+
+    edm, marquee, frontgate = grab("edm", api_edm), grab("marquee", api_marquee), grab("frontgate", api_frontgate)
+    universe, liv = grab("universe", api_universe), grab("liv", api_liv)
+    try:
+        dice_payload = _dice_payload(force=False)
+    except Exception as e:
+        traceback.print_exc()
+        errors["dice"], dice_payload = f"{type(e).__name__}: {e}", {}
+    pacha, checkin_payload = grab("pacha", api_pacha), grab("checkin", api_checkin)
+    watchers = db.tm_all_watchers()
+
+    liv_ga_ids = {(n.get("ga") or {}).get("event_id") for n in liv.get("nights") or []} - {None}
+    dice_watchers = {str(w["event_code"]): w for w in watchers if (w.get("source") or "") == "dice"}
+    dice_codes = {str(e.get("event_code")) for e in dice_payload.get("events") or []}
+    meta = {w["id"]: _watcher_meta(w) for w in watchers
+            if not ((w.get("source") or "") == "dice" and str(w["event_code"]) in dice_codes)}
+
+    rows += events_hub.from_edm(edm, now, today)
+    rows += events_hub.from_marquee(marquee, now, today)
+    rows += events_hub.from_frontgate(frontgate, now, today)
+    rows += events_hub.from_universe(universe, now, today, skip_ids=liv_ga_ids)
+    rows += events_hub.from_liv(liv, now, today)
+    rows += events_hub.from_dice(dice_payload, now, today, watchers_by_code=dice_watchers)
+    rows += events_hub.from_watchers(watchers, meta, now, today, skip_dice_codes=dice_codes)
+    rows += events_hub.from_pacha(pacha, now, today, pacha_error=_last_pacha_events.get("error"))
+    rows += events_hub.from_checkin(checkin_payload, now, today)
+    return rows, errors, {
+        "relay_seen_at": _last_edm_events.get("relay_seen_at"),
+        "dice_relay_seen_at": dice_payload.get("relay_seen_at"),
+        "edm_last_tick": _last_edm_events.get("at"),
+        "frontgate_windows": frontgate.get("windows"),
+    }
+
+
+@app.route("/events")
+def events_page():
+    return render_template("events.html")
+
+
+@app.route("/api/events")
+def api_events():
+    """Every tracked show (see events_hub). Cached 20s; ?fresh=1 skips it."""
+    import time as _t
+    from flask import request
+    fresh = request.args.get("fresh") == "1"
+    if (not fresh and _EVENTS_CACHE["body"] is not None
+            and _t.monotonic() - _EVENTS_CACHE["at"] < _EVENTS_CACHE_SECONDS):
+        return jsonify(_EVENTS_CACHE["body"])
+    rows, errors, extra = _events_rows()
+    body = {"events": rows, "summary": events_hub.summarize(rows),
+            "source_errors": errors, "now": datetime.now(timezone.utc).isoformat(),
+            "today": datetime.now(events_hub.NY).date().isoformat(), **extra}
+    _EVENTS_CACHE.update(at=_t.monotonic(), body=body)
+    return jsonify(body)
+
+
+@app.route("/api/events/track", methods=["POST"])
+def api_events_track():
+    """The one Track box. Body: {url, watch?: bool}. Routes the link to the
+    tracker that owns its site (events_hub.classify_link) through that
+    tracker's own add endpoint; for a dice.fm link, watch=true also adds a
+    drop watcher."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    route, url_or_reason = events_hub.classify_link(body.get("url"))
+    if not route:
+        return jsonify({"error": url_or_reason}), 400
+    target = {
+        "dice": api_market_add, "watcher": api_watchers_add, "liv": api_liv_add,
+        "frontgate": api_frontgate_add, "universe": api_universe_add, "edm": api_edm_add,
+    }[route]
+    result, status = _route_json(target, {"url": url_or_reason})
+    out = {"routed_to": route, "result": result}
+    if route == "dice" and body.get("watch") and status < 400:
+        wres, wstatus = _route_json(api_watchers_add, {"url": url_or_reason})
+        out["watcher"] = wres if wstatus < 400 else {"error": wres.get("error") or f"HTTP {wstatus}"}
+    _EVENTS_CACHE["body"] = None
+    if status >= 400:
+        out["error"] = result.get("error") or f"HTTP {status}"
+    return jsonify(out), status
+
+
+def _edm_ids_of(row_id):
+    """EDM event_ids behind an /events row id ('liv:a+b' covers both halves)."""
+    kind, _, key = row_id.partition(":")
+    return key.split("+") if kind == "liv" else [key]
+
+
+@app.route("/api/events/action", methods=["POST"])
+def api_events_action():
+    """Row controls. Body: {id, action: pause|resume|mute|unmute|remove|alert,
+    value?}. Each goes to the endpoint the old page used."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    row_id, action = str(body.get("id") or ""), body.get("action")
+    kind, _, key = row_id.partition(":")
+    results = []
+
+    def call(fn, payload):
+        res, status = _route_json(fn, payload)
+        results.append(res)
+        if status >= 400:
+            raise ValueError(res.get("error") or f"HTTP {status}")
+
+    try:
+        if kind in ("edm", "marquee", "frontgate", "universe", "liv"):
+            ids = _edm_ids_of(row_id)
+            if action in ("pause", "resume"):
+                for i in ids:
+                    call(api_edm_pause, {"event_id": i, "paused": action == "pause"})
+            elif action == "remove":
+                for i in ids:
+                    call(api_edm_remove, {"event_id": i})
+            elif action == "alert":
+                target = [i for i in ids if i.split(":")[0] in _LEFT_ALERT_SOURCES]
+                if not target:
+                    raise ValueError("this event has no ticket counts to alert on")
+                call(api_frontgate_alert, {"event_id": target[0], "below": body.get("value")})
+            else:
+                raise ValueError(f"{action} isn't available for this event")
+        elif kind == "dice":
+            if action in ("mute", "unmute"):
+                call(api_dice_mute, {"event_code": key, "muted": action == "mute"})
+            elif action == "remove":
+                for m in db.market_manual_all():
+                    if m["source"] == "dice" and str(m["code"]) == key:
+                        call(api_market_remove, {"id": m["id"]})
+                for w in db.tm_all_watchers():
+                    if (w.get("source") or "") == "dice" and str(w["event_code"]) == key:
+                        call(api_watchers_delete, {"id": w["id"]})
+            elif action in ("pause", "resume"):
+                ws = [w for w in db.tm_all_watchers()
+                      if (w.get("source") or "") == "dice" and str(w["event_code"]) == key]
+                if not ws:
+                    raise ValueError("only DICE events with a drop watcher can be paused")
+                for w in ws:
+                    call(api_watchers_toggle, {"id": w["id"], "paused": action == "pause"})
+            else:
+                raise ValueError(f"{action} isn't available for DICE events")
+        elif kind == "watcher":
+            if action in ("pause", "resume"):
+                call(api_watchers_toggle, {"id": key, "paused": action == "pause"})
+            elif action in ("mute", "unmute"):
+                call(api_watchers_update, {"id": key, "muted": action == "mute"})
+            elif action == "remove":
+                call(api_watchers_delete, {"id": key})
+            else:
+                raise ValueError(f"{action} isn't available for drop watchers")
+        else:
+            raise ValueError("this event has no controls here - manage it on its own page")
+    except ValueError as e:
+        return jsonify({"error": str(e), "results": results}), 400
+    _EVENTS_CACHE["body"] = None
+    return jsonify({"ok": True, "results": results})
 
 
 @app.route("/edm")
