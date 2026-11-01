@@ -60,6 +60,12 @@ import vault
 import viagogo_listing
 import viagogo_market_sales
 import viagogo_pricer
+import job_watchdog
+import pw_guard
+
+# A crashed patchright driver otherwise turns the next sync call into an
+# endless busy-loop (pw_guard.py docstring) — the 2026-10-28 vgsales wedge.
+pw_guard.install()
 
 # Drop-checker sources keyed by the value stored in tm_watchers.source.
 # Each module exposes parse_url, perf_url, fetch_selectable_seats,
@@ -1214,7 +1220,8 @@ def run_vgsales(force=False):
     the status dict, same as the pricer/market jobs. force=True (the
     run-now button) bypasses the fetched-recently skip that normally lets
     the pricer piggyback halve requests."""
-    if not _vgsales_lock.acquire(blocking=False):
+    lock = _vgsales_lock    # the watchdog may swap the global; release ours
+    if not lock.acquire(blocking=False):
         return
     _last_vgsales["running"] = True
     try:
@@ -1234,8 +1241,19 @@ def run_vgsales(force=False):
         )
         traceback.print_exc()
     finally:
-        _last_vgsales["running"] = False
-        _vgsales_lock.release()
+        if lock is _vgsales_lock:     # else the watchdog already reset it
+            _last_vgsales["running"] = False
+        lock.release()
+
+
+def _abandon_vgsales(limit_s):
+    """job_watchdog's last resort for a vgsales run that won't unwind:
+    clear `running` and give the job a fresh lock so the next tick runs."""
+    global _vgsales_lock
+    _vgsales_lock = threading.Lock()
+    _last_vgsales.update(
+        running=False, at=datetime.now(timezone.utc).isoformat(),
+        error=f"abandoned by watchdog after {limit_s / 60:.0f} min (run wedged)")
 
 
 def run_todo_remind():
@@ -10494,7 +10512,20 @@ def api_vgsales_run_now():
     return jsonify(dict(_last_vgsales))
 
 
-def _fresh_thread_job(fn):
+# Watchdog for the fresh-thread jobs: a run older than MULT x its interval
+# (never less than MIN minutes) is abandoned — see job_watchdog.py.
+# KARTIS_JOB_WATCHDOG_MULT=0 disables it.
+JOB_WATCHDOG_MULT = float(os.getenv("KARTIS_JOB_WATCHDOG_MULT") or 3)
+JOB_WATCHDOG_MIN_MINUTES = float(os.getenv("KARTIS_JOB_WATCHDOG_MIN_MINUTES") or 30)
+
+
+def _job_limit(interval_seconds):
+    if JOB_WATCHDOG_MULT <= 0:
+        return None
+    return max(JOB_WATCHDOG_MULT * interval_seconds, JOB_WATCHDOG_MIN_MINUTES * 60)
+
+
+def _fresh_thread_job(fn, interval_seconds=None, on_abandon=None):
     """Run a scheduler job in a brand-new disposable thread each tick.
 
     APScheduler's executor REUSES pool threads. When a sync_playwright
@@ -10504,11 +10535,16 @@ def _fresh_thread_job(fn):
     "Playwright Sync API inside the asyncio loop" — this silently killed
     the pricer + market sweep from 2026-07-07 13:10 until the next service
     restart. A fresh thread per tick makes that poisoning impossible.
-    Only playwright-touching jobs need this."""
+    Only playwright-touching jobs need this.
+
+    interval_seconds arms the watchdog (job_watchdog.run): past _job_limit
+    the run is interrupted, or failing that abandoned with on_abandon
+    resetting the job's lock/status, so one wedged tick can't hold the
+    scheduler slot for days (vgsales, 2026-10-28 -> 11-01)."""
+    limit = _job_limit(interval_seconds) if interval_seconds else None
+
     def _runner():
-        t = threading.Thread(target=fn, daemon=True, name=f"fresh-{fn.__name__}")
-        t.start()
-        t.join()
+        job_watchdog.run(fn, fn.__name__, max_seconds=limit, on_abandon=on_abandon)
     _runner.__name__ = f"{fn.__name__}_fresh"
     return _runner
 
@@ -10536,13 +10572,13 @@ def _reconcile_orphaned_pushes():
 _reconcile_orphaned_pushes()
 
 scheduler = BackgroundScheduler(daemon=True)
-scheduler.add_job(_fresh_thread_job(run_scraper), "interval", hours=1, id="scrape")
+scheduler.add_job(_fresh_thread_job(run_scraper, 3600), "interval", hours=1, id="scrape")
 scheduler.add_job(run_backup, "cron", hour=3, minute=0, id="backup")
 if TM_CHECK_ENABLED:
     # Fresh thread: kupat watchers ride sync_playwright (in-page harvest), so
     # an unwrapped tick inherits any poisoned pool thread — seen 2026-08-12,
     # every kupat check failing "Sync API inside the asyncio loop" for a day.
-    scheduler.add_job(_fresh_thread_job(run_tm_check), "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
+    scheduler.add_job(_fresh_thread_job(run_tm_check, TM_CHECK_INTERVAL_SECONDS), "interval", seconds=TM_CHECK_INTERVAL_SECONDS, id="tm_check")
     if DICE_SNIPER_ENABLED:
         scheduler.add_job(run_dice_sniper, "interval", seconds=DICE_SNIPER_SECONDS,
                           id="dice_sniper", max_instances=1)
@@ -10553,7 +10589,7 @@ else:
     print("[tm_check] disabled via TM_CHECK_ENABLED=0 — drop-checking runs elsewhere (e.g. the VPS watcher)")
 # mail_intake drives the CDP browser too (viagogo event search on kupat/
 # tickchak/TM-IL purchase emails) — fresh thread, same reason as the scrape.
-scheduler.add_job(_fresh_thread_job(run_mail_intake), "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
+scheduler.add_job(_fresh_thread_job(run_mail_intake, INTAKE_INTERVAL_MINUTES * 60), "interval", minutes=INTAKE_INTERVAL_MINUTES, id="mail_intake")
 if PACHA_MONITOR_ENABLED:
     # First tick shortly after boot (baseline on a fresh DB), then every N min.
     scheduler.add_job(run_pacha_events, "interval",
@@ -10571,7 +10607,7 @@ else:
 if EDM_MONITOR_ENABLED:
     # Offset again so pacha / il_events / edm first ticks don't collide.
     # Fresh thread: tixr drives the box's CDP Chrome from inside this tick.
-    scheduler.add_job(_fresh_thread_job(run_edm_events), "interval",
+    scheduler.add_job(_fresh_thread_job(run_edm_events, EDM_MONITOR_INTERVAL_MINUTES * 60), "interval",
                       minutes=EDM_MONITOR_INTERVAL_MINUTES, id="edm_events",
                       start_date=datetime.now() + timedelta(minutes=3))
 else:
@@ -10598,19 +10634,19 @@ scheduler.add_job(lambda: discord_bot.delete_expired(), "cron", hour=4, minute=1
 # Festival / GA Tracker pages have a baseline right after a restart, then
 # every N minutes.
 # Fresh thread: kupat GA label refreshes ride sync_playwright too.
-scheduler.add_job(_fresh_thread_job(run_sales_sync), "interval", minutes=FESTIVAL_SYNC_MINUTES,
+scheduler.add_job(_fresh_thread_job(run_sales_sync, FESTIVAL_SYNC_MINUTES * 60), "interval", minutes=FESTIVAL_SYNC_MINUTES,
                   id="sales_sync", next_run_time=datetime.now())
 # Auto-pricer: offset from the top of the hour (start_date pushes the first
 # run out) so its browser use doesn't collide with the hourly scrape. Cheap
 # no-op while pricer_master_enabled is off.
-scheduler.add_job(_fresh_thread_job(run_pricer), "interval",
+scheduler.add_job(_fresh_thread_job(run_pricer, PRICER_FAST_INTERVAL_MINUTES * 60), "interval",
                   minutes=PRICER_FAST_INTERVAL_MINUTES,
                   id="pricer",
                   start_date=datetime.now() + timedelta(minutes=7))
 if MARKET_ENABLED:
     # Market-wide availability sweep. Offset well clear of the hourly scrape
     # (t+0) and the pricer (t+7) — this one also launches a Chromium.
-    scheduler.add_job(_fresh_thread_job(run_market_sweep), "interval", minutes=MARKET_INTERVAL_MINUTES,
+    scheduler.add_job(_fresh_thread_job(run_market_sweep, MARKET_INTERVAL_MINUTES * 60), "interval", minutes=MARKET_INTERVAL_MINUTES,
                       id="market_sweep",
                       start_date=datetime.now() + timedelta(minutes=20))
 else:
@@ -10618,7 +10654,9 @@ else:
 if VGSALES_ENABLED:
     # Viagogo market-sales tracker — drives the CDP Chrome, so fresh thread
     # and staggered clear of scrape (t+0) / pricer (t+7) / market (t+20).
-    scheduler.add_job(_fresh_thread_job(run_vgsales), "interval",
+    scheduler.add_job(_fresh_thread_job(run_vgsales,
+                                        viagogo_market_sales.INTERVAL_MINUTES * 60,
+                                        on_abandon=_abandon_vgsales), "interval",
                       minutes=viagogo_market_sales.INTERVAL_MINUTES,
                       id="vgsales",
                       start_date=datetime.now() + timedelta(minutes=13))

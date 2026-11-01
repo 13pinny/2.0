@@ -64,18 +64,47 @@ _BROWSER_LOCKS = {
 }
 
 
+# category -> (holder thread ident, hold record). Lets job_watchdog free a
+# lane whose holder is wedged instead of every later tick timing out on it.
+_BROWSER_LOCK_HOLDS = {}
+
+
 @contextmanager
 def _exclusive_browser(timeout=180, category="listing"):
-    if not _BROWSER_LOCKS[category].acquire(timeout=timeout):
+    lock = _BROWSER_LOCKS[category]
+    if not lock.acquire(timeout=timeout):
         raise ViagogoListingError(
             f"timed out waiting for another viagogo {category} operation to finish"
         )
+    hold = {"abandoned": False}
+    _BROWSER_LOCK_HOLDS[category] = (threading.get_ident(), hold)
     scraper.viagogo_op_started()   # shields our tabs from stray-tab cleanup
     try:
         yield
     finally:
+        # An abandoned hold was already accounted for by
+        # abandon_browser_locks; only the (now orphaned) old lock is ours.
+        if not hold["abandoned"]:
+            _BROWSER_LOCK_HOLDS.pop(category, None)
+            scraper.viagogo_op_finished()
+        lock.release()
+
+
+def abandon_browser_locks(thread_ident):
+    """Hand every lane held by a wedged thread a fresh lock (job_watchdog's
+    last resort). The stuck thread keeps the old Lock object, so if it ever
+    finishes it releases that one and touches nothing live. Returns the
+    categories freed."""
+    freed = []
+    for category, (ident, hold) in list(_BROWSER_LOCK_HOLDS.items()):
+        if ident != thread_ident:
+            continue
+        hold["abandoned"] = True
+        _BROWSER_LOCKS[category] = threading.Lock()
+        _BROWSER_LOCK_HOLDS.pop(category, None)
         scraper.viagogo_op_finished()
-        _BROWSER_LOCKS[category].release()
+        freed.append(category)
+    return freed
 
 # Empirically confirmed from two real listings on this account (Caesarea
 # Orchestra: $232 -> $208.80 proceeds; Middle Tier 1: $200 -> $180 proceeds) —
