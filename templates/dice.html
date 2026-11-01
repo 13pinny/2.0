@@ -248,6 +248,11 @@
   </div>
   <div class="follows" id="follows"></div>
 
+  <p class="sub" style="margin:18px 0 4px">Tracked DICE events (prices, release timeline, mute, add/untrack) now live on
+    <a href="/events?source=dice">Events</a>, with every other tracker. Holdings, purchases, follows and profit stay here.</p>
+  {# The tracker list moved to /events. Kept in the DOM, hidden: the holdings,
+     Up next and attention views above read the same DATA and element ids. #}
+  <div id="trackerSection" hidden>
   <h2 id="trackerH">Tracked events <span style="font-size:10px;color:var(--muted)">(click a row for types + change history)</span></h2>
   <div class="stats" id="totals"></div>
   <p class="sub" id="statusline">DICE publishes no ticket counts — the price ladder is the demand signal. History accrues from every watcher check, the hourly market sweep, and manual refreshes.</p>
@@ -271,6 +276,7 @@
   </table>
   </div>
   <p class="sub" id="footnote">Paste a dice.fm event URL above to track it here (no watcher needed). To also get restock/tier-jump pings, add it as a watcher. "Tier" = DICE's current price tier on the cheapest on-sale type; "Trend" = cheapest on-sale price since tracking began. "Pace" = is the current release selling through faster or slower than the last one (DICE has no ticket counts, so release burn time stands in for tickets per day) — click a row for the release timeline with exact timestamps.</p>
+  </div>
 </main>
 <div class="tipx" id="tipx"></div>
 <script>
@@ -1257,7 +1263,7 @@ function renderAttention(){
       $('xferwrap').style.display = ''; $('xferToggle').textContent = 'Hide transfer log';
       $('xferwrap').scrollIntoView({behavior:'smooth', block:'start'});
     } else if (k === 'fetch'){
-      $('trackerH').scrollIntoView({behavior:'smooth', block:'start'});
+      location.href = '/events?source=dice';
     } else setPFilter(k);
   });
 }

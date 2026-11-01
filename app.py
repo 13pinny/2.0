@@ -14,7 +14,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, send_file, send_from_directory
+from flask import Flask, jsonify, redirect, render_template, send_file, send_from_directory
 from openpyxl import Workbook
 
 import attachments as attachments_mod
@@ -7286,7 +7286,8 @@ def api_pacha_hourly():
 
 @app.route("/marquee")
 def marquee_page():
-    return render_template("marquee.html")
+    # Retired 2026-11-01: every tracker lives on /events now.
+    return redirect("/events?source=tao")
 
 
 # tao's two rooms, in the order the page stacks them. Keys match the
@@ -7498,7 +7499,8 @@ def api_marquee():
 
 @app.route("/frontgate")
 def frontgate_page():
-    return render_template("frontgate.html")
+    # Retired 2026-11-01: every tracker lives on /events now.
+    return redirect("/events?source=frontgate")
 
 
 # Sold-per-window figures on /frontgate, label -> hours.
@@ -7671,7 +7673,8 @@ def api_frontgate_alert():
 
 @app.route("/liv")
 def liv_page():
-    return render_template("liv.html")
+    # Retired 2026-11-01: every tracker lives on /events now.
+    return redirect("/events?source=liv")
 
 
 def _liv_left_at(snaps, t_iso):
@@ -7823,7 +7826,8 @@ def api_liv_add():
 
 @app.route("/universe")
 def universe_page():
-    return render_template("universe.html")
+    # Retired 2026-11-01: every tracker lives on /events now.
+    return redirect("/events?source=universe")
 
 
 def _universe_ladder(rows, log):
@@ -8237,7 +8241,8 @@ def api_events_action():
 
 @app.route("/edm")
 def edm_page():
-    return render_template("edm.html")
+    # Retired 2026-11-01: every tracker lives on /events now.
+    return redirect("/events")
 
 
 @app.route("/api/edm")

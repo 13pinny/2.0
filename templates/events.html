@@ -152,6 +152,10 @@
     <input class="search" id="q" type="search" placeholder="Search name or venue" aria-label="Search">
     <span id="srcchips"></span>
     <span class="chip" id="attnonly" title="Only rows that are stale, blocked or erroring">Needs attention</span>
+    <span id="dicebulk" hidden>
+      <button id="muteall" title="Silence Discord pings for every upcoming DICE event shown (they keep being checked)">🔕 Mute all shown</button>
+      <button id="unmuteall" title="Turn Discord pings back on for every upcoming DICE event shown">🔔 Unmute all shown</button>
+    </span>
   </div>
   <div id="srcerr"></div>
   <div id="list"><div class="empty">Loading…</div></div>
@@ -270,6 +274,7 @@ function render(){
   $('srcchips').innerHTML = `<span class="chip ${srcFilter ? '' : 'on'}" data-src="">All</span> ` +
     srcs.map(x => `<span class="chip ${srcFilter === x ? 'on' : ''}" data-src="${escape(x)}">${escape(srcLabel(x))}</span>`).join(' ');
   $('attnonly').classList.toggle('on', attnOnly);
+  $('dicebulk').hidden = srcFilter !== 'dice';
 
   const errs = Object.entries(DATA.source_errors || {});
   $('srcerr').innerHTML = errs.length ? `<div class="srcerr">Couldn't read: ${errs.map(([k, v]) => `<b>${escape(k)}</b> (${escape(v)})`).join(', ')}</div>` : '';
@@ -736,6 +741,14 @@ $('srcchips').addEventListener('click', ev => {
   render();
 });
 $('attnonly').addEventListener('click', () => { attnOnly = !attnOnly; render(); });
+['muteall', 'unmuteall'].forEach(id => $(id).addEventListener('click', async () => {
+  const codes = DATA.events.filter(e => e.kind === 'dice' && !e.archived && matches(e)).map(e => e.id.slice(5));
+  if (!codes.length) return;
+  const muted = id === 'muteall';
+  if (!confirm(`${muted ? 'Mute' : 'Unmute'} ${codes.length} DICE event${codes.length > 1 ? 's' : ''}?`)) return;
+  try { await post('/api/dice/mute', {event_codes: codes, muted}); await load(true); }
+  catch (err) { alert(err.message); }
+}));
 $('q').addEventListener('input', () => DATA && render());
 $('trackform').addEventListener('submit', async ev => {
   ev.preventDefault();
