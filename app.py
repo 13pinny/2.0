@@ -7952,10 +7952,32 @@ def _watcher_meta(w):
         meta["url"] = src.perf_url(w["event_code"], w["perf_code"])
     except Exception:
         pass
-    try:
-        lm = (src.get_labels(w["event_code"], w["perf_code"], lang="iw") or {}).get("meta") or {}
-    except Exception:
-        lm = {}
+    # Cache file first, stale or not: this is a page view, not a check. Only
+    # pure-HTTP sources may fall back to a live lookup -- kupat's launches a
+    # browser (55s measured), so a kupat watcher without a cache stays blank.
+    lm = None
+    if src is ticketmaster:
+        import labels as _labels
+        cache_path = _labels._cache_path
+    else:
+        cache_path = getattr(src, "_cache_path", None)
+    if cache_path:
+        try:
+            # (event, perf, lang) for kupat / TM labels; (event, lang) elsewhere.
+            try:
+                p = cache_path(w["event_code"], w["perf_code"], "iw")
+            except TypeError:
+                p = cache_path(w["event_code"], "iw")
+            if p.exists():
+                lm = (json.loads(p.read_text(encoding="utf-8")) or {}).get("meta") or {}
+        except Exception:
+            lm = None
+    if lm is None and src_name != "kupat":
+        try:
+            lm = (src.get_labels(w["event_code"], w["perf_code"], lang="iw") or {}).get("meta") or {}
+        except Exception:
+            lm = None
+    lm = lm or {}
     tz = events_hub.IL if src_name in _IL_WATCHER_SOURCES else events_hub.US_CENTRAL
     txt = (lm.get("firstPerfText") or "").strip()
     night = events_hub.night_of(txt) if txt else None
@@ -7986,6 +8008,21 @@ def _events_rows():
 
     edm, marquee, frontgate = grab("edm", api_edm), grab("marquee", api_marquee), grab("frontgate", api_frontgate)
     universe, liv = grab("universe", api_universe), grab("liv", api_liv)
+    # An event never read successfully has no edm_seen_events row, so its
+    # error lives only in the EDM tick's in-memory map: carry it onto the row.
+    tick_errors = _last_edm_events.get("errors") or {}
+    if tick_errors:
+        def _with_tick_error(e):
+            if e and not e.get("last_error") and e.get("event_id") in tick_errors:
+                e["last_error"] = f"{tick_errors[e['event_id']]} @ {_last_edm_events.get('at') or ''}"
+        for e in (edm.get("events") or []) + (frontgate.get("events") or []) + (universe.get("events") or []):
+            _with_tick_error(e)
+        for v in marquee.get("venues") or []:
+            for e in v.get("events") or []:
+                _with_tick_error(e)
+        for n in liv.get("nights") or []:
+            _with_tick_error(n.get("ga"))
+            _with_tick_error(n.get("tables"))
     try:
         dice_payload = _dice_payload(force=False)
     except Exception as e:
@@ -8000,15 +8037,23 @@ def _events_rows():
     meta = {w["id"]: _watcher_meta(w) for w in watchers
             if not ((w.get("source") or "") == "dice" and str(w["event_code"]) in dice_codes)}
 
-    rows += events_hub.from_edm(edm, now, today)
-    rows += events_hub.from_marquee(marquee, now, today)
-    rows += events_hub.from_frontgate(frontgate, now, today)
-    rows += events_hub.from_universe(universe, now, today, skip_ids=liv_ga_ids)
-    rows += events_hub.from_liv(liv, now, today)
-    rows += events_hub.from_dice(dice_payload, now, today, watchers_by_code=dice_watchers)
-    rows += events_hub.from_watchers(watchers, meta, now, today, skip_dice_codes=dice_codes)
-    rows += events_hub.from_pacha(pacha, now, today, pacha_error=_last_pacha_events.get("error"))
-    rows += events_hub.from_checkin(checkin_payload, now, today)
+    # One source failing to normalize must not take the whole page down.
+    for name, build in [
+        ("edm", lambda: events_hub.from_edm(edm, now, today)),
+        ("marquee", lambda: events_hub.from_marquee(marquee, now, today)),
+        ("frontgate", lambda: events_hub.from_frontgate(frontgate, now, today)),
+        ("universe", lambda: events_hub.from_universe(universe, now, today, skip_ids=liv_ga_ids)),
+        ("liv", lambda: events_hub.from_liv(liv, now, today)),
+        ("dice", lambda: events_hub.from_dice(dice_payload, now, today, watchers_by_code=dice_watchers)),
+        ("watchers", lambda: events_hub.from_watchers(watchers, meta, now, today, skip_dice_codes=dice_codes)),
+        ("pacha", lambda: events_hub.from_pacha(pacha, now, today, pacha_error=_last_pacha_events.get("error"))),
+        ("checkin", lambda: events_hub.from_checkin(checkin_payload, now, today)),
+    ]:
+        try:
+            rows += build()
+        except Exception as e:
+            traceback.print_exc()
+            errors[name] = f"{type(e).__name__}: {e}"
     return rows, errors, {
         "relay_seen_at": _last_edm_events.get("relay_seen_at"),
         "dice_relay_seen_at": dice_payload.get("relay_seen_at"),

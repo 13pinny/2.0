@@ -45,7 +45,9 @@ STALE_MINUTES = {
 
 # Fetch errors that mean the event is gone from the site, not that we
 # couldn't read it: archived, never alarmed about.
-_REMOVED_RE = re.compile(r"\b(410|404)\b|content removed|not found|no longer", re.I)
+# Only an explicit "gone": a 404 is too often something else (posh answers
+# 404 to a wrong presale code), and that needs attention, not the archive.
+_REMOVED_RE = re.compile(r"\b410\b|content removed|no longer available", re.I)
 _BLOCKED_RE = re.compile(r"challenge|cloudflare|captcha|datadome|checkpoint|403|blocked", re.I)
 _RELAY_RE = re.compile(r"relay last sent", re.I)
 
@@ -186,8 +188,11 @@ def _archived(night, health, today):
 def _edm_like(e, kind, now, today, *, badges=None, controls=("pause", "remove")):
     src = e.get("source") or kind
     msg, err_at = _strip_err(e.get("last_error"))
-    rel_prices = [r.get("price") for r in sorted(e.get("releases") or [],
-                                                 key=lambda r: r.get("first_seen_at") or "")]
+    # /marquee rows carry `releases` as a COUNT (from _tier_ladder) and the
+    # rungs in `ladder`; everyone else carries the release list itself.
+    rels = e.get("releases") if isinstance(e.get("releases"), list) else (
+        [r for r in e.get("ladder") or [] if r.get("is_ga", True)])
+    rel_prices = [r.get("price") for r in sorted(rels, key=lambda r: r.get("first_seen_at") or "")]
     if e.get("lead_price") is not None:
         rel_prices.append(e.get("lead_price"))
     health = _health(now, source_key=src, last_good=e.get("last_seen_at"),

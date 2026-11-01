@@ -9,11 +9,13 @@
   "viagogo": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.3a1.9 1.9 0 0 0 0 3.4v3h15v-3a1.9 1.9 0 0 1 0-3.4v-3h-15v3Z"/><path d="M8 5.3v9.4" stroke-dasharray="1.6 1.8"/></svg>',
   "data": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.3 11.3h3l1.8-5.6 3 8.6 1.8-5.4 1.4 2.4h4.4"/></svg>',
   "checkin": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="12" height="14" rx="1.6"/><path d="M7.5 3.5V2.5h5v1"/><path d="m7.3 10.6 1.9 1.9 3.6-3.8"/></svg>',
+  "events": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="13" rx="1.6"/><path d="M3 8h14"/><path d="M7 2.5v3M13 2.5v3"/><path d="M6.5 11h2M11.5 11h2M6.5 14h2"/></svg>',
   "tools": '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13.2 3.4a3.6 3.6 0 0 0-4.6 4.4L3 13.4l2.6 2.6 5.6-5.6a3.6 3.6 0 0 0 4.4-4.6l-2.4 2.4-2-.6-.6-2 2.4-2.4Z"/></svg>',
 } %}
 {% set ks_path = request.path %}
 {% set ks_solo = [
   {"label": "Inventory", "href": "/", "icon": "inventory"},
+  {"label": "Events", "href": "/events", "icon": "events"},
   {"label": "Purchases", "href": "/purchases", "icon": "purchases"},
   {"label": "Sales", "href": "/sales", "icon": "sales"},
   {"label": "Check-In", "href": "/checkin", "icon": "checkin"},
