@@ -282,6 +282,11 @@ _dice_alerts_lock = threading.Lock()
 _last_dice_alerts = {"at": None, "summary": None, "error": None}
 # /checkin twice-weekly reminder. The check-ins live in the VPS's DB, so it
 # runs where the EDM monitor does (single-machine rule: one ping, not two).
+# /events health pings (#health): where the EDM monitor runs (the VPS), since
+# that box's DB holds the live state every row reads.
+EVENTS_HEALTH_ENABLED = (os.getenv("KARTIS_EVENTS_HEALTH_ENABLED")
+                         or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
+EVENTS_HEALTH_MINUTES = int(os.getenv("KARTIS_EVENTS_HEALTH_MINUTES") or 5)
 CHECKIN_REMIND_ENABLED = (os.getenv("KARTIS_CHECKIN_REMIND_ENABLED")
                           or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
 CHECKIN_REMIND_DAYS = (os.getenv("KARTIS_CHECKIN_REMIND_DAYS") or "mon,wed").strip()
@@ -8062,6 +8067,52 @@ def _events_rows():
     }
 
 
+_EVENTS_HEALTH_SETTING = "events_health_state"
+_events_health_lock = threading.Lock()
+_last_events_health = {"at": None, "broke": 0, "recovered": 0, "attention": 0, "error": None}
+
+
+def run_events_health():
+    """Every EVENTS_HEALTH_MINUTES: rebuild the /events rows, diff each live
+    row's health against the last run (stored in a setting, so a restart
+    neither re-pings nor forgets), and send ONE #health message for rows
+    that just went stale / blocked / erroring and rows that recovered. The
+    first run is a silent baseline. Also refreshes the /events cache."""
+    import time as _t
+    if not _events_health_lock.acquire(blocking=False):
+        return
+    try:
+        with app.test_request_context():
+            rows, errors, extra = _events_rows()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        _EVENTS_CACHE.update(at=_t.monotonic(), body={
+            "events": rows, "summary": events_hub.summarize(rows), "source_errors": errors,
+            "now": now_iso, "today": datetime.now(events_hub.NY).date().isoformat(), **extra})
+        snap = events_hub.health_snapshot(rows)
+        try:
+            old = {k: tuple(v) for k, v in json.loads(db.setting_get(_EVENTS_HEALTH_SETTING) or "{}").items()}
+        except (TypeError, ValueError):
+            old = {}
+        broke, recovered = events_hub.health_changes(old, snap) if old else ([], [])
+        db.setting_set(_EVENTS_HEALTH_SETTING, json.dumps(snap), now_iso)
+        if (broke or recovered) and not db.setting_get_bool("master_muted", False):
+            print(f"[events-health] {notify.notify_events_health(broke, recovered)}")
+        _last_events_health.update(at=now_iso, broke=len(broke), recovered=len(recovered),
+                                   attention=sum(1 for s in snap.values() if s[0] in events_hub.ATTENTION_STATES),
+                                   error=None)
+    except Exception as e:
+        traceback.print_exc()
+        _last_events_health["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        _events_health_lock.release()
+
+
+@app.route("/api/events/health/status")
+def api_events_health_status():
+    return jsonify({**_last_events_health, "enabled": EVENTS_HEALTH_ENABLED,
+                    "interval_minutes": EVENTS_HEALTH_MINUTES})
+
+
 @app.route("/events")
 def events_page():
     return render_template("events.html")
@@ -10895,6 +10946,10 @@ if DICE_ALERTS_ENABLED:
     scheduler.add_job(run_dice_alerts, "interval", seconds=DICE_ALERTS_INTERVAL_SECONDS,
                       id="dice_alerts", start_date=datetime.now() + timedelta(minutes=2))
 scheduler.add_job(run_todo_remind, "cron", hour=8, minute=0, id="todo_remind")
+if EVENTS_HEALTH_ENABLED:
+    # Offset from the EDM tick so it reads that tick's fresh state.
+    scheduler.add_job(run_events_health, "interval", minutes=EVENTS_HEALTH_MINUTES,
+                      id="events_health", start_date=datetime.now() + timedelta(minutes=6))
 if CHECKIN_REMIND_ENABLED:
     scheduler.add_job(run_checkin_remind, "cron", day_of_week=CHECKIN_REMIND_DAYS,
                       hour=CHECKIN_REMIND_HOUR, minute=0, timezone="America/New_York",

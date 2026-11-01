@@ -523,12 +523,17 @@ def health_snapshot(rows):
 
 def health_changes(old, new):
     """(broke, recovered) lists of (id, name, state, reason) between two
-    snapshots. Only transitions into/out of ATTENTION_STATES count, and a
-    row seen for the first time is never 'broke' (no backlog on deploy)."""
+    snapshots. Only transitions into/out of ATTENTION_STATES count. With no
+    previous snapshot at all (first run after deploy) nothing counts -- no
+    backlog; after that, a newly tracked row that starts out bad counts."""
     broke, recovered = [], []
+    if not old:
+        return broke, recovered
     for rid, (state, name, reason) in new.items():
         prev = old.get(rid)
         if prev is None:
+            if state in ATTENTION_STATES:
+                broke.append((rid, name, state, reason))
             continue
         was_bad = prev[0] in ATTENTION_STATES
         is_bad = state in ATTENTION_STATES

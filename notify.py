@@ -722,6 +722,39 @@ def send_todo_digest(due_today, overdue):
     return {"discord": discord_result, "email": email_result}
 
 
+def notify_events_health(broke, recovered):
+    """/events health: ONE message per run listing tracked shows that just
+    went stale / blocked / erroring, and ones that came back. Each item is
+    (row_id, name, state, reason). Goes to #health (DISCORD_WEBHOOK_HEALTH
+    → bot-created channel → the status category → DISCORD_WEBHOOK_URL)."""
+    url = _bot_channel_webhook("health", "status")
+    if not url:
+        return {"discord": "skipped (no DISCORD_WEBHOOK_URL)"}
+    icon = {"stale": "🟡", "blocked": "🟠", "error": "🔴"}
+    lines = []
+    for _rid, name, state, reason in broke[:15]:
+        lines.append(f"{icon.get(state, '🔴')} **{(name or '?')[:70]}** — {state}"
+                     + (f": {str(reason)[:140]}" if reason else ""))
+    if len(broke) > 15:
+        lines.append(f"... +{len(broke) - 15} more")
+    for _rid, name, _state, _reason in recovered[:15]:
+        lines.append(f"🟢 **{(name or '?')[:70]}** — reading normally again")
+    if len(recovered) > 15:
+        lines.append(f"... +{len(recovered) - 15} more back to normal")
+    parts = []
+    if broke:
+        parts.append(f"{len(broke)} need{'s' if len(broke) == 1 else ''} attention")
+    if recovered:
+        parts.append(f"{len(recovered)} recovered")
+    embed = {
+        "title": "🩺 Event tracking: " + ", ".join(parts),
+        "description": "\n".join(lines)[:4000],
+        "url": BASE_URL + "/events",
+        "color": 0xD1242F if broke else 0x1A7F37,
+    }
+    return {"discord": _post_discord(url, {"embeds": [embed]})}
+
+
 def send_checkin_reminder(events):
     """Twice-weekly /checkin nudge: ONE message listing every upcoming
     event with how long since its last stock check-in. Goes to its own
