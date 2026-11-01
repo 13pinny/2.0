@@ -26,9 +26,19 @@ function Warn($m) { Write-Host "   !! $m" -ForegroundColor Yellow }
 # --- Python venv ---------------------------------------------------------
 Step "Python virtualenv"
 if (-not (Test-Path ".venv\Scripts\python.exe")) {
-    $py = (Get-Command py -ErrorAction SilentlyContinue)
-    if ($py) { & py -3 -m venv .venv } else { & python -m venv .venv }
-    if (-not (Test-Path ".venv\Scripts\python.exe")) { throw "Could not create .venv - is Python 3.11+ installed and on PATH?" }
+    # Prefer the Python install manager's real interpreter: `python` / `py`
+    # can resolve to the Microsoft Store placeholder in WindowsApps, which
+    # only prints "Python was not found" (seen on the relay laptop, 2026-11-01).
+    $base = @(
+        "$env:LOCALAPPDATA\Python\bin\python.exe",
+        (Get-Command py -ErrorAction SilentlyContinue).Source,
+        (Get-Command python -ErrorAction SilentlyContinue).Source
+    ) | Where-Object { $_ -and (Test-Path $_) } | Where-Object {
+        try { & $_ -c "import sys" 2>$null; $LASTEXITCODE -eq 0 } catch { $false }
+    } | Select-Object -First 1
+    if (-not $base) { throw "No working Python found - install it (winget install -e --id Python.Python.3.13) and re-run" }
+    & $base -m venv .venv
+    if (-not (Test-Path ".venv\Scripts\python.exe")) { throw "Could not create .venv with $base" }
 }
 # The relays only need these two; the full requirements.txt is for the dashboard.
 & .venv\Scripts\python.exe -m pip install --quiet --upgrade pip
@@ -73,12 +83,16 @@ Ok "relay sources: $Sources"
 # --- Scheduled tasks -----------------------------------------------------
 Step "Scheduled tasks"
 $pyw = Join-Path $Root ".venv\Scripts\pythonw.exe"
-$me = "$env:USERDOMAIN\$env:USERNAME"
+# Not "$env:USERDOMAIN\$env:USERNAME": over SSH USERDOMAIN reads WORKGROUP,
+# which maps to no account and Register-ScheduledTask fails.
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
 
 $relayTriggers = @(
     (New-ScheduledTaskTrigger -AtLogOn -User $me),
-    (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5))
+    # First run after the smoke test below has finished: both drive the same
+    # Chrome tab, and overlapping them aborts each other's page loads.
+    (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(10) -RepetitionInterval (New-TimeSpan -Minutes 5))
 )
 $relaySettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)

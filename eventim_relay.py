@@ -241,11 +241,17 @@ def render(pg, url, source="eventim", expand=None):
         # on (seen 2026-11-01 on Marquee: held for 60s, while the very next
         # load passed in 6s) -- so load it once more. A plain reload, never
         # an interaction with the challenge itself.
-        if not _is_challenge(pg.title()):
-            return None, pg.title()
         try:
-            pg.goto(url, timeout=60000, wait_until="domcontentloaded")
-            pg.wait_for_selector(READY_SELECTOR[source], timeout=25000)
+            if _is_challenge(pg.title()):
+                pg.goto(url, timeout=60000, wait_until="domcontentloaded")
+                pg.wait_for_selector(READY_SELECTOR[source], timeout=25000)
+            elif source == "eventim" and "Content Removed" not in pg.title():
+                # The real page, tickets not drawn yet: an older machine can
+                # take >25s to render Eventim's ticket list on a cold start
+                # (relay laptop, BUNT Houston, 2026-11-01). Give it longer.
+                pg.wait_for_selector(READY_SELECTOR[source], timeout=30000)
+            else:
+                return None, pg.title()
         except Exception:
             return None, pg.title()
     if expand:
