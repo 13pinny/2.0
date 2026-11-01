@@ -3,17 +3,18 @@
 # Some sites (Eventim US, Shotgun, the DICE API) block the VPS's datacenter IP
 # but load fine from a home connection. This machine runs the two desktop
 # relays that fetch them from home and push the results to kartis.homes:
-#   eventim_relay.py   every 5 min, its own Chrome (CDP :9333), eventim + shotgun
+#   eventim_relay.py   every 5 min, its own Chrome (CDP :9333): eventim, Marquee (tao), shotgun
 #   dice_relay.py      --loop, every 60s, plain HTTP
-# Tixr and Marquee are NOT relayed from here: the VPS fetches Tixr itself
-# (every 2 min, faster than this relay) and the box's own relay does Marquee.
+# Tixr is NOT relayed from here: the VPS fetches it itself every 2 min, faster
+# than this relay. Marquee is: from the VPS's IP Cloudflare needs a click every
+# ~25 min, from a home IP it passes on its own (scripts\relay_check.py, 2026-11-01).
 #
 # Run from the repo root, in a normal (not admin) PowerShell:
 #   powershell -ExecutionPolicy Bypass -File scripts\setup_relay_laptop.ps1 -EnvFile <path to kartis-relay.env>
 # Re-running is safe: it updates the tasks and .env in place.
 param(
     [string]$EnvFile = "",
-    [string]$Sources = "eventim,shotgun"
+    [string]$Sources = "eventim,tao,shotgun"
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -81,11 +82,11 @@ $relayTriggers = @(
 )
 $relaySettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-Register-ScheduledTask -TaskName "Kartis relay (eventim + shotgun)" -Force -Principal $principal `
+Register-ScheduledTask -TaskName "Kartis relay (eventim, Marquee, shotgun)" -Force -Principal $principal `
     -Action (New-ScheduledTaskAction -Execute $pyw -Argument "`"$Root\eventim_relay.py`"" -WorkingDirectory $Root) `
     -Trigger $relayTriggers -Settings $relaySettings | Out-Null
-$rep = (Get-ScheduledTask -TaskName "Kartis relay (eventim + shotgun)").Triggers[1].Repetition
-Ok "eventim/shotgun relay: every $($rep.Interval), for $(if ($rep.Duration) { $rep.Duration } else { 'ever' })"
+$rep = (Get-ScheduledTask -TaskName "Kartis relay (eventim, Marquee, shotgun)").Triggers[1].Repetition
+Ok "eventim/Marquee/shotgun relay: every $($rep.Interval), for $(if ($rep.Duration) { $rep.Duration } else { 'ever' })"
 
 $diceSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
@@ -118,12 +119,12 @@ try {
 # --- Smoke test ----------------------------------------------------------
 Step "Test: one DICE relay pass"
 & .venv\Scripts\python.exe dice_relay.py
-Step "Test: one eventim/shotgun relay pass (opens its own Chrome off-screen)"
+Step "Test: one eventim/Marquee/shotgun relay pass (opens its own Chrome off-screen)"
 & .venv\Scripts\python.exe eventim_relay.py
 Get-Content "logs\eventim_relay.log" -Tail 8 -ErrorAction SilentlyContinue
 
 Step "Starting the tasks"
 Start-ScheduledTask -TaskName "Kartis DICE relay"
-Start-ScheduledTask -TaskName "Kartis relay (eventim + shotgun)"
+Start-ScheduledTask -TaskName "Kartis relay (eventim, Marquee, shotgun)"
 Ok "running. Logs: $Root\logs\dice_relay.log and eventim_relay.log"
 Write-Host "`nDone. Tell Claude it's running so it can turn the relays off on the main PC and the VPS." -ForegroundColor Cyan
