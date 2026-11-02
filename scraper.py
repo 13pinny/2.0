@@ -1223,7 +1223,7 @@ def _is_cf_interstitial(title):
     t = (title or "").strip().lower()
     return "just a moment" in t or "attention required" in t
 
-# Live viagogo browser operations (viagogo_listing/pricer/vgsales lanes).
+# Live viagogo browser operations (viagogo_listing/pricer lanes).
 # While any is active, pre-connect cleanup must NOT close inv.viagogo.com
 # tabs — with the listing/pricing lock lanes running concurrently, another
 # lane's WORKING page matches the "viagogo.com" stray host and closing it

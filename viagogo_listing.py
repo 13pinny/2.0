@@ -56,8 +56,8 @@ MODAL_TIMEOUT_MS = 15000
 # run). What must stay serialized is flows WITHIN a lane:
 #   "listing" — New Listing modal flows (a section-fetch racing an approve,
 #               or two approves, trip over the shared #modal state).
-#   "pricing" — pricer ticks + vgsales MarketDataV3 fetches (a full tick
-#               reads then edits prices; two at once would double-write).
+#   "pricing" — pricer ticks (a full tick reads then edits prices; two
+#               at once would double-write).
 _BROWSER_LOCKS = {
     "listing": threading.Lock(),
     "pricing": threading.Lock(),

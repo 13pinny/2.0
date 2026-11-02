@@ -103,7 +103,6 @@ import db
 import notify
 import scraper
 import viagogo_listing
-import viagogo_market_sales
 from viagogo_listing import PROCEEDS_RATE, _exclusive_browser
 
 DETAILS_URL = "https://inv.viagogo.com/Listings/Details"
@@ -338,9 +337,7 @@ def _parse_market_html(html):
 
 
 def fetch_market_raw(page, event_id):
-    """Raw MarketDataV3 body for an event, or None on failure. Split out of
-    fetch_market_listings because the same body also carries the market
-    SALES grid — viagogo_market_sales.ingest_window() eats the raw text."""
+    """Raw MarketDataV3 body for an event, or None on failure."""
     resp = page.request.post(MARKET_DATA_URL, form={"eventId": str(event_id)})
     if not resp.ok:
         return None
@@ -974,14 +971,6 @@ def run_pricer_tick(dry_run=None, only_fast=False):
                         db.market_snapshot_set(event_id, json.dumps(market), now)
                     except Exception as e:
                         print(f"[pricer] snapshot write failed (non-fatal): {e}")
-                    # piggyback: the same body carries the market SALES grid
-                    # — feed the /vgsales tracker so pricer-enabled events
-                    # get 15-min sale resolution without a second POST.
-                    try:
-                        viagogo_market_sales.ingest_window(
-                            event_id, market_raw, now)
-                    except Exception as e:
-                        print(f"[pricer] vgsales piggyback failed (non-fatal): {e}")
                 else:
                     source = "public"
                     sections = _public_sections_fallback(
