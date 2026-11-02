@@ -504,21 +504,22 @@ ATTENTION_STATES = ("error", "blocked", "stale")
 
 
 def summarize(rows):
-    live = [r for r in rows if not r["archived"]]
+    live = [r for r in rows if not r["archived"] and not r.get("hidden")]
     return {
         "tracked": len(live),
         "on_sale": sum(1 for r in live if r["status"] == "on_sale"),
         "sold_out": sum(1 for r in live if r["status"] == "sold_out"),
         "attention": sum(1 for r in live if r["health"]["state"] in ATTENTION_STATES),
-        "archived": len(rows) - len(live),
+        "archived": sum(1 for r in rows if r["archived"] and not r.get("hidden")),
+        "hidden": sum(1 for r in rows if r.get("hidden")),
     }
 
 
 def health_snapshot(rows):
-    """{id: (state, name, reason)} for the non-archived rows -- what the
-    #health job diffs between runs."""
+    """{id: (state, name, reason)} for the non-archived, non-hidden rows --
+    what the #health job diffs between runs."""
     return {r["id"]: (r["health"]["state"], r["name"], r["health"].get("reason"))
-            for r in rows if not r["archived"]}
+            for r in rows if not r["archived"] and not r.get("hidden")}
 
 
 def health_changes(old, new):

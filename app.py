@@ -8009,6 +8009,9 @@ def _events_rows():
         except Exception as e:
             traceback.print_exc()
             errors[name] = f"{type(e).__name__}: {e}"
+    hidden = _events_hidden()
+    for r in rows:
+        r["hidden"] = r["id"] in hidden
     return rows, errors, {
         "relay_seen_at": _last_edm_events.get("relay_seen_at"),
         "dice_relay_seen_at": dice_payload.get("relay_seen_at"),
@@ -8117,13 +8120,28 @@ def _edm_ids_of(row_id):
     return key.split("+") if kind == "liv" else [key]
 
 
-@app.route("/api/events/action", methods=["POST"])
-def api_events_action():
-    """Row controls. Body: {id, action: pause|resume|mute|unmute|remove|alert,
-    value?}. Each goes to the endpoint the old page used."""
-    from flask import request
-    body = request.get_json(silent=True) or {}
-    row_id, action = str(body.get("id") or ""), body.get("action")
+_EVENTS_HIDDEN_SETTING = "events_hidden"
+
+
+def _events_hidden():
+    """Row ids hidden on /events: a view setting only -- the trackers keep
+    checking them, but they leave the counts and the #health diff."""
+    try:
+        return set(json.loads(db.setting_get(_EVENTS_HIDDEN_SETTING) or "[]"))
+    except (TypeError, ValueError):
+        return set()
+
+
+def _events_set_hidden(ids, hidden):
+    cur = _events_hidden()
+    cur = (cur | set(ids)) if hidden else (cur - set(ids))
+    db.setting_set(_EVENTS_HIDDEN_SETTING, json.dumps(sorted(cur)),
+                   datetime.now(timezone.utc).isoformat())
+
+
+def _events_do(row_id, action, value=None):
+    """Run one row control; returns the routed endpoints' results, raises
+    ValueError with a user-facing reason."""
     kind, _, key = row_id.partition(":")
     results = []
 
@@ -8133,56 +8151,100 @@ def api_events_action():
         if status >= 400:
             raise ValueError(res.get("error") or f"HTTP {status}")
 
-    try:
-        if kind in ("edm", "marquee", "frontgate", "universe", "liv"):
-            ids = _edm_ids_of(row_id)
-            if action in ("pause", "resume"):
-                for i in ids:
-                    call(api_edm_pause, {"event_id": i, "paused": action == "pause"})
-            elif action == "remove":
-                for i in ids:
-                    call(api_edm_remove, {"event_id": i})
-            elif action == "alert":
-                target = [i for i in ids if i.split(":")[0] in _LEFT_ALERT_SOURCES]
-                if not target:
-                    raise ValueError("this event has no ticket counts to alert on")
-                call(api_frontgate_alert, {"event_id": target[0], "below": body.get("value")})
-            else:
-                raise ValueError(f"{action} isn't available for this event")
-        elif kind == "dice":
-            if action in ("mute", "unmute"):
-                call(api_dice_mute, {"event_code": key, "muted": action == "mute"})
-            elif action == "remove":
-                for m in db.market_manual_all():
-                    if m["source"] == "dice" and str(m["code"]) == key:
-                        call(api_market_remove, {"id": m["id"]})
-                for w in db.tm_all_watchers():
-                    if (w.get("source") or "") == "dice" and str(w["event_code"]) == key:
-                        call(api_watchers_delete, {"id": w["id"]})
-            elif action in ("pause", "resume"):
-                ws = [w for w in db.tm_all_watchers()
-                      if (w.get("source") or "") == "dice" and str(w["event_code"]) == key]
-                if not ws:
-                    raise ValueError("only DICE events with a drop watcher can be paused")
-                for w in ws:
-                    call(api_watchers_toggle, {"id": w["id"], "paused": action == "pause"})
-            else:
-                raise ValueError(f"{action} isn't available for DICE events")
-        elif kind == "watcher":
-            if action in ("pause", "resume"):
-                call(api_watchers_toggle, {"id": key, "paused": action == "pause"})
-            elif action in ("mute", "unmute"):
-                call(api_watchers_update, {"id": key, "muted": action == "mute"})
-            elif action == "remove":
-                call(api_watchers_delete, {"id": key})
-            else:
-                raise ValueError(f"{action} isn't available for drop watchers")
+    if action in ("hide", "unhide"):
+        _events_set_hidden([row_id], action == "hide")
+    elif kind in ("edm", "marquee", "frontgate", "universe", "liv"):
+        ids = _edm_ids_of(row_id)
+        if action in ("pause", "resume"):
+            for i in ids:
+                call(api_edm_pause, {"event_id": i, "paused": action == "pause"})
+        elif action == "remove":
+            for i in ids:
+                call(api_edm_remove, {"event_id": i})
+        elif action == "alert":
+            target = [i for i in ids if i.split(":")[0] in _LEFT_ALERT_SOURCES]
+            if not target:
+                raise ValueError("this event has no ticket counts to alert on")
+            call(api_frontgate_alert, {"event_id": target[0], "below": value})
         else:
-            raise ValueError("this event has no controls here - manage it on its own page")
+            raise ValueError(f"{action} isn't available for this event")
+    elif kind == "dice":
+        if action in ("mute", "unmute"):
+            call(api_dice_mute, {"event_code": key, "muted": action == "mute"})
+        elif action == "remove":
+            for m in db.market_manual_all():
+                if m["source"] == "dice" and str(m["code"]) == key:
+                    call(api_market_remove, {"id": m["id"]})
+            for w in db.tm_all_watchers():
+                if (w.get("source") or "") == "dice" and str(w["event_code"]) == key:
+                    call(api_watchers_delete, {"id": w["id"]})
+        elif action in ("pause", "resume"):
+            ws = [w for w in db.tm_all_watchers()
+                  if (w.get("source") or "") == "dice" and str(w["event_code"]) == key]
+            if not ws:
+                raise ValueError("only DICE events with a drop watcher can be paused")
+            for w in ws:
+                call(api_watchers_toggle, {"id": w["id"], "paused": action == "pause"})
+        else:
+            raise ValueError(f"{action} isn't available for DICE events")
+    elif kind == "watcher":
+        if action in ("pause", "resume"):
+            call(api_watchers_toggle, {"id": key, "paused": action == "pause"})
+        elif action in ("mute", "unmute"):
+            call(api_watchers_update, {"id": key, "muted": action == "mute"})
+        elif action == "remove":
+            call(api_watchers_delete, {"id": key})
+        else:
+            raise ValueError(f"{action} isn't available for drop watchers")
+    else:
+        raise ValueError("this event has no controls here - manage it on its own page")
+    return results
+
+
+@app.route("/api/events/action", methods=["POST"])
+def api_events_action():
+    """Row controls. Body: {id, action: pause|resume|mute|unmute|remove|alert|
+    hide|unhide, value?}. Each goes to the endpoint the old page used."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    try:
+        results = _events_do(str(body.get("id") or ""), body.get("action"), body.get("value"))
     except ValueError as e:
-        return jsonify({"error": str(e), "results": results}), 400
+        return jsonify({"error": str(e)}), 400
     _EVENTS_CACHE["body"] = None
     return jsonify({"ok": True, "results": results})
+
+
+@app.route("/api/events/bulk", methods=["POST"])
+def api_events_bulk():
+    """The page's select-many bar. Body: {ids: [...], action}. Runs the same
+    row control on each id and reports per-row failures instead of stopping
+    at the first (a check-in row can't be removed here, say)."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    ids = [str(i) for i in body.get("ids") or [] if i]
+    action = body.get("action")
+    if action not in ("hide", "unhide", "remove", "pause", "resume", "mute", "unmute"):
+        return jsonify({"error": f"unknown action {action!r}"}), 400
+    done, failed = 0, {}
+    if action in ("hide", "unhide"):
+        _events_set_hidden(ids, action == "hide")
+        done = len(ids)
+    else:
+        for i in ids:
+            try:
+                _events_do(i, action)
+                done += 1
+            except ValueError as e:
+                failed[i] = str(e)
+            except Exception as e:
+                traceback.print_exc()
+                failed[i] = f"{type(e).__name__}: {e}"
+        if action == "remove" and done:
+            # A removed row shouldn't linger in the hidden list.
+            _events_set_hidden([i for i in ids if i not in failed], False)
+    _EVENTS_CACHE["body"] = None
+    return jsonify({"ok": not failed, "done": done, "failed": failed})
 
 
 @app.route("/edm")
