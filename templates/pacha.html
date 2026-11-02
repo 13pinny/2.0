@@ -77,6 +77,7 @@
   .daily .rhh { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 4px; }
   .daily .sum { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
   .daily .sum b { color: var(--text); }
+  .daily.est .sum { max-width: 760px; white-space: normal; }
   .chart { width: 100%; max-width: 900px; overflow-x: auto; }
   .chart svg { display: block; }
   .chart .dbar { fill: var(--pink); }
@@ -153,6 +154,7 @@ const COLS = [
   { key:'w3d',   label:'+3d', num:true },
   { key:'w7d',   label:'+7d', num:true },
   { key:'scum',  label:'Σ Sold', num:true },
+  { key:'est',   label:'Final est.', num:true },
   { key:'pace',  label:'Pace (3d vs prior 3d)' },
   { key:'price', label:'GA $', num:true },
   { key:'buy',   label:'' },
@@ -168,7 +170,8 @@ function sortVal(e, key){
     case 'left': return e.total_available == null ? -1 : e.total_available;
     case 'w1h': return w('1h'); case 'w6h': return w('6h'); case 'w24h': return w('24h');
     case 'w3d': return w('3d'); case 'w7d': return w('7d');
-    case 'scum': return e.sold_cum == null ? -1 : e.sold_cum;
+    case 'scum': return soldOf(e) == null ? -1 : soldOf(e);
+    case 'est': return e.estimate && e.estimate.final != null ? e.estimate.final : -1;
     case 'pace': { const p = pace(e); return p.change == null ? -Infinity : p.change; }
     case 'price': return e.ga_price == null ? Infinity : e.ga_price;
     default: return 0;
@@ -187,6 +190,41 @@ function renderHead(){
     else { sortKey = k; sortDir = (k === 'name' || k === 'date') ? 1 : -1; }
     render();
   });
+}
+
+// Σ Sold = each release's own sold count added up (sold_release). The old
+// sold_cum (availability drops) also counted releases pulled with stock left.
+function soldOf(e){ return e.sold_release != null ? e.sold_release : e.sold_cum; }
+
+function estCell(e){
+  const x = e.estimate;
+  if (!x) return '<td class="num zero">—</td>';
+  if (x.final == null) return `<td class="num zero" title="${escape(x.reason || '')}">—</td>`;
+  const rng = x.low !== x.high ? `<div class="rel">${fmt(x.low)}–${fmt(x.high)}${x.untested ? '?' : ''}</div>` : '';
+  const tip = x.reason ? x.reason : `guess, not a count: ${fmt(x.low)}–${fmt(x.high)} is where ~8 in 10 past shows landed`;
+  return `<td class="num" title="${escape(tip)}"><div>~${fmt(x.final)}</div>${rng}</td>`;
+}
+
+function estBlock(e){
+  const x = e.estimate;
+  if (!x) return '';
+  let body;
+  if (x.final == null) body = `No estimate: ${escape(x.reason || 'not enough data')}.`;
+  else if (x.reason) body = `<b>${fmt(x.final)}</b> — ${escape(x.reason)}.`;
+  else {
+    const comps = (x.comparables || []).map(c =>
+      `${escape(c.name)} (${md(c.date)}): ${Math.round(c.share_by_now * 100)}% of its ${fmt(c.final)} sold by this point`).join(' · ');
+    body = `<b>~${fmt(x.final)}</b> by show night, likely <b>${fmt(x.low)}–${fmt(x.high)}</b>. ` +
+      `${fmt(x.sold)} sold so far, ${x.days_out} days out. ` +
+      `Past shows had a median <b>${Math.round(x.frac_median * 100)}%</b> of their final by this many days out (${x.n_refs} shows), ` +
+      `so ${fmt(x.sold)} ÷ ${(x.frac_median).toFixed(2)} ≈ ${fmt(x.final)}. ` +
+      (x.untested
+        ? `Back-tested only out to ${x.tested_to_days} days (typical miss there ±${Math.round(x.typical_miss * 100)}%), and the range is that one carried forward. <b>No past show could be tested this far out, so the real range is probably wider.</b>`
+        : `Back-tested on past shows, this method misses by a typical <b>±${Math.round(x.typical_miss * 100)}%</b> at this distance; the range is where ~8 in 10 landed.`) +
+      (comps ? `<div class="sum">Slowest / middle / fastest comparable: ${comps}</div>` : '') +
+      `<div class="sum">A guess, not a count: online FourVenues sales only (no door, comps or tables), and every reference so far is an outdoor Pacha New York show.</div>`;
+  }
+  return `<div class="daily est"><div class="rhh">Final sold — estimate</div><div class="sum">${body}</div></div>`;
 }
 
 function velCell(w){
@@ -341,6 +379,7 @@ function eventTip(x){
   lines.push(x.sold == null ? 'not tracked (monitor down)' : `${x.sold} sold${x.today ? ' so far today' : ''}${tierLines(x.tiers_sold)}`);
   if (x.available != null) lines.push(`${x.available.toLocaleString()} left at end of day`);
   if (x.ga_price != null) lines.push(`GA $${x.ga_price}${x.ga_release ? ' · ' + escape(x.ga_release) : ''}`);
+  if (x.out === 0 || x.out === -1) lines.push('<i>show night: overstated — releases pulled with tickets left count as sold</i>');
   return lines.join('<br>');
 }
 
@@ -484,6 +523,7 @@ function tierRows(e){
                     `<span class="pctlbl${pctSold >= 80 ? ' hot' : ''}">${pctSold}% sold</span>` : '') +
              (t.price != null ? ` ${money(t.price)}` : '') + `</div>`;
     }).join('');
+  html += estBlock(e);
   html += releaseHistory(e);
   html += dailyBlock(e);
   return html;
@@ -530,7 +570,7 @@ function render(){
     const gaCell = e.ga_available == null ? '—' :
       `<div>${fmt(e.ga_available)}${e.ga_quantity ? ' / ' + fmt(e.ga_quantity) : ''}</div>` +
       (e.ga_release ? `<div class="rel">${escape(e.ga_release)}</div>` : '');
-    const scumTitle = e.sold_cum_since ? ` title="sold since ${escape(e.sold_cum_since.slice(0,10))}"` : '';
+    const scumTitle = ' title="each release&#39;s own sold count, added up (online sales seen since tracking began)"';
     const opened = open.has(e.event_id);
     return `<tr class="ev${low ? ' lowrow' : ''}" data-id="${e.event_id}">
       <td><b>${escape(e.name || e.slug)}</b></td>
@@ -539,7 +579,8 @@ function render(){
       <td class="num">${gaCell}</td>
       <td class="num">${fmt(e.total_available)}</td>
       ${velCell((e.windows||{})['1h'])}${velCell((e.windows||{})['6h'])}${velCell((e.windows||{})['24h'])}${velCell((e.windows||{})['3d'])}${velCell((e.windows||{})['7d'])}
-      <td class="num"${scumTitle}>${fmt(e.sold_cum)}</td>
+      <td class="num"${scumTitle}>${fmt(soldOf(e))}</td>
+      ${estCell(e)}
       ${paceCell(e)}
       <td class="num">${money(e.ga_price)}</td>
       <td><a class="buy${e.on_sale ? '' : ' off'}" href="${escape(e.slug ? 'https://pacha-nyc.com/event/' + e.slug + '#tickets' : (e.buy_url||'#'))}" target="_blank" rel="noopener" onclick="event.stopPropagation()">BUY</a></td>
@@ -572,7 +613,8 @@ function renderTotals(){
     ['Events listed', evs.length, ''],
     ['Tickets left', sum(e => e.total_available), 'at current prices'],
     ['Sold last 24h', w24, 'from 10-min snapshots'],
-    ['Σ sold since tracking', sum(e => e.sold_cum), 'counting from ' + ((evs.map(e=>e.sold_cum_since).filter(Boolean).sort()[0]||'').slice(0,10))],
+    ['Σ sold since tracking', sum(soldOf), 'across listed events'],
+    ['Final est. (guess)', sum(e => e.estimate && e.estimate.final != null && !e.estimate.reason ? e.estimate.final : null), 'events with an estimate'],
     ['Low-stock now', evs.filter(e => e.on_sale && e.ga_available != null && e.ga_available <= (DATA.low_stock_threshold||20)).length, '≤' + (DATA.low_stock_threshold||20) + ' left in GA release'],
   ];
   $('totals').innerHTML = tiles.map(([l,v,h]) =>
@@ -582,7 +624,7 @@ function renderTotals(){
   $('statusline').textContent = `Monitor: ${s.enabled ? 'on' : 'OFF'} · every ${s.interval_minutes} min · last check ${fmtAgo(s.at)}` +
     (s.error ? ` · ⚠ ${s.error}` : '') + ` · pings last tick: ${['new','onsale','price_up','price_down','low_stock'].map(k => `${k} ${s[k]??0}`).join(', ')}`;
   $('meta').textContent = `${evs.length} events`;
-  $('footnote').textContent = 'Counts are per-release (a new release adds inventory at a higher price). +1h/+6h/… = actual tickets sold in that window; * = limited history. Σ Sold = everything sold since tracking began. Pace = avg sold/day over the last 3 full days vs the 3 before (▲/▼ at ±15%); the mini bars are the last 14 days. Click a row for the full sold-per-day chart. Release history logs every release from first sighting (releases already open when logging started show that date). BUY opens the event page\'s tickets section (the FourVenues iframe checkout adds tax).';
+  $('footnote').textContent = 'Counts are per-release (a new release adds inventory at a higher price). +1h/+6h/… = actual tickets sold in that window; * = limited history. Σ Sold = each release\'s own sold count added up. Final est. = a guess at total sold by show night from how past Pacha shows sold at the same days-out; the small range is where ~8 in 10 past shows landed (click a row for the working). Pace = avg sold/day over the last 3 full days vs the 3 before (▲/▼ at ±15%); the mini bars are the last 14 days. Click a row for the full sold-per-day chart. Release history logs every release from first sighting (releases already open when logging started show that date). BUY opens the event page\'s tickets section (the FourVenues iframe checkout adds tax).';
 }
 
 async function load(){

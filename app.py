@@ -46,6 +46,7 @@ import frontgate_events
 import universe_events
 import urvenue_events
 from edm_common import EdmEventsError
+import pacha_estimate
 import pacha_events
 import pacha_tickets
 import scraper
@@ -7142,8 +7143,24 @@ def api_pacha():
     release_log = db.pacha_release_log_all()
     daily = db.pacha_daily_all()
     cutoff = (now - timedelta(hours=24)).isoformat()
+    seen = db.pacha_all_seen()
+    # Final-sold guesstimate + the release-sum "sold so far" (sold_cum
+    # overcounts pulled releases). References = every finished show, so it
+    # runs over all seen rows, not just the listed ones.
+    try:
+        est_input = []
+        for r in seen.values():
+            try:
+                t = _json.loads(r.get("tiers_json") or "[]")
+            except ValueError:
+                t = []
+            est_input.append({**r, "tiers": t})
+        estimates = pacha_estimate.estimate_all(est_input, release_log, now)
+    except Exception as ex:
+        print(f"[pacha] estimate failed: {ex!r}")
+        estimates = {}
     events = []
-    for r in db.pacha_all_seen().values():
+    for r in seen.values():
         if (r.get("last_seen_at") or "") < cutoff:
             continue  # dropped off the site (past / pulled)
         windows, earliest_t = _sales_windows(
@@ -7167,6 +7184,8 @@ def api_pacha():
             "total_available": r.get("total_available"),
             "sold_cum": r.get("sold_cum"),
             "sold_cum_since": r.get("sold_cum_since"),
+            "sold_release": pacha_estimate.sold_so_far(release_log.get(r["event_id"], [])),
+            "estimate": estimates.get(r["event_id"]),
             "buy_url": r.get("buy_url"),
             "tiers": tiers,
             "releases": [
