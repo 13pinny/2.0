@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Events · Kartis</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #fff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37; --red: #d1242f;
+    --amber: #9a6700; --orange: #ea580c; --purple: #8250df; --cyan: #0f766e; --pink: #e91e63;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
+           padding: 14px 20px 10px; }
+  h1 { margin: 0 0 10px; font-size: 15px; letter-spacing: 2px; text-transform: uppercase; }
+  .stats { display: flex; flex-wrap: wrap; gap: 8px; }
+  .stat { background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; min-width: 104px; }
+  .stat .label { font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); }
+  .stat .value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat.alert .value { color: var(--red); }
+  main { padding: 14px 20px 60px; max-width: 1400px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .track { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--bg-2);
+           border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  .track input[type=text] { flex: 1 1 360px; min-width: 0; padding: 7px 10px; border: 1px solid var(--line-2);
+           border-radius: 6px; font: inherit; }
+  .track label { color: var(--muted); font-size: 12px; display: flex; gap: 5px; align-items: center; }
+  button { font: inherit; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text);
+           border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger:hover { border-color: var(--red); color: var(--red); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .msg { font-size: 12px; padding: 6px 10px; border-radius: 6px; display: none; flex-basis: 100%; }
+  .msg.ok { display: block; background: #dafbe1; color: #116329; }
+  .msg.err { display: block; background: #ffebe9; color: #a40e26; }
+  .chip { font-size: 11px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--line-2);
+          background: var(--bg-2); cursor: pointer; user-select: none; }
+  .chip.on { background: var(--text); border-color: var(--text); color: #fff; }
+  .search { padding: 5px 10px; border: 1px solid var(--line-2); border-radius: 6px; font: inherit; width: 220px; max-width: 100%; }
+  .muted { color: var(--muted); }
+  .group { margin-top: 16px; }
+  .group h2 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted);
+              margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; cursor: default; }
+  .group h2 .n { font-weight: 400; }
+  .group.attention h2 { color: var(--red); }
+  .group.collapsible h2 { cursor: pointer; }
+  .tablewrap { overflow-x: auto; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; }
+  table.ev { width: 100%; border-collapse: collapse; }
+  table.ev th { text-align: left; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase;
+                color: var(--muted); font-weight: 600; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.ev td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.ev tr.row { cursor: pointer; }
+  table.ev tr.row:hover td { background: #f6f8fa; }
+  table.ev tr.row.open td { background: #f1f6fd; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .date { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .date .dow { color: var(--muted); font-size: 11px; display: block; }
+  .name { font-weight: 600; }
+  .venue { color: var(--muted); font-size: 12px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+  .tag { font-size: 10px; padding: 0 6px; border-radius: 8px; background: var(--bg-3); color: var(--muted); }
+  .src { font-size: 10px; padding: 1px 7px; border-radius: 8px; border: 1px solid var(--line-2); white-space: nowrap; }
+  .badge { font-size: 11px; padding: 1px 8px; border-radius: 10px; white-space: nowrap; font-weight: 600; }
+  .badge.on_sale { background: #dafbe1; color: #116329; }
+  .badge.sold_out { background: #ffebe9; color: #a40e26; }
+  .badge.not_yet, .badge.closed { background: #fff8c5; color: #7d4e00; }
+  .badge.unknown { background: var(--bg-3); color: var(--muted); }
+  .badge.paused { background: var(--bg-3); color: var(--muted); }
+  .trend.up { color: var(--orange); } .trend.down { color: var(--green); }
+  .health { white-space: nowrap; font-size: 12px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; background: var(--green); }
+  .h-stale .dot, .h-due .dot { background: var(--amber); }
+  .h-error .dot, .h-blocked .dot { background: var(--red); }
+  .h-removed .dot, .h-paused .dot { background: var(--line-2); }
+  .h-pending .dot { background: var(--accent); }
+  .h-error, .h-blocked { color: var(--red); } .h-stale, .h-due { color: var(--amber); }
+  .ctl { white-space: nowrap; }
+  .ctl button { padding: 2px 8px; font-size: 11px; }
+  tr.detail > td { background: #fbfcfd; padding: 12px 14px 16px; }
+  .det { display: grid; gap: 14px; }
+  .det h4 { margin: 0 0 6px; font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); }
+  .det .line { font-size: 12px; }
+  .det .reason { color: var(--red); }
+  table.mini { border-collapse: collapse; font-size: 12px; }
+  table.mini th { font-size: 9px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); text-align: left; padding: 3px 14px 3px 0; }
+  table.mini td { padding: 3px 14px 3px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.mini td.num, table.mini th.num { text-align: right; }
+  .so { color: var(--red); } .op { color: var(--green); }
+  .note { font-size: 11px; color: var(--muted); max-width: 760px; }
+  .windows { display: flex; flex-wrap: wrap; gap: 8px; }
+  .windows .w { background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; font-size: 12px; }
+  .windows .w b { font-variant-numeric: tabular-nums; }
+  .alertbox { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+  .alertbox input { width: 80px; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 5px; font: inherit; }
+  .chart svg { width: 100%; height: auto; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .legend i { display: inline-block; width: 10px; height: 3px; margin-right: 4px; vertical-align: middle; }
+  .types { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tchip { font-size: 11px; padding: 1px 7px; border-radius: 8px; background: #ecfdf5; color: #166534; border: 1px solid #bbf7d0; }
+  .tchip.off { background: var(--bg-3); color: var(--muted); border-color: var(--line); text-decoration: line-through; }
+  .spark .ln { fill: none; stroke: var(--cyan); stroke-width: 2; stroke-linejoin: round; }
+  .spark .dotp { fill: var(--cyan); stroke: #fff; stroke-width: 2; }
+  .spark .hit { fill: transparent; } .spark .hit:hover { fill: rgba(0,163,215,.10); }
+  .climb { font-size: 11px; font-weight: 600; color: var(--orange); }
+  .rtl .gantt { overflow-x: auto; }
+  .rtl svg { display: block; }
+  .rtl .lane { fill: var(--text); font-size: 10px; font-weight: 600; }
+  .rtl .ax { fill: var(--muted); font-size: 9px; }
+  .rtl .gl { stroke: var(--line); stroke-width: 1; }
+  .rtl .showln { stroke: var(--red); stroke-width: 1; stroke-dasharray: 3 3; }
+  .rtl .rb { fill: var(--cyan); }
+  .rtl .rb.open { fill: var(--cyan); fill-opacity: .4; stroke: var(--cyan); stroke-width: 1.5; stroke-dasharray: 4 2; }
+  .rtl .rb.pre { fill: var(--cyan); opacity: .25; }
+  .rtl .rb.off { fill: var(--line-2); }
+  .rtl .rl { fill: #fff; font-size: 9px; font-weight: 600; pointer-events: none; }
+  .rtl .rl.dark { fill: var(--text); }
+  #tipx { position: fixed; z-index: 50; display: none; background: #24292f; color: #fff; font-size: 11px;
+          padding: 6px 8px; border-radius: 6px; max-width: 320px; pointer-events: none; }
+  .empty { padding: 30px; text-align: center; color: var(--muted); background: var(--bg-2);
+           border: 1px dashed var(--line-2); border-radius: 8px; }
+  .srcerr { font-size: 12px; color: var(--red); margin-bottom: 8px; }
+  .show-sm { display: none; }
+  td.pick, th.pick { width: 28px; padding-right: 0; }
+  td.pick input, th.pick input { width: 15px; height: 15px; cursor: pointer; margin: 2px 0 0; }
+  table.ev tr.row.sel td { background: #fff8c5; }
+  .bulkbar { position: sticky; bottom: 0; z-index: 6; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+             background: #24292f; color: #fff; padding: 10px 20px; box-shadow: 0 -4px 14px rgba(0,0,0,.18); }
+  .bulkbar[hidden] { display: none; }
+  .bulkbar b { margin-right: 6px; }
+  .bulkbar button { background: #32383f; color: #fff; border-color: #4b535d; }
+  .bulkbar button:hover { border-color: #fff; }
+  .bulkbar button.danger { background: #a40e26; border-color: #a40e26; }
+  .bulkbar .sp { flex: 1; }
+  @media (max-width: 760px) {
+    header, main { padding-left: 12px; padding-right: 12px; }
+    .hide-sm { display: none; }
+    .show-sm { display: inline-block; }
+    table.ev td, table.ev th { padding: 6px 6px; }
+    .stat { min-width: 0; flex: 1 1 90px; padding: 5px 8px; }
+    .stat .value { font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+{% include "_sidebar.html" %}
+<header>
+  <h1>Events</h1>
+  <div class="stats" id="stats"></div>
+</header>
+<main>
+  <form class="track" id="trackform" autocomplete="off">
+    <input type="text" id="trackurl" placeholder="Paste any event link to track it: DICE, Tixr, Posh, Leap, Shotgun, Eventim, Marquee, Frontgate, Universe, LIV, Ticketmaster IL, kupat, tickchak, barby…" aria-label="Event link">
+    <label title="dice.fm links only: also create a drop watcher, which checks every 15s while sold out"><input type="checkbox" id="trackwatch"> also a drop watcher (DICE)</label>
+    <button class="primary" type="submit" id="trackbtn">Track</button>
+    <div class="msg" id="trackmsg"></div>
+  </form>
+
+  <div class="bar">
+    <input class="search" id="q" type="search" placeholder="Search name or venue" aria-label="Search">
+    <span id="srcchips"></span>
+    <span class="chip" id="attnonly" title="Only rows that are stale, blocked or erroring">Needs attention</span>
+    <span id="dicebulk" hidden>
+      <button id="muteall" title="Silence Discord pings for every upcoming DICE event shown (they keep being checked)">🔕 Mute all shown</button>
+      <button id="unmuteall" title="Turn Discord pings back on for every upcoming DICE event shown">🔔 Unmute all shown</button>
+    </span>
+  </div>
+  <div id="srcerr"></div>
+  <div id="list"><div class="empty">Loading…</div></div>
+  <p class="note" id="foot"></p>
+</main>
+<div class="bulkbar" id="bulkbar" hidden>
+  <b id="bulkn"></b>
+  <button data-bulk="hide" title="Take them off this page; they keep being checked">Hide</button>
+  <button data-bulk="unhide">Unhide</button>
+  <button data-bulk="pause">Pause</button>
+  <button data-bulk="resume">Resume</button>
+  <button data-bulk="mute">🔕 Mute</button>
+  <button data-bulk="unmute">🔔 Unmute</button>
+  <button data-bulk="remove" class="danger" title="Stop tracking them (history is kept)">Delete</button>
+  <span class="sp"></span>
+  <button id="bulkall" title="Select every row the current filters show">Select all shown</button>
+  <button id="bulkclear">Clear</button>
+</div>
+<div id="tipx"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+function escape(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+const fmt = n => (n == null) ? '—' : Number(n).toLocaleString();
+const SYM = {USD: '$', ILS: '₪', GBP: '£', EUR: '€'};
+function money(n, cur){
+  if (n == null) return '—';
+  const s = SYM[cur || 'USD'] ?? ((cur || '') + ' ');
+  return s + Number(n).toLocaleString(undefined, {minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2});
+}
+function ago(iso){
+  if (!iso) return 'never';
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 90) return Math.max(0, Math.round(s)) + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 172800) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function fmtDur(ms){
+  if (ms == null || !isFinite(ms)) return '?';
+  const m = Math.max(0, Math.round(ms / 60000));
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '');
+  return Math.floor(h / 24) + 'd' + (h % 24 ? ' ' + (h % 24) + 'h' : '');
+}
+function hours(h){
+  if (h == null) return '—';
+  if (h < 1) return Math.max(1, Math.round(h * 60)) + 'm';
+  if (h < 48) return (h < 10 ? h.toFixed(1) : Math.round(h)) + 'h';
+  return (h / 24).toFixed(1) + 'd';
+}
+function fmtStamp(iso){
+  if (!iso) return '?';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, {weekday: 'short', month: 'numeric', day: 'numeric'}) + ' ' +
+         d.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+}
+function fmtDay(iso){ return iso ? iso.slice(5, 10).replace('-', '/') : '?'; }
+async function post(url, body){
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  let j = {}; try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+function store(k, v){ try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+
+// ---- state -----------------------------------------------------------
+let DATA = null;
+const open = new Set();
+const sel = new Set();
+let lastPick = null;
+let byGroupIds = {};
+const params = new URLSearchParams(location.search);
+let srcFilter = params.get('source') || '';
+let attnOnly = false;
+let showArchived = store('events.archived') === '1';
+let showHidden = false;
+let collapsed = new Set((store('events.collapsed') || '').split(',').filter(Boolean));
+if (params.get('id')) open.add(params.get('id'));
+
+const SOURCE_LABEL = {tao: 'Marquee', liv: 'LIV', dice: 'DICE', posh: 'Posh', leap: 'Leap', shotgun: 'Shotgun',
+  eventim: 'Eventim', tixr: 'Tixr', frontgate: 'Frontgate', universe: 'Universe', urvenue: 'LIV tables',
+  ticketmaster: 'TM-IL', tmdiscover: 'TM-IL series', kupat: 'kupat', tickchak: 'tickchak', barby: 'barby',
+  haku: 'Houston', pacha: 'Pacha', 'check-in': 'Check-in'};
+const srcLabel = s => SOURCE_LABEL[s] || s;
+const STATUS_LABEL = {on_sale: 'On sale', sold_out: 'Sold out', not_yet: 'Not selling', closed: 'Closed', unknown: '—'};
+const HEALTH_LABEL = {ok: '', stale: 'Stale', error: 'Error', blocked: 'Blocked', removed: 'Removed',
+  pending: 'Waiting', paused: 'Paused', due: 'Check-in due'};
+const ATTN = new Set(['error', 'blocked', 'stale']);
+
+// ---- load + render ---------------------------------------------------
+async function load(fresh){
+  try {
+    const r = await fetch('/api/events' + (fresh ? '?fresh=1' : ''));
+    DATA = await r.json();
+  } catch (e) {
+    $('list').innerHTML = `<div class="empty">Couldn't load events: ${escape(e.message)}</div>`;
+    return;
+  }
+  render();
+}
+
+function matches(e){
+  if (srcFilter && e.source !== srcFilter && e.kind !== srcFilter) return false;
+  if (attnOnly && !ATTN.has(e.health.state)) return false;
+  const q = $('q').value.trim().toLowerCase();
+  if (q && !((e.name || '') + ' ' + (e.venue || '') + ' ' + srcLabel(e.source)).toLowerCase().includes(q)) return false;
+  return true;
+}
+
+function groupOf(e, today, week){
+  if (e.hidden) return 'hidden';
+  if (e.archived) return 'archived';
+  if (ATTN.has(e.health.state)) return 'attention';
+  if (!e.night) return 'nodate';
+  if (e.night === today) return 'tonight';
+  if (e.night <= week) return 'week';
+  return 'later';
+}
+const GROUPS = [
+  ['attention', 'Needs attention'], ['tonight', 'Tonight'], ['week', 'This week'],
+  ['later', 'Later'], ['nodate', 'No date yet'], ['archived', 'Archived — past or removed'],
+  ['hidden', 'Hidden — still checked, no #health pings'],
+];
+
+function render(){
+  const s = DATA.summary || {};
+  $('stats').innerHTML = [
+    ['Tracked', s.tracked], ['On sale', s.on_sale], ['Sold out', s.sold_out],
+    ['Need attention', s.attention, s.attention ? 'alert' : ''], ['Archived', s.archived], ['Hidden', s.hidden],
+  ].map(([l, v, c]) => `<div class="stat ${c || ''}"><div class="label">${l}</div><div class="value">${fmt(v)}</div></div>`).join('');
+
+  const srcs = [...new Set(DATA.events.map(e => e.source))].sort((a, b) => srcLabel(a).localeCompare(srcLabel(b)));
+  $('srcchips').innerHTML = `<span class="chip ${srcFilter ? '' : 'on'}" data-src="">All</span> ` +
+    srcs.map(x => `<span class="chip ${srcFilter === x ? 'on' : ''}" data-src="${escape(x)}">${escape(srcLabel(x))}</span>`).join(' ');
+  $('attnonly').classList.toggle('on', attnOnly);
+  $('dicebulk').hidden = srcFilter !== 'dice';
+
+  const errs = Object.entries(DATA.source_errors || {});
+  $('srcerr').innerHTML = errs.length ? `<div class="srcerr">Couldn't read: ${errs.map(([k, v]) => `<b>${escape(k)}</b> (${escape(v)})`).join(', ')}</div>` : '';
+
+  const today = DATA.today;
+  const wk = new Date(today + 'T12:00:00'); wk.setDate(wk.getDate() + 7);
+  const week = wk.toISOString().slice(0, 10);
+  const rows = DATA.events.filter(matches);
+  const by = {};
+  rows.forEach(e => (by[groupOf(e, today, week)] = by[groupOf(e, today, week)] || []).push(e));
+  const sorter = g => (a, b) => g === 'archived'
+    ? (b.night || '').localeCompare(a.night || '')
+    : (a.night || '9999').localeCompare(b.night || '9999') || (a.name || '').localeCompare(b.name || '');
+
+  let html = '';
+  byGroupIds = {};
+  for (const [g, title] of GROUPS) {
+    const list = (by[g] || []).sort(sorter(g));
+    if (!list.length) continue;
+    const isCollapsed = g === 'archived' ? !showArchived : g === 'hidden' ? !showHidden : collapsed.has(g);
+    html += `<section class="group ${g === 'attention' ? 'attention' : ''} collapsible" data-g="${g}">
+      <h2>${isCollapsed ? '▸' : '▾'} ${title} <span class="n">${list.length}</span></h2>`;
+    if (!isCollapsed) html += table(list, g);
+    html += '</section>';
+  }
+  $('list').innerHTML = html || `<div class="empty">${DATA.events.length ? 'Nothing matches these filters.' : 'Nothing tracked yet — paste a link above.'}</div>`;
+  $('foot').innerHTML = `Updated ${escape(ago(DATA.now))}. Desktop relay last checked in ${escape(ago(DATA.relay_seen_at))}` +
+    ` (Eventim, Marquee, Shotgun); DICE relay ${escape(ago(DATA.dice_relay_seen_at))}. ` +
+    `Health turns <b>stale</b> after about three missed checks of that source, longer for relayed sites.`;
+  wireGantt();
+  renderBulk();
+}
+
+// ---- selection --------------------------------------------------------
+function visibleIds(){
+  // Rows in expanded groups, in on-screen order (for shift-click ranges).
+  return [...document.querySelectorAll('#list tr.row')].map(tr => tr.dataset.id);
+}
+function renderBulk(){
+  const live = new Set(DATA.events.map(e => e.id));
+  [...sel].forEach(id => { if (!live.has(id)) sel.delete(id); });
+  $('bulkbar').hidden = !sel.size;
+  $('bulkn').textContent = `${sel.size} selected`;
+  document.querySelectorAll('#list th.pick input').forEach(cb => {
+    const ids = byGroupIds[cb.dataset.g] || [];
+    const n = ids.filter(id => sel.has(id)).length;
+    cb.checked = n > 0 && n === ids.length;
+    cb.indeterminate = n > 0 && n < ids.length;
+  });
+}
+
+function table(list, g){
+  byGroupIds[g] = list.map(e => e.id);
+  return `<div class="tablewrap"><table class="ev"><thead><tr>
+    <th class="pick"><input type="checkbox" data-g="${g}" title="Select every row in this group" aria-label="Select group"></th><th>Date</th><th>Event</th><th class="hide-sm">Source</th><th>Status</th><th class="num">Price</th>
+    <th class="num hide-sm">Left</th><th>Health</th><th class="hide-sm"></th></tr></thead><tbody>` +
+    list.map(e => rowHtml(e) + (open.has(e.id) ? `<tr class="detail"><td colspan="9">${detail(e)}</td></tr>` : '')).join('') +
+    `</tbody></table></div>`;
+}
+
+function dateCell(e){
+  if (!e.night) return `<span class="muted">${escape(e.when || '—')}</span>`;
+  const d = new Date(e.night + 'T12:00:00');
+  return `${d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'})}<span class="dow">${d.toLocaleDateString(undefined, {weekday: 'short'})}</span>`;
+}
+function healthCell(e){
+  const h = e.health, st = h.state;
+  let txt = HEALTH_LABEL[st] || st;
+  if (st === 'ok') txt = h.last_good ? ago(h.last_good) : 'ok';
+  if (st === 'stale' || st === 'pending') txt = (HEALTH_LABEL[st]) + (h.last_good ? ' · ' + ago(h.last_good) : '');
+  return `<span class="health h-${st}" title="${escape(h.reason || '')}"><span class="dot"></span>${escape(txt)}</span>`;
+}
+function controls(e){
+  const c = e.controls || [];
+  let b = '';
+  if (c.includes('pause') && (e.kind !== 'dice' || (e.detail && e.detail.watcher)))
+    b += `<button data-act="${e.paused ? 'resume' : 'pause'}">${e.paused ? 'Resume' : 'Pause'}</button> `;
+  if (c.includes('mute')) b += `<button data-act="${e.muted ? 'unmute' : 'mute'}" title="${e.muted ? 'Pings are off for this event' : 'Stop Discord pings for this event (it keeps being checked)'}">${e.muted ? '🔕' : '🔔'}</button> `;
+  if (c.includes('remove')) b += `<button class="danger" data-act="remove" title="Stop tracking">✕</button>`;
+  return b;
+}
+function rowHtml(e){
+  const tags = (e.badges || []).map(t => `<span class="tag">${escape(t)}</span>`).join('');
+  const st = e.paused && e.kind !== 'dice' ? '<span class="badge paused">Paused</span>'
+    : `<span class="badge ${e.status}">${STATUS_LABEL[e.status] || e.status}</span>`;
+  const tr = e.trend ? `<span class="trend ${e.trend}" title="price went ${e.trend}">${e.trend === 'up' ? ' ▲' : ' ▼'}</span>` : '';
+  return `<tr class="row${open.has(e.id) ? ' open' : ''}${sel.has(e.id) ? ' sel' : ''}" data-id="${escape(e.id)}">
+    <td class="pick"><input type="checkbox" ${sel.has(e.id) ? 'checked' : ''} aria-label="Select"></td>
+    <td class="date">${dateCell(e)}</td>
+    <td><div class="name">${escape(e.name)}</div>${e.venue ? `<div class="venue">${escape(e.venue)}</div>` : ''}<div class="tags"><span class="src show-sm">${escape(srcLabel(e.source))}</span>${tags}</div></td>
+    <td class="hide-sm"><span class="src">${escape(srcLabel(e.source))}</span></td>
+    <td>${st}</td>
+    <td class="num">${money(e.price, e.currency)}${tr}</td>
+    <td class="num hide-sm">${fmt(e.left)}</td>
+    <td>${healthCell(e)}</td>
+    <td class="ctl hide-sm">${controls(e)}</td></tr>`;
+}
+
+// ---- expanded detail, per source ------------------------------------
+function detail(e){
+  const d = e.detail || {};
+  const h = e.health;
+  let top = `<div class="line">`;
+  if (e.url) top += `<a href="${escape(e.url)}" target="_blank" rel="noopener">Open on ${escape(srcLabel(e.source))} ↗</a> · `;
+  top += `${escape(e.when || e.night || 'date unknown')}`;
+  top += ` · last good read ${escape(ago(h.last_good))}`;
+  if (h.reason) top += ` · <span class="${ATTN.has(h.state) ? 'reason' : 'muted'}">${escape(h.reason)}</span>`;
+  top += `</div><div class="line ctl" style="margin-top:6px">${controls(e)}</div>`;
+  let body = '';
+  try {
+    body = ({edm: detEdm, marquee: detMarquee, frontgate: detFrontgate, universe: detUniverse,
+             liv: detLiv, dice: detDice, watcher: detWatcher, pacha: detPacha, checkin: detCheckin}[e.kind] || (() => ''))(e, d);
+  } catch (err) { body = `<div class="reason">Couldn't draw this detail: ${escape(err.message)}</div>`; }
+  return `<div class="det" data-for="${escape(e.id)}">${top}${body}</div>`;
+}
+
+function tiersTable(tiers, cur, opts = {}){
+  if (!(tiers || []).length) return '<div class="muted">No tier data yet — fills in on the next check.</div>';
+  const counts = tiers.some(t => t.available != null || t.quantity != null);
+  return `<table class="mini"><thead><tr><th>Tier</th><th class="num">Price</th>${counts ? '<th class="num">Left</th><th class="num">Released</th>' : ''}<th>State</th></tr></thead><tbody>` +
+    tiers.map(t => {
+      const face = (t.face_price != null && t.price != null && t.face_price !== t.price) ? ` <span class="muted">(face ${money(t.face_price, cur)})</span>` : '';
+      const state = t.sold_out ? '<span class="so">sold out</span>' : t.closed ? '<span class="muted">not released</span>' : '<span class="op">on sale</span>';
+      return `<tr><td>${escape(t.name || 'Tickets')}${t.group ? ` <span class="muted">${escape(t.group)}</span>` : ''}</td>
+        <td class="num">${money(t.price, cur)}${face}</td>
+        ${counts ? `<td class="num">${fmt(t.available)}</td><td class="num">${fmt(t.quantity)}</td>` : ''}<td>${state}</td></tr>`;
+    }).join('') + '</tbody></table>' +
+    (opts.face ? '<div class="note">Prices are face value; checkout adds a booking fee.</div>' : '') +
+    (counts ? '' : '<div class="note">This site publishes no ticket counts.</div>');
+}
+function releasesTable(rels, cur){
+  if (!(rels || []).length) return '';
+  return `<div><h4>Release history</h4><table class="mini"><thead><tr><th>Release</th><th class="num">Price</th><th>First seen</th><th>Sold out</th><th class="num">Lasted</th></tr></thead><tbody>` +
+    rels.map(r => {
+      const lasted = r.sold_out_at && r.first_seen_at ? fmtDur(Date.parse(r.sold_out_at) - Date.parse(r.first_seen_at)) : '—';
+      return `<tr><td>${escape(r.name)}</td><td class="num">${money(r.price, cur)}</td><td>${fmtStamp(r.first_seen_at)}</td>
+        <td>${r.sold_out_at ? `<span class="so">${fmtStamp(r.sold_out_at)}</span>` : '<span class="op">selling</span>'}</td><td class="num">${lasted}</td></tr>`;
+    }).join('') + '</tbody></table></div>';
+}
+function windowsBox(w){
+  if (!w) return '';
+  const cells = Object.entries(w).map(([k, v]) => {
+    const n = v && typeof v === 'object' ? v.sold : v;
+    const part = v && typeof v === 'object' && v.partial ? ' <span class="muted" title="tracking hasn\'t covered this whole window yet">*</span>' : '';
+    return `<span class="w">${escape(k)}: <b>${n == null ? '—' : fmt(n)}</b>${part}</span>`;
+  }).join('');
+  return cells ? `<div><h4>Sold per window</h4><div class="windows">${cells}</div></div>` : '';
+}
+function alertBox(e, eventId, current){
+  return `<div><h4>Ping me under N left</h4><div class="alertbox">
+    <input type="number" min="0" id="al-${escape(e.id)}" value="${current == null ? '' : current}" placeholder="off" aria-label="Alert threshold">
+    <button data-act="alert" data-eid="${escape(e.id)}">Save</button>
+    <span class="muted">Pings #jumps once when the total left drops below this. Blank turns it off.</span></div></div>`;
+}
+
+function detEdm(e, d){
+  return `<div><h4>Tiers</h4>${tiersTable(d.tiers, d.currency, {face: e.source === 'shotgun'})}</div>` +
+    windowsBox(d.windows) + releasesTable(d.releases, d.currency);
+}
+function detMarquee(e, d){
+  let html = `<div><h4>Tiers</h4>${tiersTable(d.tiers, 'USD')}</div>`;
+  const lad = d.ladder || [];
+  if (lad.length) {
+    const lines = lad.map(r => {
+      const end = r.already_gone ? '<span class="so">already sold out when tracking started</span>'
+        : r.closed ? `<span class="so">sold out ${fmtDay(r.sold_out_at)}</span> · lasted <b>${hours(r.hours_open)}</b>`
+        : `<span class="op">open</span> · up <b>${hours(r.hours_open)}</b> so far`;
+      return `<tr><td>${escape(r.name)}${r.is_ga ? '' : ' <span class="muted">(separate product)</span>'}</td><td class="num">${money(r.price)}</td><td>${fmtDay(r.first_seen_at)}</td><td>${end}</td></tr>`;
+    }).join('');
+    const walk = d.climb_pct != null ? ` · price ${money(d.price_open)} → ${money(d.price_top)} (${d.climb_pct > 0 ? '+' : ''}${d.climb_pct}%)` : '';
+    html += `<div><h4>GA ladder — ${d.releases || 0} releases, ${d.cleared || 0} sold through${walk}</h4>
+      <table class="mini"><thead><tr><th>Release</th><th class="num">Price</th><th>First seen</th><th>Burn</th></tr></thead><tbody>${lines}</tbody></table>
+      <div class="note">Burn time counts from the first check that saw the tier, so a release already open when tracking started reads shorter than it was. Only General Admission counts toward burn and climb; Fast Pass and VIP tables are priced separately.</div></div>`;
+  }
+  return html;
+}
+function sectionRows(rows, cur){
+  if (!(rows || []).length) return '';
+  return `<table class="mini"><thead><tr><th>Section / tier</th><th class="num">Price</th><th class="num">Left</th><th class="num">Released</th><th class="num">Sold</th><th class="num">% sold</th></tr></thead><tbody>` +
+    rows.map(s => `<tr><td>${escape(s.name)}${s.sold_out ? ' <span class="so">sold out</span>' : s.closed ? ' <span class="muted">not released</span>' : ''}</td>
+      <td class="num">${money(s.price, cur)}</td><td class="num">${fmt(s.left)}</td><td class="num">${fmt(s.released)}</td>
+      <td class="num">${fmt(s.sold)}</td><td class="num">${s.pct_sold == null ? '—' : s.pct_sold + '%'}</td></tr>`).join('') + '</tbody></table>';
+}
+function detFrontgate(e, d){
+  return `<div><h4>Sections — ${fmt(d.left)} left of ${fmt(d.released)} released, ${fmt(d.sold)} sold</h4>${sectionRows(d.sections, 'USD')}</div>` +
+    chart(d.history, 'section_id', e.id) + windowsBox(d.windows) + alertBox(e, d.event_id, d.alert_below);
+}
+function detUniverse(e, d){
+  return `<div><h4>Tiers — ${fmt(d.left_open ?? d.left)} left, ${fmt(d.sold)} sold</h4>${sectionRows(d.rows, 'USD')}</div>` +
+    chart(d.history, 'id', e.id) + windowsBox(d.windows) + universeLadder(d) + alertBox(e, d.event_id, d.alert_below);
+}
+function universeLadder(d){
+  const rows = (d.ladder || []).filter(l => l.first_seen_at);
+  if (rows.length < 2 && !rows.some(l => l.sold_out_at)) return '';
+  return `<div><h4>Price ladder</h4><table class="mini"><thead><tr><th>Tier</th><th class="num">Price</th><th>First seen</th><th>Sold out</th><th class="num">Lasted</th></tr></thead><tbody>` +
+    rows.map(l => {
+      const burn = l.gone_at_first_sight ? '<span class="muted">gone before tracking</span>'
+        : l.burn_hours != null ? (l.burn_lower_bound ? '≥ ' : '') + hours(l.burn_hours)
+        : l.sold_out_at ? '—' : '<span class="op">selling</span>';
+      return `<tr><td>${escape(l.name)}</td><td class="num">${money(l.price)}</td><td>${fmtStamp(l.first_seen_at)}</td><td>${l.sold_out_at ? fmtStamp(l.sold_out_at) : '—'}</td><td class="num">${burn}</td></tr>`;
+    }).join('') + '</tbody></table></div>';
+}
+function detLiv(e, n){
+  let html = '';
+  if (n.ga) html += `<div><h4>GA (Universe) — ${fmt(n.ga.left)} left, ${fmt(n.ga.sold)} sold</h4>${sectionRows(n.ga.rows, 'USD')}</div>` + chart(n.ga.history, 'id', e.id + '-ga');
+  else html += '<div class="muted">No GA listing paired yet.</div>';
+  if (n.tables) html += `<div><h4>Tables (UrVenue) — min spend; "left" is unconfirmed</h4>${sectionRows(n.tables.rows, 'USD')}</div>`;
+  if (n.ga) html += windowsBox(n.ga.windows);
+  return html;
+}
+
+// Seats-left step chart (ported from /frontgate): one line per section, dashed total.
+const COLORS = ['#0f766e', '#ea580c', '#8250df', '#0969da', '#d1242f', '#9a6700'];
+function chart(history, idKey, key){
+  const series = (history || []).filter(s => (s.points || []).length);
+  if (!series.length) return '';
+  const nowT = Date.now();
+  const allT = series.flatMap(s => s.points.map(p => new Date(p.at).getTime()));
+  const t0 = Math.min(...allT), t1 = Math.max(nowT, t0 + 60000);
+  const times = [...new Set(allT)].sort((a, b) => a - b);
+  const total = times.map(t => {
+    let sum = 0, any = false;
+    for (const s of series) {
+      let v = null;
+      for (const p of s.points) { if (new Date(p.at).getTime() <= t) v = p.left; else break; }
+      if (v != null) { sum += v; any = true; }
+    }
+    return {t, v: any ? sum : null};
+  });
+  const maxV = Math.max(1, ...total.map(x => x.v || 0), ...series.flatMap(s => s.points.map(p => p.left || 0)));
+  const W = Math.max(280, Math.min(1100, ($('list').clientWidth || 900) - 60)), H = 180, L = 44, R = 8, T = 10, B = 22;
+  const x = t => L + (t - t0) / (t1 - t0) * (W - L - R);
+  const y = v => T + (1 - v / maxV) * (H - T - B);
+  const step = pts => {
+    let d = '', last = null;
+    for (const p of pts) {
+      if (p.v == null) continue;
+      d += last == null ? `M${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}` : `H${x(p.t).toFixed(1)}V${y(p.v).toFixed(1)}`;
+      last = p.v;
+    }
+    return last == null ? '' : d + `H${x(t1).toFixed(1)}`;
+  };
+  let grid = '';
+  for (let i = 0; i <= 4; i++) {
+    const v = Math.round(maxV * i / 4), yy = y(v).toFixed(1);
+    grid += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e3e7ec"/><text x="${L - 6}" y="${(+yy + 3)}" font-size="10" text-anchor="end" fill="#6e7681">${v.toLocaleString()}</text>`;
+  }
+  const dfmt = t => new Date(t).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric'});
+  grid += `<text x="${L}" y="${H - 6}" font-size="10" fill="#6e7681">${dfmt(t0)}</text><text x="${W - R}" y="${H - 6}" font-size="10" text-anchor="end" fill="#6e7681">now</text>`;
+  let lines = '', legend = '';
+  series.forEach((s, i) => {
+    const c = COLORS[i % COLORS.length];
+    lines += `<path d="${step(s.points.map(p => ({t: new Date(p.at).getTime(), v: p.left})))}" fill="none" stroke="${c}" stroke-width="2"/>`;
+    legend += `<span><i style="background:${c}"></i>${escape(s.name || 'Section ' + s[idKey])}</span>`;
+  });
+  if (series.length > 1) {
+    lines += `<path d="${step(total)}" fill="none" stroke="#24292f" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+    legend += `<span><i style="background:#24292f"></i>Total left</span>`;
+  }
+  return `<div class="chart"><h4>Seats left over time</h4><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="seats left over time">${grid}${lines}</svg><div class="legend">${legend}</div></div>`;
+}
+
+// ---- DICE (ported from /dice) ---------------------------------------
+function typeChips(d){
+  const ts = (d.types || []).slice().sort((a, b) => ((a.status === 'on-sale' ? 0 : 1) - (b.status === 'on-sale' ? 0 : 1)) || ((a.price ?? Infinity) - (b.price ?? Infinity)));
+  if (!ts.length) return '<div class="muted">No ticket types read yet.</div>';
+  return '<div class="types">' + ts.map(t => {
+    const on = t.status === 'on-sale';
+    const tier = t.tier_name || (t.tier_index != null && t.tier_index > 0 ? 'tier ' + (t.tier_index + 1) : '');
+    return `<span class="tchip${on ? '' : ' off'}" title="${escape(t.name + (tier ? ' [' + tier + ']' : '') + ' · ' + (on ? 'on sale' : (t.status || '?')))}">${escape(t.name)} <b>${money(t.price, t.currency)}</b></span>`;
+  }).join('') + '</div>';
+}
+function sparkline(d){
+  const pts = d.ladder || [];
+  const priced = pts.filter(p => p[1] != null);
+  if (priced.length < 2 && !(priced.length === 1 && pts.length > 1)) return '';
+  const W = 220, H = 40, pad = 4;
+  const t0 = new Date(pts[0][0]).getTime(), t1 = new Date(pts[pts.length - 1][0]).getTime();
+  const vals = priced.map(p => p[1]);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const x = t => pad + (t1 > t0 ? (new Date(t).getTime() - t0) / (t1 - t0) : 1) * (W - 2 * pad);
+  const y = v => hi > lo ? H - pad - (v - lo) / (hi - lo) * (H - 2 * pad) : H / 2;
+  let dd = '', hits = '', last = null;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [ta, va] = pts[i], tb = pts[i + 1][0];
+    const xa = x(ta), xb = x(tb);
+    if (va != null) { dd += (last === null ? `M${xa.toFixed(1)},${y(va).toFixed(1)}` : `V${y(va).toFixed(1)}`) + `H${xb.toFixed(1)}`; last = va; }
+    else last = null;
+    hits += `<rect class="hit" x="${xa.toFixed(1)}" y="0" width="${Math.max(2, xb - xa).toFixed(1)}" height="${H}"><title>${fmtDay(ta)} · ${va == null ? 'nothing on sale' : money(va, d.currency)}</title></rect>`;
+  }
+  const endV = pts[pts.length - 1][1];
+  const dot = endV != null ? `<circle class="dotp" cx="${x(pts[pts.length - 1][0]).toFixed(1)}" cy="${y(endV).toFixed(1)}" r="3"/>` : '';
+  const first = vals[0], climb = endV != null && first ? Math.round((endV - first) / first * 100) : null;
+  return `<div><h4>Cheapest on-sale price over time</h4><div style="display:flex;align-items:center;gap:8px"><svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="cheapest price trend"><path class="ln" d="${dd}"/>${dot}${hits}</svg>${climb ? `<span class="climb">${climb > 0 ? '+' : ''}${climb}%</span>` : ''}</div></div>`;
+}
+function releasesOf(d){
+  const nowIso = DATA.now || new Date().toISOString();
+  const byType = {};
+  (d.history || []).forEach(h => (byType[h.type_name] = byType[h.type_name] || []).push(h));
+  const out = [];
+  for (const [type, rows] of Object.entries(byType)) {
+    rows.sort((a, b) => a.first_seen_at < b.first_seen_at ? -1 : 1);
+    const rels = [];
+    rows.forEach((h, i) => {
+      const prev = rels[rels.length - 1];
+      if (prev && prev.tier_index === h.tier_index && prev.price === h.price) prev.rows.push(h);
+      else rels.push({type, tier_index: h.tier_index, tier_name: h.tier_name, price: h.price, currency: h.currency, start: h.first_seen_at, rows: [h], pre: i === 0});
+    });
+    rels.forEach((r, i) => {
+      const last = r.rows[r.rows.length - 1], next = rels[i + 1];
+      let stop = null;
+      for (let k = r.rows.length - 1; k >= 0 && r.rows[k].status !== 'on-sale'; k--) stop = r.rows[k].first_seen_at;
+      r.on_sale = r.rows.some(x => x.status === 'on-sale');
+      if (!r.on_sale) stop = null;
+      r.end = (r.on_sale ? stop : null) || (next ? next.start : (last.ended_at || null));
+      if (!r.on_sale && !next && !last.ended_at) r.end = null;
+      r.open = !r.end;
+      r.sold_out = r.rows.some(x => x.status === 'sold-out') || (!!next && (next.price ?? 0) >= (r.price ?? 0));
+      r.ms = r.rows.reduce((a, x, k) => {
+        if (x.status !== 'on-sale') return a;
+        const xe = x.ended_at || (r.rows[k + 1] && r.rows[k + 1].first_seen_at) || r.end || nowIso;
+        return a + (Date.parse(xe) - Date.parse(x.first_seen_at));
+      }, 0);
+      r.label = r.tier_name || (r.tier_index != null ? 'Tier ' + (r.tier_index + 1) : 'Release');
+    });
+    out.push({type, rels});
+  }
+  return out;
+}
+function mainLadder(d){
+  const ls = releasesOf(d).filter(l => l.rels.some(r => r.on_sale));
+  if (!ls.length) return null;
+  const cur = l => { const r = l.rels[l.rels.length - 1]; return r.price ?? Infinity; };
+  return ls.sort((a, b) => (b.rels.length - a.rels.length) || (cur(a) - cur(b)))[0];
+}
+function dicePace(d){
+  const l = mainLadder(d);
+  if (!l) return {cls: 'na', text: '—', why: 'no on-sale ticket types logged yet'};
+  const done = l.rels.filter(r => !r.open && !r.pre && r.sold_out && r.ms > 0);
+  const cur = l.rels[l.rels.length - 1], lastDone = done[done.length - 1];
+  if (cur.open && cur.on_sale && lastDone && cur.ms > lastDone.ms * 1.25)
+    return {cls: 'down', text: '▼ slowing', why: `${cur.label} open ${fmtDur(cur.ms)} — ${lastDone.label} sold through in ${fmtDur(lastDone.ms)}`};
+  if (done.length >= 2) {
+    const a = done[done.length - 2], b = lastDone, ratio = b.ms / a.ms;
+    const base = `${b.label} sold in ${fmtDur(b.ms)} vs ${a.label} in ${fmtDur(a.ms)}`;
+    if (ratio < 0.8) return {cls: 'up', text: '▲ faster', why: base};
+    if (ratio > 1.25) return {cls: 'down', text: '▼ slower', why: base};
+    return {cls: 'flat', text: '• steady', why: base};
+  }
+  if (lastDone) return {cls: 'flat', text: `last: ${fmtDur(lastDone.ms)}`, why: `${lastDone.label} sold through in ${fmtDur(lastDone.ms)} — need one more full release to compare`};
+  return {cls: 'na', text: '—', why: 'no release has sold through since tracking began'};
+}
+const GANTT_TIPS = {};
+function releaseTimeline(d, key){
+  const ladders = releasesOf(d).filter(l => l.rels.length);
+  if (!ladders.length) return '';
+  const nowMs = Date.parse(DATA.now || new Date().toISOString());
+  const showMs = d.first_date_ms || null;
+  const all = ladders.flatMap(l => l.rels);
+  const t0 = Math.min(...all.map(r => Date.parse(r.start)));
+  const t1 = Math.max(nowMs, showMs && showMs < nowMs + 120 * 864e5 ? showMs : 0);
+  const L = 150, R = 12, T = 6, LH = 22, W = 820, B = 30;
+  const H = T + ladders.length * LH + B;
+  const x = ms => L + (t1 > t0 ? (ms - t0) / (t1 - t0) : 0) * (W - L - R);
+  let g = '';
+  const day0 = new Date(t0); day0.setHours(0, 0, 0, 0);
+  const every = Math.max(1, Math.ceil((t1 - day0.getTime()) / 864e5 / 10));
+  for (let dd = new Date(day0), i = 0; dd.getTime() <= t1; dd.setDate(dd.getDate() + 1), i++) {
+    const ms = dd.getTime(); if (ms < t0) continue;
+    g += `<line class="gl" x1="${x(ms)}" x2="${x(ms)}" y1="${T}" y2="${H - B}"></line>`;
+    if (i % every === 0) {
+      const out = showMs ? Math.round((showMs - ms) / 864e5) : null;
+      g += `<text class="ax" x="${x(ms) + 2}" y="${H - B + 11}">${dd.getMonth() + 1}/${dd.getDate()}</text>` +
+           (out != null && out >= 0 ? `<text class="ax" x="${x(ms) + 2}" y="${H - B + 22}">${out}d out</text>` : '');
+    }
+  }
+  if (showMs && showMs <= t1) g += `<line class="showln" x1="${x(showMs)}" x2="${x(showMs)}" y1="${T}" y2="${H - B}"></line><text class="ax" x="${x(showMs) - 3}" y="${T + 8}" text-anchor="end">show</text>`;
+  const id = 'g' + key.replace(/[^\w]/g, '_');
+  const tips = [];
+  ladders.forEach((l, li) => {
+    const y = T + li * LH;
+    const nm = l.type.length > 24 ? l.type.slice(0, 23) + '…' : l.type;
+    g += `<text class="lane" x="0" y="${y + LH / 2 + 3}">${escape(nm)}</text>`;
+    l.rels.forEach(r => {
+      const xs = x(Date.parse(r.start)), xe = x(r.end ? Date.parse(r.end) : nowMs);
+      const w = Math.max(2, xe - xs - 2);
+      const cls = !r.on_sale ? 'off' : r.pre ? 'pre' : r.open ? 'open' : '';
+      const ti = tips.length;
+      tips.push(`<b>${escape(l.type)} · ${escape(r.label)}</b> ${money(r.price, r.currency)}<br>${r.pre ? 'already on sale when tracking began' : 'opened ' + fmtStamp(r.start)}<br>` +
+        (r.open ? `still open · ${fmtDur(r.ms)} so far` : `${r.sold_out ? 'sold out' : 'ended'} ${fmtStamp(r.end)} · on sale ${r.pre ? '≥ ' : ''}${fmtDur(r.ms)}`));
+      const lbl = w > 34 ? `<text class="rl${cls ? ' dark' : ''}" x="${xs + 4}" y="${y + LH / 2 + 3}">${money(r.price, r.currency).replace(/\.00$/, '')}</text>` : '';
+      g += `<g class="r" data-t="${ti}"><rect class="rb ${cls}" x="${xs}" y="${y + 3}" width="${w}" height="${LH - 6}" rx="3"></rect>${lbl}</g>`;
+    });
+  });
+  GANTT_TIPS[id] = tips;
+  const p = dicePace(d);
+  return `<div class="rtl"><h4>Release timeline — how long each price tier stayed on sale</h4>
+    <div class="line">Pace: <b>${escape(p.text)}</b> · ${escape(p.why)}</div>
+    <div class="gantt"><svg id="${id}" width="${W}" height="${H}" role="img" aria-label="release timeline">${g}</svg></div>
+    <div class="note">Solid = sold through · dashed = still open · pale = already open when tracking began · gray = off sale. DICE publishes no counts, so release speed stands in for sales.</div></div>`;
+}
+function wireGantt(){
+  const tip = $('tipx');
+  document.querySelectorAll('.rtl svg').forEach(svg => {
+    const tips = GANTT_TIPS[svg.id]; if (!tips) return;
+    svg.querySelectorAll('g.r').forEach(gr => {
+      gr.addEventListener('mousemove', ev => {
+        tip.innerHTML = tips[+gr.dataset.t]; tip.style.display = 'block';
+        const r = tip.getBoundingClientRect();
+        tip.style.left = Math.min(window.innerWidth - r.width - 8, ev.clientX + 12) + 'px';
+        tip.style.top = (ev.clientY - r.height - 10) + 'px';
+      });
+      gr.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    });
+  });
+}
+function detDice(e, d){
+  let extra = '';
+  if (d.cv_url) extra += ` · <a href="${escape(d.cv_url)}" target="_blank" rel="noopener">CrowdVolt ↗</a>`;
+  if (d.page_only) extra += ' · <span class="muted">prices from the public page only</span>';
+  if (d.watcher) extra += ` · drop watcher ${d.watcher.paused ? '(paused)' : 'active'}`;
+  return `<div><h4>Ticket types${extra}</h4>${typeChips(d)}</div>` + sparkline(d) + releaseTimeline(d, e.id) +
+    `<div class="note">Holdings, purchases and profit for this show stay on <a href="/dice">/dice</a>.</div>`;
+}
+
+// ---- watchers / pacha / check-in -------------------------------------
+function detWatcher(e, w){
+  let filters = '';
+  try { const f = JSON.parse(w.filters || '{}'); filters = Object.entries(f).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join(' · '); } catch (err) {}
+  return `<div class="line">${escape(srcLabel(w.source))} · ${escape(w.event_code)}/${escape(w.perf_code)} · ${fmt(w.last_seat_count)} buyable seats at the last check (${escape(ago(w.last_check_at))})</div>` +
+    (w.last_check_error ? `<div class="line reason">Last check failed: ${escape(w.last_check_error)}</div>` : '') +
+    `<div class="line muted">Filters: ${escape(filters || 'none')} · Discord channel: ${escape(w.discord_channel || 'shared drops')} · notify: ${escape(w.notify_channels || 'none')}</div>` +
+    `<div class="note">Seat breakdown, filters and channels are edited on <a href="/watchers">/watchers</a>.</div>`;
+}
+function detPacha(e, d){
+  return `<div><h4>Tiers</h4>${tiersTable(d.tiers, 'USD')}</div>` + windowsBox(d.windows) + releasesTable(d.releases, 'USD') +
+    `<div class="note">Daily and hourly sales charts are on <a href="/pacha">/pacha</a>.</div>`;
+}
+function detCheckin(e, d){
+  const tiers = d.tiers || [];
+  const rows = tiers.map(t => {
+    const h = (t.history || []).slice().sort((a, b) => a.day < b.day ? 1 : -1)[0] || {};
+    return `<tr><td>${escape(t.name)}</td><td class="num">${fmt(h.remaining)}</td><td class="num">${money(h.price, d.currency)}</td><td class="num">${money(t.cost, d.currency)}</td><td>${escape(h.day || '—')}</td></tr>`;
+  }).join('');
+  return (rows ? `<table class="mini"><thead><tr><th>Tier</th><th class="num">Left</th><th class="num">Price</th><th class="num">Our cost</th><th>As of</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="muted">No tiers yet.</div>') +
+    `<div class="note">Log a new check-in on <a href="/checkin">/checkin</a>.</div>`;
+}
+
+// ---- events -----------------------------------------------------------
+$('list').addEventListener('click', async ev => {
+  const pick = ev.target.closest('td.pick, th.pick');
+  if (pick) {
+    ev.stopPropagation();
+    const cb = pick.querySelector('input');
+    if (ev.target !== cb) cb.checked = !cb.checked;  // a click on the cell's padding
+    if (cb.dataset.g) {
+      (byGroupIds[cb.dataset.g] || []).forEach(id => cb.checked ? sel.add(id) : sel.delete(id));
+    } else {
+      const id = pick.closest('tr').dataset.id;
+      const ids = visibleIds();
+      if (ev.shiftKey && lastPick && ids.includes(lastPick)) {
+        const [a, b] = [ids.indexOf(lastPick), ids.indexOf(id)].sort((x, y) => x - y);
+        ids.slice(a, b + 1).forEach(x => cb.checked ? sel.add(x) : sel.delete(x));
+      } else cb.checked ? sel.add(id) : sel.delete(id);
+      lastPick = id;
+    }
+    render(); return;
+  }
+  const h2 = ev.target.closest('.group h2');
+  if (h2) {
+    const g = h2.parentElement.dataset.g;
+    if (g === 'archived') { showArchived = !showArchived; store('events.archived', showArchived ? '1' : '0'); }
+    else if (g === 'hidden') showHidden = !showHidden;
+    else { collapsed.has(g) ? collapsed.delete(g) : collapsed.add(g); store('events.collapsed', [...collapsed].join(',')); }
+    render(); return;
+  }
+  const btn = ev.target.closest('button[data-act]');
+  if (btn) {
+    ev.stopPropagation();
+    const holder = btn.closest('[data-id]') || btn.closest('[data-for]');
+    const id = holder.dataset.id || holder.dataset.for;
+    const act = btn.dataset.act;
+    const e = DATA.events.find(x => x.id === id);
+    if (act === 'remove' && !confirm(`Stop tracking "${e ? e.name : id}"? Its history is kept.`)) return;
+    const body = {id, action: act};
+    if (act === 'alert') {
+      const v = $('al-' + id).value.trim();
+      body.value = v === '' ? null : Number(v);
+    }
+    btn.disabled = true;
+    try { await post('/api/events/action', body); await load(true); }
+    catch (err) { alert(err.message); btn.disabled = false; }
+    return;
+  }
+  if (ev.target.closest('a, input, .det')) return;
+  const tr = ev.target.closest('tr.row');
+  if (tr) { const id = tr.dataset.id; open.has(id) ? open.delete(id) : open.add(id); render(); }
+});
+$('srcchips').addEventListener('click', ev => {
+  const c = ev.target.closest('.chip'); if (!c) return;
+  srcFilter = c.dataset.src;
+  const u = new URL(location.href);
+  srcFilter ? u.searchParams.set('source', srcFilter) : u.searchParams.delete('source');
+  history.replaceState(null, '', u);
+  render();
+});
+$('attnonly').addEventListener('click', () => { attnOnly = !attnOnly; render(); });
+['muteall', 'unmuteall'].forEach(id => $(id).addEventListener('click', async () => {
+  const codes = DATA.events.filter(e => e.kind === 'dice' && !e.archived && matches(e)).map(e => e.id.slice(5));
+  if (!codes.length) return;
+  const muted = id === 'muteall';
+  if (!confirm(`${muted ? 'Mute' : 'Unmute'} ${codes.length} DICE event${codes.length > 1 ? 's' : ''}?`)) return;
+  try { await post('/api/dice/mute', {event_codes: codes, muted}); await load(true); }
+  catch (err) { alert(err.message); }
+}));
+$('q').addEventListener('input', () => DATA && render());
+$('trackform').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const url = $('trackurl').value.trim();
+  const msg = $('trackmsg');
+  if (!url) return;
+  $('trackbtn').disabled = true; msg.className = 'msg'; msg.textContent = '';
+  try {
+    const r = await post('/api/events/track', {url, watch: $('trackwatch').checked});
+    const where = {dice: 'the DICE tracker', watcher: 'drop watchers', liv: 'LIV', frontgate: 'Frontgate',
+                   universe: 'Universe', edm: 'the EDM tracker'}[r.routed_to] || r.routed_to;
+    const name = (r.result && (r.result.name || r.result.label)) || '';
+    let text = `Tracking${name ? ' ' + name : ''} with ${where}.`;
+    if (r.result && r.result.pending_relay) text += ' The desktop relay will read it within about 5 minutes.';
+    if (r.result && r.result.warning) text += ' ' + r.result.warning;
+    if (r.watcher) text += r.watcher.error ? ` Drop watcher not added: ${r.watcher.error}.` : ' Drop watcher added too.';
+    msg.className = 'msg ok'; msg.textContent = text;
+    $('trackurl').value = '';
+    await load(true);
+  } catch (err) {
+    msg.className = 'msg err'; msg.textContent = err.message;
+  } finally { $('trackbtn').disabled = false; }
+});
+
+const BULK_VERB = {hide: 'Hide', unhide: 'Unhide', pause: 'Pause', resume: 'Resume', mute: 'Mute', unmute: 'Unmute', remove: 'Stop tracking'};
+$('bulkbar').addEventListener('click', async ev => {
+  const btn = ev.target.closest('button[data-bulk]'); if (!btn) return;
+  const action = btn.dataset.bulk, ids = [...sel];
+  if (!ids.length) return;
+  const n = `${ids.length} event${ids.length > 1 ? 's' : ''}`;
+  if (action === 'remove' && !confirm(`Stop tracking ${n}? Their history is kept.`)) return;
+  document.querySelectorAll('#bulkbar button').forEach(b => b.disabled = true);
+  try {
+    const r = await post('/api/events/bulk', {ids, action});
+    const failed = Object.entries(r.failed || {});
+    sel.clear();
+    failed.forEach(([id]) => sel.add(id));  // keep the ones that didn't take selected
+    await load(true);
+    if (failed.length) {
+      const name = id => (DATA.events.find(e => e.id === id) || {}).name || id;
+      alert(`${BULK_VERB[action]}: ${r.done} done, ${failed.length} couldn't be:\n\n` +
+            failed.slice(0, 15).map(([id, why]) => `- ${name(id)}: ${why}`).join('\n') +
+            (failed.length > 15 ? `\n...and ${failed.length - 15} more` : ''));
+    }
+  } catch (err) { alert(err.message); }
+  finally { document.querySelectorAll('#bulkbar button').forEach(b => b.disabled = false); }
+});
+$('bulkall').addEventListener('click', () => {
+  // Rows in a collapsed Archived/Hidden group aren't swept in unseen.
+  DATA.events.filter(matches).forEach(e => {
+    if ((e.hidden && !showHidden) || (!e.hidden && e.archived && !showArchived)) return;
+    sel.add(e.id);
+  });
+  render();
+});
+$('bulkclear').addEventListener('click', () => { sel.clear(); render(); });
+
+load();
+setInterval(() => { if (!document.hidden) load(); }, 60000);
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+[Unit]
+Description=Kartis Flask app (also runs the in-process APScheduler)
+After=network.target kartis-chrome.service
+Wants=kartis-chrome.service
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+WorkingDirectory=/opt/kartis
+EnvironmentFile=/opt/kartis/.env
+# Single worker — APScheduler runs in-process and would double-fire if
+# we forked. Threads handle Flask request concurrency just fine for a
+# single-user dashboard.
+ExecStart=/opt/kartis/.venv/bin/gunicorn \
+    --workers 1 \
+    --threads 4 \
+    --bind 127.0.0.1:8000 \
+    --timeout 300 \
+    --access-logfile - \
+    --error-logfile - \
+    app:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

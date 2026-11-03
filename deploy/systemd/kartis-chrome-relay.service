@@ -1,0 +1,32 @@
+[Unit]
+Description=Kartis Chrome (relay browser for tickets.taogroup.com Marquee pages)
+Requires=kartis-xvfb.service
+After=kartis-xvfb.service
+
+[Service]
+Type=simple
+User=kartis
+Group=kartis
+WorkingDirectory=/opt/kartis
+Environment=DISPLAY=:99
+# Headed, real Chrome on the Xvfb display so a Cloudflare checkbox can be
+# clicked through vnc.kartis.homes. Own profile + CDP :9333 (the port
+# eventim_relay.py drives) so it never touches the :9222 scraper session
+# or the :9223 CrowdVolt one. Datacenter IP: tao is the only source it
+# loads (KARTIS_RELAY_SOURCES in kartis-relay.service).
+ExecStart=/usr/bin/google-chrome-stable \
+    --remote-debugging-port=9333 \
+    --remote-allow-origins=* \
+    --user-data-dir=/opt/kartis/user_data_relay \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-features=Translate \
+    --disable-background-networking \
+    --window-position=120,120 \
+    --window-size=1100,640 \
+    about:blank
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

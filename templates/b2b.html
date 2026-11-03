@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — B2B</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5;
+    --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681;
+    --accent: #0969da; --green: #1a7f37; --green-bg: #e6f4ea; --red: #d1242f;
+    --amber: #9a6700; --amber-bg: #fff8e1; --purple: #8250df;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .left { display: flex; align-items: baseline; gap: 24px; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  main { padding: 18px 24px 60px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 18px; }
+  .stat { background: var(--bg); padding: 12px 14px; }
+  .stat .label { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .stat .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .value.green { color: var(--green); }
+  .stat .value.amber { color: var(--amber); }
+  h2 { font-size: 12px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h2 .count { font-weight: 400; font-size: 11px; margin-left: 10px; }
+  input, select, button { font-family: inherit; font-size: 12px; padding: 7px 10px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; }
+  button:hover { background: #e9edf2; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .table-wrap { overflow-x: auto; background: var(--bg-2); border: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10px; padding: 8px 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.order { cursor: pointer; }
+  tr.order:hover td { background: var(--bg-3); }
+  tr.order.confirmed td { background: var(--green-bg); }
+  tr.order.confirmed:hover td { background: #d5ecdc; }
+  tr.order.cancelled td { color: var(--muted); }
+  tr.order.cancelled td.strike { text-decoration: line-through; }
+  .st.bad { color: var(--red); }
+  .st.bad .dot { border: 2px solid var(--red); font-size: 11px; }
+  .seats { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tr.event-hdr td { background: var(--bg-3); font-weight: 600; font-size: 12px; padding: 9px 10px; }
+  tr.event-hdr .sub { color: var(--muted); font-weight: 400; margin-left: 10px; }
+  tr.event-hdr .avg { float: right; color: var(--green); font-variant-numeric: tabular-nums; }
+  tr.event-hdr .avg .muted { font-weight: 400; }
+  tr.event-hdr .copy { float: right; margin: -3px 0 -3px 12px; padding: 3px 8px; font-size: 10px; font-weight: 400; }
+  .copy-all { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 8px; }
+  .st { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .st .dot { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+  .st.ok { color: var(--green); }
+  .st.ok .dot { background: var(--green); color: #fff; }
+  .st.wait { color: var(--amber); }
+  .st.wait .dot { border: 2px solid var(--amber); }
+  .chip { display: inline-block; padding: 1px 6px; font-size: 10px; letter-spacing: 1px; border: 1px solid; text-transform: uppercase; }
+  .chip.automatiq { color: #0969da; border-color: #0969da; }
+  .chip.tickpick { color: #8250df; border-color: #8250df; }
+  .chip.crowdvolt { color: #bc4c00; border-color: #bc4c00; }
+  .muted { color: var(--muted); }
+  .small { font-size: 11px; }
+  .dice { font-size: 11px; }
+  .dice b { font-weight: 600; }
+  .empty { color: var(--muted); padding: 32px; text-align: center; font-size: 12px; }
+  .toast { position: fixed; bottom: 18px; right: 18px; background: #24292f; color: #fff; padding: 10px 14px; font-size: 12px; display: none; z-index: 200; max-width: 420px; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 60px 16px; overflow-y: auto; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--bg-2); border: 1px solid var(--line); width: 100%; max-width: 560px; }
+  .modal h3 { margin: 0; padding: 14px 18px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+  .modal-body { padding: 14px 18px; display: grid; grid-template-columns: 120px 1fr; gap: 8px 14px; align-items: center; }
+  .modal-body label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; }
+  .modal-body input, .modal-body select { width: 100%; background: var(--bg-3); }
+  .modal-foot { padding: 12px 18px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .modal-foot .left { margin-right: auto; display: flex; gap: 8px; }
+  @media (max-width: 720px) {
+    header, main { padding-left: 12px; padding-right: 12px; }
+    td, th { padding: 7px 6px; }
+  }
+</style>
+</head>
+<body>
+{% include "_sidebar.html" %}
+<header>
+  <div class="left">
+    <h1>B2B</h1>
+    <span class="meta" id="sub">—</span>
+  </div>
+  <div class="right">
+    <select id="f-platform">
+      <option value="">All platforms</option>
+      <option value="automatiq">Automatiq</option>
+      <option value="tickpick">TickPick</option>
+      <option value="crowdvolt">CrowdVolt</option>
+    </select>
+    <label class="small muted"><input type="checkbox" id="f-past" /> Past events</label>
+    <label class="small muted"><input type="checkbox" id="f-cancelled" checked /> Cancelled</label>
+    <label class="small muted"><input type="checkbox" id="f-hidden" /> Hidden</label>
+    <button id="btn-check" class="primary">Check email</button>
+    <button id="btn-backfill" title="Look back 120 days instead of the usual few weeks">Backfill</button>
+  </div>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><div class="label">Orders</div><div class="value" id="s-orders">—</div></div>
+    <div class="stat"><div class="label">Awaiting confirmation</div><div class="value amber" id="s-wait">—</div></div>
+    <div class="stat"><div class="label">Confirmed</div><div class="value green" id="s-ok">—</div></div>
+    <div class="stat"><div class="label">Tickets</div><div class="value" id="s-qty">—</div></div>
+    <div class="stat"><div class="label">Spend</div><div class="value" id="s-spend">—</div></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Status</th><th>Platform</th><th>Order</th><th>Section</th><th>Row</th><th>Seats</th>
+        <th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th>
+        <th>DICE account</th><th>Placed</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="11" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="copy-all"><span class="small muted" id="copy-all-n"></span><button id="btn-copy-all">Copy all order numbers</button></div>
+  <h2 id="dice-h" style="display:none">DICE transfers not matched to an order <span class="count" id="dice-count"></span></h2>
+  <div class="table-wrap" id="dice-wrap" style="display:none">
+    <table>
+      <thead><tr><th>Received</th><th>Account</th><th>From</th><th>Event</th><th class="num">Qty</th></tr></thead>
+      <tbody id="dice-rows"></tbody>
+    </table>
+  </div>
+</main>
+
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h3 id="m-title">Order</h3>
+    <div class="modal-body">
+      <label>Event</label><input id="m-event_name" />
+      <label>Date</label><input id="m-event_date_iso" type="date" />
+      <label>Venue</label><input id="m-venue" />
+      <label>Section</label><input id="m-section" />
+      <label>Row</label><input id="m-row_label" />
+      <label>Seats</label><input id="m-seats" />
+      <label>Qty</label><input id="m-qty" type="number" min="0" />
+      <label>Price each</label><input id="m-price_each" type="number" step="0.01" />
+      <label>Total</label><input id="m-total" type="number" step="0.01" />
+      <label>Status</label><select id="m-status"><option value="placed">Waiting for confirmation</option><option value="confirmed">Confirmed</option><option value="cancelled">Cancelled</option></select>
+      <label>DICE account</label><select id="m-dice"></select>
+      <label>Notes</label><input id="m-notes" />
+    </div>
+    <div class="modal-foot">
+      <div class="left"><button id="m-hide">Hide</button></div>
+      <button id="m-cancel">Cancel</button>
+      <button id="m-save" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const PLATFORM_LABEL = {automatiq: "Automatiq", tickpick: "TickPick", crowdvolt: "CrowdVolt"};
+let DATA = null, EDITING = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const SYM = {USD: "$", EUR: "€", GBP: "£", ILS: "₪"};
+function money(v, cur) {
+  if (v === null || v === undefined || v === "") return "—";
+  return (SYM[cur || "USD"] || (cur + " ")) + Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function when(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(iso);
+  return d.toLocaleString(undefined, {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"});
+}
+function evDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + "T12:00:00");
+  return d.toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric", year: "numeric"});
+}
+// Average paid per ticket over the group's CONFIRMED orders (total ÷ qty,
+// qty-weighted). Orders in different currencies are averaged separately
+// rather than mixed; an order with no qty or no cost is left out.
+function confirmedAvg(g) {
+  const by = {};
+  g.forEach(o => {
+    if (o.status !== "confirmed" || !o.qty) return;
+    const total = o.total ?? (o.price_each != null ? o.price_each * o.qty : null);
+    if (total == null || total === "") return;
+    const cur = o.currency || "USD";
+    by[cur] = by[cur] || {paid: 0, qty: 0};
+    by[cur].paid += Number(total); by[cur].qty += o.qty;
+  });
+  const parts = Object.entries(by).map(([cur, v]) => `${money(v.paid / v.qty, cur)}/ticket`);
+  if (!parts.length) return "";
+  const n = Object.values(by).reduce((a, v) => a + v.qty, 0);
+  return `Avg ${parts.join(" + ")} <span class="muted">(${n} confirmed)</span>`;
+}
+// Order numbers for pasting into internal notes: non-cancelled orders that
+// have a real platform order number, de-duplicated, joined by ", ".
+let ALL_REFS = [];
+function orderRefs(g) {
+  return [...new Set(g.filter(o => o.status !== "cancelled" && o.order_ref).map(o => o.order_ref))];
+}
+async function copyRefs(refs) {
+  const text = refs.join(", ");
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+  }
+  toast(`Copied ${refs.length} order number${refs.length === 1 ? "" : "s"}: ${text}`);
+}
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = "none", 6000);
+}
+function prefs() {
+  try { return JSON.parse(localStorage.getItem("b2b-prefs") || "{}"); } catch (e) { return {}; }
+}
+function savePrefs() {
+  try { localStorage.setItem("b2b-prefs", JSON.stringify({platform: $("f-platform").value, past: $("f-past").checked})); } catch (e) {}
+}
+
+async function load() {
+  const r = await fetch("/api/b2b");
+  DATA = await r.json();
+  render();
+}
+
+function render() {
+  const plat = $("f-platform").value, showPast = $("f-past").checked, showHidden = $("f-hidden").checked,
+        showCancelled = $("f-cancelled").checked;
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = DATA.orders.filter(o =>
+    (!plat || o.platform === plat) &&
+    (showHidden || !o.hidden) &&
+    (showCancelled || o.status !== "cancelled") &&
+    (showPast || !o.event_date_iso || o.event_date_iso >= today));
+  let wait = 0, ok = 0, qty = 0, spend = 0;
+  rows.forEach(o => {
+    if (o.status === "cancelled") return;
+    if (o.status === "confirmed") ok++; else wait++;
+    qty += o.qty || 0;
+    if (o.total && (o.currency || "USD") === "USD") spend += o.total;
+  });
+  $("s-orders").textContent = rows.length;
+  $("s-wait").textContent = wait;
+  $("s-ok").textContent = ok;
+  $("s-qty").textContent = qty;
+  $("s-spend").textContent = money(spend, "USD");
+  $("sub").textContent = DATA.last_intake ? "Email checked " + when(DATA.last_intake) : "";
+
+  // Group by event (date + name) so one show's orders sit together.
+  const groups = new Map();
+  rows.forEach(o => {
+    const k = (o.event_date_iso || "~") + "|" + (o.event_name || "").toLowerCase();
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(o);
+  });
+  const keys = [...groups.keys()].sort();
+  let html = "";
+  for (const k of keys) {
+    const g = groups.get(k), f = g[0];
+    const gq = g.reduce((a, o) => a + (o.status === "cancelled" ? 0 : (o.qty || 0)), 0);
+    const avg = confirmedAvg(g);
+    const refs = orderRefs(g);
+    html += `<tr class="event-hdr"><td colspan="11">` +
+            (refs.length ? `<button class="copy" data-refs="${esc(refs.join(", "))}" title="Copy this event's order numbers">Copy order #s (${refs.length})</button>` : "") +
+            `${esc(f.event_name || "Unknown event")}` +
+            `<span class="sub">${esc(evDate(f.event_date_iso) || f.event_date_text || "")}${f.venue ? " · " + esc(f.venue) : ""} · ${gq} ticket${gq === 1 ? "" : "s"}</span>` +
+            `${avg ? `<span class="avg" title="Total paid ÷ tickets, confirmed orders only">${avg}</span>` : ""}</td></tr>`;
+    for (const o of g) {
+      let st;
+      if (o.status === "cancelled") {
+        st = `<span class="st bad" title="Cancelled ${esc(when(o.cancelled_at))}"><span class="dot">✕</span>Cancelled</span>`;
+      } else if (o.status === "confirmed") {
+        // CrowdVolt's green check is the delivery; elsewhere delivery is a
+        // second step after the seller confirms.
+        const label = o.platform === "crowdvolt" ? "Delivered" : "Confirmed";
+        st = `<span class="st ok" title="Confirmed ${esc(when(o.confirmed_at))}"><span class="dot">✓</span>${label}</span>`;
+        if (o.delivered_at && o.platform !== "crowdvolt")
+          st += `<div class="st ok small" style="margin-top:4px" title="Delivered ${esc(when(o.delivered_at))}"><span class="dot" style="width:14px;height:14px;font-size:10px">✓</span>Delivered</div>`;
+      } else {
+        st = `<span class="st wait"><span class="dot"></span>Placed</span>`;
+      }
+      let dice = '<span class="muted">—</span>';
+      if (o.dice) {
+        dice = `<div class="dice"><b>${esc(o.dice.account || "?")}</b>` +
+               `<div class="muted">from ${esc(o.dice.sender || "?")}${o.dice.qty ? " · " + o.dice.qty + " tix" : ""}${o.dice.pinned ? " · set by hand" : ""}</div></div>`;
+      } else if (o.dice_pinned_none) {
+        dice = '<span class="muted">none (set by hand)</span>';
+      } else if (o.dice_wallet) {
+        dice = `<div class="dice">wallet: <b>${esc(o.dice_wallet)}</b><div class="muted">no DICE email found</div></div>`;
+      }
+      if (o.dice && o.dice.holder) dice = dice.replace("</b>", `</b> <span class="muted">(${esc(o.dice.holder)})</span>`);
+      const extra = [o.delivery, o.source_notes].filter(Boolean).map(esc).join(" · ");
+      html += `<tr class="order ${o.status}" data-id="${esc(o.id)}">` +
+        `<td>${st}</td>` +
+        `<td><span class="chip ${esc(o.platform)}">${esc(PLATFORM_LABEL[o.platform] || o.platform)}</span></td>` +
+        `<td class="small">${esc(o.order_ref || "—")}${o.hidden ? ' <span class="muted">(hidden)</span>' : ""}` +
+          `${extra ? `<div class="muted">${extra}</div>` : ""}${o.notes ? `<div><i>${esc(o.notes)}</i></div>` : ""}</td>` +
+        `<td>${esc(o.section || "—")}</td><td>${esc(o.row_label || "—")}</td><td><div class="seats" title="${esc(o.seats || "")}">${esc(o.seats || "—")}</div></td>` +
+        `<td class="num">${o.qty ?? "—"}</td>` +
+        `<td class="num">${money(o.price_each, o.currency)}</td>` +
+        `<td class="num strike"><b>${money(o.total, o.currency)}</b></td>` +
+        `<td>${dice}</td>` +
+        `<td class="small muted">${when(o.placed_at)}</td></tr>`;
+    }
+  }
+  $("rows").innerHTML = html || `<tr><td colspan="11" class="empty">No orders yet. Click "Check email" (or "Backfill" for older ones).</td></tr>`;
+  document.querySelectorAll("tr.event-hdr .copy").forEach(b => b.addEventListener("click", () => copyRefs(b.dataset.refs.split(", "))));
+  ALL_REFS = orderRefs(keys.flatMap(k => groups.get(k)));
+  $("copy-all-n").textContent = ALL_REFS.length ? `${ALL_REFS.length} order number${ALL_REFS.length === 1 ? "" : "s"} shown` : "";
+  $("btn-copy-all").disabled = !ALL_REFS.length;
+  document.querySelectorAll("tr.order").forEach(tr => tr.addEventListener("click", () => openEdit(tr.dataset.id)));
+
+  const spare = DATA.dice_unmatched || [];
+  $("dice-h").style.display = $("dice-wrap").style.display = spare.length ? "" : "none";
+  $("dice-count").textContent = spare.length;
+  $("dice-rows").innerHTML = spare.map(d =>
+    `<tr><td class="small">${when(d.at)}</td><td>${esc(d.account || "?")}</td><td>${esc(d.sender || "?")}</td>` +
+    `<td>${esc(d.event_name || "—")}${d.event_date_iso ? ` <span class="muted">${esc(evDate(d.event_date_iso))}</span>` : ""}</td><td class="num">${d.qty ?? "—"}</td></tr>`).join("");
+}
+
+function openEdit(id) {
+  const o = DATA.orders.find(x => x.id === id);
+  if (!o) return;
+  EDITING = o;
+  $("m-title").textContent = (PLATFORM_LABEL[o.platform] || o.platform) + (o.order_ref ? " · " + o.order_ref : "");
+  ["event_name", "event_date_iso", "venue", "section", "row_label", "seats", "qty", "price_each", "total", "notes"]
+    .forEach(k => $("m-" + k).value = o[k] ?? "");
+  $("m-status").value = o.status || "placed";
+  const opts = ['<option value="__auto">Automatic</option>', '<option value="">None</option>'];
+  (DATA.dice_all || []).forEach(d => {
+    opts.push(`<option value="${esc(d.message_id)}">${esc((d.account || "?") + " · from " + (d.sender || "?") + " · " + when(d.at) + (d.event_name ? " · " + d.event_name : ""))}</option>`);
+  });
+  $("m-dice").innerHTML = opts.join("");
+  $("m-dice").value = o.dice && o.dice.pinned ? o.dice.message_id : (o.dice_pinned_none ? "" : "__auto");
+  $("m-hide").textContent = o.hidden ? "Unhide" : "Hide";
+  $("modal").classList.add("open");
+}
+
+async function save(extra) {
+  const body = {};
+  ["event_name", "event_date_iso", "venue", "section", "row_label", "seats", "qty", "price_each", "total", "notes"]
+    .forEach(k => body[k] = $("m-" + k).value);
+  body.status = $("m-status").value;
+  const dv = $("m-dice").value;
+  body.dice_transfer_id = dv === "__auto" ? null : dv;
+  Object.assign(body, extra || {});
+  const r = await fetch("/api/b2b/" + encodeURIComponent(EDITING.id), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json();
+  if (!r.ok) { toast(j.error || "Save failed"); return; }
+  $("modal").classList.remove("open");
+  load();
+}
+
+async function runNow(days) {
+  const btns = [$("btn-check"), $("btn-backfill")];
+  btns.forEach(b => b.disabled = true);
+  toast("Checking email…");
+  try {
+    const r = await fetch("/api/b2b/run-now", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(days ? {days} : {})});
+    const j = await r.json();
+    if (!r.ok) toast(j.error || "Check failed");
+    else {
+      const n = j.placed + j.confirmed + j.delivered + j.cancelled + j.dice_incoming;
+      toast(n ? `Read ${n} new email${n === 1 ? "" : "s"}: ${j.placed} placed, ${j.confirmed} confirmed, ${j.delivered} delivered, ${j.cancelled} cancelled, ${j.dice_incoming} DICE` + (j.errors ? `, ${j.errors} error(s)` : "")
+              : "No new order emails" + (j.errors ? ` (${j.errors} error(s))` : ""));
+    }
+  } catch (e) { toast("Check failed: " + e); }
+  btns.forEach(b => b.disabled = false);
+  load();
+}
+
+$("btn-check").onclick = () => runNow(0);
+$("btn-backfill").onclick = () => runNow(120);
+$("btn-copy-all").onclick = () => copyRefs(ALL_REFS);
+$("m-cancel").onclick = () => $("modal").classList.remove("open");
+$("m-save").onclick = () => save();
+$("m-hide").onclick = () => save({hidden: !EDITING.hidden});
+$("modal").addEventListener("click", e => { if (e.target.id === "modal") $("modal").classList.remove("open"); });
+["f-platform", "f-past", "f-hidden", "f-cancelled"].forEach(id => $(id).addEventListener("change", () => { savePrefs(); render(); }));
+const p = prefs();
+if (p.platform) $("f-platform").value = p.platform;
+if (p.past) $("f-past").checked = true;
+load();
+</script>
+</body>
+</html>
