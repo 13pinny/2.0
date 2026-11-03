@@ -4896,6 +4896,7 @@ _EMAIL_PLATFORM = {
     "posh": "Posh", "eventbrite": "Eventbrite", "seetickets_us": "See Tickets",
     "shotgun": "Shotgun", "ticketmaster_us": "Ticketmaster US", "kupat": "Kupat",
     "ticketmaster_il": "Ticketmaster IL", "universe": "Universe", "dice": "DICE",
+    "axs": "AXS",
 }
 
 

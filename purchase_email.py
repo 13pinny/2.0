@@ -9,7 +9,7 @@ whose mail doesn't match its parser's shape returns None, never a guess.
 parse(sender, subject, text, email_date) -> dict | None
   kind        'purchase' | 'cancel' | 'refund'
   provider    leap | frontgate | fourvenues | posh | eventbrite | seetickets_us |
-              shotgun | ticketmaster_us | kupat | ticketmaster_il | universe | dice
+              shotgun | ticketmaster_us | kupat | ticketmaster_il | axs | universe | dice
   order_ref   the platform's order number ('' when the receipt has none)
   group_ref   rows sharing one are a single order on the page (FourVenues
               mails one email per ticket and no order number)
@@ -39,6 +39,9 @@ SWEEP_CRITERIA = (
     ("FROM", "2207.co.il"),
     ("FROM", "confirm@ticketmaster.co.il"),
     ("FROM", "noreply@dice.fm"),
+    # AXS receipts; axs@axs.com / noreply@axs.com are transfers, listings and logins.
+    ("FROM", "guestservices@axs.com"),
+    ("FROM", "guestservices@boxoffice.axs.com"),
     # Gmail's IMAP SUBJECT search matches whole words: "ticket" misses "tickets".
     ("SUBJECT", "You got ticket"),
     ("SUBJECT", "You got tickets"),
@@ -348,6 +351,100 @@ def _ticketmaster_il(subject, flat, email_date, text=""):
     return out
 
 
+_AXS_ROW_RX = re.compile(r"(\d+) (.+?) \$([\d,]+\.\d{2}) \$([\d,]+\.\d{2})")
+
+
+def _axs_rows(table):
+    """'4 Artist Presale General Admission Standing $34.50 $138.00 ...' —
+    quantity, then the Type/Section/Row/Seats cells run together, then unit
+    price and line total. Several rows when an order mixes prices.
+    Returns (qty, [type text, ...])."""
+    rows = _AXS_ROW_RX.findall(table)
+    return sum(int(q) for q, _, _, _ in rows), [t.strip() for _, t, _, _ in rows]
+
+
+def _axs_name(name):
+    """'Tinashe - Artist Presale' -> ('Tinashe', 'Artist Presale'): the presale
+    or package name is the sale, not the show."""
+    m = re.match(r"(.+?)\s+-\s+(.*presale.*|.*package.*)$", name, re.I)
+    if m:
+        return m.group(1).strip(), re.sub(r"\s+", " ", m.group(2)).strip()
+    return name.strip(), ""
+
+
+def _axs(subject, flat, email_date, text=""):
+    # Three layouts, all from guestservices@(boxoffice.)axs.com:
+    # 1. "Thank you for your order for X": "Your confirmation number is 3874567
+    #    ... Order details for Kim Petras at Radius scheduled on 12/1/2026 6:30
+    #    PM Quantity Type Section Row Seats Price Total 4 General Admission ...
+    #    $55.00 $220.00 Method of Delivery ... Grand Total: $329.08" (the grand
+    #    total includes taxes + fees; the venue clause is sometimes absent)
+    # 2. Resale "Ticket Purchase Successful": "you're seeing Hamdi - Admissions
+    #    at The Regency Ballroom, San Francisco, CA on Fri Oct 02, 2026 ... 3
+    #    Resale General Admission GA GA-GA $40.00 $120.00 Sub Total ... Amount
+    #    Charged to Your Credit Card: $150.60" — no order number
+    # 3. Newer checkout ("Thank you for your Order for Coors Light Birds Nest!"):
+    #    "Order #3337449 10/29/2026 12:08 PM Birds Nest Saturday VIP Sat
+    #    February 13 - 3:00 PM BN VIP - BN VIP ($425.00 x4) $1,700.00 ...
+    #    Order Total $1,772.00 ... CreditCard VI ****9553"
+    out = {"provider": "axs"}
+    m = re.search(r"confirmation number is (\d+)", flat)
+    if m:
+        # One order can hold several "Order details for" blocks (a show's VIP
+        # packages + its presale tickets); every block is the same show.
+        out["order_ref"] = m.group(1)
+        tot = re.search(r"Grand Total:\s*\$([\d,]+\.\d{2})", flat)
+        blocks = re.split(r"Order details for ", flat)[1:]
+        if not tot or not blocks:
+            return None
+        out["total"] = _num(tot.group(1))
+        qty, types = 0, []
+        for blk in blocks:
+            d = re.match(r"(.+?)(?: at (.+?))? scheduled on (\d{1,2}/\d{1,2}/\d{4})", blk)
+            if not d:
+                continue
+            name, sale = _axs_name(d.group(1))
+            out.setdefault("event_name", name)
+            out.setdefault("event_date_iso", find_date(d.group(3)))
+            if d.group(2):
+                out.setdefault("venue", d.group(2).strip())
+            table = blk.split("Seats Price Total", 1)[-1]
+            table = re.split(r"Method of Delivery|: AXS Mobile|Sub Total", table)[0]
+            q, rows = _axs_rows(table)
+            qty += q
+            for t in dict.fromkeys(rows):
+                types.append(f"{sale} · {t}" if sale and sale.lower() not in t.lower() else t)
+        if not out.get("event_name"):
+            return None
+        out["qty"] = qty or None
+        out["ticket_type"] = " + ".join(dict.fromkeys(types))
+    elif "Purchase Successful" in subject:
+        d = re.search(r"you're seeing (.+?) - Admissions at (.+?) on "
+                      r"(\w{3} \w{3} \d{1,2}, \d{4})", flat)
+        tot = re.search(r"Amount Charged to Your Credit Card:\s*\$([\d,]+\.\d{2})", flat, re.I)
+        if not d or not tot:
+            return None
+        out.update({"event_name": d.group(1).strip(), "venue": d.group(2).strip(),
+                    "event_date_iso": find_date(d.group(3)), "total": _num(tot.group(1))})
+        q, rows = _axs_rows(flat.split("Seats Price Total", 1)[-1].split("Sub Total")[0])
+        out["qty"], out["ticket_type"] = q or None, " + ".join(dict.fromkeys(rows))
+    else:
+        o = re.search(r"Order #\s*(\d+) \d{1,2}/\d{1,2}/\d{4} [\d:]+ [AP]M (.+?) "
+                      r"((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w* \w+ \d{1,2})\b", flat)
+        tot = re.search(r"Order Total\s*\$([\d,]+\.\d{2})", flat)
+        if not o or not tot:
+            return None
+        out.update({"order_ref": o.group(1), "event_name": o.group(2).strip(),
+                    "event_date_iso": find_date(o.group(3), email_date),
+                    "total": _num(tot.group(1))})
+        rows = re.findall(r"[AP]M (.+?) \(\$([\d,]+\.\d{2}) x(\d+)\)", flat[o.end():])
+        if rows:
+            out["qty"] = sum(int(q) for _, _, q in rows)
+            out["ticket_type"] = " + ".join(dict.fromkeys(t.strip() for t, _, _ in rows))
+    out["card_last4"] = _card(flat)
+    return out
+
+
 def _universe_cancel(subject, flat, email_date, text=""):
     # "Your order for Prospa has been cancelled ... Start Time: 2026-12-03 ...
     #  Ticket type General Admission Tier 2 - Male (×N) ... Refund Total : $92.28"
@@ -394,6 +491,7 @@ _SENDERS = (
     ("2207.co.il", _kupat),
     ("ticketmaster.co.il", _ticketmaster_il),
     ("dice.fm", _dice_refund),
+    ("axs.com", _axs),
     ("ticketmaster.com", _ticketmaster_us),
 )
 
@@ -412,6 +510,8 @@ def wants(sender, subject):
         return subj.strip().startswith("Refunded")
     if "universe.com" in s:
         return "cancelled" in subj
+    if "axs.com" in s:
+        return bool(re.match(r"Thank you for your order|Ticket Purchase Successful", subj, re.I))
     return not re.search(r"\(פרסומת\)|\( פרסומת \)|verification code|Login code|"
                          r"Billing Information Has Been Updated", subj, re.I)
 

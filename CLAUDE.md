@@ -28,6 +28,7 @@ All commands assume the venv at `.venv\Scripts\`. On Windows use `.venv\Scripts\
 | Smoke-test Discord + Gmail | `.venv\Scripts\python notify.py` (expects `{'discord': 'ok (204)', 'email': 'ok'}`, then one line per configured per-category webhook) |
 | Test the DICE → CrowdVolt event matcher | `.venv\Scripts\python cv_events.py "<dice event name>" [YYYY-MM-DD] [venue]` (prints the top 5 scored CrowdVolt pages + the chosen match) |
 | Probe a single drop endpoint directly | `.venv\Scripts\python ticketmaster.py EVENT/PERF` (also `kupat.py`, `tickchak.py`, `barby.py <url-or-showId>`, `dice.py <dice.fm URL>`, `haku.py <houstonmarathon.com or hakuapp.com URL>`) |
+| Multi-window dice.fm mirror (manual mirror or auto checkout) | `.venv\Scripts\python dice_mirror.py "<dice.fm event url>" --windows 10 --manual` or `--auto --tier "General Admission" --qty 2` (stops before payment; profiles saved under `dice_profiles/`) |
 | Probe a TM-IL series landing page (the NEXT-style multi-date status board) | `.venv\Scripts\python tm_discover.py [<discover.ticketmaster.co.il URL or slug>]` (add `--json`; no arg = `next2026`) |
 | Re-sweep the inbox for box-office receipts onto /purchases | `.venv\Scripts\python -c "import dotenv,mail_intake;dotenv.load_dotenv();print(mail_intake.sweep_purchases(lookback_days=5))"` |
 | Extract Pacha NY ticket first-pages from Gmail | `.venv\Scripts\python pacha_tickets.py` (add `--dry-run`, `--days N`, `--folder`) |
