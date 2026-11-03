@@ -224,9 +224,9 @@
       <th></th><th>Event</th><th>Date</th>
       <th class="num">Bought</th><th class="num">Sold</th><th class="num">Avail</th><th class="num">Listed</th>
       <th>DICE now</th>
-      <th class="num">Spend</th><th class="num">Revenue</th><th class="num">Profit</th><th class="num" title="profit ÷ cost of the tickets sold">ROI</th><th></th>
+      <th class="num">Spend</th><th class="num" title="average paid per ticket: spend ÷ bought">Avg/tkt</th><th class="num">Revenue</th><th class="num">Profit</th><th class="num" title="profit ÷ cost of the tickets sold">ROI</th><th></th>
     </tr></thead>
-    <tbody id="prows"><tr><td colspan="13" class="empty">Loading…</td></tr></tbody>
+    <tbody id="prows"><tr><td colspan="14" class="empty">Loading…</td></tr></tbody>
   </table>
   </div>
   <p class="sub"><a href="#" id="xferToggle" style="color:var(--accent);text-decoration:none">Show transfer log</a></p>
@@ -1098,6 +1098,7 @@ function purchaseRow(g, tmap){
     <td class="num"${unlisted ? ' style="color:var(--amber);font-weight:600" title="fewer listed than available"' : ''}>${fmt(g.listed||0)}</td>
     <td class="nowc">${liveCell(g, tmap)}</td>
     <td class="num">${money0(g.spend)}</td>
+    <td class="num">${g.qty ? money(g.spend / g.qty, 'USD') : '<span class="when">—</span>'}</td>
     <td class="num">${g.revenue ? money0(g.revenue) : '<span class="when">—</span>'}</td>
     <td class="num">${profitCell(g)}</td>
     <td class="num">${roiCell(roiOf(g.profit, g.cost_sold))}</td>
@@ -1130,7 +1131,7 @@ function purchaseRow(g, tmap){
         <td class="sl">${saleChip(p)}</td>
       </tr>`;
     }).join('');
-    html += `<tr class="detail"><td colspan="13"><table class="ptab">
+    html += `<tr class="detail"><td colspan="14"><table class="ptab">
       <thead><tr><th>Ticket type</th><th>Account</th><th class="num">Per tkt</th><th class="num">Bought</th><th class="num">Xfer</th><th class="num">Sold</th><th class="num">Avail</th><th class="num">Profit</th><th>Listed on</th><th>Sales</th></tr></thead>
       <tbody>${rows}</tbody></table></td></tr>`;
   }
@@ -1161,8 +1162,8 @@ function renderPurchases(){
   else fb.style.display = 'none';
   if (!evs.length){
     $('prows').innerHTML = (PDATA.events || []).length
-      ? '<tr><td colspan="13" class="empty">No US events held — turn off "US only" to see the rest.</td></tr>'
-      : '<tr><td colspan="13" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
+      ? '<tr><td colspan="14" class="empty">No US events held — turn off "US only" to see the rest.</td></tr>'
+      : '<tr><td colspan="14" class="empty">No DICE purchases recorded yet — forward a DICE confirmation email to the intake inbox.</td></tr>';
     renderRail();
     return;
   }
@@ -1176,10 +1177,10 @@ function renderPurchases(){
     const pp = past.reduce((a,g) => a + (g.profit||0), 0);
     const pc = past.reduce((a,g) => a + (g.profit != null ? (g.cost_sold||0) : 0), 0);
     const pr = roiOf(pp, pc);
-    html += `<tr class="pastsep" id="pastP"><td colspan="13">${pastOpen ? '▾' : '▸'} Past events (${past.length}) · profit ${money0(pp)}${pr != null ? ` · ROI ${pr >= 0 ? '+' : '−'}${Math.abs(Math.round(pr))}%` : ''}${left ? ` · ${left} ticket${left>1?'s':''} never matched to a sale` : ''}</td></tr>`;
+    html += `<tr class="pastsep" id="pastP"><td colspan="14">${pastOpen ? '▾' : '▸'} Past events (${past.length}) · profit ${money0(pp)}${pr != null ? ` · ROI ${pr >= 0 ? '+' : '−'}${Math.abs(Math.round(pr))}%` : ''}${left ? ` · ${left} ticket${left>1?'s':''} never matched to a sale` : ''}</td></tr>`;
     if (pastOpen) html += past.map(g => purchaseRow(g, tmap)).join('');
   }
-  $('prows').innerHTML = html || '<tr><td colspan="13" class="empty">Nothing matches this filter.</td></tr>';
+  $('prows').innerHTML = html || '<tr><td colspan="14" class="empty">Nothing matches this filter.</td></tr>';
   $('prows').querySelectorAll('tr.ev').forEach(tr => tr.onclick = () => {
     const id = tr.dataset.pid;
     popen.has(id) ? popen.delete(id) : popen.add(id);

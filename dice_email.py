@@ -96,6 +96,16 @@ def _venue(body):
     return m.group(1).strip() if m else ""
 
 
+def _unwrap_type(t, rest):
+    """Plain-text DICE mail hard-wraps at ~72 columns, so a long type arrives
+    as "GA (Entry BEFORE" with "3AM)" on the next line. An unclosed "(" means
+    the rest of the name is at the start of the following line."""
+    if t.count("(") <= t.count(")"):
+        return t
+    m = re.match(r"[ \t]*\r?\n[ \t]*([^\n()]{1,40}?\))", rest)
+    return f"{t} {m.group(1).strip()}" if m else t
+
+
 def parse_purchase(subject, body, email_date=None):
     """Returns dict with event_name, event_slug, event_date_iso, venue,
     ticket_type, qty, price_total, price_per_unit, currency, warnings."""
@@ -113,7 +123,8 @@ def parse_purchase(subject, body, email_date=None):
     idx = region.find("Ticket details")
     if idx >= 0:
         region = region[idx:idx + 600]
-    pairs = [(int(q), t.strip()) for q, t in _TICKET_LINE_RX.findall(region) if 0 < int(q) < 50]
+    pairs = [(int(m.group(1)), _unwrap_type(m.group(2).strip(), region[m.end(2):]))
+             for m in _TICKET_LINE_RX.finditer(region) if 0 < int(m.group(1)) < 50]
     if pairs:
         out["qty"] = sum(q for q, _ in pairs)
         out["ticket_type"] = ", ".join(
