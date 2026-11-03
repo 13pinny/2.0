@@ -3,8 +3,10 @@ purchases without the /dice match-a-sale picker.
 
 A sale is linked only when the answer is unambiguous:
   - the sale's event date equals the purchase's event date (both known);
-  - the names match tightly (normalized equality/containment, or a difflib
-    ratio >= AUTO_RATIO -- stricter than the transfer matcher's 0.75);
+  - the names match tightly (normalized equality/containment, a difflib
+    ratio >= AUTO_RATIO, or every distinctive word of the shorter name in
+    the longer -- CrowdVolt's "Crankdat (Friday)" for DICE's "CRANKDAT
+    (Night 1 - Friday)");
   - every matching purchase is the SAME DICE event (one slug), so two shows
     on one night never get guessed between;
   - no non-DICE purchase (Lysted / manual / JeruJam) exists for that event,
@@ -33,13 +35,38 @@ AUTO_RATIO = 0.85
 SALE_LOOKBACK_DAYS = 180
 
 
+# Words that say nothing about WHICH show it is. CrowdVolt titles its pages
+# "Crankdat (Friday)" / "Odd Mob (Afters)" / "Music On Basel" where DICE says
+# "CRANKDAT (Night 1 - Friday)" / "ODD MOB (OFFICIAL AFTERPARTY)" / "Music On
+# (Space Basel)", so neither containment nor a char ratio sees one show.
+_STOPWORDS = frozenset("""
+    presents present presented presenting by the and at more with a an of in on
+    for live tour event events night show shows plus ft feat featuring x vs
+    special guest guests friends day pass ga vip tickets ticket edition
+    official afters afterparty after party sold out
+    monday tuesday wednesday thursday friday saturday sunday
+    mon tue tues wed thu thur thurs fri sat sun
+""".split())
+
+
+def _tokens(name):
+    return frozenset(w for w in dice_email._norm_name(name).split()
+                     if w not in _STOPWORDS and not w.isdigit() and len(w) > 1)
+
+
 def _names_match(a, b):
     na, nb = dice_email._norm_name(a), dice_email._norm_name(b)
     if not na or not nb:
         return False
     if na == nb or na in nb or nb in na:
         return True
-    return SequenceMatcher(None, na, nb).ratio() >= AUTO_RATIO
+    if SequenceMatcher(None, na, nb).ratio() >= AUTO_RATIO:
+        return True
+    # Every distinctive word of the shorter name is in the longer. Safe only
+    # because callers also require the same event date and one DICE event.
+    ta, tb = _tokens(a), _tokens(b)
+    small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    return bool(small) and small <= big and any(len(w) >= 3 for w in small)
 
 
 def _day(v):
@@ -88,10 +115,14 @@ def run(apply=True, now_iso=None):
     purchases = db.dice_purchases_all()
     linked = db.dice_linked_qty_by_purchase()
     avail = {p["id"]: (p.get("qty") or 0) - linked.get(p["id"], 0) for p in purchases}
-    # Hidden/canceled sales, ones the user unlinked from an auto match, and
-    # ones already matched to non-DICE inventory on /sales.
+    # Hidden/canceled sales, ones the user unlinked from an auto match, ones
+    # already matched to non-DICE inventory on /sales, and orders CrowdVolt
+    # itself canceled (they pay nothing, so they'd fake revenue).
     skip = db.dice_autolink_skipped() | db.sales_excluded_keys() | {
         (m.get("sale_source"), str(m.get("sale_id"))) for m in db.all_matches()}
+    with db.connect() as conn:
+        skip |= {("crowdvolt", r[0]) for r in conn.execute(
+            "SELECT id FROM crowdvolt_sales WHERE status = 'Canceled'")}
     others = _other_inventory()
 
     sales = [s for s in db.dice_sale_candidates(days=SALE_LOOKBACK_DAYS)
