@@ -465,7 +465,7 @@ TRACK_ROUTES = [
     ("dice", lambda u, h: "dice.fm" in h and "/event/" in u),
     ("watcher", lambda u, h: any(x in h for x in (
         "ticketmaster.co.il", "kupat.co.il", "tickchak.co.il", "barby.co.il",
-        "hakuapp.com", "haku.ly", "houstonmarathon.com"))),
+        "hakuapp.com", "haku.ly", "houstonmarathon.com", "prekindle.com"))),
     ("liv", lambda u, h: "livnightclub.com" in h or re.search(r"/event/EVE\d", u)),
     ("frontgate", lambda u, h: "frontgatetickets.com" in h),
     ("universe", lambda u, h: "universe.com" in h),
@@ -496,7 +496,7 @@ def classify_link(text):
             return route, s
     return None, (f"Kartis doesn't track {host or 'that site'} yet. Supported: DICE, Tixr, Posh, "
                   "Leap, Shotgun, Eventim US, Marquee, Frontgate, Universe, LIV, "
-                  "Ticketmaster IL, kupat, tickchak, barby.")
+                  "Ticketmaster IL, kupat, tickchak, barby, Prekindle.")
 
 
 # --------------------------------------------------------------- summary ---

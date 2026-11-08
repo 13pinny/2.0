@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 import barby
+import prekindle
 import db
 import dice
 import discord_bot
@@ -32,13 +33,15 @@ db.init()
 
 SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
            "barby": barby, "dice": dice, "haku": haku,
-           "tmdiscover": tm_discover}
+           "tmdiscover": tm_discover, "prekindle": prekindle}
 
 
 def detect_source(url):
     s = (url or "").strip().lower()
     if "barby.co.il" in s:
         return "barby", barby
+    if "prekindle.com" in s:
+        return "prekindle", prekindle
     if "dice.fm" in s or re.fullmatch(r"\s*[a-f0-9]{24}\s*", s or ""):
         return "dice", dice
     # haku race registration (Houston Marathon) — platform hosts, the

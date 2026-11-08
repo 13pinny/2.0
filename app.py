@@ -31,6 +31,7 @@ import import_jerujam
 import kupat
 import kupat_credits
 import kupat_events
+import prekindle
 import dice
 import dice_autolink
 import dice_follow
@@ -80,6 +81,7 @@ WATCHER_SOURCES = {
     "dice": dice,
     "haku": haku,
     "tmdiscover": tm_discover,
+    "prekindle": prekindle,
 }
 
 
@@ -93,6 +95,8 @@ def _detect_source(url):
     s = (url or "").strip().lower()
     if "barby.co.il" in s:
         return "barby", barby
+    if "prekindle.com" in s:
+        return "prekindle", prekindle
     if "dice.fm" in s:
         return "dice", dice
     # haku race registration (Houston Marathon): the platform's own hosts
@@ -197,7 +201,8 @@ DICE_SNIPER_ENABLED = (os.getenv("KARTIS_DICE_SNIPER_ENABLED") or "1").strip().l
 # `_tm_lock` can't starve it and no watcher is fetched by both at once.
 TM_SNIPER_SECONDS = int(os.getenv("KARTIS_TM_SNIPER_SECONDS") or 20)
 TM_SNIPER_ENABLED = (os.getenv("KARTIS_TM_SNIPER_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
-TM_SNIPER_SOURCES = {"ticketmaster", "tmdiscover"}
+# prekindle rides along: one ~0.3s status page, and its returns go just as fast.
+TM_SNIPER_SOURCES = {"ticketmaster", "tmdiscover", "prekindle"}
 # Drop-checking can be disabled here when the watcher runs on another machine
 # (e.g. the VPS), so the dashboard still serves inventory/sales without
 # double-pinging Discord. Manual "check now" from the UI still works.
