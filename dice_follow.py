@@ -3,15 +3,18 @@
 You follow a dice.fm artist or venue by pasting its page link (real
 artist slugs carry an id suffix, e.g. /artist/adiel-6dxgq, so a typed name
 only works when DICE happens to have a suffix-less page). Every
-FETCH_MINUTES the page is fetched. Its Next.js __NEXT_DATA__ embeds the
+FETCH_MINUTES the page is fetched -- every minute in the first
+FAST_WINDOW_MINUTES of each quarter hour, when sales open. Its Next.js
+__NEXT_DATA__ embeds the
 upcoming shows (props.pageProps.initialProfile.sections[].items[].event:
 id, name, status, price, venues[0], dates incl. sale_start_date), so one
 page fetch per follow covers everything and NO api.dice.fm call is made --
 which matters because api.dice.fm 403s the VPS's (Hetzner) IP whatever
 the headers, while dice.fm pages still load from it (verified 2026-10-06).
 A page without that embedded data falls back to collecting /event/<slug>
-links and reading each new one through the ticket_types API, which only
-works from a machine DICE doesn't block.
+links and reading each new one through the ticket_types API, or -- where
+DICE blocks the API, i.e. on the VPS -- off that show's own event page,
+which carries the same event object.
 
 Pings (one Discord channel per followed artist/venue, `dice-<name>`, made
 by the bot on first use; falls back to the shared new-events channel):
@@ -46,7 +49,12 @@ from datetime import datetime, timedelta, timezone
 import db
 import dice
 
-FETCH_MINUTES = 10
+FETCH_MINUTES = 5
+# DICE sales open on the quarter hour (Pacha's at :15 / :45 too), and a
+# venue page only lists a show once it's on sale, so in the first minutes
+# of each quarter every page is re-read every minute (a page is ~0.1s). At
+# a flat 10 min a 7:00 sale pinged at 7:10.
+FAST_WINDOW_MINUTES = 3
 REMINDER_MINUTES = 60
 DETAIL_REFRESH_MINUTES = 30      # re-read a not-yet-on-sale show this often
 LIVE_GRACE_HOURS = 6             # don't fire a go-live ping for an old sale
@@ -251,11 +259,39 @@ def _profile_name(html):
     return None
 
 
+def _event_from_page(slug):
+    """One show's facts off its public event page, whose __NEXT_DATA__
+    (initialState -> event.event) is the same object an artist page embeds.
+    The page loads from the VPS while api.dice.fm 403s it, so without this a
+    venue follow (no embedded shows) couldn't read a new show until the PC
+    relay happened to carry it -- Polo & Pan at Knockdown Center went on
+    sale at 15:00 UTC and was only read at 17:10."""
+    html = dice._http_get(f"{dice.SITE_BASE}/event/{slug}",
+                          accept="text/html,application/xhtml+xml")
+    st = (((_next_data(html) or {}).get("props") or {}).get("pageProps") or {}).get("initialState")
+    if isinstance(st, str):
+        st = json.loads(st)
+    e = ((st or {}).get("event") or {}).get("event")
+    if not isinstance(e, dict) or not e.get("id"):
+        raise FollowError(f"{slug}: no event data on its page")
+    ev = _from_embedded(e)
+    ev["slug"] = slug
+    # Not listed on the followed profile itself, so _belongs must still
+    # check an artist's name against the show's text.
+    ev["_embedded"] = False
+    ev["_text"] = _norm(json.dumps(e, ensure_ascii=False))
+    return ev
+
+
 def event_details(slug):
     """One show's facts from the ticket_types API (via the event page for
-    its id). Raises on any failure so the caller can retry later."""
+    its id), else from the event page alone. Raises on any failure so the
+    caller can retry later."""
     internal_id = dice._resolve_internal_id(slug)
-    data = dice._fetch_ticket_types(internal_id)
+    try:
+        data = dice._fetch_ticket_types(internal_id)
+    except Exception:
+        return _event_from_page(slug)
     venues = data.get("venues") or []
     ven = venues[0] if venues and isinstance(venues[0], dict) else {}
     city = ven.get("city") if isinstance(ven.get("city"), dict) else {}
@@ -505,6 +541,13 @@ def due_pings(now=None):
     return out
 
 
+def _fetch_due(last, now):
+    every = 1 if now.minute % 15 < FAST_WINDOW_MINUTES else FETCH_MINUTES
+    # 5s slack: the job fires every 60s and checked_at is stamped a moment
+    # into the run, so a strict compare would skip every other minute.
+    return now - last >= timedelta(minutes=every, seconds=-5)
+
+
 def run_tick(force=False):
     """Fetch every follow that's due, then send new / reminder / live pings.
     Returns a summary dict for /api status."""
@@ -514,7 +557,7 @@ def run_tick(force=False):
         if follow.get("paused"):
             continue
         last = _parse_dt(follow.get("last_checked_at"))
-        if not force and last and _now() - last < timedelta(minutes=FETCH_MINUTES):
+        if not force and last and not _fetch_due(last, _now()):
             continue
         summary["checked"] += 1
         try:
