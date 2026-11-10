@@ -86,8 +86,7 @@
     <div class="row" style="margin-top:8px">
       <label class="f">Automatiq event link / id<input id="nAq" size="28"></label>
       <label class="f">TickPick broker link / id<input id="nTp" size="28"></label>
-      <label class="f">CrowdVolt page link<input id="nCvUrl" size="28"></label>
-      <label class="f">CrowdVolt event id<input id="nCv" size="16" title="event_uqid - the Chrome extension fills this in"></label>
+      <label class="f">CrowdVolt event link<input id="nCvUrl" size="28" placeholder="crowdvolt.com/event/…"></label>
       <button class="primary" id="nAdd">Add</button>
     </div>
   </div>
@@ -102,7 +101,7 @@
 <script>
 const $ = s => document.querySelector(s);
 let DATA = null;
-const KIND_LABEL = {under: "Ask under", offer_over: "Offer over", arb: "Arb spread ≥"};
+const KIND_LABEL = {under: "Ask under", offer_over: "Offer over", arb: "Arb profit (CV payout − B2B ask) ≥"};
 const SCOPE_LABEL = {b2b: "Automatiq + TickPick", cv: "CrowdVolt"};
 const PLAT = {automatiq: "Automatiq", tickpick: "TickPick", cv: "CrowdVolt"};
 
@@ -154,7 +153,7 @@ function bookHtml(ev) {
     const s = ev.platforms[p];
     if (!s || (!s.asks.length && !s.bids.length)) continue;
     const rows = s.asks.slice(0, 12).map(a => `<tr><td>${esc(a.section)}${a.row ? " · r" + esc(a.row) : ""}${a.unmapped ? ' <span class="chip warn">unmapped</span>' : ""}</td><td class="num">${a.qty ?? ""}</td><td class="num">${money(a.price)}</td></tr>`).join("");
-    const bids = s.bids.slice(0, 8).map(b => `<tr><td>${esc(b.section)}</td><td class="num">${b.qty ?? ""}</td><td class="num hit">${money(b.price)}</td></tr>`).join("");
+    const bids = s.bids.slice(0, 8).map(b => `<tr><td>${esc(b.section)}</td><td class="num">${b.qty ?? ""}</td><td class="num hit">${money(b.price)}${b.payout != null ? ` <span class="muted small">(get ${money(b.payout)})</span>` : ""}</td></tr>`).join("");
     parts.push(`<div class="book"><h4><span>${PLAT[p]}</span><span class="muted">${ago(s.fetched_at)}</span></h4>
       <table><tr><th>Cheapest asks</th><th>Qty</th><th>Price</th></tr>${rows || '<tr><td class="muted" colspan=3>none</td></tr>'}</table>
       ${p === "cv" ? `<table style="margin-top:6px"><tr><th>Top offers</th><th>Qty</th><th>Offer</th></tr>${bids || '<tr><td class="muted" colspan=3>none</td></tr>'}</table>` : ""}</div>`);
@@ -168,7 +167,7 @@ function ruleForm(ev) {
   return `<div class="panel" style="background:var(--bg-3);margin:10px 0 0" data-form="${ev.id}">
     <div class="row">
       <label class="f">Where<select data-k="scope"><option value="b2b">Automatiq + TickPick</option><option value="cv">CrowdVolt</option></select></label>
-      <label class="f">Ping when<select data-k="kind"><option value="under">Ask at or under</option><option value="offer_over">CV offer at or over</option><option value="arb">CV offer − B2B ask ≥</option></select></label>
+      <label class="f">Ping when<select data-k="kind"><option value="under">Ask at or under</option><option value="offer_over">CV offer at or over</option><option value="arb">Arb: CV payout − B2B ask ≥</option></select></label>
       <label class="f">Price $<input type="number" data-k="price" step="1" min="0"></label>
       <label class="f">Min qty<input type="number" data-k="min_qty" value="1" min="1"></label>
       <label class="f">+ TickPick unmapped<input type="checkbox" data-k="include_unmapped"></label>
@@ -235,8 +234,8 @@ $("#nAdd").onclick = () => {
   act("/api/snipe/event", {
     name: $("#nName").value, event_date: $("#nDate").value, venue: $("#nVenue").value,
     automatiq_ref: $("#nAq").value, tickpick_ref: $("#nTp").value,
-    cv_url: cvUrl.startsWith("http") ? cvUrl : "", cv_event_uqid: $("#nCv").value.trim() || cvFromUrl(cvUrl),
-  }).then(() => { for (const id of ["nName", "nDate", "nVenue", "nAq", "nTp", "nCvUrl", "nCv"]) $("#" + id).value = ""; });
+    cv_url: cvUrl.startsWith("http") ? cvUrl : "", cv_event_uqid: cvFromUrl(cvUrl),
+  }).then(() => { for (const id of ["nName", "nDate", "nVenue", "nAq", "nTp", "nCvUrl"]) $("#" + id).value = ""; });
 };
 $("#gEnabled").onclick = () => act("/api/snipe/settings", {enabled: !DATA.settings.enabled});
 $("#gSave").onclick = () => act("/api/snipe/settings", {interval_seconds: +$("#gInterval").value, active_hours: $("#gHours").value});
@@ -264,7 +263,7 @@ $("#events").addEventListener("click", e => {
     const body = {id};
     for (const [k, label] of [["name", "Name"], ["event_date", "Date (YYYY-MM-DD)"], ["venue", "Venue"],
         ["automatiq_ref", "Automatiq event link / id"], ["tickpick_ref", "TickPick broker link / id"],
-        ["cv_url", "CrowdVolt page link"], ["cv_event_uqid", "CrowdVolt event id"],
+        ["cv_url", "CrowdVolt event link"],
         ["interval_seconds", "Check every N seconds (blank = global)"], ["active_hours", "Active hours e.g. 09:00-02:00 (blank = global)"]]) {
       const v = ask(label, ev[k]);
       if (v === undefined) return;

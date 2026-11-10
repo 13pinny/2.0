@@ -251,8 +251,17 @@ def save_event(body):
     for k in ("name", "event_date", "venue", "automatiq_ref", "tickpick_ref", "cv_url"):
         if k in body:
             fields[k] = _clean(body[k])
+    if "cv_url" in body and not _clean(body.get("cv_event_uqid")):
+        # CrowdVolt's event_uqid IS the slug in the event URL
+        # (crowdvolt.com/event/<slug>), so a pasted link is enough.
+        m = CV_URL_RE.search(fields.get("cv_url") or "")
+        if m:
+            body = {**body, "cv_event_uqid": m.group(1)}
     if "cv_event_uqid" in body:
         u = _clean(body["cv_event_uqid"])
+        m = CV_URL_RE.search(u or "")
+        if m:
+            u = m.group(1)
         if u and not UQID_RE.match(u):
             raise SnipeError(f"that doesn't look like a CrowdVolt event id: {u!r}")
         fields["cv_event_uqid"] = u
@@ -452,7 +461,16 @@ def _norm_listing(r):
         "unmapped": bool(r.get("unmapped")),
         "url": r.get("url") or None,
         "note": (str(r.get("note"))[:120] if r.get("note") else None),
+        # CV offers only: what the seller actually receives after CV's fee
+        "payout": _num(r.get("payout")),
     }
+
+
+def _num(v):
+    try:
+        return round(float(v), 2) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _qty_ok(listing, min_qty):
@@ -476,19 +494,27 @@ def _cv():
 
 
 def _cv_row(r, side):
-    """One CrowdVolt book row -> listing. Asks carry `price` (the seller's
-    price) and `all_in_price` (what a buyer pays, an integer); for an ask we
-    compare the ALL-IN price - that's what buying it costs. For a buy offer
-    the row's `price` is the offer amount as the page shows it."""
+    """One CrowdVolt book row -> listing. Both sides carry `price` and
+    `all_in_price`, which mean different things (measured 2026-11-10 on
+    Circoloco Miami):
+      ask: price = seller's price, all_in_price = what a BUYER pays (higher,
+           $260 -> $271). We compare all-in - that's what buying it costs.
+      bid: price = the offer, all_in_price = what the SELLER receives after
+           CV's fee (lower, $400 -> $382; matches our own sale $250 -> $236
+           payout). The offer is shown as `price`; arb uses `payout`."""
     if side == "ask":
         price = r.get("all_in_price") if r.get("all_in_price") is not None else r.get("price")
+        payout = None
     else:
         price = r.get("price") if r.get("price") is not None else r.get("all_in_price")
+        payout = r.get("all_in_price")
     return _norm_listing({
-        "id": r.get("uqid") or r.get("bid_uqid") or r.get("ask_uqid"),
-        "section": r.get("ticket_type"),
-        "qty": r.get("qty") if r.get("qty") is not None else r.get("qty_left"),
+        "id": r.get("uqid"),
+        "section": r.get("ticket_type") or r.get("section"),
+        "row": r.get("row"),
+        "qty": r.get("qty"),
         "price": price,
+        "payout": payout,
     })
 
 
@@ -561,7 +587,10 @@ def evaluate(event, rules, snaps, glob=None, now=None):
                 if not pair:
                     continue
                 plat, a = min(pair, key=lambda pa: pa[1]["price"])
-                spread = round(b["price"] - a["price"], 2)
+                # what filling the offer actually pays us, minus what the
+                # B2B ticket costs all-in
+                got = b.get("payout") if b.get("payout") is not None else b["price"]
+                spread = round(got - a["price"], 2)
                 if spread >= rule["price"]:
                     hits.append({"rule": rule, "kind": kind, "platform": plat,
                                  "key": f"arb:{b['id']}:{plat}:{a['id']}", "value": spread,
@@ -652,12 +681,14 @@ def describe(hit, event):
         detail = f"under your {_money(hit['rule']['price'])}"
     elif kind == "offer_over":
         head = f"💰 CrowdVolt offer: {_where(l)} {_money(l['price'])}{_qty(l)}{was}"
-        detail = f"over your {_money(hit['rule']['price'])}"
+        detail = f"over your {_money(hit['rule']['price'])}" + (
+            f" · you'd get {_money(l['payout'])}" if l.get("payout") is not None else "")
     else:
         b = hit["bid"]
-        head = (f"⚡ ARB {_money(hit['value'])}/tkt: buy {plat} {_where(l)} {_money(l['price'])}{_qty(l)}"
+        head = (f"⚡ ARB +{_money(hit['value'])}/tkt: buy {plat} {_where(l)} {_money(l['price'])}{_qty(l)}"
                 f" → CV offer {_money(b['price'])}{_qty(b)}{was}")
-        detail = f"spread ≥ your {_money(hit['rule']['price'])}"
+        detail = (f"you'd get {_money(b['payout'] if b.get('payout') is not None else b['price'])} "
+                  f"after CV's fee · profit ≥ your {_money(hit['rule']['price'])}")
     link = l.get("url") or _platform_link(event, hit["platform"])
     return head, detail, link
 
