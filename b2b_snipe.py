@@ -227,8 +227,13 @@ def in_hours(spec, now=None):
 
 def effective(event, glob=None):
     glob = glob or settings()
+    # Auto 'market' events (every CrowdVolt show with offers, ~80 of them) are
+    # read on the market scan's cadence, not the 60s hand-picked one, so the
+    # laptop doesn't fire ~160 broker-site calls a minute from the account.
+    default = (glob["market_minutes"] * 60 if event.get("auto") == "market"
+               else glob["interval_seconds"])
     return {
-        "interval_seconds": max(MIN_INTERVAL, event.get("interval_seconds") or glob["interval_seconds"]),
+        "interval_seconds": max(MIN_INTERVAL, event.get("interval_seconds") or default),
         "active_hours": event.get("active_hours") if event.get("active_hours") is not None
         else glob["active_hours"],
     }
@@ -302,6 +307,13 @@ def save_event(body):
     for k in ("paused", "muted"):
         if k in body:
             fields[k] = 1 if body[k] else 0
+    if body.get("claim") and body.get("id") and (get_event(body["id"]) or {}).get("auto") == "market":
+        # The user put their own rule on an auto 'market' event (the Chrome
+        # extension matched the show): make it a hand-picked event so the
+        # market scan never deletes it, it reads at the normal speed and it
+        # pings in its own channel.
+        fields["auto"] = None
+        fields.setdefault("interval_seconds", None)
     event_id = body.get("id")
     with db.connect() as conn:
         if event_id:
@@ -1079,7 +1091,8 @@ def overview():
     market.sort(key=lambda r: -((r.get("best_offer") or {}).get("payout") or 0))
     return {"settings": glob, "events": events, "market": market, "pings": pings,
             "zones": ZONE_LABEL, "cv_watch": cv_auth.session_status("watch"),
-            "last_run": dict(last_run), "market_run": dict(market_run)}
+            "last_run": dict(last_run), "market_run": dict(market_run),
+            "relay_seen_at": db.setting_get("snipe_relay_seen_at")}
 
 
 if __name__ == "__main__":

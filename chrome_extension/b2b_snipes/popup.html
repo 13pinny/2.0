@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#fff; --fg:#16181d; --mut:#6b7280; --line:#e5e7eb; --acc:#2563eb; --ok:#059669; --bad:#dc2626; --chip:#f3f4f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16181d; --fg:#e8eaee; --mut:#9aa1ad; --line:#2c3038; --acc:#5b8cff; --ok:#34d399; --bad:#f87171; --chip:#23262d; } }
+  body { margin:0; width:360px; font:13px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:10px 12px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+  header b { font-size:14px; }
+  main { padding:10px 12px; }
+  .mut { color:var(--mut); }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .ev { font-weight:600; font-size:14px; margin:2px 0; }
+  .row { display:flex; gap:8px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+  label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--mut); }
+  input[type=text], input[type=number], input[type=password], select {
+    font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:5px 7px; }
+  input[type=number] { width:80px; }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; max-height:110px; overflow:auto; }
+  .chip { border:1px solid var(--line); background:var(--chip); border-radius:999px; padding:2px 9px; cursor:pointer; font-size:12px; user-select:none; }
+  .chip.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button { font:inherit; border:0; border-radius:6px; padding:7px 12px; background:var(--acc); color:#fff; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--mut); border:1px solid var(--line); padding:3px 8px; }
+  ul { list-style:none; padding:0; margin:6px 0; }
+  li { display:flex; justify-content:space-between; gap:6px; padding:5px 0; border-top:1px solid var(--line); }
+  h3 { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); margin:12px 0 4px; }
+  #settings { display:none; border-top:1px solid var(--line); padding-top:8px; margin-top:10px; }
+  a { color:var(--acc); }
+</style>
+</head>
+<body>
+<header><b>B2B Snipes</b><button class="ghost" id="gear" title="Settings">⚙</button></header>
+<main>
+  <div id="msg" class="mut">Loading…</div>
+  <div id="body" style="display:none">
+    <div class="mut" id="site"></div>
+    <div class="ev" id="evName"></div>
+    <div class="mut" id="evMeta"></div>
+
+    <h3>Current rules</h3>
+    <ul id="rules"></ul>
+
+    <h3>New rule</h3>
+    <div class="row" id="kindRow">
+      <label>Ping when
+        <select id="kind">
+          <option value="under">a ticket is listed at or under</option>
+          <option value="offer_over">an offer is at or over</option>
+          <option value="arb">offer beats a B2B ask by at least</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Price $ (all-in, each)<input type="number" id="price" min="0" step="1"></label>
+      <label>Min qty<input type="number" id="minQty" min="1" value="1"></label>
+    </div>
+    <div class="mut" style="font-size:12px">Sections (none picked = any)</div>
+    <div class="chips" id="secChips"></div>
+    <div class="row">
+      <input type="text" id="secCustom" placeholder="other sections, comma separated" style="flex:1">
+    </div>
+    <div class="row" id="unmappedRow">
+      <label style="flex-direction:row;align-items:center;gap:6px;color:var(--fg)"><input type="checkbox" id="unmapped" checked> include TickPick unmapped listings</label>
+    </div>
+    <div class="row"><button id="save">Add rule</button><span id="saved" class="mut"></span></div>
+    <div class="mut" style="font-size:12px" id="scopeNote"></div>
+  </div>
+
+  <div id="settings">
+    <div class="row"><label style="flex:1">Kartis URL<input type="text" id="sBase" value="https://kartis.homes"></label></div>
+    <div class="row">
+      <label>Site user<input type="text" id="sUser"></label>
+      <label>Site password<input type="password" id="sPass"></label>
+    </div>
+    <div class="row"><button id="sSave">Save</button><span class="mut" id="sMsg"></span></div>
+  </div>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

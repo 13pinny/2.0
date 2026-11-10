@@ -4,6 +4,7 @@ auth.json
 user_data/
 user_data_cv/
 user_data_viagogo/
+user_data_b2b/
 .env.cvproxy
 
 # Python
