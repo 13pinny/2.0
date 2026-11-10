@@ -1257,6 +1257,73 @@ CREATE TABLE IF NOT EXISTS frontgate_snapshots (
     at         TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_frontgate_snap ON frontgate_snapshots(event_id, at);
+-- B2B snipes (b2b_snipe.py, /snipes): price alerts on Automatiq + TickPick
+-- broker listings (fed by the home laptop's relay) and CrowdVolt order books
+-- (read from the server with the separate "watch" CrowdVolt account).
+-- One snipe_events row per show; its *_ref columns say where to look on each
+-- platform. Rules hang off an event; scope 'b2b' covers Automatiq AND
+-- TickPick with one rule.
+CREATE TABLE IF NOT EXISTS snipe_events (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    event_date TEXT,
+    venue TEXT,
+    cv_event_uqid TEXT,
+    cv_url TEXT,
+    automatiq_ref TEXT,
+    tickpick_ref TEXT,
+    interval_seconds INTEGER,        -- NULL = the global setting
+    active_hours TEXT,               -- 'HH:MM-HH:MM' NY time; NULL = global
+    paused INTEGER NOT NULL DEFAULT 0,
+    muted INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS snipe_rules (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    scope TEXT NOT NULL,             -- 'b2b' | 'cv'
+    kind TEXT NOT NULL,              -- 'under' | 'offer_over' | 'arb'
+    sections_json TEXT,              -- ["zone:ga", "Floor 2", ...]; [] = any
+    include_unmapped INTEGER NOT NULL DEFAULT 0,
+    price REAL NOT NULL,             -- max (under), min (offer_over), min spread (arb)
+    min_qty INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_snipe_rules_event ON snipe_rules(event_id);
+-- Latest read per (event, platform): the listings as normalized rows, or the
+-- error that stopped the read. A failed read never overwrites listings_json.
+CREATE TABLE IF NOT EXISTS snipe_snapshots (
+    event_id TEXT NOT NULL,
+    platform TEXT NOT NULL,          -- 'automatiq' | 'tickpick' | 'cv'
+    listings_json TEXT,
+    fetched_at TEXT,
+    error TEXT,
+    error_at TEXT,
+    PRIMARY KEY (event_id, platform)
+);
+-- What each rule already pinged, so a listing pings once and again only
+-- when it gets better (cheaper ask, higher offer, wider spread).
+CREATE TABLE IF NOT EXISTS snipe_seen (
+    rule_id TEXT NOT NULL,
+    hit_key TEXT NOT NULL,
+    value REAL,
+    first_at TEXT NOT NULL,
+    last_at TEXT NOT NULL,
+    PRIMARY KEY (rule_id, hit_key)
+);
+CREATE TABLE IF NOT EXISTS snipe_pings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    rule_id TEXT,
+    kind TEXT,
+    title TEXT,
+    detail TEXT,
+    at TEXT NOT NULL,
+    result TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_snipe_pings_event ON snipe_pings(event_id, at);
 """
 
 

@@ -39,6 +39,7 @@ tm_probe/
 # Supervisor log (rolling output from start_supervised.bat)
 supervisor.log
 
+
 # CrowdVolt refresh cookie cache (live credential)
 cv_session.json
 
@@ -50,3 +51,6 @@ cv_session.json
 browser-profile/
 frontgate/*.db*
 frontgate/.env
+
+# CrowdVolt watcher-account cookie (b2b snipes; live credential)
+cv_session_watch.json

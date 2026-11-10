@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — B2B Snipes</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --orange: #ea580c; --purple: #8250df; --cyan: #00a3d7;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); font-size: 13px; }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--cyan); }
+  header .meta { font-size: 11px; color: var(--muted); }
+  main { padding: 18px 24px 60px; max-width: 1200px; }
+  h2 { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; color: var(--muted); }
+  button, .btn { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 11px; letter-spacing: .5px; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--cyan); border-color: var(--cyan); color: #fff; }
+  button.danger:hover { border-color: var(--red); color: var(--red); }
+  button.on { background: #e6f4ea; border-color: var(--green); color: var(--green); }
+  input, select { font: inherit; font-size: 12px; padding: 5px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg-2); color: var(--text); }
+  input[type=number] { width: 80px; }
+  label.f { display: flex; flex-direction: column; gap: 3px; font-size: 10px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .panel { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+  .err { background: #fdecea; border: 1px solid var(--red); color: var(--red); padding: 8px 12px; margin-bottom: 14px; font-size: 12px; display: none; border-radius: 6px; white-space: pre-wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 9px; border-radius: 10px; background: var(--bg-3); border: 1px solid var(--line); margin: 2px 3px 2px 0; }
+  .chip.ok { background: #e6f4ea; border-color: #a7d7b4; color: var(--green); }
+  .chip.bad { background: #fdecea; border-color: #f2b8b5; color: var(--red); }
+  .chip.warn { background: #fff4e5; border-color: #f6c88a; color: var(--amber); }
+  .chip.sel { background: var(--cyan); border-color: var(--cyan); color: #fff; cursor: pointer; }
+  .chip.pick { cursor: pointer; }
+  .ev-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+  .ev-head .t { font-size: 15px; font-weight: 700; }
+  .ev-head .s { color: var(--muted); font-size: 12px; }
+  .ev.paused { opacity: .6; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  td, th { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .books { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 10px; }
+  .book { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .book h4 { margin: 0 0 6px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; display: flex; justify-content: space-between; }
+  .muted { color: var(--muted); }
+  .small { font-size: 11px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 12px; margin-top: 8px; }
+  .hit { color: var(--green); font-weight: 600; }
+  @media (max-width: 640px) { header, main { padding-left: 12px; padding-right: 12px; } }
+</style>
+</head>
+<body>
+{% include "_sidebar.html" %}
+<header>
+  <div>
+    <h1>B2B Snipes</h1>
+    <div class="meta" id="meta">loading…</div>
+  </div>
+  <div class="row">
+    <button id="runNow">Check CrowdVolt now</button>
+  </div>
+</header>
+<main>
+  <div class="err" id="err"></div>
+
+  <div class="panel">
+    <div class="row">
+      <label class="f">Snipes<button id="gEnabled">…</button></label>
+      <label class="f">Check every (sec)<input type="number" id="gInterval" min="15" step="5"></label>
+      <label class="f">Active hours (NY, blank = 24h)<input id="gHours" placeholder="09:00-02:00" size="12"></label>
+      <button id="gSave">Save</button>
+      <span class="small muted" id="accounts"></span>
+    </div>
+  </div>
+
+  <h2>Add an event</h2>
+  <div class="panel">
+    <div class="row">
+      <label class="f">Name<input id="nName" size="28" placeholder="Kettama · Knockdown Center"></label>
+      <label class="f">Date<input id="nDate" type="date"></label>
+      <label class="f">Venue<input id="nVenue" size="18"></label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="f">Automatiq event link / id<input id="nAq" size="28"></label>
+      <label class="f">TickPick broker link / id<input id="nTp" size="28"></label>
+      <label class="f">CrowdVolt page link<input id="nCvUrl" size="28"></label>
+      <label class="f">CrowdVolt event id<input id="nCv" size="16" title="event_uqid - the Chrome extension fills this in"></label>
+      <button class="primary" id="nAdd">Add</button>
+    </div>
+  </div>
+
+  <h2>Events <span class="muted" id="evCount"></span></h2>
+  <div id="events"></div>
+
+  <h2>Recent pings</h2>
+  <div class="panel"><table id="pings"><tbody></tbody></table></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let DATA = null;
+const KIND_LABEL = {under: "Ask under", offer_over: "Offer over", arb: "Arb spread ≥"};
+const SCOPE_LABEL = {b2b: "Automatiq + TickPick", cv: "CrowdVolt"};
+const PLAT = {automatiq: "Automatiq", tickpick: "TickPick", cv: "CrowdVolt"};
+
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function money(v) { return v == null ? "—" : "$" + (Math.abs(v - Math.round(v)) < 0.005 ? Math.round(v) : v.toFixed(2)); }
+function ago(iso) {
+  if (!iso) return "never";
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 90) return Math.round(s) + "s ago";
+  if (s < 5400) return Math.round(s / 60) + "m ago";
+  if (s < 129600) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+}
+function showErr(msg) { const e = $("#err"); e.textContent = msg || ""; e.style.display = msg ? "block" : "none"; }
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({error: "HTTP " + r.status}));
+  if (!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+async function act(path, body) {
+  try { showErr(""); await api(path, body); await load(); } catch (e) { showErr(e.message); }
+}
+
+function secLabel(s) {
+  if (s.startsWith("zone:")) return (DATA.zones[s.slice(5)] || s.slice(5)) + " (any site's name)";
+  return s;
+}
+
+function ruleText(r) {
+  const secs = r.sections.length ? r.sections.map(secLabel).join(", ") : "any section";
+  return `${SCOPE_LABEL[r.scope]} · ${KIND_LABEL[r.kind]} <b>${money(r.price)}</b> · ${esc(secs)}`
+    + (r.min_qty > 1 ? ` · qty ≥ ${r.min_qty}` : "") + (r.include_unmapped ? " · + unmapped" : "");
+}
+
+function platChip(ev, p) {
+  const ref = {cv: ev.cv_event_uqid, automatiq: ev.automatiq_ref, tickpick: ev.tickpick_ref}[p];
+  const s = ev.platforms[p];
+  if (!ref) return `<span class="chip">${PLAT[p]}: not set</span>`;
+  if (!s) return `<span class="chip warn">${PLAT[p]}: waiting for first read${p === "cv" ? "" : " (laptop)"}</span>`;
+  const errNewer = s.error && (!s.fetched_at || s.error_at > s.fetched_at);
+  if (errNewer) return `<span class="chip bad" title="${esc(s.error)}">${PLAT[p]}: ${esc(s.error.slice(0, 70))}</span>`;
+  return `<span class="chip ${s.fresh ? "ok" : "warn"}">${PLAT[p]}: ${s.n_asks} asks${p === "cv" ? `, ${s.n_bids} offers` : ""} · ${ago(s.fetched_at)}</span>`;
+}
+
+function bookHtml(ev) {
+  const parts = [];
+  for (const p of ["automatiq", "tickpick", "cv"]) {
+    const s = ev.platforms[p];
+    if (!s || (!s.asks.length && !s.bids.length)) continue;
+    const rows = s.asks.slice(0, 12).map(a => `<tr><td>${esc(a.section)}${a.row ? " · r" + esc(a.row) : ""}${a.unmapped ? ' <span class="chip warn">unmapped</span>' : ""}</td><td class="num">${a.qty ?? ""}</td><td class="num">${money(a.price)}</td></tr>`).join("");
+    const bids = s.bids.slice(0, 8).map(b => `<tr><td>${esc(b.section)}</td><td class="num">${b.qty ?? ""}</td><td class="num hit">${money(b.price)}</td></tr>`).join("");
+    parts.push(`<div class="book"><h4><span>${PLAT[p]}</span><span class="muted">${ago(s.fetched_at)}</span></h4>
+      <table><tr><th>Cheapest asks</th><th>Qty</th><th>Price</th></tr>${rows || '<tr><td class="muted" colspan=3>none</td></tr>'}</table>
+      ${p === "cv" ? `<table style="margin-top:6px"><tr><th>Top offers</th><th>Qty</th><th>Offer</th></tr>${bids || '<tr><td class="muted" colspan=3>none</td></tr>'}</table>` : ""}</div>`);
+  }
+  return parts.length ? `<details><summary>Current listings</summary><div class="books">${parts.join("")}</div></details>` : "";
+}
+
+function ruleForm(ev) {
+  const zones = Object.keys(DATA.zones).map(z => `<span class="chip pick" data-sec="zone:${z}" title="matches every site's spelling of ${esc(DATA.zones[z])}">≈ ${esc(DATA.zones[z])}</span>`).join("");
+  const seen = ev.sections.filter(s => s).slice(0, 40).map(s => `<span class="chip pick" data-sec="${esc(s)}">${esc(s)}</span>`).join("");
+  return `<div class="panel" style="background:var(--bg-3);margin:10px 0 0" data-form="${ev.id}">
+    <div class="row">
+      <label class="f">Where<select data-k="scope"><option value="b2b">Automatiq + TickPick</option><option value="cv">CrowdVolt</option></select></label>
+      <label class="f">Ping when<select data-k="kind"><option value="under">Ask at or under</option><option value="offer_over">CV offer at or over</option><option value="arb">CV offer − B2B ask ≥</option></select></label>
+      <label class="f">Price $<input type="number" data-k="price" step="1" min="0"></label>
+      <label class="f">Min qty<input type="number" data-k="min_qty" value="1" min="1"></label>
+      <label class="f">+ TickPick unmapped<input type="checkbox" data-k="include_unmapped"></label>
+      <button class="primary" data-act="addRule">Add rule</button>
+    </div>
+    <div class="small muted" style="margin-top:8px">Sections (none picked = any): ${zones} ${seen}
+      <input data-k="custom" placeholder="other section name" size="16" style="margin-left:6px"></div>
+  </div>`;
+}
+
+function render() {
+  const d = DATA, g = d.settings;
+  $("#gEnabled").textContent = g.enabled ? "ON" : "OFF";
+  $("#gEnabled").className = g.enabled ? "on" : "";
+  if (document.activeElement !== $("#gInterval")) $("#gInterval").value = g.interval_seconds;
+  if (document.activeElement !== $("#gHours")) $("#gHours").value = g.active_hours || "";
+  const w = d.cv_watch;
+  $("#accounts").innerHTML = (w.linked
+    ? `<span class="chip ok">CrowdVolt watch account linked${w.days_remaining != null ? ` · ~${Math.max(0, Math.round(w.days_remaining))}d left` : ""}</span>`
+    : `<span class="chip bad">CrowdVolt watch account not linked</span>`)
+    + (d.enabled_here ? "" : ` <span class="chip warn">checker disabled on this machine</span>`);
+  const lr = d.last_run || {};
+  $("#meta").textContent = `CrowdVolt pass ${ago(lr.at)}` + (lr.at ? ` · ${lr.checked} read · ${lr.pinged} pinged` : "")
+    + (lr.errors && lr.errors.length ? ` · ${lr.errors.length} error(s)` : "");
+  $("#evCount").textContent = d.events.length ? `(${d.events.length})` : "";
+
+  $("#events").innerHTML = d.events.map(ev => {
+    const date = ev.event_date ? new Date(ev.event_date + "T12:00").toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric"}) : "no date";
+    const rules = ev.rules.map(r => `<tr><td>${ruleText(r)}</td><td style="white-space:nowrap;text-align:right">
+        <button data-act="toggleRule" data-id="${r.id}" data-en="${r.enabled ? 0 : 1}" class="${r.enabled ? "on" : ""}">${r.enabled ? "on" : "off"}</button>
+        <button class="danger" data-act="delRule" data-id="${r.id}">✕</button></td></tr>`).join("");
+    const eff = ev.effective;
+    return `<div class="panel ev ${ev.paused ? "paused" : ""}" data-ev="${ev.id}">
+      <div class="ev-head"><div><div class="t">${esc(ev.name)}</div>
+        <div class="s">${esc(date)}${ev.venue ? " · " + esc(ev.venue) : ""} · every ${eff.interval_seconds}s${eff.active_hours ? " · " + esc(eff.active_hours) + " NY" : ""}</div></div>
+        <div class="row">
+          <button data-act="pause" class="${ev.paused ? "" : "on"}">${ev.paused ? "paused" : "running"}</button>
+          <button data-act="mute" class="${ev.muted ? "" : "on"}">${ev.muted ? "muted" : "pings on"}</button>
+          <button data-act="edit">edit</button>
+          <button class="danger" data-act="delEv">delete</button>
+        </div></div>
+      <div style="margin-top:6px">${platChip(ev, "automatiq")}${platChip(ev, "tickpick")}${platChip(ev, "cv")}</div>
+      <table style="margin-top:8px">${rules || '<tr><td class="muted">No rules yet — nothing is checked until you add one.</td></tr>'}</table>
+      ${ruleForm(ev)}
+      ${bookHtml(ev)}
+    </div>`;
+  }).join("") || `<div class="panel muted">No events yet. Add one above (or from the Chrome extension).</div>`;
+
+  $("#pings tbody").innerHTML = d.pings.map(p => `<tr><td class="muted small" style="white-space:nowrap">${ago(p.at)}</td><td>${esc(p.event_name || "")}</td><td>${esc(p.title)}</td><td class="muted small">${esc(p.detail || "")}</td></tr>`).join("")
+    || '<tr><td class="muted">No pings yet.</td></tr>';
+}
+
+async function load() {
+  try { DATA = await api("/api/snipe"); render(); } catch (e) { showErr(e.message); }
+}
+
+function cvFromUrl(u) {
+  // a CrowdVolt event id pasted into the link box is used as-is
+  return /^[A-Za-z0-9_-]{6,}$/.test(u) && !u.includes(".") ? u : "";
+}
+
+$("#nAdd").onclick = () => {
+  const cvUrl = $("#nCvUrl").value.trim();
+  act("/api/snipe/event", {
+    name: $("#nName").value, event_date: $("#nDate").value, venue: $("#nVenue").value,
+    automatiq_ref: $("#nAq").value, tickpick_ref: $("#nTp").value,
+    cv_url: cvUrl.startsWith("http") ? cvUrl : "", cv_event_uqid: $("#nCv").value.trim() || cvFromUrl(cvUrl),
+  }).then(() => { for (const id of ["nName", "nDate", "nVenue", "nAq", "nTp", "nCvUrl", "nCv"]) $("#" + id).value = ""; });
+};
+$("#gEnabled").onclick = () => act("/api/snipe/settings", {enabled: !DATA.settings.enabled});
+$("#gSave").onclick = () => act("/api/snipe/settings", {interval_seconds: +$("#gInterval").value, active_hours: $("#gHours").value});
+$("#runNow").onclick = async () => {
+  $("#runNow").disabled = true;
+  try { const r = await api("/api/snipe/run-now", {}); showErr(r.errors && r.errors.length ? r.errors.join("\n") : ""); await load(); }
+  catch (e) { showErr(e.message); } finally { $("#runNow").disabled = false; }
+};
+
+$("#events").addEventListener("click", e => {
+  const chip = e.target.closest(".chip.pick, .chip.sel");
+  if (chip) { chip.classList.toggle("sel"); chip.classList.toggle("pick"); return; }
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  const card = b.closest("[data-ev]"), id = card && card.dataset.ev;
+  const ev = DATA.events.find(x => x.id === id);
+  const a = b.dataset.act;
+  if (a === "pause") return act("/api/snipe/event", {id, paused: !ev.paused});
+  if (a === "mute") return act("/api/snipe/event", {id, muted: !ev.muted});
+  if (a === "delEv") return confirm(`Delete ${ev.name} and its rules?`) && act("/api/snipe/event/delete", {id});
+  if (a === "delRule") return act("/api/snipe/rule/delete", {id: b.dataset.id});
+  if (a === "toggleRule") return act("/api/snipe/rule", {id: b.dataset.id, enabled: !!+b.dataset.en});
+  if (a === "edit") {
+    const ask = (label, cur) => { const v = prompt(label, cur ?? ""); return v === null ? undefined : v; };
+    const body = {id};
+    for (const [k, label] of [["name", "Name"], ["event_date", "Date (YYYY-MM-DD)"], ["venue", "Venue"],
+        ["automatiq_ref", "Automatiq event link / id"], ["tickpick_ref", "TickPick broker link / id"],
+        ["cv_url", "CrowdVolt page link"], ["cv_event_uqid", "CrowdVolt event id"],
+        ["interval_seconds", "Check every N seconds (blank = global)"], ["active_hours", "Active hours e.g. 09:00-02:00 (blank = global)"]]) {
+      const v = ask(label, ev[k]);
+      if (v === undefined) return;
+      body[k] = (k === "active_hours" && !v.trim()) ? null : v;
+    }
+    return act("/api/snipe/event", body);
+  }
+  if (a === "addRule") {
+    const f = card.querySelector("[data-form]");
+    const val = k => f.querySelector(`[data-k="${k}"]`);
+    const sections = [...f.querySelectorAll(".chip.sel")].map(c => c.dataset.sec);
+    const custom = val("custom").value.trim();
+    if (custom) sections.push(...custom.split(",").map(s => s.trim()).filter(Boolean));
+    if (val("price").value === "") return showErr("Set a price for the rule.");
+    return act("/api/snipe/rule", {event_id: id, scope: val("scope").value, kind: val("kind").value,
+      price: +val("price").value, min_qty: +val("min_qty").value || 1,
+      include_unmapped: val("include_unmapped").checked, sections});
+  }
+});
+
+load();
+setInterval(() => { if (!document.querySelector("[data-form] input:focus, [data-form] select:focus, .chip.sel")) load(); }, 20000);
+</script>
+</body>
+</html>

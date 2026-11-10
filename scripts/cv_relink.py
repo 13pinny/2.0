@@ -62,7 +62,16 @@ def main():
                          "CDP - use this to reuse the session in your EVERYDAY "
                          "Chrome. Omit the value to be prompted (keeps the "
                          "credential out of shell history).")
+    ap.add_argument("--profile", default="main", choices=sorted(cv_auth.PROFILES),
+                    help="which login to link: main = your selling account "
+                         "(sales tracking); watch = the throwaway account the "
+                         "b2b snipe watcher reads order books with")
     args = ap.parse_args()
+    if args.profile != "main" and args.cookie is None:
+        # Harvesting reads the :9222 Chrome, which is signed in as the MAIN
+        # account - never the right cookie for another profile.
+        raise SystemExit(f"--profile {args.profile} needs --cookie (paste the "
+                         "value from a Chrome signed in as THAT account)")
 
     if args.cookie is not None:
         # Chrome >=136 refuses --remote-debugging-port on the default profile,
@@ -96,15 +105,15 @@ def main():
         return 0
 
     if args.local:
-        status = cv_auth.import_cookies(cookies)
-        print(f"\nwrote {cv_auth.STATE_PATH}")
+        status = cv_auth.import_cookies(cookies, args.profile)
+        print(f"\nwrote {cv_auth.PROFILES[args.profile]}")
         print(json.dumps(status, indent=2))
         return 0
 
-    print(f"\npushing to {args.base_url} ...")
+    print(f"\npushing the {args.profile} login to {args.base_url} ...")
     try:
         imported = client.push(cookies, base_url=args.base_url,
-                               verify=not args.no_verify)
+                               verify=not args.no_verify, profile=args.profile)
     except client.RelinkError as e:
         raise SystemExit(str(e))
     print("imported: " + json.dumps(imported, indent=2))

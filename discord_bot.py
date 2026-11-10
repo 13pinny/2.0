@@ -81,8 +81,40 @@ def _api(method, path, payload=None):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def webhook_for(name):
+def category_id_for(title):
+    """Category title (e.g. "B2B Snipes") -> its Discord channel id, created on
+    first use. Cached in discord_event_channels under "category:<slug>" with
+    an empty webhook_url (categories have none). None when the bot is
+    unconfigured or the API fails - the caller then files the channel
+    wherever webhook_for's default puts it."""
+    key = "category:" + slugify_label(title)
+    cached = db.discord_channel_get(key)
+    if cached and cached.get("channel_id"):
+        return cached["channel_id"]
+    if not configured():
+        return None
+    guild = os.environ["DISCORD_GUILD_ID"].strip()
+    try:
+        cat = next((c for c in _api("GET", f"/guilds/{guild}/channels")
+                    if c.get("type") == 4
+                    and (c.get("name") or "").lower() == title.lower()), None)
+        if cat is None:
+            cat = _api("POST", f"/guilds/{guild}/channels",
+                       {"name": title, "type": 4})
+        db.discord_channel_put(key, str(cat["id"]), "",
+                               datetime.now(timezone.utc).isoformat())
+        return str(cat["id"])
+    except Exception as e:
+        print(f"[discord_bot] category_id_for({title!r}) failed: "
+              f"{type(e).__name__}: {e}", flush=True)
+        return None
+
+
+def webhook_for(name, category=None):
     """Channel name → webhook URL, creating channel + webhook if needed.
+
+    `category` (a category TITLE) files a newly created channel under that
+    category instead of DISCORD_DROPS_CATEGORY_ID.
 
     Returns None when unconfigured or on any API failure so drop pings fall
     back to the shared drops channel instead of being dropped.
@@ -107,7 +139,7 @@ def webhook_for(name):
         )
         if chan is None:
             payload = {"name": name, "type": 0}
-            cat = os.environ.get("DISCORD_DROPS_CATEGORY_ID", "").strip()
+            cat = (category_id_for(category) if category else None)                 or os.environ.get("DISCORD_DROPS_CATEGORY_ID", "").strip()
             if cat:
                 payload["parent_id"] = cat
             chan = _api("POST", f"/guilds/{guild}/channels", payload)

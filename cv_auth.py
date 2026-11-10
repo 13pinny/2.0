@@ -41,6 +41,24 @@ REFRESH_URL = "https://www.crowdvolt.com/api/auth/refresh"
 STATE_PATH = Path(os.environ.get("KARTIS_CV_SESSION_FILE",
                                  Path(__file__).parent / "cv_session.json"))
 
+# Separate logins, one state file each. "main" is the selling account (sales
+# tracking). "watch" is a throwaway account that only READS order books for
+# b2b_snipe.py - the user does not want their selling account polling
+# CrowdVolt every minute, so the two must never share a cookie.
+PROFILES = {
+    "main": STATE_PATH,
+    "watch": Path(os.environ.get("KARTIS_CV_WATCH_SESSION_FILE",
+                                 Path(__file__).parent / "cv_session_watch.json")),
+}
+
+
+def _path(profile):
+    try:
+        return PROFILES[profile or "main"]
+    except KeyError:
+        raise CvAuthError(f"unknown CrowdVolt profile {profile!r} "
+                          f"(expected one of {sorted(PROFILES)})")
+
 # Sent on every call. An okhttp/* UA gets 403 from what.crowdvolt.com; a
 # browser-shaped one passes, so keep this browser-shaped.
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -73,27 +91,28 @@ def _jwt_exp(token):
         return None
 
 
-def _read_state():
+def _read_state(profile="main"):
     try:
-        with open(STATE_PATH, "r", encoding="utf-8") as fh:
+        with open(_path(profile), "r", encoding="utf-8") as fh:
             return json.load(fh)
     except Exception:
         return {}
 
 
-def _write_state(state):
-    tmp = STATE_PATH.with_suffix(".tmp")
+def _write_state(state, profile="main"):
+    path = _path(profile)
+    tmp = path.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(state, fh)
     try:
         os.chmod(tmp, 0o600)
     except OSError:
         pass          # windows
-    os.replace(tmp, STATE_PATH)
+    os.replace(tmp, path)
 
 
 
-def import_cookies(cookies):
+def import_cookies(cookies, profile="main"):
     """Install cookies harvested on another machine into this box's cache.
 
     The VPS runs no logged-in Chrome and cv_refresh_token is HttpOnly, so a
@@ -111,20 +130,20 @@ def import_cookies(cookies):
         raise CvAuthError(
             "payload carries no cv_refresh_token - harvest it from a Chrome "
             "signed in at crowdvolt.com")
-    state = _read_state()
-    state["cookies"] = clean
-    state["harvested_at"] = int(time.time())
-    _write_state(state)
-    return session_status()
+    # A new cookie may be a different account - drop the old identity so the
+    # same-account guard re-checks against whoever this cookie belongs to.
+    state = {"cookies": clean, "harvested_at": int(time.time())}
+    _write_state(state, profile)
+    return session_status(profile)
 
 
-def session_status():
+def session_status(profile="main"):
     """Whether a CrowdVolt session is cached and how much life it has left.
 
     Feeds a web response, so it returns cookie NAMES and ages only - never a
     value. cv_session.json is a live credential.
     """
-    state = _read_state()
+    state = _read_state(profile)
     cookies = state.get("cookies") or {}
     harvested_at = state.get("harvested_at")
     age_days = None
@@ -140,6 +159,10 @@ def session_status():
         "days_remaining": (None if age_days is None
                            else round(REFRESH_COOKIE_DAYS - age_days, 1)),
         "cookie_names": sorted(cookies),
+        "profile": profile,
+        # Which CrowdVolt user the cookie belongs to (recorded at the first
+        # token mint). An id, not an email - safe for a web response.
+        "user_id": state.get("user_id"),
     }
 
 def harvest_cookies(playwright, cdp_url):
@@ -173,8 +196,10 @@ class CvAuth:
     raises with instructions instead of silently failing.
     """
 
-    def __init__(self, playwright=None, cdp_url=None):
-        self._pw = playwright
+    def __init__(self, playwright=None, cdp_url=None, profile="main"):
+        self._profile = profile or "main"
+        _path(self._profile)                 # unknown profile fails here
+        self._pw = playwright if self._profile == "main" else None
         self._cdp = cdp_url
         self._cookies = None
         self._token = None
@@ -186,10 +211,15 @@ class CvAuth:
         if self._cookies and not force_harvest:
             return self._cookies
         if not force_harvest:
-            cached = _read_state().get("cookies") or {}
+            cached = _read_state(self._profile).get("cookies") or {}
             if cached.get("cv_refresh_token"):
                 self._cookies = cached
                 return self._cookies
+        if self._profile != "main":
+            raise CvAuthError(
+                f"no CrowdVolt session for the '{self._profile}' account - "
+                f"link it with scripts/cv_relink.py --profile {self._profile} "
+                "--cookie")
         if self._pw is None:
             raise CvAuthError(
                 "no cached CrowdVolt session and no browser to harvest one "
@@ -225,15 +255,41 @@ class CvAuth:
                 "scripts/cv_relink.py on the desktop with the CV Chrome "
                 "signed in")
         try:
-            token = json.loads(body)["access_token"]
+            parsed = json.loads(body)
+            token = parsed["access_token"]
         except (ValueError, KeyError) as e:
             raise CvAuthError(f"auth/refresh returned no access_token: {e}")
+        self._remember_user(parsed.get("user"))
         self._token = token
         exp = _jwt_exp(token)
         # No exp claim: assume a short life so we re-mint often rather than
         # ride a dead token through a whole tick.
         self._token_exp = exp if exp else now + 300
         return token
+
+    def _remember_user(self, user):
+        """Record which CrowdVolt user this profile's cookie belongs to, and
+        refuse to let the watch profile run on the selling account."""
+        uid = None
+        if isinstance(user, dict):
+            for k in ("uqid", "user_uqid", "id", "user_id"):
+                if user.get(k):
+                    uid = str(user[k])
+                    break
+        if not uid:
+            return
+        state = _read_state(self._profile)
+        if state.get("user_id") != uid:
+            state["user_id"] = uid
+            _write_state(state, self._profile)
+        if self._profile != "main":
+            main_uid = _read_state("main").get("user_id")
+            if main_uid and main_uid == uid:
+                self._token = None
+                raise CvAuthError(
+                    f"the '{self._profile}' CrowdVolt cookie belongs to your "
+                    "MAIN selling account - sign in with the second account "
+                    "and relink it")
 
     # -- transport --
 

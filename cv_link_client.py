@@ -124,7 +124,7 @@ def call(path, payload=None, method=None, base_url=None, timeout=45):
         raise RelinkError(f"could not reach {base_url}: {e.reason}")
 
 
-def push(cookies, base_url=None, verify=True):
+def push(cookies, base_url=None, verify=True, profile="main"):
     """Send harvested cookies to the server, then prove CrowdVolt still
     honours them. Returns the import status dict.
 
@@ -133,7 +133,8 @@ def push(cookies, base_url=None, verify=True):
     scheduled tick, far from anyone watching.
     """
     status, raw = call("/api/cvauth/import",
-                       {"secret": secret(), "cookies": cookies},
+                       {"secret": secret(), "cookies": cookies,
+                        "profile": profile},
                        base_url=base_url)
     if status == 401:
         raise RelinkError("401 from the edge - check KARTIS_WEB_USER / "
@@ -143,7 +144,8 @@ def push(cookies, base_url=None, verify=True):
     imported = json.loads(raw)
     if not verify:
         return imported
-    status, raw = call("/api/cvauth/verify", {}, base_url=base_url)
+    status, raw = call("/api/cvauth/verify", {"profile": profile},
+                       base_url=base_url)
     if status != 200:
         raise RelinkError(
             f"cookie stored but CrowdVolt rejected it ({status}): {raw[:200]}\n"

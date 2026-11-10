@@ -20,6 +20,7 @@ from openpyxl import Workbook
 import attachments as attachments_mod
 import b2b
 import barby
+import b2b_snipe
 import checkin
 import barby_events
 import db
@@ -292,6 +293,12 @@ _last_dice_alerts = {"at": None, "summary": None, "error": None}
 EVENTS_HEALTH_ENABLED = (os.getenv("KARTIS_EVENTS_HEALTH_ENABLED")
                          or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
 EVENTS_HEALTH_MINUTES = int(os.getenv("KARTIS_EVENTS_HEALTH_MINUTES") or 5)
+# B2B snipes (b2b_snipe.py, /snipes): CrowdVolt book reads + pings. Where
+# the EDM monitor runs (the VPS) - its DB holds the rules and the laptop
+# relay posts Automatiq/TickPick listings there.
+SNIPE_ENABLED = (os.getenv("KARTIS_SNIPE_ENABLED")
+                 or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
+SNIPE_TICK_SECONDS = int(os.getenv("KARTIS_SNIPE_TICK_SECONDS") or 15)
 CHECKIN_REMIND_ENABLED = (os.getenv("KARTIS_CHECKIN_REMIND_ENABLED")
                           or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
 CHECKIN_REMIND_DAYS = (os.getenv("KARTIS_CHECKIN_REMIND_DAYS") or "mon,wed").strip()
@@ -4706,6 +4713,105 @@ def _unmapped_payload(body, existing_qty=None):
 @app.route("/checkin")
 def checkin_page():
     return render_template("checkin.html")
+
+
+# --- B2B snipes (b2b_snipe.py) ---------------------------------------------
+
+@app.route("/snipes")
+def snipes_page():
+    return render_template("snipes.html")
+
+
+def _snipe_call(fn):
+    try:
+        return jsonify(fn())
+    except b2b_snipe.SnipeError as e:
+        return jsonify({"error": str(e)}), 400
+    except (TypeError, ValueError) as e:
+        return jsonify({"error": f"bad input: {e}"}), 400
+
+
+@app.route("/api/snipe")
+def api_snipe():
+    body = b2b_snipe.overview()
+    body["enabled_here"] = SNIPE_ENABLED
+    return jsonify(body)
+
+
+@app.route("/api/snipe/settings", methods=["POST"])
+def api_snipe_settings():
+    from flask import request
+    return _snipe_call(lambda: b2b_snipe.save_settings(request.get_json(silent=True) or {}))
+
+
+@app.route("/api/snipe/event", methods=["POST"])
+def api_snipe_event():
+    """Create (no id) or update a snipe event. The Chrome extension posts
+    here too, with `rules` riding along to create them in one call."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+
+    def go():
+        ev = b2b_snipe.save_event(body)
+        rules = [b2b_snipe.save_rule({**r, "event_id": ev["id"]}) for r in body.get("rules") or []]
+        return {"event": ev, "rules": rules}
+    return _snipe_call(go)
+
+
+@app.route("/api/snipe/event/delete", methods=["POST"])
+def api_snipe_event_delete():
+    from flask import request
+    b2b_snipe.delete_event((request.get_json(silent=True) or {}).get("id") or "")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/snipe/rule", methods=["POST"])
+def api_snipe_rule():
+    from flask import request
+    return _snipe_call(lambda: b2b_snipe.save_rule(request.get_json(silent=True) or {}))
+
+
+@app.route("/api/snipe/rule/delete", methods=["POST"])
+def api_snipe_rule_delete():
+    from flask import request
+    b2b_snipe.delete_rule((request.get_json(silent=True) or {}).get("id") or "")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/snipe/run-now", methods=["POST"])
+def api_snipe_run_now():
+    """One CrowdVolt pass now, ignoring the per-event interval (still skips
+    paused events and events with no rules)."""
+    with db.connect() as conn:
+        conn.execute("UPDATE snipe_snapshots SET fetched_at = NULL, error_at = NULL "
+                     "WHERE platform = 'cv'")
+    return jsonify(b2b_snipe.run_tick())
+
+
+@app.route("/api/snipe/relay/targets")
+def api_snipe_relay_targets():
+    """What the laptop relay should read now (Automatiq / TickPick)."""
+    err = _cvauth_secret_error()
+    if err:
+        return err
+    db.setting_set("snipe_relay_seen_at", datetime.now(timezone.utc).isoformat(),
+                   datetime.now(timezone.utc).isoformat())
+    return jsonify({"targets": b2b_snipe.relay_targets()})
+
+
+@app.route("/api/snipe/relay", methods=["POST"])
+def api_snipe_relay():
+    """The laptop relay posts one platform's listings for one event:
+    {event_id, platform, listings: [{id, section, row, qty, price, unmapped,
+    url}], error?}. A read that failed posts `error` and no listings."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    err = _cvauth_secret_error(body)
+    if err:
+        return err
+    return _snipe_call(lambda: b2b_snipe.ingest(
+        body.get("event_id") or "", body.get("platform") or "",
+        body.get("listings"), body.get("bids"), body.get("error")))
 
 
 @app.route("/api/checkin")
@@ -10581,7 +10687,9 @@ def api_cvauth_import():
     the LAN of a machine that does, so the desktop pushes and the server
     receives. scripts/cv_relink.py is the sender.
 
-    Body: {"secret": "...", "cookies": {"cv_refresh_token": "..."}}
+    Body: {"secret": "...", "cookies": {"cv_refresh_token": "..."},
+           "profile": "main" | "watch"}   (default main; watch = the
+    throwaway account b2b_snipe.py reads order books with)
 
     Gated on KARTIS_CVAUTH_SECRET *in addition to* Caddy's basic auth: the
     payload is a live ~30-day credential, so it does not ride on the edge
@@ -10595,17 +10703,20 @@ def api_cvauth_import():
     err = _cvauth_secret_error(body)
     if err:
         return err
+    profile = (body.get("profile") or "main").strip()
     try:
-        status = cv_auth.import_cookies(body.get("cookies") or {})
+        status = cv_auth.import_cookies(body.get("cookies") or {}, profile)
     except cv_auth.CvAuthError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:                      # disk full, perms, ...
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
-    print(f"[kartis] cvauth: imported cookies {status['cookie_names']}")
+    print(f"[kartis] cvauth: imported {profile} cookies {status['cookie_names']}")
     # A successful import IS the job completing - the agent should not have
-    # to report separately for the happy path.
-    _cvauth_job_set(state="done", error=None,
-                    finished_at=datetime.now(timezone.utc).isoformat())
+    # to report separately for the happy path. (The relink job is only ever
+    # for the main account.)
+    if profile == "main":
+        _cvauth_job_set(state="done", error=None,
+                        finished_at=datetime.now(timezone.utc).isoformat())
     return jsonify({"imported": True, **status})
 
 
@@ -10617,14 +10728,18 @@ def api_cvauth_verify():
     CrowdVolt still honours it. Worth its own route so the relink script can
     confirm end to end instead of leaving you to find out at the next tick.
     """
+    from flask import request
     import cv_auth
+    profile = ((request.get_json(silent=True) or {}).get("profile")
+               or request.args.get("profile") or "main").strip()
     try:
-        cv_auth.CvAuth().token(force=True)      # cache-only: no browser here
+        # cache-only: no browser here
+        cv_auth.CvAuth(profile=profile).token(force=True)
     except cv_auth.CvAuthError as e:
         return jsonify({"ok": False, "error": str(e)}), 502
     except Exception as e:
         return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 502
-    return jsonify({"ok": True, **cv_auth.session_status()})
+    return jsonify({"ok": True, **cv_auth.session_status(profile)})
 
 
 @app.route("/api/pacha-events/status")
@@ -10802,6 +10917,12 @@ if EVENTS_HEALTH_ENABLED:
     # Offset from the EDM tick so it reads that tick's fresh state.
     scheduler.add_job(run_events_health, "interval", minutes=EVENTS_HEALTH_MINUTES,
                       id="events_health", start_date=datetime.now() + timedelta(minutes=6))
+if SNIPE_ENABLED:
+    # Wakes every SNIPE_TICK_SECONDS; each event is only read once its own
+    # interval (default 60s, set on /snipes) has passed.
+    scheduler.add_job(lambda: b2b_snipe.run_tick(), "interval", seconds=SNIPE_TICK_SECONDS,
+                      id="b2b_snipe", start_date=datetime.now() + timedelta(seconds=45),
+                      max_instances=1, coalesce=True)
 if CHECKIN_REMIND_ENABLED:
     scheduler.add_job(run_checkin_remind, "cron", day_of_week=CHECKIN_REMIND_DAYS,
                       hour=CHECKIN_REMIND_HOUR, minute=0, timezone="America/New_York",
