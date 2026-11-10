@@ -1407,6 +1407,9 @@ def init():
             "ALTER TABLE pending_intake ADD COLUMN buyer_email TEXT",
             "ALTER TABLE viagogo_push ADD COLUMN buyer_email TEXT",
             "ALTER TABLE email_purchases ADD COLUMN listed_at TEXT",
+            # b2b_snipe market scan: 'market' = auto-added from the all-events
+            # CrowdVolt scan; NULL = added by hand
+            "ALTER TABLE snipe_events ADD COLUMN auto TEXT",
         ):
             try:
                 conn.executescript(_sql)

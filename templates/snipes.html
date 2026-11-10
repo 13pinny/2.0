@@ -74,6 +74,14 @@
       <button id="gSave">Save</button>
       <span class="small muted" id="accounts"></span>
     </div>
+    <div class="row" style="margin-top:10px">
+      <label class="f">All-events CV scan<button id="mEnabled">…</button></label>
+      <label class="f">Scan every (min)<input type="number" id="mMinutes" min="5" step="1"></label>
+      <label class="f">Ping if profit ≥ $/tkt<input type="number" id="mProfit" min="0" step="1"></label>
+      <button id="mSave">Save</button>
+      <button id="mRun">Scan now</button>
+      <span class="small muted" id="mStatus"></span>
+    </div>
   </div>
 
   <h2>Add an event</h2>
@@ -93,6 +101,10 @@
 
   <h2>Events <span class="muted" id="evCount"></span></h2>
   <div id="events"></div>
+
+  <h2>All CrowdVolt events with offers <span class="muted" id="mkCount"></span></h2>
+  <div class="panel small muted" style="margin-bottom:6px">Every upcoming CrowdVolt event is scanned; the ones with buy offers are listed here and checked against Automatiq + TickPick (the laptop finds each show there by name + date). Profit = what the offer pays after CrowdVolt's fee − the cheapest matching B2B ticket.</div>
+  <div class="panel" style="overflow-x:auto"><table id="market"><thead><tr><th>Event</th><th>Date</th><th>Best offer</th><th class="num">You get</th><th>Automatiq</th><th>TickPick</th></tr></thead><tbody></tbody></table></div>
 
   <h2>Recent pings</h2>
   <div class="panel"><table id="pings"><tbody></tbody></table></div>
@@ -193,6 +205,29 @@ function render() {
   $("#meta").textContent = `CrowdVolt pass ${ago(lr.at)}` + (lr.at ? ` · ${lr.checked} read · ${lr.pinged} pinged` : "")
     + (lr.errors && lr.errors.length ? ` · ${lr.errors.length} error(s)` : "");
   $("#evCount").textContent = d.events.length ? `(${d.events.length})` : "";
+  $("#mEnabled").textContent = g.market_enabled ? "ON" : "OFF";
+  $("#mEnabled").className = g.market_enabled ? "on" : "";
+  if (document.activeElement !== $("#mMinutes")) $("#mMinutes").value = g.market_minutes;
+  if (document.activeElement !== $("#mProfit")) $("#mProfit").value = g.market_min_profit;
+  const mr = d.market_run || {};
+  $("#mStatus").textContent = mr.running ? `scanning… (started ${ago(mr.started_at)})`
+    : mr.error ? `last scan failed: ${mr.error}`
+    : mr.at ? `last scan ${ago(mr.at)}: ${mr.read}/${mr.events} books, ${mr.with_offers} with offers${mr.errors ? `, ${mr.errors} errors` : ""}` : "no scan yet";
+  $("#mkCount").textContent = d.market.length ? `(${d.market.length})` : "";
+  const b2bCell = (ev, p) => {
+    const s = ev.platforms[p];
+    if (!s) return `<span class="muted">${ev[p + "_ref"] ? "waiting" : "laptop not searching yet"}</span>`;
+    if (s.error && (!s.fetched_at || s.error_at > s.fetched_at)) return `<span class="chip bad" title="${esc(s.error)}">error</span>`;
+    const c = s.cheapest;
+    return c ? `${esc(c.section)} ${money(c.price)}` : '<span class="muted">none listed</span>';
+  };
+  $("#market tbody").innerHTML = d.market.map(ev => {
+    const b = ev.best_offer || {};
+    const date = ev.event_date ? new Date(ev.event_date + "T12:00").toLocaleDateString(undefined, {month: "short", day: "numeric"}) : "—";
+    return `<tr><td><a href="${esc(ev.cv_url)}" target="_blank" rel="noopener">${esc(ev.name)}</a></td><td>${date}</td>
+      <td>${esc(b.section || "")} ${money(b.price)}${b.qty ? " ×" + b.qty : ""}</td><td class="num hit">${money(b.payout ?? b.price)}</td>
+      <td>${b2bCell(ev, "automatiq")}</td><td>${b2bCell(ev, "tickpick")}</td></tr>`;
+  }).join("") || `<tr><td class="muted" colspan="6">${mr.at ? "No CrowdVolt event has offers right now." : "Waiting for the first scan."}</td></tr>`;
 
   $("#events").innerHTML = d.events.map(ev => {
     const date = ev.event_date ? new Date(ev.event_date + "T12:00").toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric"}) : "no date";
@@ -238,6 +273,9 @@ $("#nAdd").onclick = () => {
   }).then(() => { for (const id of ["nName", "nDate", "nVenue", "nAq", "nTp", "nCvUrl"]) $("#" + id).value = ""; });
 };
 $("#gEnabled").onclick = () => act("/api/snipe/settings", {enabled: !DATA.settings.enabled});
+$("#mEnabled").onclick = () => act("/api/snipe/settings", {market_enabled: !DATA.settings.market_enabled});
+$("#mSave").onclick = () => act("/api/snipe/settings", {market_minutes: +$("#mMinutes").value, market_min_profit: +$("#mProfit").value});
+$("#mRun").onclick = () => act("/api/snipe/market/run-now", {});
 $("#gSave").onclick = () => act("/api/snipe/settings", {interval_seconds: +$("#gInterval").value, active_hours: $("#gHours").value});
 $("#runNow").onclick = async () => {
   $("#runNow").disabled = true;

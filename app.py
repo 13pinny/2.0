@@ -4811,7 +4811,18 @@ def api_snipe_relay():
         return err
     return _snipe_call(lambda: b2b_snipe.ingest(
         body.get("event_id") or "", body.get("platform") or "",
-        body.get("listings"), body.get("bids"), body.get("error")))
+        body.get("listings"), body.get("bids"), body.get("error"), body.get("ref")))
+
+
+@app.route("/api/snipe/market/run-now", methods=["POST"])
+def api_snipe_market_run_now():
+    """Start a full CrowdVolt market scan now (runs in the background; a pass
+    takes a few minutes). Poll /api/snipe for progress."""
+    if b2b_snipe.market_run.get("running"):
+        return jsonify({"error": "a market scan is already running"}), 429
+    threading.Thread(target=b2b_snipe.run_market_scan, kwargs={"force": True},
+                     daemon=True, name="snipe-market").start()
+    return jsonify({"started": True})
 
 
 @app.route("/api/checkin")
@@ -10922,6 +10933,11 @@ if SNIPE_ENABLED:
     # interval (default 60s, set on /snipes) has passed.
     scheduler.add_job(lambda: b2b_snipe.run_tick(), "interval", seconds=SNIPE_TICK_SECONDS,
                       id="b2b_snipe", start_date=datetime.now() + timedelta(seconds=45),
+                      max_instances=1, coalesce=True)
+    # All-events CrowdVolt offer scan; wakes every minute, runs when its own
+    # interval (default 10 min, /snipes) has passed. A pass takes minutes.
+    scheduler.add_job(lambda: b2b_snipe.run_market_scan(), "interval", minutes=1,
+                      id="b2b_snipe_market", start_date=datetime.now() + timedelta(minutes=2),
                       max_instances=1, coalesce=True)
 if CHECKIN_REMIND_ENABLED:
     scheduler.add_job(run_checkin_remind, "cron", day_of_week=CHECKIN_REMIND_DAYS,

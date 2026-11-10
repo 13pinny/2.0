@@ -61,6 +61,11 @@ PLATFORM_LABEL = {"automatiq": "Automatiq", "tickpick": "TickPick", "cv": "Crowd
 SET_ENABLED = "snipe_enabled"
 SET_INTERVAL = "snipe_interval_seconds"
 SET_HOURS = "snipe_active_hours"
+SET_MARKET = "snipe_market_enabled"
+SET_MARKET_MINUTES = "snipe_market_minutes"
+SET_MARKET_PROFIT = "snipe_market_min_profit"
+MARKET_CHANNEL = "snipe-market-arb"
+MARKET_PAUSE_SECONDS = float(os.environ.get("KARTIS_SNIPE_MARKET_PAUSE", "0.4"))
 DEFAULT_INTERVAL = int(os.environ.get("KARTIS_SNIPE_INTERVAL_SECONDS", "60"))
 MIN_INTERVAL = 15
 MAX_PINGS_PER_EVENT = 6
@@ -155,10 +160,18 @@ def settings():
         interval = int(db.setting_get(SET_INTERVAL) or DEFAULT_INTERVAL)
     except ValueError:
         interval = DEFAULT_INTERVAL
+    def _f(key, default):
+        try:
+            return float(db.setting_get(key) or default)
+        except ValueError:
+            return default
     return {
         "enabled": db.setting_get_bool(SET_ENABLED, True),
         "interval_seconds": max(MIN_INTERVAL, interval),
         "active_hours": db.setting_get(SET_HOURS) or "",
+        "market_enabled": db.setting_get_bool(SET_MARKET, True),
+        "market_minutes": max(5, int(_f(SET_MARKET_MINUTES, 10))),
+        "market_min_profit": max(0.0, _f(SET_MARKET_PROFIT, 10)),
     }
 
 
@@ -170,6 +183,16 @@ def save_settings(body):
         db.setting_set(SET_INTERVAL, max(MIN_INTERVAL, int(body["interval_seconds"])), now)
     if "active_hours" in body:
         db.setting_set(SET_HOURS, parse_hours(body["active_hours"]) or "", now)
+    if "market_enabled" in body:
+        db.setting_set(SET_MARKET, "1" if body["market_enabled"] else "0", now)
+    if "market_minutes" in body:
+        db.setting_set(SET_MARKET_MINUTES, max(5, int(body["market_minutes"])), now)
+    if "market_min_profit" in body:
+        v = round(max(0.0, float(body["market_min_profit"])), 2)
+        db.setting_set(SET_MARKET_PROFIT, v, now)
+        with db.connect() as conn:      # every auto rule follows the setting
+            conn.execute("UPDATE snipe_rules SET price = ? WHERE kind = 'arb' AND event_id IN "
+                         "(SELECT id FROM snipe_events WHERE auto = 'market')", (v,))
     return settings()
 
 
@@ -632,6 +655,8 @@ def _filter_new(hits, now_iso):
 # --- pings --------------------------------------------------------------
 
 def channel_name(event):
+    if event.get("auto") == "market":
+        return MARKET_CHANNEL       # one channel for the whole scan, not 100+
     import discord_bot
     slug = discord_bot.slugify_label(event.get("name") or "") or "event"
     d = event.get("event_date")
@@ -759,7 +784,7 @@ def _process(event, glob, now_iso):
     return len(fresh)
 
 
-def ingest(event_id, platform, listings=None, bids=None, error=None):
+def ingest(event_id, platform, listings=None, bids=None, error=None, ref=None):
     """Store one platform's read for an event (from the relay or the CV
     fetch) and ping anything new. `error` records a failed read and keeps the
     last good listings."""
@@ -768,6 +793,10 @@ def ingest(event_id, platform, listings=None, bids=None, error=None):
     event = get_event(event_id)
     if not event:
         raise SnipeError("no such event")
+    if ref and platform in B2B_PLATFORMS and not event.get(f"{platform}_ref"):
+        with db.connect() as conn:      # the laptop found the show by search
+            conn.execute(f"UPDATE snipe_events SET {platform}_ref = ? WHERE id = ?",
+                         (str(ref)[:500], event_id))
     if error:
         _store_snapshot(event_id, platform, error=error)
         return {"stored": False, "error": str(error)[:200]}
@@ -789,8 +818,10 @@ def due(event, platform, glob=None, now=None, snaps=None):
         return False
     ref = {"cv": "cv_event_uqid", "automatiq": "automatiq_ref",
            "tickpick": "tickpick_ref"}[platform]
-    if not event.get(ref):
+    if not event.get(ref) and not (event.get("auto") == "market" and platform in B2B_PLATFORMS):
         return False
+    if platform == "cv" and event.get("auto") == "market":
+        return False                # the market scan refreshes these books
     if not rules_for(event["id"]):
         return False
     if event.get("event_date"):
@@ -816,7 +847,12 @@ def relay_targets(platforms=B2B_PLATFORMS):
         for p in platforms:
             if p in B2B_PLATFORMS and due(ev, p, glob, snaps=snaps):
                 out.append({"event_id": ev["id"], "platform": p, "ref": ev[f"{p}_ref"],
-                            "name": ev["name"], "event_date": ev.get("event_date")})
+                            "name": ev["name"], "event_date": ev.get("event_date"),
+                            "venue": ev.get("venue"),
+                            # no ref yet: find the show on that site by name + date
+                            # and post the ref back with the listings
+                            "search": not ev[f"{p}_ref"],
+                            "auto": ev.get("auto")})
     return out
 
 
@@ -857,11 +893,154 @@ def run_tick():
         _tick_lock.release()
 
 
+# --- market scan: every CrowdVolt event's offers vs the B2B sites ---------
+
+_MONTHS = {m: i for i, m in enumerate(
+    "jan feb mar apr may jun jul aug sep oct nov dec".split(), 1)}
+_MONTHS.update({"january": 1, "february": 2, "march": 3, "april": 4, "june": 6, "july": 7,
+                "august": 8, "september": 9, "sept": 9, "october": 10, "november": 11,
+                "december": 12})
+_SLUG_NOISE = {"mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
+               "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+               "new", "york", "nyc", "presents", "tickets"}
+
+
+def slug_info(slug, today=None):
+    """CrowdVolt slugs are hand-written ('kettama-knockdown-center-fri-oct-9-
+    new-york', 'circoloco-miami-factory-town-basel-2026-dec-5'). -> (name,
+    date|None). A slug with no year gets the next occurrence of that day."""
+    today = today or _now().astimezone(NY).date()
+    toks = slug.lower().split("-")
+    year = next((int(t) for t in toks if re.fullmatch(r"20\d\d", t)), None)
+    when, cut = None, len(toks)
+    for i, t in enumerate(toks):
+        mo = _MONTHS.get(t)
+        if mo and i + 1 < len(toks) and toks[i + 1].isdigit() and 1 <= int(toks[i + 1]) <= 31:
+            day = int(toks[i + 1])
+            try:
+                if year:
+                    when = datetime(year, mo, day).date()
+                else:
+                    when = datetime(today.year, mo, day).date()
+                    if (today - when).days > 45:            # Jan show seen in Dec
+                        when = datetime(today.year + 1, mo, day).date()
+            except ValueError:
+                when = None
+            cut = min(cut, i)
+            break
+    words = [t for t in toks[:cut] if t not in _SLUG_NOISE and not re.fullmatch(r"20\d\d|\d+", t)]
+    name = " ".join(words).title() or slug
+    return name, when
+
+
+_market_lock = threading.Lock()
+market_run = {"at": None, "started_at": None, "events": 0, "read": 0, "with_offers": 0,
+              "added": 0, "removed": 0, "pinged": 0, "errors": 0, "error": None, "running": False}
+
+
+def market_due(glob=None):
+    glob = glob or settings()
+    if not glob["market_enabled"] or not glob["enabled"]:
+        return False
+    last = _parse_iso(market_run.get("started_at") or db.setting_get("snipe_market_last_at") or "")
+    return last is None or (_now() - last).total_seconds() >= glob["market_minutes"] * 60 - 5
+
+
+def run_market_scan(force=False, slugs=None):
+    """Read every upcoming CrowdVolt event's book (sequential, gently paced),
+    keep an auto 'market' event + arb rule for each one that has offers, and
+    drop auto events whose offers are gone or whose show has passed. Hand-
+    added events are never touched. B2B prices for the auto events come from
+    the laptop (relay_targets lists them with search=True until it finds the
+    show)."""
+    import time
+    import cv_events
+    glob = settings()
+    if not force and not market_due(glob):
+        return market_run
+    if db.setting_get_bool("master_paused", False):
+        return market_run
+    if not _market_lock.acquire(blocking=False):
+        return market_run
+    try:
+        now_iso = _iso()
+        market_run.update(running=True, started_at=now_iso, error=None)
+        db.setting_set("snipe_market_last_at", now_iso, now_iso)
+        today = _now().astimezone(NY).date()
+        if slugs is None:
+            slugs = cv_events.event_slugs()
+            if not slugs:
+                raise SnipeError("CrowdVolt sitemap unavailable")
+        todo = []
+        for slug in slugs:
+            name, when = slug_info(slug, today)
+            if when is None or when >= today:
+                todo.append((slug, name, when))
+        existing = {e["cv_event_uqid"]: e for e in list_events() if e.get("cv_event_uqid")}
+        read = with_offers = added = removed = pinged = errors = 0
+        live = set()
+        for slug, name, when in todo:
+            try:
+                book = fetch_cv(slug)
+            except SnipeError as e:
+                errors += 1
+                if "watch account" in str(e):        # auth is dead: stop, don't hammer
+                    raise
+                continue
+            finally:
+                time.sleep(MARKET_PAUSE_SECONDS)
+            read += 1
+            ev = existing.get(slug)
+            if not book["bids"]:
+                if ev and ev.get("auto") == "market":
+                    delete_event(ev["id"])
+                    removed += 1
+                elif ev:
+                    _store_snapshot(ev["id"], "cv", book)
+                continue
+            with_offers += 1
+            live.add(slug)
+            if ev is None:
+                ev = save_event({"name": name, "event_date": when.isoformat() if when else None,
+                                 "cv_event_uqid": slug,
+                                 "cv_url": f"https://www.crowdvolt.com/event/{slug}",
+                                 "interval_seconds": glob["market_minutes"] * 60})
+                with db.connect() as conn:
+                    conn.execute("UPDATE snipe_events SET auto = 'market' WHERE id = ?", (ev["id"],))
+                save_rule({"event_id": ev["id"], "scope": "cv", "kind": "arb",
+                           "price": glob["market_min_profit"]})
+                ev = get_event(ev["id"])
+                existing[slug] = ev
+                added += 1
+            _store_snapshot(ev["id"], "cv", book)
+            if not ev.get("paused"):
+                pinged += _process(ev, glob, _iso())
+        # an auto event whose show passed, or whose slug left the sitemap
+        for slug, ev in existing.items():
+            if ev.get("auto") != "market" or slug in live:
+                continue
+            gone = slug not in {s for s, _, _ in todo}
+            if gone:
+                delete_event(ev["id"])
+                removed += 1
+        market_run.update(at=_iso(), events=len(todo), read=read, with_offers=with_offers,
+                          added=added, removed=removed, pinged=pinged, errors=errors)
+        print(f"[snipe-market] {read}/{len(todo)} books, {with_offers} with offers, "
+              f"+{added} -{removed}, {pinged} pinged, {errors} errors", flush=True)
+    except Exception as e:
+        market_run["error"] = f"{type(e).__name__}: {e}"
+        print(f"[snipe-market] failed: {market_run['error']}", flush=True)
+    finally:
+        market_run["running"] = False
+        _market_lock.release()
+    return market_run
+
+
 def overview():
     """Everything /snipes renders."""
     import cv_auth
     glob = settings()
-    events = []
+    events, market = [], []
     now = _now()
     for ev in list_events():
         snaps = snapshots(ev["id"])
@@ -882,12 +1061,25 @@ def overview():
             }
         sections = sorted({a["section"] for p in plats.values() for a in p["asks"] + p["bids"]
                            if a.get("section")})
-        events.append({**ev, "rules": rules_for(ev["id"]), "platforms": plats,
-                       "sections": sections, "effective": effective(ev, glob)})
+        row = {**ev, "rules": rules_for(ev["id"]), "platforms": plats,
+               "sections": sections, "effective": effective(ev, glob)}
+        if ev.get("auto") == "market":
+            cvp = plats.get("cv") or {}
+            best = max(cvp.get("bids") or [], default=None,
+                       key=lambda b: b["payout"] if b.get("payout") is not None else b["price"])
+            row["best_offer"] = best
+            row["platforms"] = {p: {k: v for k, v in d.items() if k not in ("asks", "bids")}
+                                | {"cheapest": (d["asks"][0] if d.get("asks") else None)}
+                                for p, d in plats.items()}
+            market.append(row)
+        else:
+            events.append(row)
     pings = _rows("SELECT p.*, e.name AS event_name FROM snipe_pings p "
                   "LEFT JOIN snipe_events e ON e.id = p.event_id ORDER BY p.id DESC LIMIT 40")
-    return {"settings": glob, "events": events, "pings": pings, "zones": ZONE_LABEL,
-            "cv_watch": cv_auth.session_status("watch"), "last_run": dict(last_run)}
+    market.sort(key=lambda r: -((r.get("best_offer") or {}).get("payout") or 0))
+    return {"settings": glob, "events": events, "market": market, "pings": pings,
+            "zones": ZONE_LABEL, "cv_watch": cv_auth.session_status("watch"),
+            "last_run": dict(last_run), "market_run": dict(market_run)}
 
 
 if __name__ == "__main__":
