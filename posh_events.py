@@ -52,6 +52,10 @@ TRAPS
   waves before its sale opens (Palm Tree 2027: ticketGroups [] behind
   PALM2027 on 2026-10-21), so 0 tiers is a quiet "not released yet" there
   instead of an error; the first wave then arrives as a new_tier ping.
+  When the presale ends posh lifts the gate and unlockEvent starts
+  answering 404 (as it does for a wrong code), so a 404 falls back to
+  reading the page without the code: an eventId there means the event is
+  public now and the tracker keeps going under its old key.
 
 CLI probe:  python posh_events.py [<url-or-slug>[@code]] [--json]
 """
@@ -157,6 +161,11 @@ def _save_cache(cache):
         pass  # a cache we can't write just means we re-read the page
 
 
+class _UnlockNotFound(EdmEventsError):
+    """unlockEvent answered 404: a wrong code, OR an event whose presale
+    gate has since been lifted (Palm Tree 2027 once PALM2027 ended)."""
+
+
 def _unlock(slug, password):
     """Unlock a password-gated event page → the Cookie header value the
     page then needs. Raises EdmEventsError on a wrong code."""
@@ -176,8 +185,9 @@ def _unlock(slug, password):
                 raw = gzip.decompress(raw)
             cookies = resp.headers.get_all("Set-Cookie") or []
     except urllib.error.HTTPError as e:
-        raise EdmEventsError(f"posh: unlock {slug} returned HTTP {e.code} "
-                             "— wrong code?") from e
+        cls = _UnlockNotFound if e.code == 404 else EdmEventsError
+        raise cls(f"posh: unlock {slug} returned HTTP {e.code} "
+                  "— wrong code?") from e
     except (urllib.error.URLError, OSError) as e:
         raise EdmEventsError(f"posh: unlock {slug} failed: {e}") from e
     try:
@@ -197,8 +207,15 @@ def _unlock(slug, password):
 def _scrape_meta(slug, password=None):
     """eventId + display metadata from the event page's flight payload."""
     headers = None
+    unlock_404 = None
     if password:
-        headers = {**edm_common.BROWSER_HEADERS, "Cookie": _unlock(slug, password)}
+        try:
+            headers = {**edm_common.BROWSER_HEADERS, "Cookie": _unlock(slug, password)}
+        except _UnlockNotFound as e:
+            # Either the code is wrong or the gate is gone. Read the page
+            # without it: an eventId there means the presale ended and the
+            # event is public now; a password form means the code is wrong.
+            unlock_404 = e
     html = edm_common.fetch_text(event_page_url(slug), headers=headers)
     payload = _flight_payload(html)
     data = {}
@@ -216,6 +233,8 @@ def _scrape_meta(slug, password=None):
         m = _EVENT_ID_RE.search(payload) or _EVENT_ID_RE.search(html)
         event_id = m.group(1) if m else None
     if not event_id:
+        if unlock_404 is not None:
+            raise unlock_404
         if "PasswordProtected" in html or "PasswordProtected" in payload:
             raise EdmEventsError(f"posh: {event_page_url(slug)} is password-gated "
                                  + ("and the code didn't unlock it" if password else
