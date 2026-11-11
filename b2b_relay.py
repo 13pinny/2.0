@@ -83,6 +83,50 @@ class RelayError(Exception):
     pass
 
 
+class BrowserGone(Exception):
+    """The B2B Chrome was closed (or crashed): reconnect instead of posting
+    the same error for every event until someone notices."""
+
+
+_GONE_MARKERS = ("has been closed", "target closed", "connection closed", "browser closed",
+                 "browser has disconnected", "econnrefused")
+
+
+def _is_gone(exc):
+    return any(m in str(exc).lower() for m in _GONE_MARKERS)
+
+
+CHROME = os.environ.get("KARTIS_CHROME_EXE") or r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+PROFILE = os.environ.get("KARTIS_B2B_PROFILE") or str(ROOT / "user_data_b2b")
+
+
+def _cdp_up():
+    import urllib.request
+    try:
+        urllib.request.urlopen(CDP + "/json/version", timeout=3).read()
+        return True
+    except Exception:
+        return False
+
+
+def ensure_chrome():
+    """Start the B2B Chrome if it isn't running. Same profile, so the
+    Automatiq / TickPick logins are still there."""
+    if _cdp_up():
+        return
+    import subprocess
+    port = CDP.rsplit(":", 1)[-1]
+    log("B2B Chrome is not running - starting it")
+    subprocess.Popen([CHROME, f"--remote-debugging-port={port}", f"--user-data-dir={PROFILE}",
+                      AQ_HOME, TP_HOME])
+    for _ in range(40):
+        time.sleep(1)
+        if _cdp_up():
+            time.sleep(4)       # let the first tabs settle
+            return
+    raise BrowserGone("B2B Chrome did not come up on " + CDP)
+
+
 # --- one logged-in site in the CDP Chrome --------------------------------
 
 class Site:
@@ -401,6 +445,9 @@ def run_pass(sites):
                 log(f"{site.name}: matched {t.get('name')!r} -> {ref}")
             payload["listings"] = site.listings(ref)
         except Exception as e:
+            if _is_gone(e):
+                _notfound_save(nf)
+                raise BrowserGone(str(e)) from e
             payload["error"] = str(e)[:300]
             log(f"{key}: {e}")
         res = post(payload)
@@ -414,6 +461,7 @@ def run_pass(sites):
 
 def connect():
     from patchright.sync_api import sync_playwright
+    ensure_chrome()
     pw = sync_playwright().start()
     # Never browser.close(): on a CDP connection that closes the user's Chrome.
     browser = pw.chromium.connect_over_cdp(CDP)
@@ -448,10 +496,35 @@ def main():
         print(run_pass(sites), "targets read")
         return 0
     log("b2b relay started")
+    me = Path(__file__).resolve()
+    started_mtime = me.stat().st_mtime
     while True:
         t0 = time.time()
         try:
+            changed = me.stat().st_mtime != started_mtime
+        except OSError:
+            changed = False
+        if changed:
+            # the nightly git pull brought new code: restart into it
+            log("b2b_relay.py changed - restarting")
+            try:
+                pw.stop()
+            except Exception:
+                pass
+            os.execv(sys.executable, [sys.executable, str(me), *sys.argv[1:]])
+        try:
             run_pass(sites)
+        except BrowserGone as e:
+            log(f"browser gone ({e}) - reconnecting")
+            try:
+                pw.stop()
+            except Exception:
+                pass
+            try:
+                pw, sites = connect()
+            except Exception as e2:
+                log(f"reconnect failed: {e2}")
+                time.sleep(20)
         except Exception:
             log("pass failed:\n" + traceback.format_exc())
             try:            # a dead CDP connection: start over

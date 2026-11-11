@@ -145,8 +145,26 @@ def section_matches(wanted, listing, include_unmapped=False):
     return False
 
 
+_ENTRY_RE = re.compile(r"\b(anytime|any time)\b|\b(before|after)\s*(\d{1,2})")
+
+
+def entry_window(section):
+    """'GA (Entry Anytime)' -> 'any', 'GA ENTRY BEFORE 1AM' -> 'before 1',
+    'GA entry after 10am' -> 'after 10', no qualifier -> None."""
+    m = _ENTRY_RE.search(_norm(section))
+    if not m:
+        return None
+    return "any" if m.group(1) else f"{m.group(2)} {int(m.group(3))}"
+
+
 def same_bucket(a_section, b_section):
-    """Arbitrage pairing: same zone family, or the same section name."""
+    """Arbitrage pairing: same zone family, or the same section name. Two
+    different entry windows are different products: an 'entry after 10am'
+    ticket can't fill an 'entry anytime' order (Space Basel pinged +$402 on
+    exactly that)."""
+    ea, eb = entry_window(a_section), entry_window(b_section)
+    if ea and eb and ea != eb:
+        return False
     za, zb = zone_of(a_section), zone_of(b_section)
     if za and za == zb:
         return True
@@ -1048,6 +1066,21 @@ def run_market_scan(force=False, slugs=None):
     return market_run
 
 
+def _relay_health():
+    """How the laptop's last reads went: the heartbeat alone stays green
+    while every read fails (Chrome closed at 3am on 2026-11-11 and nothing
+    showed it)."""
+    cutoff = _iso(_now() - timedelta(minutes=30))
+    rows = _rows("SELECT error, error_at, fetched_at FROM snipe_snapshots "
+                 "WHERE platform IN ('automatiq', 'tickpick')")
+    ok = sum(1 for r in rows if r["fetched_at"] and r["fetched_at"] >= cutoff
+             and not (r["error_at"] and r["error_at"] > r["fetched_at"]))
+    bad = [r for r in rows if r["error_at"] and r["error_at"] >= cutoff
+           and (not r["fetched_at"] or r["error_at"] > r["fetched_at"])]
+    return {"ok": ok, "failing": len(bad),
+            "last_error": max(bad, key=lambda r: r["error_at"])["error"][:160] if bad else None}
+
+
 def overview():
     """Everything /snipes renders."""
     import cv_auth
@@ -1092,7 +1125,8 @@ def overview():
     return {"settings": glob, "events": events, "market": market, "pings": pings,
             "zones": ZONE_LABEL, "cv_watch": cv_auth.session_status("watch"),
             "last_run": dict(last_run), "market_run": dict(market_run),
-            "relay_seen_at": db.setting_get("snipe_relay_seen_at")}
+            "relay_seen_at": db.setting_get("snipe_relay_seen_at"),
+            "relay_health": _relay_health()}
 
 
 if __name__ == "__main__":

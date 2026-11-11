@@ -201,7 +201,9 @@ function render() {
     ? `<span class="chip ok">CrowdVolt watch account linked${w.days_remaining != null ? ` · ~${Math.max(0, Math.round(w.days_remaining))}d left` : ""}</span>`
     : `<span class="chip bad">CrowdVolt watch account not linked</span>`)
     + (d.relay_seen_at && (Date.now() - Date.parse(d.relay_seen_at)) < 3 * 60000
-      ? ` <span class="chip ok">laptop (Automatiq + TickPick) checked in ${ago(d.relay_seen_at)}</span>`
+      ? ((d.relay_health || {}).failing && !(d.relay_health || {}).ok
+        ? ` <span class="chip bad" title="${esc((d.relay_health.last_error) || "")}">laptop is up but can't read Automatiq / TickPick (${d.relay_health.failing} failing)</span>`
+        : ` <span class="chip ok">laptop (Automatiq + TickPick) checked in ${ago(d.relay_seen_at)}</span>`)
       : ` <span class="chip bad">laptop (Automatiq + TickPick) ${d.relay_seen_at ? "last seen " + ago(d.relay_seen_at) : "never seen"}</span>`)
     + (d.enabled_here ? "" : ` <span class="chip warn">checker disabled on this machine</span>`);
   const lr = d.last_run || {};
