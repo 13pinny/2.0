@@ -197,7 +197,10 @@ function render() {
   if (document.activeElement !== $("#gInterval")) $("#gInterval").value = g.interval_seconds;
   if (document.activeElement !== $("#gHours")) $("#gHours").value = g.active_hours || "";
   const w = d.cv_watch;
-  $("#accounts").innerHTML = (w.linked
+  const cvDead = /watch|auth\/refresh|session/i.test((d.market_run || {}).error || "");
+  $("#accounts").innerHTML = (cvDead
+    ? `<span class="chip bad" title="${esc(d.market_run.error)}">CrowdVolt watch account logged out - relink it</span>`
+    : w.linked
     ? `<span class="chip ok">CrowdVolt watch account linked${w.days_remaining != null ? ` · ~${Math.max(0, Math.round(w.days_remaining))}d left` : ""}</span>`
     : `<span class="chip bad">CrowdVolt watch account not linked</span>`)
     + (d.relay_seen_at && (Date.now() - Date.parse(d.relay_seen_at)) < 3 * 60000

@@ -204,6 +204,7 @@ class CvAuth:
         self._cookies = None
         self._token = None
         self._token_exp = 0
+        self._last_set_cookie = []
 
     # -- cookies --
 
@@ -260,12 +261,36 @@ class CvAuth:
         except (ValueError, KeyError) as e:
             raise CvAuthError(f"auth/refresh returned no access_token: {e}")
         self._remember_user(parsed.get("user"))
+        self._keep_rotated_cookie()
         self._token = token
         exp = _jwt_exp(token)
         # No exp claim: assume a short life so we re-mint often rather than
         # ride a dead token through a whole tick.
         self._token_exp = exp if exp else now + 300
         return token
+
+    def _keep_rotated_cookie(self):
+        """If auth/refresh handed back a NEW cv_refresh_token, keep it.
+
+        The old code never read Set-Cookie, so a rotated token was thrown
+        away and the stored one died a day or so later (the watch session
+        stopped refreshing ~26h after it was linked on 2026-11-10; the main
+        one went the same way). Harmless if CrowdVolt doesn't rotate."""
+        fresh = {}
+        for header in self._last_set_cookie or []:
+            name, _, rest = header.partition("=")
+            name = name.strip()
+            if name in COOKIE_NAMES:
+                value = rest.split(";", 1)[0].strip()
+                if value:
+                    fresh[name] = value
+        if not fresh or all((self._cookies or {}).get(k) == v for k, v in fresh.items()):
+            return
+        self._cookies = {**(self._cookies or {}), **fresh}
+        state = _read_state(self._profile)
+        state["cookies"] = {**(state.get("cookies") or {}), **fresh}
+        state["rotated_at"] = time.time()
+        _write_state(state, self._profile)
 
     def _remember_user(self, user):
         """Record which CrowdVolt user this profile's cookie belongs to, and
@@ -310,8 +335,10 @@ class CvAuth:
             req.data = data.encode()
         try:
             with urllib.request.urlopen(req, timeout=45) as r:
+                self._last_set_cookie = r.headers.get_all("Set-Cookie") or []
                 return r.status, r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
+            self._last_set_cookie = []
             return e.code, e.read().decode("utf-8", "replace")
 
     def call(self, url, method="GET", body=None):
