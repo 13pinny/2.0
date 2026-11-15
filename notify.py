@@ -1329,6 +1329,15 @@ def notify_dice(kind, info):
     return {"discord": _post_discord(discord_url, {"embeds": [embed]})}
 
 
+def dice_title_who(name, date_text=None):
+    """'Kettama · Fri Oct 9' — the event and its night for a DICE ping title
+    (date_text = venue-local 'YYYY-MM-DD…' or an ISO start). Name alone when
+    there's no usable date."""
+    d = _event_day(date_text)
+    name = name or "DICE event"
+    return f"{name} · {d.strftime('%a %b')} {d.day}" if d else name
+
+
 def notify_dice_price(kind, info):
     """Tracked-DICE-event ping from dice_alerts.py. `kind` is the most urgent
     change ('restock' / 'price_down' / 'soldout' / 'price_up' / 'type_soldout'
@@ -1350,30 +1359,42 @@ def notify_dice_price(kind, info):
     # headline change's own type price (dice_alerts._headline_prices).
     old_p = info.get("headline_old", info.get("old_min_price"))
     new_p = info.get("headline_new", info.get("min_price"))
+    typ = info.get("headline_type")
+    cheapest = info.get("min_price")
 
     def m(v):
         return f"{sym}{v:,.0f}" if float(v).is_integer() else f"{sym}{v:,.2f}"
-    move = f"{m(old_p)} → {m(new_p)}" if old_p is not None and new_p is not None else None
-    if move and info.get("headline_type"):
-        move = f"{info['headline_type']} {move}"
+    # Title = "<event> · <night> — WHAT HAPPENED: <type> $old → $new", so the
+    # phone push alone says which show, which night, what moved and by how much.
+    who = dice_title_who(name, info.get("date_text"))
+    what = typ or "cheapest"
+    move = (f"{what} {m(old_p)} → {m(new_p)}"
+            if old_p is not None and new_p is not None else None)
     if kind == "restock":
-        title = f"⚡ DICE: {name} is BACK on sale" + (
-            f" — {move}" if move else f" from {m(new_p)}" if new_p is not None else "")
+        title = f"⚡ {who} — BACK ON SALE" + (
+            f" from {m(new_p)}" if new_p is not None else "") + (
+            f" (was {m(old_p)})" if old_p is not None and old_p != new_p else "")
         color = 0x00B0F4
     elif kind == "soldout":
-        title = f"🚫 DICE: {name} sold out — waitlist only" + (f" (was {m(old_p)})" if old_p is not None else "")
+        title = f"🚫 {who} — SOLD OUT, waitlist only" + (f" (was {m(old_p)})" if old_p is not None else "")
         color = 0x99AAB5
     elif kind == "onsale":
-        title = f"🎟️ DICE: {name} is ON SALE" + (f" from {m(new_p)}" if new_p is not None else "")
+        title = f"🎟️ {who} — ON SALE" + (f" from {m(new_p)}" if new_p is not None else "")
         color = 0x56D364
     elif kind == "type_soldout":
-        title = f"⏳ DICE: {name} — a ticket type sold out" + (f" (was {m(old_p)})" if old_p is not None else "")
+        title = (f"⏳ {who} — {typ or 'a ticket type'} SOLD OUT"
+                 + (f" (was {m(old_p)})" if old_p is not None else "")
+                 + (f" · cheapest now {m(cheapest)}" if cheapest is not None else ""))
         color = 0xED4245
     elif kind == "price_down":
-        title = f"⚡ DICE: {name} {move}" if move else f"⚡ DICE: {name} price DROPPED"
+        title = f"⚡ {who} — PRICE DROP: {move}" if move else f"⚡ {who} — PRICE DROP"
         color = 0x00B0F4
     else:
-        title = f"📈 DICE: {name} {move}" if move else f"📈 DICE: {name} price went up"
+        title = f"📈 {who} — PRICE UP: {move}" if move else f"📈 {who} — PRICE UP"
+        sold = info.get("sold_types") or []
+        if sold and not typ:
+            # The cheapest climbed because a cheaper type sold through.
+            title += f" ({sold[0]}{' +' + str(len(sold) - 1) if len(sold) > 1 else ''} sold out)"
         color = 0xFAA61A
     where = " · ".join(x for x in (info.get("venue"), info.get("date_text")) if x)
     lines = ([f"**{where}**"] if where else []) + list(info.get("lines") or [])

@@ -386,9 +386,10 @@ def _ping(follow, kind, ev):
         lines.append(f"**{start.strftime('%a %b %-d, %Y · %-I:%M %p')}**" + (f" · {where}" if where else ""))
     elif where:
         lines.append(f"**{where}**")
+    show = notify.dice_title_who(ev["name"], ev.get("event_start"))
     if kind == "new":
-        title = (f"🆕 {ev['name']} just announced" if _norm(who) in _norm(ev["name"])
-                 else f"🆕 {who}: {ev['name']} just announced")
+        title = (f"🆕 {show} — JUST ANNOUNCED" if _norm(who) in _norm(ev["name"])
+                 else f"🆕 {who}: {show} — JUST ANNOUNCED")
         color = 0xE91E63
         if ev.get("status") == "onsale":
             lines.append("Tickets are **on sale now**.")
@@ -397,12 +398,12 @@ def _ping(follow, kind, ev):
         elif ev.get("status") == "soldout":
             lines.append("Already sold out / waitlist only.")
     elif kind == "reminder":
-        title = f"⏰ {ev['name']} goes on sale in 1 hour"
+        title = f"⏰ {show} — ON SALE IN 1 HOUR"
         color = 0xFAA61A
         if sale:
             lines.append(f"Sale opens {_ts(sale, 't')} ({_ts(sale, 'R')}).")
     else:
-        title = f"🟢 {ev['name']} is ON SALE now"
+        title = f"🟢 {show} — ON SALE NOW"
         color = 0x56D364
     lines.append(f"[Open on DICE]({ev['url']})")
     embed = {"title": title[:250], "description": "\n".join(lines)[:4000],
