@@ -1,12 +1,20 @@
 {
   "manifest_version": 3,
   "name": "Kartis B2B Snipes",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Set Automatiq / TickPick / CrowdVolt price pings from the event page you're on.",
   "action": {
     "default_popup": "popup.html",
     "default_title": "B2B Snipes"
   },
-  "permissions": ["activeTab", "storage"],
-  "host_permissions": ["https://kartis.homes/*"]
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "https://kartis.homes/*",
+    "https://app.sync.automatiq.com/*",
+    "https://www.tickpick.com/*",
+    "https://www.crowdvolt.com/*"
+  ]
 }

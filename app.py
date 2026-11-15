@@ -4738,6 +4738,19 @@ def api_snipe():
     return jsonify(body)
 
 
+@app.route("/api/snipe/index")
+def api_snipe_index():
+    """Tracked shows, small: the Chrome extension's badge reads this."""
+    return jsonify({"events": b2b_snipe.index()})
+
+
+@app.route("/api/snipe/event/detail")
+def api_snipe_event_detail():
+    """One show with rules, per-section prices and recent pings (extension popup)."""
+    from flask import request
+    return _snipe_call(lambda: b2b_snipe.event_detail(request.args.get("id") or ""))
+
+
 @app.route("/api/snipe/settings", methods=["POST"])
 def api_snipe_settings():
     from flask import request

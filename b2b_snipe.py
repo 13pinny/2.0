@@ -814,6 +814,36 @@ def _process(event, glob, now_iso):
     return len(fresh)
 
 
+_VENUE_NOISE = {"the", "at", "of", "and", "new", "york", "nyc", "ny", "il", "fl", "ca", "tx",
+                "miami", "florida", "brooklyn", "queens", "los", "angeles", "chicago", "illinois",
+                "california", "texas", "las", "vegas", "san", "diego", "francisco", "center",
+                "club", "hall", "park", "studios", "theater", "theatre", "arena", "stage", "tickets"}
+_TP_SLUG_RE = re.compile(r"/buy-(.+?)-tickets-(.+?)-\d{1,2}-\d{1,2}-\d{2}-[0-9apm]+/\d+/?$")
+
+
+def _venue_words(text):
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(w) > 2 and w not in _VENUE_NOISE and w not in _MONTHS and not w.isdigit()}
+
+
+def venue_ok(event, platform, ref):
+    """Does a searched TickPick ref sit at the CrowdVolt event's venue? Only
+    checkable when both sides name a venue (TickPick URLs carry one; a CV
+    slug usually does); anything uncheckable passes."""
+    if platform != "tickpick" or not event.get("cv_event_uqid"):
+        return True
+    m = _TP_SLUG_RE.search(ref or "")
+    if not m:
+        return True
+    artist = _venue_words(m.group(1))
+    theirs = _venue_words(m.group(2)) - artist
+    ours = _venue_words(event["cv_event_uqid"].replace("-", " ")) - artist         - _venue_words(event.get("name"))
+    ours |= _venue_words(event.get("venue"))
+    if not theirs or not ours:
+        return True
+    return bool(theirs & ours)
+
+
 def ingest(event_id, platform, listings=None, bids=None, error=None, ref=None):
     """Store one platform's read for an event (from the relay or the CV
     fetch) and ping anything new. `error` records a failed read and keeps the
@@ -824,6 +854,11 @@ def ingest(event_id, platform, listings=None, bids=None, error=None, ref=None):
     if not event:
         raise SnipeError("no such event")
     if ref and platform in B2B_PLATFORMS and not event.get(f"{platform}_ref"):
+        if not venue_ok(event, platform, ref):
+            # the laptop's name+date search landed on the same artist at
+            # another venue (Carl Cox at Club Space vs Coca-Cola Roxy)
+            _store_snapshot(event_id, platform, error=f"search hit another venue: {ref}")
+            return {"stored": False, "error": "venue mismatch", "rejected_ref": ref}
         with db.connect() as conn:      # the laptop found the show by search
             conn.execute(f"UPDATE snipe_events SET {platform}_ref = ? WHERE id = ?",
                          (str(ref)[:500], event_id))
@@ -1079,6 +1114,61 @@ def _relay_health():
            and (not r["fetched_at"] or r["error_at"] > r["fetched_at"])]
     return {"ok": ok, "failing": len(bad),
             "last_error": max(bad, key=lambda r: r["error_at"])["error"][:160] if bad else None}
+
+
+def section_summary(snaps):
+    """Per (platform, section): cheapest ask, its qty, how many listings, and
+    the best offer - what the extension lists as clickable sections."""
+    out = {}
+    for p, s in snaps.items():
+        book = (s or {}).get("book") or {}
+        for side in ("asks", "bids"):
+            for l in book.get(side) or []:
+                sec = l.get("section") or ""
+                if not sec:
+                    continue
+                k = (p, sec)
+                row = out.setdefault(k, {"platform": p, "section": sec, "zone": zone_of(sec),
+                                         "min_price": None, "min_qty": None, "listings": 0,
+                                         "unmapped": False, "best_offer": None})
+                if side == "asks":
+                    row["listings"] += 1
+                    row["unmapped"] = row["unmapped"] or bool(l.get("unmapped"))
+                    if row["min_price"] is None or l["price"] < row["min_price"]:
+                        row["min_price"], row["min_qty"] = l["price"], l.get("qty")
+                elif row["best_offer"] is None or l["price"] > row["best_offer"]:
+                    row["best_offer"] = l["price"]
+    return sorted(out.values(), key=lambda r: (r["min_price"] is None, r["min_price"] or 0))
+
+
+def index():
+    """Small list of every tracked show for the extension's badge."""
+    last = {r["event_id"]: r for r in _rows(
+        "SELECT event_id, MAX(at) AS at, title FROM snipe_pings GROUP BY event_id")}
+    n_rules = {r["event_id"]: r["n"] for r in _rows(
+        "SELECT event_id, COUNT(*) AS n FROM snipe_rules WHERE enabled = 1 GROUP BY event_id")}
+    keep = ("id", "name", "event_date", "venue", "automatiq_ref", "tickpick_ref",
+            "cv_event_uqid", "cv_url", "auto", "paused", "muted")
+    return [{**{k: ev.get(k) for k in keep}, "n_rules": n_rules.get(ev["id"], 0),
+             "last_ping": last.get(ev["id"])} for ev in list_events()]
+
+
+def event_detail(event_id):
+    """One show for the extension: event, rules, per-section prices, pings."""
+    ev = get_event(event_id)
+    if not ev:
+        raise SnipeError("no such event")
+    glob = settings()
+    snaps = snapshots(event_id)
+    now = _now()
+    plats = {p: {"fetched_at": s.get("fetched_at"), "error": s.get("error"),
+                 "error_at": s.get("error_at"), "fresh": is_fresh(s, ev, glob, now)}
+             for p, s in snaps.items()}
+    pings = _rows("SELECT id, kind, title, at FROM snipe_pings WHERE event_id = ? "
+                  "ORDER BY id DESC LIMIT 5", (event_id,))
+    return {**ev, "rules": rules_for(event_id), "platforms": plats,
+            "sections": section_summary(snaps), "effective": effective(ev, glob),
+            "pings": pings}
 
 
 def overview():
