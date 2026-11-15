@@ -376,8 +376,8 @@ def main():
     sched = BackgroundScheduler(daemon=True, timezone="UTC")
     sched.add_job(tick, "interval", seconds=INTERVAL, id="tm_check")
     # This box creates DICE event channels too (dice watcher pings), so it
-    # sweeps the ones it knows 30 days after their show. (Same job as app.py.)
-    sched.add_job(lambda: discord_bot.delete_expired(), "cron", hour=4, minute=17,
+    # sweeps the ones it knows a day after their show (hourly). (Same job as app.py.)
+    sched.add_job(lambda: discord_bot.delete_expired(), "cron", minute=17,
                   id="discord_channel_cleanup")
     if DICE_SNIPER_ENABLED:
         sched.add_job(dice_sniper, "interval", seconds=DICE_SNIPER_SECONDS,

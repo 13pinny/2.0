@@ -155,7 +155,7 @@ def _shocks_webhook(key=None):
     return _bot_channel_webhook(channel)
 
 
-DICE_CHANNEL_KEEP_DAYS = int(os.environ.get("KARTIS_DICE_CHANNEL_KEEP_DAYS", "30"))
+DICE_CHANNEL_KEEP_DAYS = int(os.environ.get("KARTIS_DICE_CHANNEL_KEEP_DAYS", "1"))
 _MONTH_ABBR = ("jan", "feb", "mar", "apr", "may", "jun",
                "jul", "aug", "sep", "oct", "nov", "dec")
 
@@ -191,7 +191,7 @@ def dice_event_channel_webhook(name, date_text=None):
     """The bot-created #dice-<event>-<date> channel's webhook, or None (no
     bot, nothing to slug, or an API failure). Callers with their own routing
     (the drop-watcher ticks) use this so a missing bot leaves it alone.
-    Also stamps the channel deletable DICE_CHANNEL_KEEP_DAYS (30) after the
+    Also stamps the channel deletable DICE_CHANNEL_KEEP_DAYS (1) after the
     event — discord_bot.delete_expired removes it on the daily sweep."""
     channel = dice_event_channel(name, date_text)
     if not channel:

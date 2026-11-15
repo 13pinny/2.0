@@ -29,7 +29,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import db
 
@@ -159,9 +159,39 @@ def webhook_for(name, category=None):
 
 
 
+def _rebase_dice_expiry():
+    """When KARTIS_DICE_CHANNEL_KEEP_DAYS changes, move the expiry already
+    stamped on every #dice-* channel by the difference, so existing show
+    channels follow the new window instead of the one they were created
+    under. The window in effect is remembered in setting
+    dice_channel_keep_days (unset = the old 30-day default)."""
+    try:
+        import notify
+        keep = int(notify.DICE_CHANNEL_KEEP_DAYS)
+        prev = int(db.setting_get("dice_channel_keep_days") or 30)
+        if prev == keep:
+            return
+        delta = keep - prev
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT name, expires_at FROM discord_event_channels "
+                "WHERE name LIKE 'dice-%' AND expires_at IS NOT NULL").fetchall()
+            for r in rows:
+                try:
+                    exp = datetime.fromisoformat(r["expires_at"]) + timedelta(days=delta)
+                except ValueError:
+                    continue
+                conn.execute("UPDATE discord_event_channels SET expires_at = ? WHERE name = ?",
+                             (exp.isoformat(), r["name"]))
+        db.setting_set("dice_channel_keep_days", str(keep), datetime.now(timezone.utc).isoformat())
+        print(f"[discord_bot] dice channel window {prev}d -> {keep}d: rebased {len(rows)} channel(s)", flush=True)
+    except Exception as e:
+        print(f"[discord_bot] dice expiry rebase failed: {type(e).__name__}: {e}", flush=True)
+
+
 def delete_expired(now_iso=None):
     """Delete every bot channel whose expires_at has passed (DICE event
-    channels, 30 days after the show) and forget it. A channel already gone
+    channels, notify.DICE_CHANNEL_KEEP_DAYS after the show) and forget it. A channel already gone
     on Discord (404) just drops out of the cache. Returns {"deleted": [...],
     "errors": [...]}. Only rows this machine has resolved are known, so each
     machine running a scheduler cleans up its own; a channel the other
@@ -171,6 +201,7 @@ def delete_expired(now_iso=None):
     out = {"deleted": [], "errors": []}
     if not configured():
         return out
+    _rebase_dice_expiry()
     for row in db.discord_channels_expired(now_iso):
         name, chan = row["name"], row.get("channel_id")
         try:

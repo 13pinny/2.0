@@ -8638,6 +8638,36 @@ def _dice_tracked_codes():
             for c in market | watched}
 
 
+# A tracked DICE event is dropped from the tracker this long after its start,
+# so finished shows stop filling /dice and /events. Holdings, purchases,
+# sales and the tier log are untouched.
+DICE_TRACK_KEEP_HOURS = float(os.environ.get("KARTIS_DICE_TRACK_KEEP_HOURS", "24"))
+
+
+def _dice_prune_past():
+    """Untrack (market_manual) every DICE event whose start is more than
+    DICE_TRACK_KEEP_HOURS ago, read from the labels cache only (no network).
+    An event with no known start is left alone. Drop watchers are reaped by
+    _purge_past_watchers. Returns the removed codes."""
+    if DICE_TRACK_KEEP_HOURS <= 0:
+        return []
+    cutoff_ms = datetime.now(timezone.utc).timestamp() * 1000 - DICE_TRACK_KEEP_HOURS * 3600e3
+    removed = []
+    for r in db.market_manual_all():
+        if r["source"] != "dice":
+            continue
+        try:
+            first_ms = ((dice._read_cache(str(r["code"])) or {}).get("meta") or {}).get("firstPerfMs")
+        except Exception:
+            first_ms = None
+        if first_ms and first_ms < cutoff_ms:
+            db.market_manual_remove(r["id"])
+            removed.append(str(r["code"]))
+    if removed:
+        print(f"[dice] untracked {len(removed)} past event(s): {removed}", flush=True)
+    return removed
+
+
 def _dice_price_ladder(history, now_iso):
     """Cheapest ON-SALE price over time, from the tier log: [[iso, price]]
     with a point only where it moved (None = nothing buyable). The /dice
@@ -8696,6 +8726,10 @@ def _dice_payload(force=False):
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
     now_ms = now.timestamp() * 1000
+    try:
+        _dice_prune_past()
+    except Exception as e:
+        print(f"[dice] past-event prune failed: {e}")
     tracked = _dice_tracked_codes()
     if force:
         from concurrent.futures import ThreadPoolExecutor
@@ -8849,6 +8883,10 @@ def run_dice_alerts():
             return None
         muted = db.setting_get_bool("master_muted", default=False)
         import dice_alerts
+        try:
+            _dice_prune_past()
+        except Exception as e:
+            print(f"[dice-alerts] past-event prune failed: {e}")
         summary = dice_alerts.run_tick(list(_dice_tracked_codes()),
                                        notify_fn=None if muted else notify.notify_dice_price,
                                        now_iso=now_iso)
@@ -10943,10 +10981,10 @@ if CHECKIN_REMIND_ENABLED:
     scheduler.add_job(run_checkin_remind, "cron", day_of_week=CHECKIN_REMIND_DAYS,
                       hour=CHECKIN_REMIND_HOUR, minute=0, timezone="America/New_York",
                       id="checkin_remind")
-# Delete DICE event channels 30 days after their show (notify.dice_event_
-# channel_webhook stamps the expiry). Daily, off the hour; a no-op without
+# Delete DICE event channels a day after their show (KARTIS_DICE_CHANNEL_KEEP_DAYS) (notify.dice_event_
+# channel_webhook stamps the expiry). Hourly, off the hour; a no-op without
 # the Discord bot.
-scheduler.add_job(lambda: discord_bot.delete_expired(), "cron", hour=4, minute=17,
+scheduler.add_job(lambda: discord_bot.delete_expired(), "cron", minute=17,
                   id="discord_channel_cleanup")
 # Festival/GA sales snapshots — fire one immediately (next_run_time) so the
 # Festival / GA Tracker pages have a baseline right after a restart, then
