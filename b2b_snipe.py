@@ -837,8 +837,9 @@ def venue_ok(event, platform, ref):
         return True
     artist = _venue_words(m.group(1))
     theirs = _venue_words(m.group(2)) - artist
-    ours = _venue_words(event["cv_event_uqid"].replace("-", " ")) - artist         - _venue_words(event.get("name"))
-    ours |= _venue_words(event.get("venue"))
+    # CrowdVolt-derived names carry the venue ("William Black ... Brooklyn
+    # Steel"), so only the TickPick artist words are taken out.
+    ours = (_venue_words(event["cv_event_uqid"].replace("-", " ")) - artist)         | _venue_words(event.get("venue"))
     if not theirs or not ours:
         return True
     return bool(theirs & ours)
