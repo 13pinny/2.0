@@ -9722,6 +9722,24 @@ def api_kupat_pdf():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"Unexpected: {e}"}), 500
+    # The dashboard runs on the VPS, so the folder above is on the server.
+    # Hand the PDFs back as a zip the browser saves into Downloads (same
+    # temp store + download route as the Pacha tool).
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for t in manifest.get("tickets") or []:
+            try:
+                zf.write(t["file"], arcname=t["filename"])
+            except OSError:
+                pass
+    if manifest.get("tickets"):
+        _PACHA_TMP.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+        (_PACHA_TMP / f"{token}.zip").write_bytes(buf.getvalue())
+        folder_name = Path(manifest.get("folder") or "Kupat tickets").name
+        manifest["download_name"] = f"{folder_name}.zip"
+        manifest["download_url"] = f"/api/pacha-download/{token}"
     return jsonify(manifest)
 
 

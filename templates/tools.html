@@ -75,9 +75,8 @@
       <code style="color:var(--cyan);">tickets.kupat.co.il/edocument/&lt;uuid&gt;/?id=&lt;number&gt;</code>) and we&rsquo;ll
       drive a headless browser to render each ticket in the order as its own PDF, named
       <code style="color:var(--cyan);">&lt;EventName&gt;_&lt;Date&gt;_&lt;Section&gt;_Row&lt;N&gt;_Seat&lt;N&gt;.pdf</code>,
-      saved into a per-event folder under
-      <code style="color:var(--cyan);">$KARTIS_TICKETS_DIR</code>
-      (defaults to <code>~/OneDrive/KartisTickets/</code>). Takes ~5s per ticket.
+      bundled into a <strong>zip that downloads to your Downloads folder</strong>.
+      Takes ~5s per ticket.
     </div>
     <form id="kupat-form" onsubmit="return false;">
       <label for="kupat-url">Kupat e-document URL</label>
@@ -162,9 +161,16 @@ $("kupat-go").addEventListener("click", async () => {
       <div class="row">✓ Saved <strong>${data.tickets.length}</strong> tickets for
         <strong>${esc(data.event_name || "")}</strong> at <strong>${esc(data.venue || "")}</strong>
         · ${esc((data.event_date || "").slice(0, 16))}</div>
-      <div class="row">Folder: <span class="folder">${esc(data.folder)}</span></div>
       <ul class="file-list">${fileList}</ul>
     `;
+    if (data.download_url) {
+      const name = data.download_name || "Kupat tickets.zip";
+      const href = data.download_url + "?name=" + encodeURIComponent(name);
+      const a = document.createElement("a");
+      a.href = href; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      statusEl.innerHTML += `<div class="row" style="margin-top:8px;">⬇ <a href="${esc(href)}" style="color:var(--accent);">Download ${esc(name)}</a> (saved to your Downloads automatically)</div>`;
+    }
   } catch (e) {
     statusEl.className = "status error";
     statusEl.innerHTML = `<div class="row">⚠ ${esc(e.message || e)}</div>`;
