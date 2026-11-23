@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Kartis Stock",
+  "version": "1.0.0",
+  "description": "One click on a ticket page: the show and (on Ticketmaster) tickets left per section go into today's column on kartis.homes/stock.",
+  "action": {
+    "default_title": "Send this show to Kartis Stock"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "https://*.ticketmaster.com/*",
+    "https://*.livenation.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.ticketmaster.com/*", "https://*.livenation.com/*"],
+      "js": ["hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  }
+}

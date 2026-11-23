@@ -151,6 +151,7 @@
   <p style="text-align:center"><a id="bmLink" class="act primary" style="display:inline-block;text-decoration:none;padding:9px 18px;border-radius:8px;background:var(--cyan);color:#fff;font-size:13px;font-weight:600" href="#">+ Kartis Stock</a></p>
   <p><b>Phone:</b> bookmark any page, edit that bookmark, and paste this in as its address. Then open the bookmark while you're on the event page.</p>
   <div style="display:flex;gap:8px"><input id="bmCode" readonly><button class="act" id="bmCopy">Copy</button></div>
+  <p style="margin-top:14px"><b>Ticketmaster tickets left:</b> the Kartis Stock Chrome extension does what the bookmark does and also fills today's tickets left and price per section from Ticketmaster's own seat-map data. To install it, open <code>chrome://extensions</code>, turn on Developer mode, click <i>Load unpacked</i> and pick the <code>chrome_extension\kartis_stock</code> folder in the Kartis repo. Then open (or reload) a Ticketmaster event, let the seat map finish loading, and click the extension's button.</p>
   <div class="btns"><button class="act" id="bmClose">Close</button></div>
 </dialog>
 
@@ -484,6 +485,8 @@ async function addFromHash() {
   const j = await api('/add', Object.assign({}, o, {from_page: true}));
   if (j.updated) say(j.updated.length ? `“${o.name}” was already here; filled in ${j.updated.join(', ').replace(/event_date_iso/, 'date').replace(/image_url/, 'artwork')}.` : `“${o.name}” is already here.`, true);
   else say(`Added “${o.name}”.`, true);
+  if (j.sections_written) say(document.getElementById('msg').textContent + ` Today's tickets left filled for ${j.sections_written} section${j.sections_written === 1 ? '' : 's'}.`, true);
+  else if (o.sections && !o.sections.length) say(document.getElementById('msg').textContent + ' No section counts on the page yet; wait for the seat map to load, then click again.', true);
   await load(j.id);
   return true;
 }

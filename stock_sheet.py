@@ -567,12 +567,40 @@ def add_show(body):
                    note=None if body.get("from_page") else out["note"])
     else:
         out["id"] = save_event(fields)
+    if body.get("sections"):
+        out["sections_written"] = write_page_sections(out["id"], body["sections"])
     if info.get("source"):
         try:
             out["auto"] = auto_read(out["id"])
         except Exception as e:
             out["note"] = f"couldn't read stock: {e}"[:200]
     return out
+
+
+def write_page_sections(event_id, sections):
+    """Today's Left/Price per section as read off the ticket page by the
+    Kartis Stock extension ([{name, remaining, price}]). The user clicked
+    for these, so they replace today's cells (marked auto, shown blue); a
+    missing section is created."""
+    now, day, n = _now(), today(), 0
+    with _conn() as conn:
+        secs = {_norm(r["name"]): r["id"] for r in conn.execute(
+            "SELECT id, name FROM stock_sections WHERE event_id = ?", (event_id,)).fetchall()}
+        for s in sections or []:
+            if not isinstance(s, dict):
+                continue
+            name = str(s.get("name") or "").strip()[:80]
+            rem, price = _int(s.get("remaining")), _num(s.get("price"))
+            if not name or (rem is None and price is None):
+                continue
+            sid = secs.get(_norm(name))
+            if not sid:
+                sid = secs[_norm(name)] = _add_section(conn, event_id, name, now)
+            _write_entry(conn, sid, event_id, day, rem, price, True, now)
+            n += 1
+        conn.execute("UPDATE stock_events SET updated_at = ? WHERE id = ?", (now, event_id))
+        conn.commit()
+    return n
 
 
 def _norm(s):
