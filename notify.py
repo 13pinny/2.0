@@ -215,6 +215,100 @@ def dice_event_channel_webhook(name, date_text=None):
     return url
 
 
+def _date_channel_day(seat):
+    """Venue-local show date of a seat stamped with `_perf_ms` (TM event-level
+    and tmdiscover seats), or None."""
+    ms = seat.get("_perf_ms")
+    if not ms:
+        return None
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.fromtimestamp(int(ms) / 1000, ZoneInfo("Asia/Jerusalem")).date()
+    except Exception:
+        return None
+
+
+def date_channel_groups(w, matched):
+    """[(seats, discord_override_url)] for one drop ping.
+
+    Default: one group, routed to the watcher's own `discord_channel`.
+    When the watcher's filters JSON carries `"per_date_channels": "<prefix>"`
+    (a pre-slugged lowercase name), the ping is split per show DATE into
+    `#<prefix>-<mon>-<day>` (e.g. #next-dec-7), so every night of a
+    multi-date series has its own channel — and several watchers given the
+    same prefix (NEXT's MAS03 + MAS04 events and its series page) share one
+    channel per night. Seats with no date stay in the watcher's own channel.
+    A failed channel resolve falls back to the watcher's channel. Channels
+    are stamped deletable DICE_CHANNEL_KEEP_DAYS after the show, like DICE's.
+    """
+    import discord_bot
+    base_hook = None
+
+    def _base():
+        nonlocal base_hook
+        if base_hook is None:
+            base_hook = discord_bot.webhook_for(w.get("discord_channel")) or ""
+        return base_hook or None
+
+    try:
+        f = w.get("filters")
+        f = json.loads(f) if isinstance(f, str) else (f or {})
+        prefix = str(f.get("per_date_channels") or "").strip().lower()
+    except Exception:
+        prefix = ""
+    if not prefix:
+        return [(matched, _base())]
+    groups = {}
+    for s in matched:
+        groups.setdefault(_date_channel_day(s), []).append(s)
+    out = []
+    for day in sorted(groups, key=lambda d: (d is None, d)):
+        seats = groups[day]
+        if day is None:
+            out.append((seats, _base()))
+            continue
+        channel = f"{prefix}-{_MONTH_ABBR[day.month - 1]}-{day.day}"
+        try:
+            url = discord_bot.webhook_for(channel) or None
+        except Exception as e:
+            print(f"[notify] {channel} bot channel failed: {e}")
+            url = None
+        if url:
+            try:
+                from datetime import datetime, time, timedelta, timezone
+                import db
+                expires = datetime.combine(day + timedelta(days=DICE_CHANNEL_KEEP_DAYS + 1),
+                                           time(0, 0), tzinfo=timezone.utc)
+                db.discord_channel_set_expiry(channel, expires.isoformat())
+            except Exception as e:
+                print(f"[notify] {channel} expiry not stored: {e}")
+        out.append((seats, url or _base()))
+    return out
+
+
+def group_headline(src_name, seats, headline, name):
+    """Headline for one per-date slice of a split ping (see
+    date_channel_groups): the slice's own status flip, else the whole ping's
+    headline when it wasn't a status one."""
+    fest = next((s for s in seats if s.get("festival") or s.get("ga")), None)
+    if fest:
+        return {
+            "soldout": f"❌ Sold out — {name}",
+            "lasttickets": f"⚠️ Last tickets — {name}",
+            "available": f"🎟️ Available again — {name}",
+            "closed": f"⛔ Sales closed — {name}",
+        }.get(fest.get("status"), headline)
+    if src_name == "tmdiscover":
+        last = all((s.get("status") or "") == "low_availability" for s in seats)
+        icon, tail = ("⚠️", " (כרטיסים אחרונים)") if last else ("🎟️", "")
+        return f"{icon} {len(seats)} date{'s' if len(seats) != 1 else ''} just opened{tail} — {name}"
+    if headline and any(h in headline for h in ("Sold out —", "Last tickets —",
+                                                 "Available again —", "Sales closed —")):
+        return None
+    return headline
+
+
 def dice_event_webhook(name, fallback=None, date_text=None):
     """Every ping about a DICE event — drops, restocks/price-drop shocks,
     sell-outs, climbs, on-sale — goes to that event's own bot-created

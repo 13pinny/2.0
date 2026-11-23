@@ -410,6 +410,9 @@ def fetch_selectable_seats(event_code, perf_code="0"):
             # a ping for one date of a series doesn't get stamped with the
             # series' opening night (meta.firstPerfText).
             "date_text": entry_date(entry)[0],
+            # Start in epoch ms for notify.date_channel_groups' per-night
+            # channel routing. Not part of the seat key.
+            "_perf_ms": start_ms,
         })
     return seats
 

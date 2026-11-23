@@ -856,6 +856,14 @@ def fetch_event_seats(event_code):
             last = _last_known(_last_onsale_seats, (event_code, perf_code))
             if last is not None:
                 seats.extend(dict(s) for s in last)
+    # Stamp each perf's start on its seats (status, radar and real alike) so
+    # notify.date_channel_groups can route a ping to that night's channel.
+    # Not part of any seat key.
+    perf_ms = {str(p.get("performanceCode") or ""): p.get("performanceDate") for p in perfs}
+    for s in seats:
+        ms = perf_ms.get(str(s.get("_perf") or ""))
+        if ms:
+            s["_perf_ms"] = ms
     if attempted and failed == attempted:
         raise TicketmasterError(
             f"all {attempted} on-sale perf(s) failed for {event_code}: {per_perf_errors}"

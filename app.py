@@ -6832,15 +6832,25 @@ def _check_one_watcher(w, now_iso):
                 _dmeta.get("eventName") or label, _dmeta.get("firstPerfText"))
 
         if enabled and matched:
-            result = notify.notify_drop(
-                label=label, perf_url=perf_url,
-                added_seats=matched, removed_count=len(removed),
-                total_now=len(seats), labels=labels,
-                channels=enabled,
-                headline=headline,
-                discord_override=_dice_hook or discord_bot.webhook_for(w.get("discord_channel")),
-                status_override=_dice_hook,
-            )
+            # One send per show night when the watcher asks for per-date
+            # channels (notify.date_channel_groups); otherwise one send to its
+            # own channel exactly as before. (Keep in sync with watcher_only.py.)
+            _groups = ([(matched, _dice_hook)] if _dice_hook
+                       else notify.date_channel_groups(w, matched))
+            _results = []
+            for _gseats, _ghook in _groups:
+                _results.append(notify.notify_drop(
+                    label=label, perf_url=perf_url,
+                    added_seats=_gseats, removed_count=len(removed),
+                    total_now=len(seats), labels=labels,
+                    channels=enabled,
+                    headline=(headline if len(_groups) == 1
+                              else notify.group_headline(src_name, _gseats, headline, label)),
+                    discord_override=_ghook,
+                    status_override=_dice_hook,
+                ))
+            result = (_results[0] if len(_results) == 1 else
+                      {k: "; ".join(str(r.get(k)) for r in _results) for k in _results[0]})
             # Stamp the physical seats we just pinged so they cool down.
             if SEAT_COOLDOWN_SECONDS > 0:
                 db.tm_seat_cooldown_mark(
@@ -10148,6 +10158,17 @@ def api_watchers_update():
                 out_f[k] = float(v)
             except (TypeError, ValueError):
                 pass
+        # Routing setting with no UI control (notify.date_channel_groups):
+        # keep the stored value unless the body sets it explicitly.
+        if "per_date_channels" in f:
+            pdc = discord_bot.slugify_label(str(f.get("per_date_channels") or "")) or None
+        else:
+            try:
+                pdc = (json.loads(db.tm_get_watcher(wid).get("filters") or "{}") or {}).get("per_date_channels")
+            except Exception:
+                pdc = None
+        if pdc:
+            out_f["per_date_channels"] = pdc
         fields["filters"] = json.dumps(out_f) if out_f else None
     if not fields:
         return jsonify({"error": "no fields to update"}), 400

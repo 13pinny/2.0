@@ -227,14 +227,24 @@ def check_one(w, now_iso):
                 _dmeta.get("eventName") or label, _dmeta.get("firstPerfText"))
 
         if enabled and matched:
-            result = notify.notify_drop(
-                label=label, perf_url=perf_url,
-                added_seats=matched, removed_count=len(removed),
-                total_now=len(seats), labels=lbls, channels=enabled,
-                headline=headline,
-                discord_override=_dice_hook or discord_bot.webhook_for(w.get("discord_channel")),
-                status_override=_dice_hook,
-            )
+            # One send per show night when the watcher asks for per-date
+            # channels (notify.date_channel_groups); otherwise one send to its
+            # own channel exactly as before. (Keep in sync with app.py.)
+            _groups = ([(matched, _dice_hook)] if _dice_hook
+                       else notify.date_channel_groups(w, matched))
+            _results = []
+            for _gseats, _ghook in _groups:
+                _results.append(notify.notify_drop(
+                    label=label, perf_url=perf_url,
+                    added_seats=_gseats, removed_count=len(removed),
+                    total_now=len(seats), labels=lbls, channels=enabled,
+                    headline=(headline if len(_groups) == 1
+                              else notify.group_headline(src_name, _gseats, headline, label)),
+                    discord_override=_ghook,
+                    status_override=_dice_hook,
+                ))
+            result = (_results[0] if len(_results) == 1 else
+                      {k: "; ".join(str(r.get(k)) for r in _results) for k in _results[0]})
             # Stamp the physical seats we just pinged so they cool down.
             if SEAT_COOLDOWN_SECONDS > 0:
                 db.tm_seat_cooldown_mark(
