@@ -65,6 +65,9 @@ from pathlib import Path
 
 SOURCE_NAME = "tmdiscover"
 SITE_BASE = "https://discover.ticketmaster.co.il"
+# A date this long past its start is dropped from the seat set (mirrors
+# ticketmaster.PAST_PERF_GRACE_MS).
+PAST_DATE_GRACE_MS = 6 * 3600 * 1000
 API_PATH = "/public/v1/pages/"
 DEFAULT_SLUG = "next2026"
 CACHE_DIR = Path(__file__).parent / "tm_cache"  # shared cache dir; files are namespaced
@@ -377,7 +380,16 @@ def fetch_selectable_seats(event_code, perf_code="0"):
     payload = _fetch_page(event_code)
     seats = []
     perf_memo = {}
+    now_ms = time.time() * 1000
     for entry in _sorted_entries(payload):
+        # Past dates: the CMS never grays them out (on 2026-11-23 six October
+        # NEXT dates still read "last tickets"), so they sat in the seat set
+        # as "buyable" forever and any later CMS edit to one would ping.
+        # Same grace as ticketmaster.PAST_PERF_GRACE_MS. Dropping them is a
+        # silent removal.
+        start_ms = entry_date(entry)[1]
+        if start_ms and start_ms < now_ms - PAST_DATE_GRACE_MS:
+            continue
         status, via_tm = entry_status(entry), False
         if not is_buyable(entry):
             live = _live_perf_status(entry, perf_memo) if CROSSCHECK_ENABLED else None

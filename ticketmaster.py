@@ -243,6 +243,60 @@ STATUS_GATE_ENABLED = (os.getenv("KARTIS_TM_STATUS_GATE") or "1").strip().lower(
 PERF_STATUS_TTL_SECONDS = int(os.getenv("KARTIS_TM_PERF_STATUS_TTL") or 20)
 _perf_status_memo = {}  # event_code -> (fetched_at, {perf_code: status})
 
+# --- Unreadable gates: last-known verdict, never the raw feed -------------
+#
+# Both gates used to FAIL OPEN: an unreadable perf list or price catalog left
+# the seat feed ungated for that tick. That is a false-ping generator, not a
+# safety net, because the two gates exist precisely for perfs whose raw feed
+# is NOT buyable — and the seats endpoint (ISM) stays up when the wbtxapi
+# routes behind both gates blip. Measured on prod:
+#   * MAS04/001 (06.12, s01_onsale, EMPTY catalog, 38-40 hospitality seats in
+#     H11A/H11B/B11A/B11B/VIPG): one failed catalog read on 2026-11-22 21:19
+#     pinged all 40 as a drop; the next tick gated them out silently.
+#   * MAS03/006 (03.12, s02_soldout): 63 residual seats — including blocks the
+#     catalog does not price — pinged on 2026-10-27 AND again on 2026-11-03,
+#     same 63, each time the perf list and catalog both failed for a tick.
+# Each blip pings the standing set and the recovery tick removes it silently,
+# so the next blip pings it all again (past the 30-min seat cool-down).
+#
+# Now: a successful read is remembered per perf with no TTL, and an
+# unreadable gate falls back to it for up to GATE_FALLBACK_MAX_SECONDS. With
+# no remembered verdict, fetch_selectable_seats RAISES instead of returning
+# ungated seats — the tick loops treat an exception as "no check this tick"
+# and leave stored seat state untouched, so the cost is one missed 20s tick
+# while TM's own booking API (which the SPA needs for the same calls) is down.
+GATE_FALLBACK_MAX_SECONDS = int(os.getenv("KARTIS_TM_GATE_FALLBACK_MAX") or 6 * 3600)
+_last_status = {}  # (event, perf) -> (read_at, status)
+_last_priced = {}  # (event, perf) -> (read_at, frozenset)
+_last_onsale_seats = {}  # (event, perf) -> (read_at, [seat dicts]) — see fetch_event_seats
+
+
+def _last_known(store, key):
+    hit = store.get(key)
+    if hit and time.time() - hit[0] < GATE_FALLBACK_MAX_SECONDS:
+        return hit[1]
+    return None
+
+
+def gate_status(event_code, perf_code):
+    """perf_status, falling back to the last successful read. None = unknown."""
+    st = perf_status(event_code, perf_code)
+    key = (event_code, str(perf_code))
+    if st:
+        _last_status[key] = (time.time(), st)
+        return st
+    return _last_known(_last_status, key)
+
+
+def gate_priced(event_code, perf_code):
+    """fetch_priced_blocks, falling back to the last successful read."""
+    priced = fetch_priced_blocks(event_code, perf_code)
+    key = (event_code, str(perf_code))
+    if priced is not None:
+        _last_priced[key] = (time.time(), priced)
+        return priced
+    return _last_known(_last_priced, key)
+
 
 def perf_status(event_code, perf_code):
     """The perf-list `status` string for one performance, or None when it
@@ -266,8 +320,11 @@ def fetch_priced_blocks(event_code, perf_code):
 
     Returns a frozenset (possibly empty — meaning nothing sells online), or
     None when the catalog could not be read. None is deliberately distinct
-    from empty: callers must fail OPEN on it, since a spurious ping beats a
-    silent miss. Failures are not memoized, so a blip retries next tick.
+    from empty. Drop-checker callers go through `gate_priced`, which falls
+    back to the last good read and otherwise refuses to gate (raises) —
+    failing open pinged whole hospitality allocations, see
+    GATE_FALLBACK_MAX_SECONDS. Failures are not memoized, so a blip retries
+    next tick.
     """
     key = (event_code, perf_code)
     hit = _price_catalog_memo.get(key)
@@ -310,13 +367,17 @@ def perf_sells_online(event_code, perf_code):
 
 
 def apply_price_gate(event_code, perf_code, seats):
-    """Drop seats whose block carries no public price. Fails open (returns
-    the input unchanged) when the catalog can't be read."""
+    """Drop seats whose block carries no public price. An unreadable catalog
+    falls back to the last good one; with none, raises TicketmasterError
+    rather than passing the raw feed through (see GATE_FALLBACK_MAX_SECONDS
+    for why failing open was a false-ping generator)."""
     if not seats:
         return list(seats)
-    priced = fetch_priced_blocks(event_code, perf_code)
+    priced = gate_priced(event_code, perf_code)
     if priced is None:
-        return list(seats)
+        raise TicketmasterError(
+            f"price catalog unreadable for {event_code}/{perf_code} and no "
+            f"earlier read to fall back on — not trusting the raw seat feed")
     return [s for s in seats
             if str(s.get("block") or s.get("b") or "") in priced]
 
@@ -347,8 +408,16 @@ def fetch_selectable_seats(event_code, perf_code, price_gate=None, status_gate=N
     (equally unsellable) box allocations.
     """
     if STATUS_GATE_ENABLED if status_gate is None else status_gate:
-        st = perf_status(event_code, perf_code)
-        if st is not None and st not in _ON_SALE_STATUSES:
+        st = gate_status(event_code, perf_code)
+        if st is None:
+            # Unreadable (or perf absent from the list) with no recent good
+            # read: raise so the tick keeps its stored state — see
+            # GATE_FALLBACK_MAX_SECONDS. Returning the raw feed here is what
+            # pinged MAS03/006's 63 sold-out residual seats twice.
+            raise TicketmasterError(
+                f"perf status unreadable for {event_code}/{perf_code} — "
+                f"not trusting the raw seat feed this tick")
+        if st not in _ON_SALE_STATUSES:
             return []
     url = f"{API_HOST}{ISM_PATH}/getAllSelectableSeats/{CHANNEL}/{event_code}/{perf_code}"
     status, raw = _http_get(url)
@@ -386,7 +455,7 @@ def fetch_selectable_seats(event_code, perf_code, price_gate=None, status_gate=N
         out = apply_price_gate(event_code, perf_code, out)
         if not out:
             return []
-    if not out and gate_on and perf_sells_online(event_code, perf_code) is False:
+    if not out and gate_on and gate_priced(event_code, perf_code) == frozenset():
         # Empty seat feed AND an empty price catalog. The GA fallback below
         # would happily turn this perf's getAllGaBlock rows into an "GA
         # available" ping, but a perf that prices nothing online is not
@@ -752,7 +821,14 @@ def fetch_event_seats(event_code):
                     else:
                         _unconfirmed_skip.pop((event_code, perf_code), None)
                         if PRICE_GATE_ENABLED:
-                            ps = apply_price_gate(event_code, perf_code, ps)
+                            try:
+                                ps = apply_price_gate(event_code, perf_code, ps)
+                            except Exception as e:
+                                # No catalog verdict: omit the perf (sentinel
+                                # too) so it re-baselines silently, rather than
+                                # tracking — and later pinging — unpriced seats.
+                                per_perf_errors[perf_code] = f"unconfirmed seats: {type(e).__name__}: {e}"
+                                continue
                         seats.append({
                             "_perf": perf_code, "unconfirmed": True, "_tracking": True,
                             "block": "#tracking", "row": "", "seat": "",
@@ -769,9 +845,17 @@ def fetch_event_seats(event_code):
             for s in ps:
                 s["_perf"] = perf_code
             seats.extend(ps)
+            _last_onsale_seats[(event_code, perf_code)] = (time.time(), [dict(s) for s in ps])
         except Exception as e:
             failed += 1
             per_perf_errors[perf_code] = f"seats: {type(e).__name__}: {e}"
+            # One perf failing while others succeed used to DROP its seats
+            # from the snapshot: tm_replace_seat_state then forgot them and
+            # the recovery tick re-pinged the whole perf as a drop. Carry the
+            # last good copy forward instead (same window as the gates).
+            last = _last_known(_last_onsale_seats, (event_code, perf_code))
+            if last is not None:
+                seats.extend(dict(s) for s in last)
     if attempted and failed == attempted:
         raise TicketmasterError(
             f"all {attempted} on-sale perf(s) failed for {event_code}: {per_perf_errors}"
