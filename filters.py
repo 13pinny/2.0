@@ -6,8 +6,18 @@ The filter dict (stored as JSON in tm_watchers.filters) has shape:
       "min_group_size": 2,         # require at least N consecutive seats together
       "exclude_sections": ["BLT"],  # skip notifications for these block codes
       "min_price": 200,             # ILS lower bound (inclusive)
-      "max_price": 500              # ILS upper bound (inclusive)
+      "max_price": 500,             # ILS upper bound (inclusive)
+      "only_sections": ["13", "49"], # allow-list: ping ONLY these block codes
+      "max_row": {"49": 4}          # per block: only rows numbered <= N
     }
+
+`only_sections` and `max_row` exist for "only good seats" asks such as
+"Menorah Dec 12: a pair in the Gallery rows 1-4, or anywhere lower down":
+allow-list the Hall + VIP + Gallery blocks and cap the Gallery blocks at
+row 4. A seat in a `max_row` block whose row has no number is dropped
+(can't prove it's good enough). Adjacency is still measured against the
+FULL live snapshot, so a row-4 seat next to a just-dropped row-4 seat
+still counts as a pair.
 
 `min_group_size` adjacency rule: two seats in the same block + same row
 whose seat numbers differ by 1 OR 2 are considered adjacent. The "1 or 2"
@@ -82,6 +92,8 @@ def parse_filters(raw):
         and not excl
         and minp in (None, "")
         and maxp in (None, "")
+        and not f.get("only_sections")
+        and not f.get("max_row")
     )
     if no_filter:
         return None
@@ -132,6 +144,27 @@ def _passes_section(seat, excluded):
     if not excluded:
         return True
     return _seat_block(seat) not in {str(x) for x in excluded}
+
+
+def _passes_only(seat, only):
+    if not only:
+        return True
+    return _seat_block(seat) in {str(x) for x in only}
+
+
+def _passes_row(seat, max_row):
+    if not isinstance(max_row, dict) or not max_row:
+        return True
+    limit = max_row.get(_seat_block(seat))
+    if limit in (None, ""):
+        return True
+    m = _NUM_RE.search(_seat_row(seat))
+    if not m:
+        return False
+    try:
+        return int(m.group()) <= int(limit)
+    except (TypeError, ValueError):
+        return True
 
 
 def _passes_price(seat, labels, min_price, max_price):
@@ -193,6 +226,10 @@ def apply(added_seats, all_current, filters_raw, labels=None):
             continue
         if not _passes_section(s, excluded):
             continue
+        if not _passes_only(s, f.get("only_sections")):
+            continue
+        if not _passes_row(s, f.get("max_row")):
+            continue
         if not _passes_price(s, labels, min_price, max_price):
             continue
         if min_group > 1:
@@ -220,6 +257,13 @@ def summarize(filters_raw):
     excl = f.get("exclude_sections") or []
     if excl:
         bits.append("skip " + ",".join(str(x) for x in excl[:3]) + ("…" if len(excl) > 3 else ""))
+    only = f.get("only_sections") or []
+    if only:
+        bits.append(f"only {len(only)} sections")
+    mr = f.get("max_row") or {}
+    if isinstance(mr, dict) and mr:
+        lims = sorted({str(v) for v in mr.values()})
+        bits.append("rows ≤" + "/".join(lims) + f" in {len(mr)}")
     minp, maxp = f.get("min_price"), f.get("max_price")
     if minp not in (None, "") or maxp not in (None, ""):
         bits.append(f"₪{minp or '-'}-{maxp or '-'}")
