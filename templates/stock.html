@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+{% include "_pwa.html" %}
+<title>Kartis — Stock</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --bg-2: #ffffff; --bg-3: #eef1f5; --line: #e3e7ec; --line-2: #d3dae1;
+    --text: #24292f; --muted: #6e7681; --accent: #0969da; --green: #1a7f37;
+    --red: #d1242f; --amber: #9a6700; --cyan: #00a3d7; --today: #fffbea;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 14px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); z-index: 20; }
+  header .left { display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; color: var(--cyan); }
+  header .meta { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  header .right { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  main { padding: 16px 24px 80px; max-width: 1500px; }
+  button.act { border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 6px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  button.act:hover { border-color: var(--accent); color: var(--accent); }
+  button.act.primary { background: var(--cyan); border-color: var(--cyan); color: #fff; }
+  button.act.primary:hover { filter: brightness(1.06); color: #fff; }
+  button.act.danger:hover { border-color: var(--red); color: var(--red); }
+  button.act:disabled { opacity: .5; cursor: default; }
+  label.tog { font-size: 11px; color: var(--muted); display: flex; gap: 5px; align-items: center; cursor: pointer; }
+
+  .addbar { display: flex; gap: 8px; margin-bottom: 8px; }
+  .addbar input { flex: 1; min-width: 0; font: inherit; font-size: 15px; padding: 11px 14px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); }
+  .addbar input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,163,215,.15); }
+  .hint { font-size: 11.5px; color: var(--muted); margin: 0 2px 18px; }
+  .msg { font-size: 12px; padding: 8px 12px; border-radius: 8px; margin-bottom: 14px; display: none; }
+  .msg.err { display: block; background: #fdecea; border: 1px solid var(--red); color: var(--red); }
+  .msg.ok { display: block; background: #e9f7ee; border: 1px solid #9ed8b0; color: var(--green); }
+
+  h2 { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; margin: 26px 0 10px; color: var(--muted); font-weight: 600; }
+  .show { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; overflow: hidden; }
+  .show.past { opacity: .72; }
+  .show.flash { box-shadow: 0 0 0 2px var(--cyan); }
+  .shead { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; background: linear-gradient(180deg, #fbfcfd, #f5f7fa); }
+  .shead .art { width: 40px; height: 40px; border-radius: 8px; background: var(--bg-3) center/cover; flex: 0 0 auto; }
+  .shead .fields { display: flex; gap: 6px; flex: 1; min-width: 0; flex-wrap: wrap; align-items: center; }
+  .f { font: inherit; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 4px 6px; color: var(--text); min-width: 0; }
+  .f:hover { border-color: var(--line-2); background: #fff; }
+  .f:focus { outline: none; border-color: var(--cyan); background: #fff; }
+  .f.name { font-size: 15px; font-weight: 700; width: 230px; }
+  .f.city { width: 120px; font-size: 13px; }
+  .f.venue { width: 170px; font-size: 13px; }
+  .f.date { width: 132px; font-size: 13px; }
+  .f::placeholder { color: #aab3bd; }
+  .cd { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 9px; background: var(--bg-3); color: #4b5563; white-space: nowrap; }
+  .cd.soon { background: #dbeafe; color: #1e40af; }
+  .cd.today { background: #fde68a; color: #92400e; }
+  .sacts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .sacts .mini { border: 1px solid var(--line-2); background: #fff; border-radius: 6px; font-size: 11px; padding: 4px 9px; cursor: pointer; color: var(--text); white-space: nowrap; }
+  .sacts .mini:hover { border-color: var(--accent); color: var(--accent); }
+  .sacts .mini.danger:hover { border-color: var(--red); color: var(--red); }
+  .links { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+  .links .lk { display: inline-flex; align-items: center; gap: 4px; background: var(--bg-3); border-radius: 12px; padding: 3px 4px 3px 10px; max-width: 280px; }
+  .links .lk.main { background: #e0f4fb; }
+  .links .lk a { color: var(--accent); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .links .lk button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 4px; }
+  .links .lk button:hover { color: var(--red); }
+  .links input { font: inherit; font-size: 12px; border: 1px dashed var(--line-2); border-radius: 12px; padding: 3px 10px; width: 240px; background: transparent; }
+  .links input:focus { outline: none; border-style: solid; border-color: var(--cyan); background: #fff; }
+  .links .auto { color: var(--muted); font-size: 11px; margin-left: auto; }
+  .links .auto.bad { color: var(--red); }
+
+  .tw { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; min-width: 100%; }
+  th, td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); padding: 0; text-align: left; white-space: nowrap; }
+  th { font-size: 10.5px; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 5px 8px; background: #fafbfc; }
+  th.day { text-align: center; position: relative; }
+  th.day .x { display: none; position: absolute; right: 3px; top: 3px; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+  th.day:hover .x { display: inline; }
+  th.day .x:hover { color: var(--red); }
+  th.sub { font-size: 9.5px; text-align: right; padding: 3px 8px; }
+  th.today, td.today { background: var(--today); }
+  td.sec { min-width: 150px; }
+  td input.c { font: inherit; width: 100%; border: 0; background: transparent; padding: 7px 8px; text-align: right; min-width: 64px; color: var(--text); }
+  td.sec input.c { text-align: left; font-weight: 600; min-width: 150px; }
+  td input.c:focus { outline: 2px solid var(--cyan); outline-offset: -2px; background: #fff; }
+  td input.c.saved { animation: saved 1s ease; }
+  td input.c.bad { outline: 2px solid var(--red); outline-offset: -2px; }
+  td input.c.auto { color: #1a5fb4; }
+  @keyframes saved { 0% { background: #c9f0d4; } 100% { background: transparent; } }
+  td .cell { position: relative; }
+  td .dl { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 10px; pointer-events: none; }
+  td .dl.dn { color: var(--green); }
+  td .dl.up { color: var(--red); }
+  td.rowx { border-right: 0; width: 26px; text-align: center; }
+  td.rowx button { border: 0; background: transparent; color: transparent; cursor: pointer; font-size: 13px; }
+  tr:hover td.rowx button { color: var(--muted); }
+  td.rowx button:hover { color: var(--red) !important; }
+  tr.new td.sec input.c { font-weight: 400; }
+  tr.new td input.c::placeholder { color: #aab3bd; font-style: italic; }
+  tr.tot td { background: #fafbfc; font-weight: 700; font-size: 12px; padding: 6px 8px; text-align: right; }
+  tr.tot td.sec { text-align: left; color: var(--muted); font-weight: 600; letter-spacing: .5px; text-transform: uppercase; font-size: 10.5px; }
+  .more { font-size: 11px; color: var(--accent); cursor: pointer; padding: 6px 12px; display: inline-block; }
+  .empty { color: var(--muted); padding: 46px 20px; text-align: center; font-size: 13px; border: 1px dashed var(--line-2); border-radius: 14px; background: var(--bg-2); }
+  .empty b { display: block; color: var(--text); font-size: 15px; margin-bottom: 6px; }
+
+  dialog { border: 1px solid var(--line-2); border-radius: 12px; padding: 18px; width: min(520px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.3); }
+  dialog h3 { margin: 0 0 8px; font-size: 15px; }
+  dialog p { font-size: 12.5px; color: var(--muted); margin: 0 0 12px; }
+  dialog input, dialog textarea { width: 100%; font: inherit; font-size: 13px; padding: 9px 10px; border: 1px solid var(--line-2); border-radius: 8px; }
+  dialog textarea { height: 120px; margin-top: 8px; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
+  dialog .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+  @media (max-width: 720px) {
+    header, main { padding-left: 16px; padding-right: 16px; }
+    .shead .fields { flex: 1 1 calc(100% - 50px); }
+    .sacts { flex: 1 1 100%; justify-content: flex-end; }
+    .f.name { width: 100%; }
+    .f.city, .f.venue { width: calc(50% - 4px); }
+    .links input { width: 100%; }
+  }
+</style>
+</head>
+<body>
+{% include "_sidebar.html" %}
+<header>
+  <div class="left">
+    <h1>Stock</h1>
+    <span class="meta" id="meta"></span>
+  </div>
+  <div class="right">
+    <label class="tog"><input type="checkbox" id="showPast"> Past</label>
+    <label class="tog"><input type="checkbox" id="showArch"> Archived</label>
+    <button class="act" id="readAll" title="Read today's stock for every show on a site Kartis can read">↻ Read all</button>
+    <button class="act" id="importBtn">Import Google Sheet</button>
+  </div>
+</header>
+<main>
+  <div class="addbar">
+    <input id="addIn" placeholder="Paste a ticket link, or type a show name, then press Enter" autocomplete="off">
+    <button class="act primary" id="addBtn">+ Add show</button>
+  </div>
+  <div class="hint">A link fills in the name, venue and date where the site allows it (AXS blocks this, so only the name comes from its link). Type straight into the grid: Enter moves down, Tab moves right, and every cell saves on its own. The yellow column is today. <span id="autoHint"></span></div>
+  <div class="msg" id="msg"></div>
+  <div id="list"></div>
+</main>
+
+<dialog id="impDlg">
+  <h3>Import a Google Sheet</h3>
+  <p>Paste the sheet's share link (it must be shared as "anyone with the link"), or paste the rows themselves below. A show that's already here gets the new numbers merged in, not duplicated.</p>
+  <input id="impUrl" placeholder="https://docs.google.com/spreadsheets/d/…">
+  <textarea id="impText" placeholder="…or paste CSV / copied rows here"></textarea>
+  <div class="btns"><button class="act" id="impCancel">Cancel</button><button class="act primary" id="impGo">Import</button></div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let DATA = {events: [], today: null}, expanded = new Set(), extraDays = {};
+const MAX_DAYS = 5;
+
+async function api(path, body) {
+  const r = await fetch('/api/stock' + path, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({error: 'HTTP ' + r.status}));
+  if (!r.ok || j.error) throw new Error(j.error || 'HTTP ' + r.status);
+  return j;
+}
+function say(text, ok) { const m = $('msg'); m.className = 'msg ' + (ok ? 'ok' : 'err'); m.textContent = text; if (ok) setTimeout(() => { if (m.textContent === text) m.className = 'msg'; }, 6000); }
+
+async function load(focusId) {
+  DATA = await api('');
+  render();
+  if (focusId) {
+    const el = document.querySelector(`.show[data-id="${focusId}"]`);
+    if (el) { el.scrollIntoView({block: 'center'}); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600);
+      const first = el.querySelector('tr.new input.c') || el.querySelector('input.c'); first && first.focus(); }
+  }
+}
+
+function fmtDay(d) { const t = new Date(d + 'T12:00:00'); return t.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}); }
+function countdown(d) {
+  if (!d) return '';
+  const days = Math.round((new Date(d + 'T12:00:00') - new Date(DATA.today + 'T12:00:00')) / 864e5);
+  if (days < 0) return `<span class="cd">${-days}d ago</span>`;
+  if (days === 0) return '<span class="cd today">today</span>';
+  return `<span class="cd${days <= 14 ? ' soon' : ''}">in ${days}d</span>`;
+}
+const n = v => v === null || v === undefined || v === '' ? '' : String(v);
+const money = v => v === null || v === undefined ? '' : (Number.isInteger(v) ? String(v) : Number(v).toFixed(2));
+
+function render() {
+  const past = $('showPast').checked, arch = $('showArch').checked;
+  const evs = DATA.events;
+  const live = evs.filter(e => !e.archived && !e.past), old = evs.filter(e => !e.archived && e.past), ar = evs.filter(e => e.archived);
+  $('meta').textContent = `${live.length} upcoming · today ${fmtDay(DATA.today)}`;
+  const a = DATA.auto || {};
+  $('autoHint').textContent = a.enabled ? `Shows on sites Kartis reads (posh, shotgun, frontgate, universe…) refill their own stock every ${a.hours}h.` : '';
+  let h = '';
+  if (!evs.length) h = '<div class="empty"><b>No shows yet</b>Paste a ticket link above, or bring in your Google Sheet with “Import Google Sheet”.</div>';
+  else {
+    h += live.length ? live.map(card).join('') : '<div class="empty">Nothing upcoming.</div>';
+    if (old.length) h += past ? `<h2>Past · ${old.length}</h2>` + old.map(card).join('') : '';
+    if (ar.length && arch) h += `<h2>Archived · ${ar.length}</h2>` + ar.map(card).join('');
+  }
+  $('list').innerHTML = h;
+}
+
+function visibleDays(ev) {
+  let days = [...new Set([...(ev.days || []), ...(extraDays[ev.id] || [])])].filter(d => d !== DATA.today).sort();
+  const hidden = expanded.has(ev.id) ? 0 : Math.max(0, days.length - MAX_DAYS);
+  return {days: [...days.slice(hidden), DATA.today], hidden};
+}
+
+function card(ev) {
+  const {days, hidden} = visibleDays(ev);
+  const secs = ev.sections || [];
+  const img = ev.image_url ? ` style="background-image:url('${esc(ev.image_url)}')"` : '';
+  let head = `<div class="shead"><div class="art"${img}></div><div class="fields">
+    <input class="f name" data-f="name" value="${esc(ev.name)}" placeholder="Show name">
+    <input class="f city" data-f="city" value="${esc(ev.city)}" placeholder="City">
+    <input class="f venue" data-f="venue" value="${esc(ev.venue)}" placeholder="Venue">
+    <input class="f date" type="date" data-f="event_date_iso" value="${esc(ev.event_date_iso || '')}">
+    ${countdown(ev.event_date_iso)}</div>
+    <div class="sacts">
+      ${ev.auto_source ? `<button class="mini" data-act="read" title="Read today's stock from ${esc(ev.auto_source)}">↻ Read</button>` : ''}
+      <button class="mini" data-act="addday" title="Add a column for an earlier date">+ Date</button>
+      <button class="mini" data-act="archive">${ev.archived ? 'Unarchive' : 'Archive'}</button>
+      <button class="mini danger" data-act="delete">Delete</button>
+    </div></div>`;
+  const links = [];
+  if (ev.link) links.push(`<span class="lk main" title="Main link"><a href="${esc(ev.link)}" target="_blank" rel="noopener">${esc(host(ev.link))}</a><button data-act="rmmain" title="Remove">×</button></span>`);
+  (ev.links || []).forEach((l, i) => links.push(`<span class="lk"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label || host(l.url))}</a><button data-act="rmlink" data-i="${i}" title="Remove">×</button></span>`));
+  let autoTxt = '';
+  if (ev.auto_source) autoTxt = ev.auto_error ? `<span class="auto bad" title="${esc(ev.auto_error)}">${esc(ev.auto_source)}: last read failed</span>`
+    : `<span class="auto">auto-read: ${esc(ev.auto_source)}${ev.auto_at ? ' · ' + ago(ev.auto_at) : ''}</span>`;
+  head += `<div class="links">${links.join('')}<input data-act="addlink" placeholder="${ev.link ? '+ add another link (paste, Enter)' : '+ paste the main ticket link (Enter)'}">${autoTxt}</div>`;
+
+  let t = '<div class="tw"><table><thead><tr><th rowspan="2">Section</th><th rowspan="2" title="How many we hold">Held</th><th rowspan="2" title="What we paid per ticket">Paid</th>';
+  days.forEach(d => t += `<th class="day${d === DATA.today ? ' today' : ''}" colspan="2">${d === DATA.today ? 'Today · ' : ''}${fmtDay(d)}${(ev.days || []).includes(d) ? `<button class="x" data-act="rmday" data-day="${d}" title="Delete this date's numbers">×</button>` : ''}</th>`);
+  t += '<th rowspan="2" class="rowx" style="border:0"></th></tr><tr>';
+  days.forEach(d => t += `<th class="sub${d === DATA.today ? ' today' : ''}">Left</th><th class="sub${d === DATA.today ? ' today' : ''}">Price</th>`);
+  t += '</tr></thead><tbody>';
+  secs.forEach(s => {
+    t += `<tr data-sec="${s.id}"><td class="sec"><input class="c" data-k="name" value="${esc(s.name)}"></td>
+      <td><input class="c" data-k="held" inputmode="numeric" value="${n(s.held)}"></td>
+      <td><input class="c" data-k="cost" inputmode="decimal" value="${money(s.cost)}"></td>`;
+    days.forEach((d, i) => {
+      const e = (s.entries || {})[d] || {}, cls = (d === DATA.today ? ' today' : '');
+      const prevDay = Object.keys(s.entries || {}).filter(x => x < d).sort().pop();
+      const prev = prevDay ? s.entries[prevDay] : null;
+      let dl = '';
+      if (prev && e.remaining != null && prev.remaining != null && e.remaining !== prev.remaining) {
+        const diff = e.remaining - prev.remaining;
+        dl = `<span class="dl ${diff < 0 ? 'dn' : 'up'}" title="vs ${fmtDay(prevDay)}">${diff > 0 ? '+' : ''}${diff}</span>`;
+      }
+      t += `<td class="${cls}"><div class="cell">${dl}<input class="c${e.auto ? ' auto' : ''}" data-k="remaining" data-day="${d}" inputmode="numeric" value="${n(e.remaining)}"${e.auto ? ' title="read automatically"' : ''}></div></td>
+        <td class="${cls}"><input class="c${e.auto ? ' auto' : ''}" data-k="price" data-day="${d}" inputmode="decimal" value="${money(e.price)}"></td>`;
+    });
+    t += `<td class="rowx"><button data-act="rmsec" title="Delete section">×</button></td></tr>`;
+  });
+  t += `<tr class="new"><td class="sec"><input class="c" data-k="newname" placeholder="+ section (GA, 104, Balcony…)"></td><td></td><td></td>${days.map(d => `<td class="${d === DATA.today ? 'today' : ''}"></td><td class="${d === DATA.today ? 'today' : ''}"></td>`).join('')}<td class="rowx"></td></tr>`;
+  if (secs.length > 1) {
+    const sum = f => { let any = false, s = 0; secs.forEach(x => { const v = f(x); if (v != null) { any = true; s += v; } }); return any ? s : ''; };
+    t += `<tr class="tot"><td class="sec">Total</td><td>${sum(s => s.held)}</td><td></td>${days.map(d => `<td class="${d === DATA.today ? 'today' : ''}">${sum(s => (s.entries[d] || {}).remaining)}</td><td class="${d === DATA.today ? 'today' : ''}"></td>`).join('')}<td class="rowx"></td></tr>`;
+  }
+  t += '</tbody></table></div>';
+  if (hidden) t += `<span class="more" data-act="expand">Show ${hidden} earlier date${hidden > 1 ? 's' : ''}</span>`;
+  else if (expanded.has(ev.id)) t += `<span class="more" data-act="collapse">Show fewer dates</span>`;
+  return `<div class="show${ev.past ? ' past' : ''}" data-id="${ev.id}">${head}${t}</div>`;
+}
+function host(u) { try { return new URL(u).host.replace(/^www\./, ''); } catch (e) { return u; } }
+function ago(iso) { const m = Math.round((Date.now() - Date.parse(iso)) / 6e4); return m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; }
+const evOf = el => DATA.events.find(e => e.id === el.closest('.show').dataset.id);
+
+// ---- add a show ----
+async function addShow() {
+  const v = $('addIn').value.trim();
+  if (!v) return;
+  $('addBtn').disabled = true; $('addBtn').textContent = 'Adding…';
+  try {
+    const isLink = /^https?:\/\//i.test(v);
+    const j = await api('/add', isLink ? {link: v} : {name: v});
+    $('addIn').value = '';
+    if (j.note) say(j.note, true);
+    else if (j.auto) say(`Added, and read ${j.auto.written} section${j.auto.written === 1 ? '' : 's'} from ${j.auto.source}.`, true);
+    await load(j.id);
+  } catch (e) { say(e.message); }
+  finally { $('addBtn').disabled = false; $('addBtn').textContent = '+ Add show'; }
+}
+$('addBtn').onclick = addShow;
+$('addIn').addEventListener('keydown', e => { if (e.key === 'Enter') addShow(); });
+
+// ---- inline edits ----
+function flashSaved(el) { el.classList.remove('saved', 'bad'); void el.offsetWidth; el.classList.add('saved'); }
+document.addEventListener('change', async e => {
+  const el = e.target;
+  if (el.id === 'showPast' || el.id === 'showArch') return render();
+  const show = el.closest('.show'); if (!show) return;
+  const ev = evOf(el);
+  try {
+    if (el.dataset.f) {
+      await api('/event', {id: ev.id, [el.dataset.f]: el.value});
+      ev[el.dataset.f] = el.value || null;
+      flashSaved(el);
+      if (el.dataset.f === 'event_date_iso') await load();
+      return;
+    }
+    const tr = el.closest('tr'), k = el.dataset.k;
+    if (k === 'newname') {
+      if (!el.value.trim()) return;
+      await api('/section', {event_id: ev.id, name: el.value.trim()});
+      await load();
+      // land in the new section's first "today" cell, ready to type the count
+      const rows = document.querySelectorAll(`.show[data-id="${ev.id}"] tr[data-sec]`);
+      const last = rows[rows.length - 1];
+      const c = last && last.querySelector(`input[data-day="${DATA.today}"]`);
+      c && c.focus();
+      return;
+    }
+    const sid = tr.dataset.sec;
+    if (k === 'name' || k === 'held' || k === 'cost') {
+      if (k === 'name' && !el.value.trim()) { el.value = ev.sections.find(s => s.id === sid).name; return; }
+      await api('/section', {id: sid, [k]: el.value});
+      flashSaved(el);
+      const s = ev.sections.find(s => s.id === sid); s[k] = el.value === '' ? null : (k === 'name' ? el.value : Number(el.value.replace(/[$,]/g, '')));
+      return;
+    }
+    if (k === 'remaining' || k === 'price') {
+      const day = el.dataset.day;
+      await api('/entry', {section_id: sid, day, [k]: el.value});
+      const s = ev.sections.find(s => s.id === sid);
+      const ent = s.entries[day] = Object.assign({}, s.entries[day] || {}, {auto: false});
+      ent[k] = el.value === '' ? null : Number(el.value.replace(/[$,]/g, '').replace(/^oos$/i, '0'));
+      if (!ev.days.includes(day)) ev.days.push(day);
+      el.classList.remove('auto');
+      flashSaved(el);
+    }
+  } catch (err) { el.classList.add('bad'); say(err.message); }
+});
+
+// Enter / arrows move like a spreadsheet; the add-link box adds on Enter.
+document.addEventListener('keydown', async e => {
+  const el = e.target;
+  if (el.dataset && el.dataset.act === 'addlink' && e.key === 'Enter') {
+    const url = el.value.trim(); if (!url) return;
+    const ev = evOf(el);
+    try {
+      if (!ev.link) {
+        const fill = (await api('/autofill', {link: url})).fill || {};
+        const patch = {id: ev.id, link: url};
+        ['city', 'venue', 'event_date_iso', 'image_url'].forEach(k => { if (fill[k] && !ev[k]) patch[k] = fill[k]; });
+        await api('/event', patch);
+        if (fill.source) { try { await api('/read', {id: ev.id}); } catch (err) { say(err.message); } }
+      } else {
+        await api('/event', {id: ev.id, links: [...(ev.links || []), {url}]});
+      }
+      await load();
+    } catch (err) { say(err.message); }
+    return;
+  }
+  if (!el.classList || !el.classList.contains('c')) return;
+  let dr = 0, dc = 0;
+  if (e.key === 'Enter' || e.key === 'ArrowDown') dr = e.shiftKey && e.key === 'Enter' ? -1 : 1;
+  else if (e.key === 'ArrowUp') dr = -1;
+  else return;
+  e.preventDefault();
+  const td = el.closest('td'), tr = td.closest('tr');
+  const col = [...tr.children].indexOf(td);
+  let row = tr;
+  for (;;) {
+    row = dr > 0 ? row.nextElementSibling : row.previousElementSibling;
+    if (!row) break;
+    const target = row.children[col] && row.children[col].querySelector('input.c');
+    if (target) { el.dispatchEvent(new Event('change', {bubbles: true})); target.focus(); target.select(); return; }
+  }
+  el.blur();
+});
+// stop a duplicate change event when Enter already committed the value
+document.addEventListener('focusin', e => { if (e.target.classList && e.target.classList.contains('c')) e.target.dataset.orig = e.target.value; });
+document.addEventListener('change', e => { const el = e.target; if (el.dataset && 'orig' in el.dataset) { if (el.dataset.orig === el.value && el.dataset.k !== 'newname') e.stopImmediatePropagation(); el.dataset.orig = el.value; } }, true);
+
+// ---- buttons ----
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'); if (!b || b.tagName === 'INPUT') return;
+  const ev = b.closest('.show') ? evOf(b) : null, act = b.dataset.act;
+  try {
+    if (act === 'read') { b.disabled = true; b.textContent = 'Reading…'; const j = await api('/read', {id: ev.id}); say(`Read ${j.auto.written} section${j.auto.written === 1 ? '' : 's'} from ${j.auto.source}.`, true); await load(); }
+    else if (act === 'addday') {
+      const d = prompt('Add a column for which date? (e.g. 11/20 or 2026-11-20)'); if (!d) return;
+      const iso = parseDay(d); if (!iso) return say('Couldn\'t read that date.');
+      (extraDays[ev.id] = extraDays[ev.id] || []).push(iso); expanded.add(ev.id); render();
+    }
+    else if (act === 'archive') { await api('/event', {id: ev.id, archived: !ev.archived}); await load(); }
+    else if (act === 'delete') { if (!confirm(`Delete “${ev.name}” and all its numbers? This can't be undone.`)) return; await api('/event/delete', {id: ev.id}); await load(); }
+    else if (act === 'rmmain') { if (!confirm('Remove the main link?')) return; await api('/event', {id: ev.id, link: ''}); await load(); }
+    else if (act === 'rmlink') { const links = [...ev.links]; links.splice(+b.dataset.i, 1); await api('/event', {id: ev.id, links}); await load(); }
+    else if (act === 'rmday') { if (!confirm(`Delete every number for ${fmtDay(b.dataset.day)} on this show?`)) return; await api('/day/delete', {event_id: ev.id, day: b.dataset.day}); await load(); }
+    else if (act === 'rmsec') { const s = ev.sections.find(s => s.id === b.closest('tr').dataset.sec); if (!confirm(`Delete section “${s.name}” and its history?`)) return; await api('/section/delete', {id: s.id}); await load(); }
+    else if (act === 'expand') { expanded.add(ev.id); render(); }
+    else if (act === 'collapse') { expanded.delete(ev.id); render(); }
+  } catch (err) { say(err.message); b.disabled = false; }
+});
+function parseDay(s) {
+  s = s.trim(); let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/); if (m) return s;
+  m = s.match(/^(\d{1,2})[\/.](\d{1,2})(?:[\/.](\d{2,4}))?$/); if (!m) return null;
+  const t = new Date(DATA.today + 'T12:00:00');
+  let y = m[3] ? (+m[3] < 100 ? 2000 + +m[3] : +m[3]) : t.getFullYear();
+  let d = new Date(y, +m[1] - 1, +m[2], 12);
+  if (!m[3] && d > t) d = new Date(y - 1, +m[1] - 1, +m[2], 12);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+$('readAll').onclick = async () => {
+  $('readAll').disabled = true; $('readAll').textContent = 'Reading…';
+  try { const j = await api('/read-all', {}); const r = (j.auto || {}).result || {}; say(`Read ${r.ok || 0} show${r.ok === 1 ? '' : 's'}${r.failed ? `, ${r.failed} failed` : ''}. ${r.skipped || 0} have no readable link.`, !r.failed); await load(); }
+  catch (e) { say(e.message); } finally { $('readAll').disabled = false; $('readAll').textContent = '↻ Read all'; }
+};
+$('importBtn').onclick = () => $('impDlg').showModal();
+$('impCancel').onclick = () => $('impDlg').close();
+$('impGo').onclick = async () => {
+  const url = $('impUrl').value.trim(), text = $('impText').value;
+  if (!url && !text.trim()) return;
+  $('impGo').disabled = true;
+  try {
+    const j = await api('/import', url ? {url} : {text: text.replace(/\t/g, ',')});
+    const r = j.import; $('impDlg').close(); $('impUrl').value = ''; $('impText').value = '';
+    say(`Imported ${r.events} new show${r.events === 1 ? '' : 's'}${r.merged ? `, merged into ${r.merged}` : ''}: ${r.sections} sections, ${r.entries} numbers.`, true);
+    await load();
+  } catch (e) { say(e.message); } finally { $('impGo').disabled = false; }
+};
+
+load().catch(e => say(e.message));
+</script>
+</body>
+</html>

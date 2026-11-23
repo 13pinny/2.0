@@ -22,6 +22,7 @@ import b2b
 import barby
 import b2b_snipe
 import checkin
+import stock_sheet
 import barby_events
 import db
 import discord_bot
@@ -303,6 +304,14 @@ CHECKIN_REMIND_ENABLED = (os.getenv("KARTIS_CHECKIN_REMIND_ENABLED")
                           or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
 CHECKIN_REMIND_DAYS = (os.getenv("KARTIS_CHECKIN_REMIND_DAYS") or "mon,wed").strip()
 CHECKIN_REMIND_HOUR = int(os.getenv("KARTIS_CHECKIN_REMIND_HOUR") or 7)
+# /stock auto-read: refill today's Left/Price for shows whose link is on a
+# site Kartis reads (posh / shotgun / frontgate / universe / ...). Where the
+# EDM monitor runs (the VPS), whose DB holds the sheet.
+STOCK_AUTO_ENABLED = (os.getenv("KARTIS_STOCK_AUTO_ENABLED")
+                      or ("1" if EDM_MONITOR_ENABLED else "0")).strip().lower() not in ("0", "false", "no", "off")
+STOCK_AUTO_HOURS = float(os.getenv("KARTIS_STOCK_AUTO_HOURS") or 6)
+_stock_auto_lock = threading.Lock()
+_last_stock_auto = {"at": None, "result": None, "error": None}
 _checkin_remind_lock = threading.Lock()
 _last_checkin_remind = {"at": None, "events": 0, "due": 0, "result": None, "error": None}
 # Low-stock alert: ping once when the current release's remaining count
@@ -1279,6 +1288,20 @@ def run_todo_remind():
     finally:
         _last_todo_remind["running"] = False
         _todo_remind_lock.release()
+
+
+def run_stock_auto():
+    """/stock: read today's stock for every show with a readable link."""
+    if not _stock_auto_lock.acquire(blocking=False):
+        return _last_stock_auto
+    try:
+        res = stock_sheet.run_auto()
+        _last_stock_auto.update(at=datetime.now(timezone.utc).isoformat(), result=res, error=None)
+    except Exception as e:
+        _last_stock_auto.update(at=datetime.now(timezone.utc).isoformat(), error=str(e))
+    finally:
+        _stock_auto_lock.release()
+    return _last_stock_auto
 
 
 def run_checkin_remind(force=False):
@@ -4901,6 +4924,64 @@ def api_checkin_entry_delete():
         return jsonify({"error": "event_id and day required"}), 400
     checkin.delete_checkin_day(body["event_id"], body["day"])
     return jsonify({"ok": True})
+
+
+@app.route("/stock")
+def stock_page():
+    return render_template("stock.html")
+
+
+@app.route("/api/stock")
+def api_stock():
+    return jsonify({"events": stock_sheet.all_events(), "today": stock_sheet.today(),
+                    "auto": {"enabled": STOCK_AUTO_ENABLED, "hours": STOCK_AUTO_HOURS,
+                             "last": _last_stock_auto}})
+
+
+def _stock_call(fn):
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify({"ok": True, **(fn(body) or {})})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 502
+
+
+@app.route("/api/stock/<path:what>", methods=["POST"])
+def api_stock_post(what):
+    def add(b):
+        info = stock_sheet.autofill(b.get("link") or b.get("name") or "") if b.get("link") else {}
+        fields = {k: v for k, v in info.items() if k in ("name", "city", "venue", "event_date_iso",
+                                                         "link", "image_url") and v}
+        fields.update({k: v for k, v in b.items() if v not in (None, "")})
+        if not fields.get("name"):
+            raise ValueError("type a name or paste a link")
+        eid = stock_sheet.save_event(fields)
+        out = {"id": eid, "note": info.get("note")}
+        if info.get("source"):
+            try:
+                out["auto"] = stock_sheet.auto_read(eid)
+            except Exception as e:
+                out["note"] = f"couldn't read stock: {e}"[:200]
+        return out
+    handlers = {
+        "add": add,
+        "autofill": lambda b: {"fill": stock_sheet.autofill(b.get("link"))},
+        "event": lambda b: {"id": stock_sheet.save_event(b)},
+        "event/delete": lambda b: stock_sheet.delete_event(b["id"]),
+        "section": lambda b: {"id": stock_sheet.save_section(b)},
+        "section/delete": lambda b: stock_sheet.delete_section(b["id"]),
+        "entry": lambda b: {"day": stock_sheet.save_entry(b)},
+        "day/delete": lambda b: stock_sheet.delete_day(b["event_id"], b["day"]),
+        "read": lambda b: {"auto": stock_sheet.auto_read(b.get("id"))},
+        "read-all": lambda b: {"auto": run_stock_auto()},
+        "import": lambda b: {"import": stock_sheet.import_sheet(b.get("url") or b.get("text"))},
+    }
+    if what not in handlers:
+        return jsonify({"error": "unknown action"}), 404
+    return _stock_call(handlers[what])
 
 
 @app.route("/api/checkin/remind-now", methods=["POST"])
@@ -11028,6 +11109,11 @@ if SNIPE_ENABLED:
     # interval (default 10 min, /snipes) has passed. A pass takes minutes.
     scheduler.add_job(lambda: b2b_snipe.run_market_scan(), "interval", minutes=1,
                       id="b2b_snipe_market", start_date=datetime.now() + timedelta(minutes=2),
+                      max_instances=1, coalesce=True)
+if STOCK_AUTO_ENABLED:
+    scheduler.add_job(_fresh_thread_job(run_stock_auto, int(STOCK_AUTO_HOURS * 3600)), "interval",
+                      minutes=max(30, int(STOCK_AUTO_HOURS * 60)), id="stock_auto",
+                      start_date=datetime.now() + timedelta(minutes=5),
                       max_instances=1, coalesce=True)
 if CHECKIN_REMIND_ENABLED:
     scheduler.add_job(run_checkin_remind, "cron", day_of_week=CHECKIN_REMIND_DAYS,
