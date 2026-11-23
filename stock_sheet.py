@@ -492,6 +492,89 @@ def autofill(url):
     return out
 
 
+def _link_key(url):
+    """host + the last meaningful path segment, so ticketmaster.com/event/<id>
+    and ticketmaster.com/<slug>/event/<id> are the same show."""
+    try:
+        u = urlparse((url or "").strip())
+    except ValueError:
+        return None
+    if not u.netloc:
+        return None
+    host = u.netloc.lower().removeprefix("www.")
+    segs = [p for p in u.path.split("/") if p]
+    return f"{host}/{segs[-1].lower()}" if segs else host
+
+
+def find_by_link(url):
+    key = _link_key(url)
+    if not key:
+        return None
+    for r in _rows("SELECT id, link, links_json FROM stock_events"):
+        links = [r["link"]]
+        try:
+            links += [l.get("url") for l in json.loads(r["links_json"] or "[]")]
+        except ValueError:
+            pass
+        if any(_link_key(l) == key for l in links if l):
+            return r["id"]
+    return None
+
+
+def _is_placeholder(name, link):
+    return not name or (link and name == f"{_site_name(link)} event")
+
+
+_ADD_FIELDS = ("name", "city", "venue", "event_date_iso", "link", "image_url")
+
+
+def add_show(body):
+    """The add box and the browser bookmark both land here.
+
+    body = {link?, name?, city?, venue?, event_date_iso?, image_url?,
+    from_page?}. `from_page` means the details were read by the user's own
+    browser off the ticket page (the bookmark), so the server doesn't try
+    to fetch a page that blocks it. A link already on a show fills that
+    show's blanks (and its placeholder name) instead of adding a duplicate."""
+    b = {k: (str(body.get(k)).strip() if body.get(k) is not None else None) for k in _ADD_FIELDS}
+    if b.get("event_date_iso"):
+        b["event_date_iso"] = parse_date(b["event_date_iso"][:10])
+    link = b.get("link")
+    info = {}
+    if link and not body.get("from_page"):
+        info = autofill(link)
+    elif link and source_of(link):
+        info = {"source": source_of(link)}
+    fields = {k: v for k, v in info.items() if k in _ADD_FIELDS and v}
+    fields.update({k: v for k, v in b.items() if v})
+    if not fields.get("name"):
+        raise ValueError("type a name or paste a link")
+
+    out = {"note": info.get("note"), "needs_name": bool(info.get("needs_name"))}
+    existing = find_by_link(link) if link else None
+    if existing:
+        ev = get_event(existing)
+        patch = {"id": existing}
+        for k in ("city", "venue", "event_date_iso", "image_url"):
+            if fields.get(k) and not ev.get(k):
+                patch[k] = fields[k]
+        if fields.get("name") and _is_placeholder(ev.get("name"), ev.get("link"))                 and not _is_placeholder(fields["name"], link):
+            patch["name"] = fields["name"]
+        if body.get("from_page") and fields.get("link") and len(fields["link"]) > len(ev.get("link") or ""):
+            patch["link"] = fields["link"]  # the canonical URL beats a short one
+        save_event(patch)
+        out.update(id=existing, updated=[k for k in patch if k != "id"], needs_name=False,
+                   note=None if body.get("from_page") else out["note"])
+    else:
+        out["id"] = save_event(fields)
+    if info.get("source"):
+        try:
+            out["auto"] = auto_read(out["id"])
+        except Exception as e:
+            out["note"] = f"couldn't read stock: {e}"[:200]
+    return out
+
+
 def _norm(s):
     return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
 

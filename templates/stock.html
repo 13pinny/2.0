@@ -130,6 +130,7 @@
     <label class="tog"><input type="checkbox" id="showPast"> Past</label>
     <label class="tog"><input type="checkbox" id="showArch"> Archived</label>
     <button class="act" id="readAll" title="Read today's stock for every show on a site Kartis can read">↻ Read all</button>
+    <button class="act" id="bmBtn" title="A bookmark that adds the ticket page you're on">+ Bookmark</button>
     <button class="act" id="importBtn">Import Google Sheet</button>
   </div>
 </header>
@@ -142,6 +143,16 @@
   <div class="msg" id="msg"></div>
   <div id="list"></div>
 </main>
+
+<dialog id="bmDlg">
+  <h3>Add shows from any ticket page</h3>
+  <p>Ticketmaster and AXS block Kartis's server, but they load fine in your own browser. This bookmark reads the show's name, date, venue, city and artwork from the page you're on and adds it here. If the show is already on /stock, it fills in whatever is missing.</p>
+  <p><b>Computer:</b> drag this button to your bookmarks bar, then click it on any event page.</p>
+  <p style="text-align:center"><a id="bmLink" class="act primary" style="display:inline-block;text-decoration:none;padding:9px 18px;border-radius:8px;background:var(--cyan);color:#fff;font-size:13px;font-weight:600" href="#">+ Kartis Stock</a></p>
+  <p><b>Phone:</b> bookmark any page, edit that bookmark, and paste this in as its address. Then open the bookmark while you're on the event page.</p>
+  <div style="display:flex;gap:8px"><input id="bmCode" readonly><button class="act" id="bmCopy">Copy</button></div>
+  <div class="btns"><button class="act" id="bmClose">Close</button></div>
+</dialog>
 
 <dialog id="impDlg">
   <h3>Import a Google Sheet</h3>
@@ -431,7 +442,52 @@ $('impGo').onclick = async () => {
   } catch (e) { say(e.message); } finally { $('impGo').disabled = false; }
 };
 
-load().catch(e => say(e.message));
+// ---- bookmark: runs ON the ticket page, so it must not touch anything here ----
+function stockBookmark() {
+  var ev = null;
+  document.querySelectorAll('script[type="application/ld+json"]').forEach(function (s) {
+    try {
+      var q = [].concat(JSON.parse(s.textContent));
+      while (q.length) {
+        var x = q.shift();
+        if (!x || typeof x !== 'object') continue;
+        if (x['@graph']) q = q.concat(x['@graph']);
+        var t = [].concat(x['@type'] || []).join(' ');
+        if (!ev && (/Event\b/.test(t) || (x.startDate && x.location))) ev = x;
+      }
+    } catch (e) {}
+  });
+  function meta(p) { var m = document.querySelector('meta[property="' + p + '"],meta[name="' + p + '"]'); return m ? m.content : ''; }
+  var loc = ev ? [].concat(ev.location || [])[0] || {} : {}, ad = loc.address || {};
+  var img = ev && ev.image; img = [].concat(img || [])[0]; if (img && img.url) img = img.url;
+  var out = {
+    link: (meta('og:url') || location.origin + location.pathname),
+    name: (ev && ev.name) || (meta('og:title') || document.title).split(/ (?:Tickets|[-|]) /)[0],
+    venue: loc.name || '', city: (typeof ad === 'object' && ad.addressLocality) || '',
+    event_date_iso: ev && ev.startDate ? String(ev.startDate).slice(0, 10) : '',
+    image_url: meta('og:image') || img || ''
+  };
+  window.open('__ORIGIN__/stock#add=' + encodeURIComponent(JSON.stringify(out)), '_blank');
+}
+const BM = 'javascript:' + encodeURIComponent('(' + stockBookmark.toString().replace('__ORIGIN__', location.origin) + ')()');
+$('bmLink').href = BM; $('bmCode').value = BM;
+$('bmLink').onclick = e => { e.preventDefault(); say('Drag the button to your bookmarks bar instead of clicking it.'); };
+$('bmBtn').onclick = () => $('bmDlg').showModal();
+$('bmClose').onclick = () => $('bmDlg').close();
+$('bmCopy').onclick = async () => { try { await navigator.clipboard.writeText(BM); $('bmCopy').textContent = 'Copied'; } catch (e) { $('bmCode').select(); } };
+
+async function addFromHash() {
+  if (!location.hash.startsWith('#add=')) return false;
+  let o;
+  try { o = JSON.parse(decodeURIComponent(location.hash.slice(5))); } catch (e) { return false; }
+  history.replaceState(null, '', location.pathname);
+  const j = await api('/add', Object.assign({}, o, {from_page: true}));
+  if (j.updated) say(j.updated.length ? `“${o.name}” was already here; filled in ${j.updated.join(', ').replace(/event_date_iso/, 'date').replace(/image_url/, 'artwork')}.` : `“${o.name}” is already here.`, true);
+  else say(`Added “${o.name}”.`, true);
+  await load(j.id);
+  return true;
+}
+addFromHash().then(done => done || load()).catch(e => { say(e.message); load(); });
 </script>
 </body>
 </html>

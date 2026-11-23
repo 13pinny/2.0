@@ -4951,23 +4951,8 @@ def _stock_call(fn):
 
 @app.route("/api/stock/<path:what>", methods=["POST"])
 def api_stock_post(what):
-    def add(b):
-        info = stock_sheet.autofill(b.get("link") or b.get("name") or "") if b.get("link") else {}
-        fields = {k: v for k, v in info.items() if k in ("name", "city", "venue", "event_date_iso",
-                                                         "link", "image_url") and v}
-        fields.update({k: v for k, v in b.items() if v not in (None, "")})
-        if not fields.get("name"):
-            raise ValueError("type a name or paste a link")
-        eid = stock_sheet.save_event(fields)
-        out = {"id": eid, "note": info.get("note"), "needs_name": bool(info.get("needs_name"))}
-        if info.get("source"):
-            try:
-                out["auto"] = stock_sheet.auto_read(eid)
-            except Exception as e:
-                out["note"] = f"couldn't read stock: {e}"[:200]
-        return out
     handlers = {
-        "add": add,
+        "add": stock_sheet.add_show,
         "autofill": lambda b: {"fill": stock_sheet.autofill(b.get("link"))},
         "event": lambda b: {"id": stock_sheet.save_event(b)},
         "event/delete": lambda b: stock_sheet.delete_event(b["id"]),
