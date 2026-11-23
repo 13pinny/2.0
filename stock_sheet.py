@@ -360,20 +360,45 @@ def source_of(url):
         return None
 
 
-def _slug_name(url):
-    """'…/events/1683710/boy-throbs-real-tour-tickets' → 'Boy Throbs Real Tour'."""
-    path = [p for p in urlparse(url).path.split("/") if p]
+_GENERIC_SEGMENTS = re.compile(r"^(e|event|events|tickets?|shop|buy|en|us|en-us)$", re.I)
+_SITE_NAMES = {"ticketmaster": "Ticketmaster", "livenation": "Live Nation", "axs": "AXS",
+               "seatgeek": "SeatGeek", "stubhub": "StubHub", "eventbrite": "Eventbrite",
+               "dice": "DICE", "etix": "Etix", "seetickets": "See Tickets"}
+
+
+def _slug_parts(url):
+    """'…/alex-warren-atlanta-georgia-06-25-2026/event/0E00…' →
+    ('Alex Warren Atlanta Georgia', '2026-06-25'); (None, None) when the
+    link carries no words (e.g. ticketmaster.com/event/<id>)."""
+    path = [unquote(p) for p in urlparse(url).path.split("/") if p]
     words = ""
     for p in reversed(path):
-        p = unquote(p)
-        if re.search(r"[a-z]{3}", p, re.I) and not re.fullmatch(r"[0-9a-f]{12,}", p, re.I):
+        if (re.search(r"[a-z]{3}", p, re.I) and not _GENERIC_SEGMENTS.match(p)
+                and not re.fullmatch(r"[0-9A-Fa-f]{12,}", p)):
             words = p
             break
+    when = None
+    m = re.search(r"(\d{2})-(\d{2})-(\d{4})", words)
+    if m:
+        when = parse_date(f"{m.group(1)}/{m.group(2)}/{m.group(3)}")
+        words = words.replace(m.group(0), " ")
     words = re.sub(r"\.(html?|php|aspx?)$", "", words)
     words = re.sub(r"[-_]+", " ", words)
     words = re.sub(r"\b(tickets?|event|events|e)\b", " ", words, flags=re.I)
     words = re.sub(r"\b\d{5,}\b", " ", words)
-    return " ".join(w.capitalize() if w.islower() else w for w in words.split()) or None
+    name = " ".join(w.capitalize() if w.islower() else w for w in words.split()) or None
+    return name, when
+
+
+def _slug_name(url):
+    return _slug_parts(url)[0]
+
+
+def _site_name(url):
+    host = urlparse(url).netloc.lower().split(":")[0]
+    parts = [p for p in host.split(".") if p not in ("www", "com", "co", "net", "org", "us", "uk", "il")]
+    key = parts[-1] if parts else host
+    return _SITE_NAMES.get(key, key.capitalize() or "Ticket")
 
 
 def _ld_event(page):
@@ -450,10 +475,20 @@ def autofill(url):
             return out
     except Exception as e:
         out["note"] = (out.get("note") or "") + f" page: {e}"[:200]
-    out["name"] = out.get("name") or _slug_name(url)
-    host = urlparse(url).netloc.lower()
-    if "axs.com" in host:
-        out["note"] = "AXS blocks automatic reads; name taken from the link, type the rest."
+    # The site wouldn't let us read it: take what the link itself says, and
+    # never come back without a name (a pasted link must always add a show).
+    site = _site_name(url)
+    slug_name, slug_date = _slug_parts(url)
+    out["event_date_iso"] = out.get("event_date_iso") or slug_date
+    if out.get("name"):
+        pass
+    elif slug_name:
+        out["name"] = slug_name
+        out["note"] = f"{site} blocks automatic reads; name taken from the link, type the rest."
+    else:
+        out["name"] = f"{site} event"
+        out["needs_name"] = True
+        out["note"] = f"{site} blocks automatic reads and the link has no show name in it. Type the name, city, venue and date."
     return out
 
 

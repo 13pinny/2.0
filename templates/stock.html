@@ -165,13 +165,17 @@ async function api(path, body) {
 }
 function say(text, ok) { const m = $('msg'); m.className = 'msg ' + (ok ? 'ok' : 'err'); m.textContent = text; if (ok) setTimeout(() => { if (m.textContent === text) m.className = 'msg'; }, 6000); }
 
-async function load(focusId) {
+async function load(focusId, focusName) {
   DATA = await api('');
+  // a new show with no date sorts last, and one already past would be hidden
+  const ev = focusId && DATA.events.find(e => e.id === focusId);
+  if (ev && ev.past && !$('showPast').checked) $('showPast').checked = true;
   render();
   if (focusId) {
     const el = document.querySelector(`.show[data-id="${focusId}"]`);
     if (el) { el.scrollIntoView({block: 'center'}); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600);
-      const first = el.querySelector('tr.new input.c') || el.querySelector('input.c'); first && first.focus(); }
+      const first = focusName ? el.querySelector('.f.name') : (el.querySelector('tr.new input.c') || el.querySelector('input.c'));
+      if (first) { first.focus(); if (focusName) first.select(); } }
   }
 }
 
@@ -281,7 +285,7 @@ async function addShow() {
     $('addIn').value = '';
     if (j.note) say(j.note, true);
     else if (j.auto) say(`Added, and read ${j.auto.written} section${j.auto.written === 1 ? '' : 's'} from ${j.auto.source}.`, true);
-    await load(j.id);
+    await load(j.id, j.needs_name);
   } catch (e) { say(e.message); }
   finally { $('addBtn').disabled = false; $('addBtn').textContent = '+ Add show'; }
 }

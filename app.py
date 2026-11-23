@@ -4959,7 +4959,7 @@ def api_stock_post(what):
         if not fields.get("name"):
             raise ValueError("type a name or paste a link")
         eid = stock_sheet.save_event(fields)
-        out = {"id": eid, "note": info.get("note")}
+        out = {"id": eid, "note": info.get("note"), "needs_name": bool(info.get("needs_name"))}
         if info.get("source"):
             try:
                 out["auto"] = stock_sheet.auto_read(eid)
