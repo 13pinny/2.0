@@ -40,7 +40,7 @@ STALE_MINUTES = {
     "edm": 10, "tixr": 10, "posh": 10, "leap": 10, "frontgate": 10,
     "universe": 10, "urvenue": 15,
     "eventim": 25, "shotgun": 25, "tao": 40,
-    "dice": 20, "watcher": 10, "kupat": 15, "pacha": 10,
+    "boletos": 10, "dice": 20, "watcher": 10, "kupat": 15, "pacha": 10,
 }
 
 # Fetch errors that mean the event is gone from the site, not that we
@@ -229,7 +229,10 @@ def _edm_like(e, kind, now, today, *, badges=None, controls=("pause", "remove"))
 
 
 def from_edm(payload, now, today):
-    return [_edm_like(e, "edm", now, today) for e in (payload or {}).get("events") or []]
+    return [_edm_like(e, "edm", now, today,
+                      controls=(("pause", "remove", "alert") if e.get("source") == "boletos"
+                                else ("pause", "remove")))
+            for e in (payload or {}).get("events") or []]
 
 
 def from_marquee(payload, now, today):
@@ -466,6 +469,9 @@ TRACK_ROUTES = [
     ("watcher", lambda u, h: any(x in h for x in (
         "ticketmaster.co.il", "kupat.co.il", "tickchak.co.il", "barby.co.il",
         "hakuapp.com", "haku.ly", "houstonmarathon.com", "prekindle.com"))),
+    # Boletos Express: the stock tracker (left per section, "under N" alert);
+    # watch=true also adds the per-seat drop watcher.
+    ("boletos", lambda u, h: "boletosexpress.com" in h),
     ("liv", lambda u, h: "livnightclub.com" in h or re.search(r"/event/EVE\d", u)),
     ("frontgate", lambda u, h: "frontgatetickets.com" in h),
     ("universe", lambda u, h: "universe.com" in h),
@@ -496,7 +502,7 @@ def classify_link(text):
             return route, s
     return None, (f"Kartis doesn't track {host or 'that site'} yet. Supported: DICE, Tixr, Posh, "
                   "Leap, Shotgun, Eventim US, Marquee, Frontgate, Universe, LIV, "
-                  "Ticketmaster IL, kupat, tickchak, barby, Prekindle.")
+                  "Ticketmaster IL, kupat, tickchak, barby, Prekindle, Boletos Express.")
 
 
 # --------------------------------------------------------------- summary ---

@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 
 import barby
 import prekindle
+import boletos
 import db
 import dice
 import discord_bot
@@ -33,7 +34,8 @@ db.init()
 
 SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
            "barby": barby, "dice": dice, "haku": haku,
-           "tmdiscover": tm_discover, "prekindle": prekindle}
+           "tmdiscover": tm_discover, "prekindle": prekindle,
+           "boletos": boletos}
 
 
 def detect_source(url):
@@ -42,6 +44,8 @@ def detect_source(url):
         return "barby", barby
     if "prekindle.com" in s:
         return "prekindle", prekindle
+    if "boletosexpress.com" in s:
+        return "boletos", boletos
     if "dice.fm" in s or re.fullmatch(r"\s*[a-f0-9]{24}\s*", s or ""):
         return "dice", dice
     # haku race registration (Houston Marathon) — platform hosts, the

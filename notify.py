@@ -361,6 +361,27 @@ def _block_info(labels, code):
     return name, entry.get("price")
 
 
+def _own_price(seat, labels, block_price):
+    """' — $295' for a seat priced on its own (boletos seat maps price each
+    seat; the block carries none), else ''. Only for labels that name their
+    currency, so the Israeli sources' seat lines are unchanged."""
+    p = seat.get("price")
+    if block_price is not None or p is None or not ((labels or {}).get("meta") or {}).get("currency"):
+        return ""
+    try:
+        return f" — {_cur_sym(labels)}{float(p):,.0f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _cur_sym(labels):
+    """Currency symbol for a labels payload's block prices. Israeli sources
+    leave meta.currency unset and mean shekels; a USD source (boletos) sets
+    it so its seat lines don't read as ₪."""
+    cur = (((labels or {}).get("meta")) or {}).get("currency")
+    return {"USD": "$", "EUR": "€", "GBP": "£"}.get(cur, "₪")
+
+
 def _short(seat, labels=None):
     code = _seat_block(seat) or "?"
     name, _ = _block_info(labels, code)
@@ -413,7 +434,7 @@ def _format_seat_lines(seats, limit=40, labels=None):
             if str(name) != str(code):
                 header_bits.append(f"({code})")
             if price is not None:
-                header_bits.append(f"— ₪{price:.0f}")
+                header_bits.append(f"— {_cur_sym(labels)}{price:.0f}")
             if len(group) > 1:
                 header_bits.append(f"× {len(group)}")
             lines.append(f"**{' '.join(header_bits)}**")
@@ -422,7 +443,8 @@ def _format_seat_lines(seats, limit=40, labels=None):
                     lines.append(f"... +{len(seats) - shown} more")
                     return lines
                 mark = " ⚠️" if seat.get("unconfirmed") else ""
-                lines.append(f"• row {_seat_row(seat)}, seat {_seat_num(seat)}{mark}")
+                lines.append(f"• row {_seat_row(seat)}, seat {_seat_num(seat)}"
+                             f"{_own_price(seat, labels, price)}{mark}")
                 shown += 1
     return lines
 
@@ -455,7 +477,7 @@ def _seat_content_summary(seats, labels=None, when=None, max_seat_lines=14):
         name, price = _block_info(labels, code)
         head = str(name)
         if price is not None:
-            head += f" ₪{price:.0f}"
+            head += f" {_cur_sym(labels)}{price:.0f}"
         if len(group) > 1:
             head += f" ×{len(group)}"
         lines.append(f"**{head}**")
@@ -464,6 +486,7 @@ def _seat_content_summary(seats, labels=None, when=None, max_seat_lines=14):
                 lines.append(f"… +{len(real) - shown} more")
                 return "\n".join(lines)
             lines.append(f"row {_seat_row(s)} seat {_seat_num(s)}"
+                         + _own_price(s, labels, price)
                          + (" ⚠️ unconfirmed" if s.get("unconfirmed") else ""))
             shown += 1
     return "\n".join(lines)
@@ -1250,7 +1273,20 @@ def notify_edm_event(kind, ev, old=None):
     'jumps', a full sell-out to 'status', the rest to 'new_events' — or,
     for a source that names its venue (tao's two Marquee rooms), that
     venue's own new-events channel."""
-    if kind in ("price_down", "restock", "tier_restock"):
+    if ev.get("source") == "boletos":
+        # Boletos Express: every tracker ping goes to the show's own channel
+        # (the same #<event-slug> a drop watcher on that show posts to),
+        # falling back to the category the kind would normally use.
+        fallback = ("jumps" if kind in ("below", "low_stock", "price_up")
+                    else "status" if kind == "soldout" else "drops"
+                    if kind in ("restock", "tier_restock") else "new_events")
+        try:
+            import discord_bot
+            channel = discord_bot.slugify_label(ev.get("name") or "")
+        except Exception:
+            channel = None
+        discord_url = _bot_channel_webhook(channel, fallback=fallback)
+    elif kind in ("price_down", "restock", "tier_restock"):
         discord_url = _shocks_webhook(ev.get("venue_key") or ev.get("source"))
     elif kind in ("price_up", "low_stock", "below"):
         discord_url = _discord_webhook("jumps")

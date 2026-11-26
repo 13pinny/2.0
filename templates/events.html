@@ -153,8 +153,8 @@
 </header>
 <main>
   <form class="track" id="trackform" autocomplete="off">
-    <input type="text" id="trackurl" placeholder="Paste any event link to track it: DICE, Tixr, Posh, Leap, Shotgun, Eventim, Marquee, Frontgate, Universe, LIV, Ticketmaster IL, kupat, tickchak, barby…" aria-label="Event link">
-    <label title="dice.fm links only: also create a drop watcher, which checks every 15s while sold out"><input type="checkbox" id="trackwatch"> also a drop watcher (DICE)</label>
+    <input type="text" id="trackurl" placeholder="Paste any event link to track it: DICE, Tixr, Posh, Leap, Shotgun, Eventim, Marquee, Frontgate, Universe, LIV, Ticketmaster IL, kupat, tickchak, barby, Boletos Express…" aria-label="Event link">
+    <label title="dice.fm and boletosexpress.com links only: also create a drop watcher (DICE checks every 15s while sold out; Boletos pings each returned seat)"><input type="checkbox" id="trackwatch"> also a drop watcher (DICE, Boletos)</label>
     <button class="primary" type="submit" id="trackbtn">Track</button>
     <div class="msg" id="trackmsg"></div>
   </form>
@@ -462,7 +462,8 @@ function alertBox(e, eventId, current){
 
 function detEdm(e, d){
   return `<div><h4>Tiers</h4>${tiersTable(d.tiers, d.currency, {face: e.source === 'shotgun'})}</div>` +
-    windowsBox(d.windows) + releasesTable(d.releases, d.currency);
+    windowsBox(d.windows) + releasesTable(d.releases, d.currency) +
+    ((e.controls || []).includes('alert') ? alertBox(e, d.event_id, d.alert_below) : '');
 }
 function detMarquee(e, d){
   let html = `<div><h4>Tiers</h4>${tiersTable(d.tiers, 'USD')}</div>`;
@@ -830,7 +831,7 @@ $('trackform').addEventListener('submit', async ev => {
   try {
     const r = await post('/api/events/track', {url, watch: $('trackwatch').checked});
     const where = {dice: 'the DICE tracker', watcher: 'drop watchers', liv: 'LIV', frontgate: 'Frontgate',
-                   universe: 'Universe', edm: 'the EDM tracker'}[r.routed_to] || r.routed_to;
+                   universe: 'Universe', edm: 'the EDM tracker', boletos: 'the Boletos stock tracker'}[r.routed_to] || r.routed_to;
     const name = (r.result && (r.result.name || r.result.label)) || '';
     let text = `Tracking${name ? ' ' + name : ''} with ${where}.`;
     if (r.result && r.result.pending_relay) text += ' The desktop relay will read it within about 5 minutes.';

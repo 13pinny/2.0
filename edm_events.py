@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 
 import db
 import edm_common
+import boletos_events
 import eventim_events
 import frontgate_events
 import leap_events
@@ -53,6 +54,7 @@ SOURCES = {
     frontgate_events.SOURCE_NAME: frontgate_events,
     universe_events.SOURCE_NAME: universe_events,
     urvenue_events.SOURCE_NAME: urvenue_events,
+    boletos_events.SOURCE_NAME: boletos_events,
 }
 
 # Host fragment → source. Checked before the parse_url fallback so a URL is
@@ -67,6 +69,7 @@ _HOST_HINTS = (
     ("frontgatetickets.com", "frontgate"),
     ("universe.com", "universe"),
     ("livnightclub.com", "urvenue"),
+    ("boletosexpress.com", "boletos"),
 )
 
 # The events this tracker was built for. Seeded once, on a

@@ -34,6 +34,7 @@ import kupat
 import kupat_credits
 import kupat_events
 import prekindle
+import boletos
 import dice
 import dice_autolink
 import dice_follow
@@ -47,6 +48,7 @@ import events_hub
 import eventim_events
 import frontgate_events
 import universe_events
+import boletos_events
 import urvenue_events
 from edm_common import EdmEventsError
 import pacha_estimate
@@ -84,6 +86,7 @@ WATCHER_SOURCES = {
     "haku": haku,
     "tmdiscover": tm_discover,
     "prekindle": prekindle,
+    "boletos": boletos,
 }
 
 
@@ -99,6 +102,8 @@ def _detect_source(url):
         return "barby", barby
     if "prekindle.com" in s:
         return "prekindle", prekindle
+    if "boletosexpress.com" in s:
+        return "boletos", boletos
     if "dice.fm" in s:
         return "dice", dice
     # haku race registration (Houston Marathon): the platform's own hosts
@@ -739,7 +744,14 @@ def _frontgate_left(tiers):
 
 
 # Sources with a per-event "ping me under N left" box (/frontgate, /universe).
-_LEFT_ALERT_SOURCES = {frontgate_events.SOURCE_NAME, universe_events.SOURCE_NAME}
+_LEFT_ALERT_SOURCES = {frontgate_events.SOURCE_NAME, universe_events.SOURCE_NAME,
+                       boletos_events.SOURCE_NAME}
+
+# Sources whose tracker pings ONLY these kinds. boletos is a seated house
+# priced per seat: its cheapest section flips with every single seat sold
+# or returned, so price_up/price_down/tier_restock would fire all day.
+# Returned seats are the drop watcher's job (boletos.py, per seat).
+_EDM_ONLY_KINDS = {boletos_events.SOURCE_NAME: {"below", "soldout", "restock", "onsale"}}
 
 
 def _frontgate_alert_kinds(ev, old):
@@ -917,6 +929,9 @@ def run_edm_events():
                 continue
             kinds = _edm_diff(ev, old) + _frontgate_alert_kinds(ev, old)
             kinds += _tier_restock_kinds(ev, old, kinds)
+            only = _EDM_ONLY_KINDS.get(ev["source"])
+            if only is not None:
+                kinds = [k for k in kinds if k in only]
             for kind in kinds:
                 pings.append((kind, ev, old))
 
@@ -8333,10 +8348,11 @@ def api_events_track():
     target = {
         "dice": api_market_add, "watcher": api_watchers_add, "liv": api_liv_add,
         "frontgate": api_frontgate_add, "universe": api_universe_add, "edm": api_edm_add,
+        "boletos": api_edm_add,
     }[route]
     result, status = _route_json(target, {"url": url_or_reason})
     out = {"routed_to": route, "result": result}
-    if route == "dice" and body.get("watch") and status < 400:
+    if route in ("dice", "boletos") and body.get("watch") and status < 400:
         wres, wstatus = _route_json(api_watchers_add, {"url": url_or_reason})
         out["watcher"] = wres if wstatus < 400 else {"error": wres.get("error") or f"HTTP {wstatus}"}
     _EVENTS_CACHE["body"] = None
@@ -8546,6 +8562,8 @@ def api_edm():
             "last_seen_at": r.get("last_seen_at"),
             "last_error": r.get("last_error"),
             "tracked_only": not r,   # added but not yet successfully fetched
+            "alert_below": (db.frontgate_alert_get(t["event_id"])
+                            if t["source"] in _LEFT_ALERT_SOURCES else None),
         })
     events.sort(key=lambda e: (e.get("start_date") or "9999", e.get("name") or ""))
     return jsonify({

@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 
 import barby
 import prekindle
+import boletos
 import db
 import dice
 import discord_bot
@@ -45,7 +46,8 @@ db.init()
 
 SOURCES = {"ticketmaster": ticketmaster, "kupat": kupat, "tickchak": tickchak,
            "barby": barby, "dice": dice, "haku": haku,
-           "tmdiscover": tm_discover, "prekindle": prekindle}
+           "tmdiscover": tm_discover, "prekindle": prekindle,
+           "boletos": boletos}
 
 import os
 INTERVAL = int(os.getenv("TM_CHECK_INTERVAL_SECONDS") or 60)
