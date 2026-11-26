@@ -751,7 +751,44 @@ _LEFT_ALERT_SOURCES = {frontgate_events.SOURCE_NAME, universe_events.SOURCE_NAME
 # priced per seat: its cheapest section flips with every single seat sold
 # or returned, so price_up/price_down/tier_restock would fire all day.
 # Returned seats are the drop watcher's job (boletos.py, per seat).
-_EDM_ONLY_KINDS = {boletos_events.SOURCE_NAME: {"below", "soldout", "restock", "onsale"}}
+_EDM_ONLY_KINDS = {boletos_events.SOURCE_NAME: {"below", "soldout", "restock", "onsale",
+                                                 "runs_low"}}
+
+
+def _boletos_rows_with_run(tiers, sections, run):
+    """How many rows in `sections` still have `run` open seats side by side
+    (None when the tiers predate row_runs, so the first tick is silent)."""
+    picked = [t for t in tiers or [] if t.get("name") in sections]
+    if not picked or any("row_runs" not in t for t in picked):
+        return None
+    return sum(1 for t in picked for n in t["row_runs"].values() if n >= run)
+
+
+def _boletos_runs_kinds(ev, old):
+    """Per-event "running out of seats together" alert for a boletos seat
+    map, stored as setting `boletos_runs_alert:<event_id>` =
+    {"sections": [...], "run": 6, "rows": 2}: ping once when the rows in
+    those sections that still hold `run` open seats together drop to
+    `rows` or fewer. Re-arms when the count goes back above."""
+    if ev.get("source") != boletos_events.SOURCE_NAME:
+        return []
+    try:
+        cfg = json.loads(db.setting_get(f"boletos_runs_alert:{ev['event_id']}") or "null")
+        old_tiers = json.loads(old.get("tiers_json") or "[]")
+    except (TypeError, ValueError):
+        return []
+    if not cfg:
+        return []
+    sections, run, rows = set(cfg.get("sections") or []), int(cfg.get("run") or 6), int(cfg.get("rows") or 2)
+    was = _boletos_rows_with_run(old_tiers, sections, run)
+    now_n = _boletos_rows_with_run(ev.get("tiers"), sections, run)
+    if was is None or now_n is None or not (was > rows >= now_n):
+        return []
+    ev["_runs"] = {"run": run, "rows": rows, "now": now_n, "was": was,
+                   "where": sorted(f"{t['name']} row {r}" for t in ev.get("tiers") or []
+                                   if t.get("name") in sections
+                                   for r, n in (t.get("row_runs") or {}).items() if n >= run)}
+    return ["runs_low"]
 
 
 def _frontgate_alert_kinds(ev, old):
@@ -873,7 +910,7 @@ def _tier_restock_kinds(ev, old, kinds):
 
 # Perishable first, so a burst of routine pings can't push a price drop or
 # a restock past the per-tick cap.
-_EDM_KIND_PRIORITY = {"price_down": 0, "restock": 1, "tier_restock": 1, "below": 2, "low_stock": 2,
+_EDM_KIND_PRIORITY = {"price_down": 0, "restock": 1, "tier_restock": 1, "below": 2, "low_stock": 2, "runs_low": 2,
                       "new_tier": 3, "onsale": 4, "soldout": 5,
                       "price_up": 6, "new": 7}
 
@@ -927,7 +964,8 @@ def run_edm_events():
                 if ev["source"] not in baseline_sources:
                     pings.append(("new", ev, None))
                 continue
-            kinds = _edm_diff(ev, old) + _frontgate_alert_kinds(ev, old)
+            kinds = (_edm_diff(ev, old) + _frontgate_alert_kinds(ev, old)
+                     + _boletos_runs_kinds(ev, old))
             kinds += _tier_restock_kinds(ev, old, kinds)
             only = _EDM_ONLY_KINDS.get(ev["source"])
             if only is not None:

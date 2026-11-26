@@ -1277,7 +1277,7 @@ def notify_edm_event(kind, ev, old=None):
         # Boletos Express: every tracker ping goes to the show's own channel
         # (the same #<event-slug> a drop watcher on that show posts to),
         # falling back to the category the kind would normally use.
-        fallback = ("jumps" if kind in ("below", "low_stock", "price_up")
+        fallback = ("jumps" if kind in ("below", "low_stock", "price_up", "runs_low")
                     else "status" if kind == "soldout" else "drops"
                     if kind in ("restock", "tier_restock") else "new_events")
         try:
@@ -1378,6 +1378,13 @@ def notify_edm_event(kind, ev, old=None):
         color = 0xED4245
         if ev.get("total_released"):
             lines.append(f"{left:,} of {ev['total_released']:,} released are left.")
+    elif kind == "runs_low":
+        r = ev.get("_runs") or {}
+        title = (f"⏳ {site}: {name} — only {r.get('now')} row(s) left with "
+                 f"{r.get('run')} seats together (your alert: {r.get('rows')})")
+        color = 0xED4245
+        lines.append(f"Was {r.get('was')} rows. Still together: "
+                     + (", ".join(r.get("where") or []) or "none") + ".")
     else:  # 'new'
         # A catalog source discovers its own events, so 'new' there means
         # the venue just put a show on the calendar — the headline should
@@ -1408,7 +1415,7 @@ def notify_edm_event(kind, ev, old=None):
     if ev.get("page_url"):
         embed["url"] = ev["page_url"]
     payload = {"embeds": [embed]}
-    if kind in ("price_down", "restock", "tier_restock", "low_stock", "below"):
+    if kind in ("price_down", "restock", "tier_restock", "low_stock", "below", "runs_low"):
         # Discord's phone push previews only `content`, not the embed — put
         # the headline on the lock screen for the time-critical kinds.
         payload["content"] = title[:1990]

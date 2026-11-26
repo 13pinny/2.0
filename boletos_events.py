@@ -43,13 +43,20 @@ def fetch_event(event_key):
         raise EdmEventsError(str(e)) from e
     boletos._write_labels(event_key, ev)
     seated = ev["layout"] == "seated"
+    runs = boletos.row_runs(ev["seats"]) if seated else {}
     tiers = []
     for s in ev["sections"]:
         q, a = s["quantity"], s["available"]
-        tiers.append(make_tier(
+        t = make_tier(
             s["name"], s["price"], available=a, quantity=q,
             used=(q - a) if (q is not None and a is not None) else None,
-            sold_out=s["sold_out"], max_qty=s["max_qty"]))
+            sold_out=s["sold_out"], max_qty=s["max_qty"])
+        # {row: longest run of open seats side by side} — what the
+        # "N seats together" alert (app._boletos_runs_kinds) counts. Rows
+        # with nothing open are left out; it rides in tiers_json.
+        if seated:
+            t["row_runs"] = runs.get(s["name"], {})
+        tiers.append(t)
     start = ev.get("start")
     out = {
         "source": SOURCE_NAME,

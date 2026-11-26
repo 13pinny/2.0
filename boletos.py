@@ -238,6 +238,34 @@ def parse_event(page):
     raise BoletosError("no seat map and no ticket table on the page — layout change?")
 
 
+def row_runs(seats):
+    """{section: {row: longest run of open seats side by side}} for a seated
+    map. United Palace numbers its side AND center orchestra sections odd or
+    even only (seats 101, 103, 105 sit next to each other), so a section
+    whose every seat number shares one parity steps by 2; otherwise by 1."""
+    by_sec = {}
+    for s in seats:
+        if str(s.get("seat") or "").isdigit():
+            by_sec.setdefault(s["section"], []).append(s)
+    out = {}
+    for sec, ss in by_sec.items():
+        step = 2 if len({int(s["seat"]) % 2 for s in ss}) == 1 else 1
+        rows = {}
+        for s in ss:
+            if s["open"]:
+                rows.setdefault(s["row"], []).append(int(s["seat"]))
+        best_by_row = {}
+        for row, nums in rows.items():
+            nums.sort()
+            best = cur = 1
+            for a, b in zip(nums, nums[1:]):
+                cur = cur + 1 if b - a == step else 1
+                best = max(best, cur)
+            best_by_row[row] = best
+        out[sec] = best_by_row
+    return out
+
+
 # --- drop-checker interface ---------------------------------------------------
 
 def fetch_selectable_seats(event_code, perf_code="0"):
